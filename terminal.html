@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terminus</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/lib/xterm-addon-search.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.8.0/lib/xterm-addon-unicode11.js"></script>
+</head>
+<body>
+<div id="app">
+  <!-- ── Sidebar ── -->
+  <nav id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="18" rx="3"/>
+          <polyline points="8,9 4.5,12 8,15"/>
+          <line x1="12" y1="15" x2="16" y2="15"/>
+        </svg>
+      </div>
+      <div class="sidebar-toggle" id="sidebar-toggle" title="Toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+      </div>
+    </div>
+    <div class="sidebar-sep"></div>
+    <!-- workspace buttons injected here -->
+    <div class="sidebar-actions">
+      <div class="sa-btn" id="btn-search" title="Search (Ctrl+Shift+F)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </div>
+      <div class="sa-btn" id="btn-theme" title="Change theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 010 20"/><circle cx="12" cy="12" r="3"/></svg>
+      </div>
+      <div class="sa-btn" id="btn-settings" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </div>
+    </div>
+  </nav>
+  <div class="sidebar-sash" id="sidebar-sash"></div>
+  <div id="main">
+    <!-- ── Pane area ── -->
+    <div id="pane-area">
+      <div id="empty-state" class="empty-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="18" rx="3"/>
+          <polyline points="8,9 4.5,12 8,15"/>
+          <line x1="12" y1="15" x2="16" y2="15"/>
+        </svg>
+        <p>No terminal open — press <kbd>Ctrl+Shift+T</kbd> or click <kbd>+</kbd></p>
+      </div>
+      <!-- split containers injected here -->
+
+      <!-- Search overlay -->
+      <div id="searchbar">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="opacity:0.5;flex-shrink:0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="search-input" placeholder="Search…" spellcheck="false" autocomplete="off">
+        <span class="sb-nav" id="search-prev" title="Previous">▲</span>
+        <span class="sb-nav" id="search-next" title="Next">▼</span>
+        <span class="sb-close-btn" id="search-close">✕</span>
+      </div>
+    </div>
+
+    <!-- ── Status bar ── -->
+    <div id="statusbar">
+      <span class="sb-item"><span class="sb-icon">⬡</span><span id="sb-ws">—</span></span>
+      <span class="sb-sep"></span>
+      <span class="sb-item" id="sb-term">—</span>
+      <span class="sb-sep"></span>
+      <span class="sb-item" id="sb-conn">
+        <span id="sb-conn-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#a6e3a1;margin-right:3px"></span>
+        <span id="sb-conn-text">Connecting…</span>
+      </span>
+      <span class="sb-spacer"></span>
+      <span class="sb-item" id="sb-size">—</span>
+      <span class="sb-sep"></span>
+      <span class="sb-item" id="sb-time">—</span>
+    </div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div id="ctx"></div>
+<!-- Theme menu -->
+<div id="theme-menu"></div>
+<!-- Settings -->
+<div id="settings-overlay">
+  <div id="settings-modal">
+    <div class="settings-header">
+      <h2>Settings</h2>
+      <div class="settings-close" id="settings-close">✕</div>
+    </div>
+    <div class="settings-body">
+
+      <div class="settings-section">
+        <div class="settings-section-title">Appearance</div>
+        <div class="settings-row">
+          <span class="settings-label">Theme</span>
+          <div class="settings-control">
+            <select id="set-theme"></select>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Font size</span>
+          <div class="settings-control">
+            <input type="range" id="set-fontsize" min="8" max="32" step="1">
+            <span class="settings-value" id="set-fontsize-val"></span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Font family</span>
+          <div class="settings-control">
+            <input type="text" id="set-fontfamily" spellcheck="false" autocomplete="off">
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Line height</span>
+          <div class="settings-control">
+            <input type="range" id="set-lineheight" min="1.0" max="2.0" step="0.1">
+            <span class="settings-value" id="set-lineheight-val"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Terminal</div>
+        <div class="settings-row">
+          <span class="settings-label">Cursor style</span>
+          <div class="settings-control">
+            <select id="set-cursor">
+              <option value="block">Block</option>
+              <option value="underline">Underline</option>
+              <option value="bar">Bar</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Cursor blink</span>
+          <div class="settings-control">
+            <div class="toggle-switch" id="set-cursorblink"></div>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Scrollback</span>
+          <div class="settings-control">
+            <input type="range" id="set-scrollback" min="1000" max="50000" step="1000">
+            <span class="settings-value" id="set-scrollback-val"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Keyboard Shortcuts</div>
+        <div class="settings-shortcuts">
+          <div class="shortcut-item"><span>New terminal</span><span class="shortcut-key">Ctrl+Shift+T</span></div>
+          <div class="shortcut-item"><span>Close terminal</span><span class="shortcut-key">Ctrl+Shift+W</span></div>
+          <div class="shortcut-item"><span>Split horizontal</span><span class="shortcut-key">Ctrl+Shift+D</span></div>
+          <div class="shortcut-item"><span>Split vertical</span><span class="shortcut-key">Ctrl+Shift+E</span></div>
+          <div class="shortcut-item"><span>Search</span><span class="shortcut-key">Ctrl+Shift+F</span></div>
+          <div class="shortcut-item"><span>Prev/Next tab</span><span class="shortcut-key">Ctrl+Tab</span></div>
+          <div class="shortcut-item"><span>Focus pane</span><span class="shortcut-key">Alt+H/J/K/L</span></div>
+          <div class="shortcut-item"><span>Font size</span><span class="shortcut-key">Ctrl+Scroll</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Tooltip -->
+<div id="tooltip"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
