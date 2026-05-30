@@ -25,20 +25,30 @@ import json
 import os
 import re
 import signal
+import socket
+import ssl
 import struct
 import sys
 import termios
 import threading
 import urllib.parse
 import warnings
+
+# Bypass system environment proxies for local addresses
+os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
+
+# Permissive SSL context for local / self-signed dev servers
+_ssl_noverify = ssl._create_unverified_context()
 import websockets
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
 HOST = "127.0.0.1"
 PORT = 7681        # WebSocket PTY
 PROXY_PORT = 7682  # HTTP proxy for browser tab
+APP_PORT = 6969    # HTTP app server (serves terminal.html + static files)
 
 SESSIONS: dict[str, "PTYSession"] = {}
 
@@ -136,16 +146,29 @@ def rewrite_html(html: str, base_url: str) -> str:
         r'(\bsrcset\s*=\s*["\'])([^"\']+)(["\'])',
         rewrite_srcset, html, flags=re.IGNORECASE
     )
-    # url() in inline styles / <style> blocks
+    # url() inside <style> blocks only (not JS strings)
     def rewrite_css_url(m):
         q = m.group(1)  # quote char or empty
         href = m.group(2)
         if href.startswith("data:"):
             return m.group(0)
         return f"url({q}{proxy(href)}{q})"
+    def rewrite_style_block(m):
+        return m.group(1) + re.sub(
+            r'url\((["\']?)([^)\'"]+)\1\)', rewrite_css_url, m.group(2)
+        ) + m.group(3)
     html = re.sub(
-        r'url\((["\']?)([^)\'"]+)\1\)',
-        rewrite_css_url, html
+        r'(<style\b[^>]*>)(.*?)(</style>)',
+        rewrite_style_block, html, flags=re.I | re.S
+    )
+    # url() in inline style="..." attributes
+    def rewrite_style_attr(m):
+        return m.group(1) + re.sub(
+            r'url\((["\']?)([^)\'"]+)\1\)', rewrite_css_url, m.group(2)
+        ) + m.group(3)
+    html = re.sub(
+        r'(\bstyle\s*=\s*["\'])(.*?)(["\'])',
+        rewrite_style_attr, html, flags=re.I
     )
     # <video src> and poster
     html = re.sub(
@@ -223,20 +246,35 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
-        if not parsed.path.startswith("/proxy"):
-            self.send_response(404)
-            self.end_headers()
-            return
 
-        qs = urllib.parse.parse_qs(parsed.query)
-        target = qs.get("url", [None])[0]
-        if not target:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(b"Missing ?url=")
-            return
-
-        target = urllib.parse.unquote(target)
+        # ── Resolve target URL ──
+        if parsed.path.startswith("/proxy"):
+            qs = urllib.parse.parse_qs(parsed.query)
+            target = qs.get("url", [None])[0]
+            if not target:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing ?url=")
+                return
+            target = urllib.parse.unquote(target)
+        else:
+            # Asset request (e.g. /style.css) — resolve via Referer
+            referer = self.headers.get("Referer", "")
+            target = None
+            if referer and "/proxy?url=" in referer:
+                try:
+                    ref_qs = urllib.parse.parse_qs(
+                        urllib.parse.urlparse(referer).query)
+                    orig = ref_qs.get("url", [None])[0]
+                    if orig:
+                        target = urllib.parse.urljoin(
+                            urllib.parse.unquote(orig), self.path)
+                except Exception:
+                    pass
+            if not target:
+                self.send_response(404)
+                self.end_headers()
+                return
 
         req = Request(target)
         req.add_header("User-Agent", BROWSER_UA)
@@ -245,17 +283,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
         req.add_header("Accept-Encoding", "identity")  # no compression — simpler
         req.add_header("Connection", "keep-alive")
         req.add_header("Upgrade-Insecure-Requests", "1")
-        # Pass referer so sites think it's a real navigation
+        # Pass Host and Referer matching the target so local dev servers work
+        target_parsed = urllib.parse.urlparse(target)
+        if target_parsed.hostname:
+            host_header = target_parsed.hostname
+            if target_parsed.port:
+                host_header += f":{target_parsed.port}"
+            req.add_header("Host", host_header)
         req.add_header("Referer", target)
 
         try:
-            with urlopen(req, timeout=15) as resp:
-                status = resp.getcode()
+            with urlopen(req, timeout=15, context=_ssl_noverify) as resp:
+                status = resp.getcode() or resp.status or 200
+                if status is None:
+                    status = 200
                 content_type = resp.headers.get("Content-Type", "application/octet-stream")
                 body = resp.read()
 
         except HTTPError as e:
-            status = e.code
+            status = e.code or 500
             content_type = e.headers.get("Content-Type", "text/plain")
             body = e.read()
         except URLError as e:
@@ -296,17 +342,90 @@ class ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-        self.send_response(status)
-        self._cors()
+        try:
+            self.send_response(status)
+            self._cors()
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass  # client disconnected
+
+
+# ─────────────────────────────────────────────────────────────
+#  STATIC APP SERVER  (serves terminal.html, app.js, style.css …)
+# ─────────────────────────────────────────────────────────────
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+MIME_TYPES = {
+    ".html": "text/html",
+    ".css":  "text/css",
+    ".js":   "application/javascript",
+    ".json": "application/json",
+    ".png":  "image/png",
+    ".jpg":  "image/jpeg",
+    ".svg":  "image/svg+xml",
+    ".ico":  "image/x-icon",
+    ".woff2": "font/woff2",
+    ".woff":  "font/woff",
+}
+
+
+class AppHandler(BaseHTTPRequestHandler):
+    """Serve the frontend static files."""
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def do_GET(self):
+        path = self.path.split("?")[0].lstrip("/")
+        if not path or path == "/":
+            path = "terminal.html"
+
+        filepath = os.path.join(APP_DIR, path)
+        filepath = os.path.realpath(filepath)
+
+        # security: stay inside APP_DIR
+        if not filepath.startswith(APP_DIR):
+            self.send_response(403)
+            self.end_headers()
+            return
+
+        if not os.path.isfile(filepath):
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Not found")
+            return
+
+        ext = os.path.splitext(filepath)[1].lower()
+        content_type = MIME_TYPES.get(ext, "application/octet-stream")
+
+        with open(filepath, "rb") as f:
+            body = f.read()
+
+        self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
 
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
 def run_proxy_server():
-    server = HTTPServer((HOST, PROXY_PORT), ProxyHandler)
+    server = ThreadingHTTPServer((HOST, PROXY_PORT), ProxyHandler)
     print(f"Terminus proxy server listening on http://{HOST}:{PROXY_PORT}", flush=True)
+    server.serve_forever()
+
+
+def run_app_server():
+    server = ThreadingHTTPServer((HOST, APP_PORT), AppHandler)
+    print(f"Terminus app server listening on http://{HOST}:{APP_PORT}", flush=True)
     server.serve_forever()
 
 
@@ -517,7 +636,12 @@ async def main():
     proxy_thread = threading.Thread(target=run_proxy_server, daemon=True)
     proxy_thread.start()
 
+    # Start static app server in a background daemon thread
+    app_thread = threading.Thread(target=run_app_server, daemon=True)
+    app_thread.start()
+
     print(f"Terminus PTY server listening on ws://{HOST}:{PORT}", flush=True)
+    print(f"Open http://{HOST}:{APP_PORT} in your browser", flush=True)
     async with websockets.serve(handler, HOST, PORT, max_size=None, ping_interval=20):
         await asyncio.Future()
 

@@ -916,8 +916,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 /* Override term-slot layout for browser */
 .browser-slot {
-  display: flex !important;
-  flex-direction: column !important;
+  flex-direction: column;
   overflow: hidden;
   position: absolute;
   inset: 0;

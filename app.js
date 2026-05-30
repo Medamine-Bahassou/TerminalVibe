@@ -112,7 +112,8 @@ const ID_LEN = 36;
 
 function connectWS() {
   updateConnStatus(false, true);
-  ws = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
+  const wsHost = window.location.hostname || '127.0.0.1';
+  ws = new WebSocket(`ws://${wsHost}:${WS_PORT}`);
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
@@ -586,7 +587,13 @@ function _createTermEntry(wsp, id, label) {
   term.onTitleChange(title => {
     const terms = getWorkspaceTerminals(wsp);
     const t = terms.find(x => x.id === id);
-    if (t) { t.label = title || t.label; if (activeWsId === wsp.id) renderPaneArea(); }
+    if (t) {
+      t.label = title || t.label;
+      // Lightweight update: just change the tab label in the DOM
+      const tabEl = document.querySelector(`.tg-tab[data-termid="${id}"] .tg-tab-name`);
+      if (tabEl) tabEl.textContent = t.label;
+      renderSidebar();
+    }
   });
 
   const entry = { id, label, term, fit: fitAddon, search: searchAddon, el: null, opened: false };
@@ -628,6 +635,7 @@ function addTerminal(wsId, targetGroupId) {
     }
   }
 
+  renderPaneArea();
   activateTerminal(wsp.id, id);
   renderSidebar();
 
@@ -669,6 +677,7 @@ function addBrowserTab(wsId, targetGroupId, url) {
     }
   }
 
+  renderPaneArea();
   activateTerminal(wsp.id, id);
   renderSidebar();
   return entry;
@@ -693,7 +702,26 @@ function activateTerminal(wsId, termId) {
   if (group) group.activeTermId = termId;
 
   if (activeWsId === wsId) {
-    renderPaneArea();
+    // Lightweight update: toggle visibility without rebuilding the DOM
+    // (preserves browser tab state, iframe content, etc.)
+    if (group) {
+      const groupEl = document.getElementById('group-' + group.id);
+      if (groupEl) {
+        // Update tab active state
+        groupEl.querySelectorAll('.tg-tab').forEach(tab => {
+          tab.classList.toggle('active', tab.dataset.termid === termId);
+        });
+        // Toggle slot visibility
+        group.terminals.forEach(t => {
+          const slot = document.getElementById('slot-' + t.id);
+          if (!slot) return;
+          const isActive = t.id === termId;
+          const showAs = t.type === 'browser' ? 'flex' : 'block';
+          slot.style.display = isActive ? showAs : 'none';
+          slot.classList.toggle('focused', isActive);
+        });
+      }
+    }
     updateStatusBar();
     const terms = getWorkspaceTerminals(wsp);
     const t = terms.find(x => x.id === termId);
@@ -771,7 +799,12 @@ function renameTerminalInGroup(wsId, termId) {
   inp.focus(); inp.select();
   const done = () => {
     t.label = inp.value.trim() || t.label;
-    renderPaneArea();
+    // Replace input with a span showing the new name
+    const span = document.createElement('span');
+    span.className = 'tg-tab-name';
+    span.textContent = t.label;
+    inp.replaceWith(span);
+    renderSidebar();
     updateStatusBar();
   };
   inp.onblur = done;
@@ -1106,7 +1139,8 @@ function buildNodeDom(node, wsp) {
     node.terminals.forEach(t => {
       const isAct = t.id === node.activeTermId;
       const slot = getOrCreateSlot(t, wsp, body);
-      slot.style.display = isAct ? 'block' : 'none';
+      const showAs = t.type === 'browser' ? 'flex' : 'block';
+      slot.style.display = isAct ? showAs : 'none';
       if (isAct) slot.classList.add('focused');
       else slot.classList.remove('focused');
       body.appendChild(slot);
@@ -1185,8 +1219,8 @@ function getOrCreateSlot(entry, wsp, parentEl) {
 
     // iframe for proxied pages (provides CSS isolation)
     const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:absolute;inset:0;border:none;background:#fff;display:none;';
-    iframe.sandbox = 'allow-scripts allow-forms allow-popups';
+    iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;display:none;';
+    iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups';
     contentWrap.appendChild(iframe);
 
     // Scrollable div for start/error pages
@@ -1201,8 +1235,8 @@ function getOrCreateSlot(entry, wsp, parentEl) {
     entry.opened = true;
 
     // ── Local proxy (port 7682 on same host as WebSocket server) ──
-    const _proxyHost = location.hostname || '127.0.0.1';
-    const proxyUrl = u => `http://${_proxyHost}:${PROXY_PORT}/proxy?url=${encodeURIComponent(u)}`;
+    const proxyHost = window.location.hostname || '127.0.0.1';
+    const proxyUrl = u => `http://${proxyHost}:${PROXY_PORT}/proxy?url=${encodeURIComponent(u)}`;
 
     let loading = false;
     let abortCtrl = null;
@@ -1248,15 +1282,23 @@ function getOrCreateSlot(entry, wsp, parentEl) {
         </div>`;
     }
 
+    function isLocalhostUrl(u) {
+      try { return /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(new URL(u).hostname); } catch {}
+      return false;
+    }
+
     async function loadUrl(rawUrl) {
       if (!rawUrl || rawUrl === 'about:blank') { showStartPage(); return; }
       let url = rawUrl.trim();
-      if (!/^https?:\/\//i.test(url)) {
-        if (!url.includes('.') || url.includes(' ')) {
-          url = 'https://www.google.com/search?q=' + encodeURIComponent(url);
-        } else {
-          url = 'https://' + url;
-        }
+      if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) {
+        // Already has a scheme (http, https, file, ftp, etc.) — use as-is
+      } else if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i.test(url)) {
+        // Localhost dev server — use http
+        url = 'http://' + url;
+      } else if (!url.includes('.') || url.includes(' ')) {
+        url = 'https://www.google.com/search?q=' + encodeURIComponent(url);
+      } else {
+        url = 'https://' + url;
       }
 
       if (abortCtrl) abortCtrl.abort();
@@ -1275,6 +1317,19 @@ function getOrCreateSlot(entry, wsp, parentEl) {
       entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
       renderSidebar();
       updateStatusBar();
+
+      // ── Localhost / dev-server bypass: load directly in iframe ──
+      // ES modules (Vite, React, etc.) break when proxied through srcdoc
+      // because import statements can't be rewritten. Load via iframe.src
+      // so the browser handles everything natively.
+      if (isLocalhostUrl(url)) {
+        showLoading(false);
+        pageView.style.display = 'none';
+        iframe.style.display = 'block';
+        iframe.removeAttribute('srcdoc');
+        iframe.src = url;
+        return;
+      }
 
       let html = null;
       let lastErr = '';
@@ -1298,28 +1353,92 @@ function getOrCreateSlot(entry, wsp, parentEl) {
       }
 
       try {
-        // Strip scripts and CSP meta tags for safety
-        const scriptRe = /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi;
-        html = html.replace(scriptRe, '');
+        // Strip CSP meta tags so the navBridge and page scripts can run
         html = html.replace(/<meta[^>]*http-equiv\s*=\s*["']?content-security-policy[^>]*>/gi, '');
 
-        // Inject navigation interceptor and base styles into the iframe
-        const navBridge = '<script>(' + (function(){
+        // Inject navigation + fetch/XHR interceptor for SPA support
+        const proxyBase = 'http://' + (window.location.hostname || '127.0.0.1') + ':' + PROXY_PORT + '/proxy?url=';
+        const navBridge = '<script>(' + (function(pxBase, pageUrl){
+          // Link click interceptor
           document.addEventListener('click', function(e){
             var a = e.target.closest && e.target.closest('a[href]');
             if (!a) return;
             var href = a.getAttribute('href');
             if (!href || href.indexOf('javascript:') === 0 || href.charAt(0) === '#') return;
             e.preventDefault();
-            try { var u = new URL(href, location.href); var i = u.searchParams.get('url'); if (i) href = decodeURIComponent(i); } catch(x){}
+            try { var u = new URL(href, pageUrl); var i = u.searchParams.get('url'); if (i) href = decodeURIComponent(i); } catch(x){}
             try { window.parent.postMessage({terminusNav: href}, '*'); } catch(x){}
           }, true);
-        }).toString() + ')()<\/script>';
+
+          // Fetch interceptor — routes JS fetch() through the proxy safely using original URL base
+          var origFetch = window.fetch;
+          window.fetch = function(input, init){
+            try {
+              var url = typeof input === 'string' ? input : (input && input.url);
+              if (url && /^(https?:\/\/|\/)/.test(url)) {
+                var abs = new URL(url, pageUrl).href;
+                return origFetch.call(this, pxBase + encodeURIComponent(abs), init);
+              }
+            } catch(x){}
+            return origFetch.call(this, input, init);
+          };
+
+          // XHR interceptor — routes XMLHttpRequest.open() through the proxy safely
+          var origOpen = XMLHttpRequest.prototype.open;
+          XMLHttpRequest.prototype.open = function(method, url, ...rest){
+            try {
+              if (url && /^(https?:\/\/|\/)/.test(url)) {
+                url = new URL(url, pageUrl).href;
+                url = pxBase + encodeURIComponent(url);
+              }
+            } catch(x){}
+            return origOpen.call(this, method, url, ...rest);
+          };
+
+          // Dynamic DOM elements interceptor (captures lazy-loaded chunks injected by React/Webpack/Vite)
+          var origCreateElement = document.createElement;
+          document.createElement = function(tagName, options) {
+            var el = origCreateElement.call(document, tagName, options);
+            var tag = tagName.toLowerCase();
+            if (tag === 'script') {
+              var descriptor = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+              Object.defineProperty(el, 'src', {
+                get: function() { return descriptor.get.call(el); },
+                set: function(val) {
+                  if (val && !val.startsWith(pxBase) && !val.startsWith('data:')) {
+                    var abs = new URL(val, pageUrl).href;
+                    descriptor.set.call(el, pxBase + encodeURIComponent(abs));
+                  } else {
+                    descriptor.set.call(el, val);
+                  }
+                },
+                configurable: true
+              });
+            } else if (tag === 'link') {
+              var descriptor = Object.getOwnPropertyDescriptor(HTMLLinkElement.prototype, 'href');
+              Object.defineProperty(el, 'href', {
+                get: function() { return descriptor.get.call(el); },
+                set: function(val) {
+                  if (val && !val.startsWith(pxBase) && !val.startsWith('data:')) {
+                    var abs = new URL(val, pageUrl).href;
+                    descriptor.set.call(el, pxBase + encodeURIComponent(abs));
+                  } else {
+                    descriptor.set.call(el, val);
+                  }
+                },
+                configurable: true
+              });
+            }
+            return el;
+          };
+        }).toString() + ')(' + JSON.stringify(proxyBase) + ',' + JSON.stringify(url) + ')<\/script>';
         const baseStyles = '<style>body{margin:0;font-family:sans-serif;font-size:14px;line-height:1.5;color:#222}a{color:#1a73e8}</style>';
 
         // Render in the pre-created iframe (CSS isolation)
         pageView.style.display = 'none';
-        iframe.style.display = '';
+        iframe.style.display = 'block';
+        // Remove src before setting srcdoc
+        iframe.removeAttribute('src');
         iframe.srcdoc = baseStyles + navBridge + html;
       } catch (e) {
         showError(url, 'Failed to render page: ' + e.message);
@@ -2201,6 +2320,16 @@ if (restored) {
 }
 
 connectWS();
+
+// Listen for navigation messages from browser tab iframes
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.terminusNav) {
+    const active = activeTerminal();
+    if (active && active.type === 'browser' && active._loadUrl) {
+      active._loadUrl(e.data.terminusNav);
+    }
+  }
+});
 
 window.addEventListener('beforeunload', (e) => {
   saveState();
