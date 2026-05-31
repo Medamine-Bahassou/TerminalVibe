@@ -2046,38 +2046,6 @@ function showCtxMenu(e, type, data) {
 
 function hideCtxMenu() { ctxEl.classList.remove('open'); }
 document.addEventListener('click', e => { if (!e.target.closest('#ctx')) hideCtxMenu(); });
-document.addEventListener('click', e => { if (!e.target.closest('#theme-menu')) hideThemeMenu(); });
-
-/* ═══════════════════════════════════════════════════════════════
-   THEME MENU
-═══════════════════════════════════════════════════════════════ */
-const themeMenu = document.getElementById('theme-menu');
-
-function showThemeMenu() {
-  themeMenu.innerHTML = '';
-  for (const [key, t] of Object.entries(THEMES)) {
-    const el = document.createElement('div');
-    el.className = 'theme-item' + (key === currentThemeName ? ' active' : '');
-    const swatchHtml = t.swatches.map(c => `<span style="background:${c}"></span>`).join('');
-    el.innerHTML = `<span class="theme-swatch">${swatchHtml}</span><span>${t.label}</span>`;
-    el.addEventListener('click', () => { applyTheme(key); hideThemeMenu(); });
-    themeMenu.appendChild(el);
-  }
-  const btn = document.getElementById('btn-theme');
-  const rect = btn.getBoundingClientRect();
-  themeMenu.style.left = (rect.right + 4) + 'px';
-  themeMenu.style.right = 'auto';
-  themeMenu.classList.add('open');
-  const menuH = themeMenu.offsetHeight;
-  const spaceBelow = window.innerHeight - rect.top;
-  if (menuH > spaceBelow) {
-    themeMenu.style.top = Math.max(4, rect.bottom - menuH) + 'px';
-  } else {
-    themeMenu.style.top = rect.top + 'px';
-  }
-}
-
-function hideThemeMenu() { themeMenu.classList.remove('open'); }
 
 /* ═══════════════════════════════════════════════════════════════
    FONT SIZE (Ctrl+Scroll)
@@ -2149,7 +2117,88 @@ document.getElementById('search-close').addEventListener('click', closeSearch);
 document.getElementById('btn-search').addEventListener('click', () => {
   searchbar.classList.contains('open') ? closeSearch() : openSearch();
 });
-document.getElementById('btn-theme').addEventListener('click', e => { e.stopPropagation(); showThemeMenu(); });
+
+/* ═══════════════════════════════════════════════════════════════
+   CUSTOM DROPDOWN
+═══════════════════════════════════════════════════════════════ */
+function initCustomDropdown(dd) {
+  const selectId = dd.dataset.for;
+  const select = document.getElementById(selectId);
+  if (!select) return;
+
+  dd.innerHTML = '';
+  const btn = document.createElement('div');
+  btn.className = 'custom-dropdown-btn';
+  btn.innerHTML = `<span class="custom-dropdown-label"></span><span class="dropdown-arrow">▼</span>`;
+  const menu = document.createElement('div');
+  menu.className = 'custom-dropdown-menu';
+  dd.appendChild(btn);
+  dd.appendChild(menu);
+
+  function buildOptions() {
+    menu.innerHTML = '';
+    [...select.options].forEach(opt => {
+      const el = document.createElement('div');
+      el.className = 'custom-dropdown-option' + (opt.selected ? ' selected' : '');
+      el.dataset.value = opt.value;
+      // Support theme swatches via data-swatches attribute
+      if (opt.dataset.swatches) {
+        const swatches = opt.dataset.swatches.split(',');
+        el.innerHTML = `<span class="theme-swatch">${swatches.map(c => `<span style="background:${c}"></span>`).join('')}</span><span>${opt.textContent}</span>`;
+      } else {
+        el.textContent = opt.textContent;
+      }
+      el.addEventListener('click', () => {
+        select.value = opt.value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        refresh();
+        close();
+      });
+      menu.appendChild(el);
+    });
+  }
+
+  function refresh() {
+    const sel = select.options[select.selectedIndex];
+    btn.querySelector('.custom-dropdown-label').textContent = sel ? sel.textContent : '';
+    menu.querySelectorAll('.custom-dropdown-option').forEach(el => {
+      el.classList.toggle('selected', el.dataset.value === select.value);
+    });
+  }
+
+  function close() {
+    btn.classList.remove('open');
+    menu.classList.remove('open');
+  }
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const isOpen = menu.classList.contains('open');
+    // Close all other dropdowns
+    document.querySelectorAll('.custom-dropdown-menu.open').forEach(m => m.classList.remove('open'));
+    document.querySelectorAll('.custom-dropdown-btn.open').forEach(b => b.classList.remove('open'));
+    if (!isOpen) {
+      buildOptions();
+      btn.classList.add('open');
+      menu.classList.add('open');
+    }
+  });
+
+  // Close on outside click
+  document.addEventListener('click', e => {
+    if (!dd.contains(e.target)) close();
+  });
+
+  // Sync when select changes externally
+  select.addEventListener('change', refresh);
+
+  // Initial build
+  buildOptions();
+  refresh();
+}
+
+// Init all custom dropdowns
+document.querySelectorAll('.custom-dropdown').forEach(initCustomDropdown);
 
 /* ═══════════════════════════════════════════════════════════════
    SETTINGS MODAL
@@ -2164,9 +2213,13 @@ function openSettings() {
     const opt = document.createElement('option');
     opt.value = key;
     opt.textContent = t.label;
+    opt.dataset.swatches = t.swatches.join(',');
     if (key === currentThemeName) opt.selected = true;
     themeSelect.appendChild(opt);
   }
+  // Rebuild custom dropdown for theme
+  const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
+  if (themeDD) initCustomDropdown(themeDD);
 
   // Font size
   document.getElementById('set-fontsize').value = currentFontSize;
@@ -2190,12 +2243,24 @@ function openSettings() {
   document.getElementById('set-scrollback').value = currentScrollback;
   document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
 
+  // Activate first category
+  switchSettingsCat('appearance');
   settingsOverlay.classList.add('open');
 }
 
 function closeSettings() {
   settingsOverlay.classList.remove('open');
 }
+
+function switchSettingsCat(cat) {
+  document.querySelectorAll('.settings-cat-btn').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
+  document.querySelectorAll('.settings-section[data-cat]').forEach(s => s.classList.toggle('active', s.dataset.cat === cat));
+}
+
+// Category button click handlers
+document.querySelectorAll('.settings-cat-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchSettingsCat(btn.dataset.cat));
+});
 
 function applySettings() {
   const wsp = activeWs();
@@ -2426,6 +2491,24 @@ document.addEventListener('keydown', e => {
       e.preventDefault(); e.stopPropagation();
       const wsp = activeWs();
       if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
+      return;
+    }
+    if (e.code === 'KeyC' || e.key === 'C' || e.key === 'c') {
+      const t = activeTerminal();
+      if (t && t.type !== 'browser' && t.term.hasSelection()) {
+        e.preventDefault(); e.stopPropagation();
+        navigator.clipboard.writeText(t.term.getSelection());
+      }
+      return;
+    }
+    if (e.code === 'KeyV' || e.key === 'V' || e.key === 'v') {
+      const t = activeTerminal();
+      if (t && t.type !== 'browser') {
+        e.preventDefault(); e.stopPropagation();
+        navigator.clipboard.readText().then(text => {
+          if (text) sendStdin(t.id, new TextEncoder().encode(text));
+        });
+      }
       return;
     }
   }
