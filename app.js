@@ -1,6 +1,11 @@
 (function() {
 'use strict';
 
+// Tauri Webview API (from window.__TAURI__ global, injected by Tauri runtime)
+function tauriWebview() { return window.__TAURI__ && window.__TAURI__.webview; }
+function tauriWindow() { return window.__TAURI__ && window.__TAURI__.window; }
+function loadTauriApi() { /* no-op: API available via window.__TAURI__ at runtime */ }
+
 /* ═══════════════════════════════════════════════════════════════
    THEMES — mirror Python THEMES dict exactly
 ═══════════════════════════════════════════════════════════════ */
@@ -726,6 +731,10 @@ function activateTerminal(wsId, termId) {
           const showAs = t.type === 'browser' ? 'flex' : 'block';
           slot.style.display = isActive ? showAs : 'none';
           slot.classList.toggle('focused', isActive);
+          // Show/hide native webview
+          if (t._webview) {
+            try { isActive ? t._webview.show() : t._webview.hide(); } catch {}
+          }
         });
       }
     }
@@ -762,6 +771,8 @@ function removeTerminal(wsId, termId, skipRender) {
     entry.term.dispose();
   } else {
     if (entry._msgCleanup) entry._msgCleanup();
+    if (entry._resizeObs) { entry._resizeObs.disconnect(); entry._resizeObs = null; }
+    if (entry._webview) { try { entry._webview.close(); } catch {} entry._webview = null; }
   }
   if (entry.el) entry.el.remove();
 
@@ -1217,18 +1228,12 @@ function getOrCreateSlot(entry, wsp, parentEl) {
     toolbar.appendChild(urlInput);
     toolbar.appendChild(btnOpenExt);
 
-    // ── Content area with iframe for style isolation ──
+    // ── Content area ──
     const contentWrap = document.createElement('div');
     contentWrap.className = 'browser-content';
 
     // Loading bar sits above the content
     contentWrap.appendChild(loadingBar);
-
-    // iframe for proxied pages (provides CSS isolation)
-    const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;display:none;';
-    iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups';
-    contentWrap.appendChild(iframe);
 
     // Scrollable div for start/error pages
     const pageView = document.createElement('div');
@@ -1241,12 +1246,66 @@ function getOrCreateSlot(entry, wsp, parentEl) {
     entry._pageView = pageView;
     entry.opened = true;
 
-    // ── Local proxy (port 7682 on same host as WebSocket server) ──
-    const proxyHost = isTauri() ? '127.0.0.1' : (window.location.hostname || '127.0.0.1');
-    const proxyUrl = u => `http://${proxyHost}:${PROXY_PORT}/proxy?url=${encodeURIComponent(u)}`;
+    // ── Tauri native webview (lazy-created) ──
+    let wvNative = null;
+    let resizeObs = null;
+
+    function positionWebview() {
+      if (!wvNative || !contentWrap.isConnected) return;
+      const r = contentWrap.getBoundingClientRect();
+      const dpi = window.__TAURI__ && window.__TAURI__.dpi;
+      if (!dpi) return;
+      wvNative.setPosition(new dpi.LogicalPosition(r.left, r.top));
+      wvNative.setSize(new dpi.LogicalSize(r.width, r.height));
+    }
+
+    async function ensureWebview(url) {
+      const wvApi = tauriWebview();
+      const winApi = tauriWindow();
+      if (!wvApi || !winApi) return false;
+      if (wvNative) return true;
+      try {
+        const appWindow = winApi.getCurrentWindow();
+        wvNative = new wvApi.Webview(appWindow, 'browser-' + entry.id, {
+          url: url,
+          x: 0, y: 0, width: 800, height: 600
+        });
+        await new Promise((res, rej) => {
+          wvNative.once('tauri://created', res);
+          wvNative.once('tauri://error', e => rej(e));
+        });
+        positionWebview();
+        wvNative.setAutoResize(false);
+        if (!resizeObs) {
+          resizeObs = new ResizeObserver(() => positionWebview());
+          resizeObs.observe(contentWrap);
+          entry._resizeObs = resizeObs;
+        }
+        entry._webview = wvNative;
+        // Sync URL bar with internal navigation
+        wvNative.listen('page-url-changed', ev => {
+          const newUrl = ev.payload;
+          if (newUrl && newUrl !== 'about:blank') {
+            entry.url = newUrl;
+            urlInput.value = newUrl;
+            entry.label = newUrl.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
+            if (entry._history[entry._historyIdx] !== newUrl) {
+              entry._history = entry._history.slice(0, entry._historyIdx + 1);
+              entry._history.push(newUrl);
+              entry._historyIdx = entry._history.length - 1;
+            }
+            updateNavButtons();
+            renderSidebar();
+          }
+        });
+        return true;
+      } catch (e) {
+        console.error('Failed to create webview:', e);
+        return false;
+      }
+    }
 
     let loading = false;
-    let abortCtrl = null;
 
     function showLoading(on) {
       loading = on;
@@ -1255,7 +1314,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
     }
 
     function showError(url, msg) {
-      iframe.style.display = 'none';
+      if (wvNative) { try { wvNative.hide(); } catch {} }
       pageView.style.display = '';
       pageView.innerHTML = `
         <div class="browser-error-page">
@@ -1276,7 +1335,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
     }
 
     function showStartPage() {
-      iframe.style.display = 'none';
+      if (wvNative) { try { wvNative.hide(); } catch {} }
       pageView.style.display = '';
       pageView.innerHTML = `
         <div class="browser-start-page">
@@ -1285,31 +1344,23 @@ function getOrCreateSlot(entry, wsp, parentEl) {
             <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
           </svg>
           <p>Enter a URL or search term above</p>
-          <p class="browser-start-hint">Pages load through your local proxy — most sites work.</p>
+          <p class="browser-start-hint">Native webview — all sites load directly.</p>
         </div>`;
     }
 
-    function isLocalhostUrl(u) {
-      try { return /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(new URL(u).hostname); } catch {}
-      return false;
+    function normalizeUrl(raw) {
+      if (!raw || raw === 'about:blank') return null;
+      let url = raw.trim();
+      if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) return url;
+      if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i.test(url)) return 'http://' + url;
+      if (!url.includes('.') || url.includes(' ')) return 'https://www.google.com/search?q=' + encodeURIComponent(url);
+      return 'https://' + url;
     }
 
     async function loadUrl(rawUrl) {
-      if (!rawUrl || rawUrl === 'about:blank') { showStartPage(); return; }
-      let url = rawUrl.trim();
-      if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) {
-        // Already has a scheme (http, https, file, ftp, etc.) — use as-is
-      } else if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i.test(url)) {
-        // Localhost dev server — use http
-        url = 'http://' + url;
-      } else if (!url.includes('.') || url.includes(' ')) {
-        url = 'https://www.google.com/search?q=' + encodeURIComponent(url);
-      } else {
-        url = 'https://' + url;
-      }
+      const url = normalizeUrl(rawUrl);
+      if (!url) { showStartPage(); return; }
 
-      if (abortCtrl) abortCtrl.abort();
-      abortCtrl = new AbortController();
       showLoading(true);
       urlInput.value = url;
       entry.url = url;
@@ -1325,48 +1376,39 @@ function getOrCreateSlot(entry, wsp, parentEl) {
       renderSidebar();
       updateStatusBar();
 
-      // ── Localhost / dev-server bypass: load directly in iframe ──
-      // ES modules (Vite, React, etc.) break when proxied through srcdoc
-      // because import statements can't be rewritten. Load via iframe.src
-      // so the browser handles everything natively.
-      if (isLocalhostUrl(url)) {
-        showLoading(false);
+      // In Tauri: use native webview (no proxy needed)
+      if (isTauri() && tauriWebview() && tauriWindow()) {
         pageView.style.display = 'none';
-        iframe.style.display = 'block';
-        iframe.removeAttribute('srcdoc');
-        iframe.src = url;
+        const ok = await ensureWebview(url);
+        if (ok) {
+          wvNative.show();
+          wvNative.setUrl(url);
+          positionWebview();
+        } else {
+          showError(url, 'Failed to create native webview');
+        }
+        showLoading(false);
         return;
       }
 
+      // Non-Tauri fallback: proxy fetch + iframe
+      const proxyHost = window.location.hostname || '127.0.0.1';
+      const proxyUrlFn = u => `http://${proxyHost}:${PROXY_PORT}/proxy?url=${encodeURIComponent(u)}`;
       let html = null;
       let lastErr = '';
       try {
-        const res = await fetch(proxyUrl(url), { signal: abortCtrl.signal });
-        if (res.ok) {
-          html = await res.text();
-        } else {
-          lastErr = `Proxy returned HTTP ${res.status}`;
-        }
+        const res = await fetch(proxyUrlFn(url));
+        if (res.ok) { html = await res.text(); }
+        else { lastErr = `Proxy returned HTTP ${res.status}`; }
       } catch (err) {
-        if (err.name === 'AbortError') { showLoading(false); return; }
-        lastErr = 'Could not reach proxy server (is server.js running?): ' + err.message;
+        lastErr = 'Could not reach proxy server: ' + err.message;
       }
-
       showLoading(false);
-
-      if (!html) {
-        showError(url, lastErr);
-        return;
-      }
-
+      if (!html) { showError(url, lastErr); return; }
       try {
-        // Strip CSP meta tags so the navBridge and page scripts can run
         html = html.replace(/<meta[^>]*http-equiv\s*=\s*["']?content-security-policy[^>]*>/gi, '');
-
-        // Inject navigation + fetch/XHR interceptor for SPA support
-        const proxyBase = 'http://' + (isTauri() ? '127.0.0.1' : (window.location.hostname || '127.0.0.1')) + ':' + PROXY_PORT + '/proxy?url=';
+        const proxyBase = 'http://' + proxyHost + ':' + PROXY_PORT + '/proxy?url=';
         const navBridge = '<script>(' + (function(pxBase, pageUrl){
-          // Link click interceptor
           document.addEventListener('click', function(e){
             var a = e.target.closest && e.target.closest('a[href]');
             if (!a) return;
@@ -1376,8 +1418,6 @@ function getOrCreateSlot(entry, wsp, parentEl) {
             try { var u = new URL(href, pageUrl); var i = u.searchParams.get('url'); if (i) href = decodeURIComponent(i); } catch(x){}
             try { window.parent.postMessage({terminusNav: href}, '*'); } catch(x){}
           }, true);
-
-          // Fetch interceptor — routes JS fetch() through the proxy safely using original URL base
           var origFetch = window.fetch;
           window.fetch = function(input, init){
             try {
@@ -1389,8 +1429,6 @@ function getOrCreateSlot(entry, wsp, parentEl) {
             } catch(x){}
             return origFetch.call(this, input, init);
           };
-
-          // XHR interceptor — routes XMLHttpRequest.open() through the proxy safely
           var origOpen = XMLHttpRequest.prototype.open;
           XMLHttpRequest.prototype.open = function(method, url, ...rest){
             try {
@@ -1401,8 +1439,6 @@ function getOrCreateSlot(entry, wsp, parentEl) {
             } catch(x){}
             return origOpen.call(this, method, url, ...rest);
           };
-
-          // Dynamic DOM elements interceptor (captures lazy-loaded chunks injected by React/Webpack/Vite)
           var origCreateElement = document.createElement;
           document.createElement = function(tagName, options) {
             var el = origCreateElement.call(document, tagName, options);
@@ -1415,11 +1451,8 @@ function getOrCreateSlot(entry, wsp, parentEl) {
                   if (val && !val.startsWith(pxBase) && !val.startsWith('data:')) {
                     var abs = new URL(val, pageUrl).href;
                     descriptor.set.call(el, pxBase + encodeURIComponent(abs));
-                  } else {
-                    descriptor.set.call(el, val);
-                  }
-                },
-                configurable: true
+                  } else { descriptor.set.call(el, val); }
+                }, configurable: true
               });
             } else if (tag === 'link') {
               var descriptor = Object.getOwnPropertyDescriptor(HTMLLinkElement.prototype, 'href');
@@ -1429,22 +1462,25 @@ function getOrCreateSlot(entry, wsp, parentEl) {
                   if (val && !val.startsWith(pxBase) && !val.startsWith('data:')) {
                     var abs = new URL(val, pageUrl).href;
                     descriptor.set.call(el, pxBase + encodeURIComponent(abs));
-                  } else {
-                    descriptor.set.call(el, val);
-                  }
-                },
-                configurable: true
+                  } else { descriptor.set.call(el, val); }
+                }, configurable: true
               });
             }
             return el;
           };
         }).toString() + ')(' + JSON.stringify(proxyBase) + ',' + JSON.stringify(url) + ')<\/script>';
         const baseStyles = '<style>body{margin:0;font-family:sans-serif;font-size:14px;line-height:1.5;color:#222}a{color:#1a73e8}</style>';
-
-        // Render in the pre-created iframe (CSS isolation)
+        // Create or reuse iframe for fallback
+        let iframe = contentWrap.querySelector('iframe.browser-fallback');
+        if (!iframe) {
+          iframe = document.createElement('iframe');
+          iframe.className = 'browser-fallback';
+          iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;display:none;';
+          iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups';
+          contentWrap.insertBefore(iframe, pageView);
+        }
         pageView.style.display = 'none';
         iframe.style.display = 'block';
-        // Remove src before setting srcdoc
         iframe.removeAttribute('src');
         iframe.srcdoc = baseStyles + navBridge + html;
       } catch (e) {
@@ -2328,6 +2364,7 @@ if (restored) {
 
 // In Tauri, delay first connection to ensure server is fully ready
 if (isTauri()) {
+  loadTauriApi(); // preload webview + window API for browser tabs
   setTimeout(() => { try { connectWS(); } catch (e) { console.error('connectWS failed:', e); } }, 500);
 } else {
   try { connectWS(); } catch (e) { console.error('connectWS failed:', e); }
