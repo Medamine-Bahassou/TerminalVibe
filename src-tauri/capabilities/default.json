@@ -20,6 +20,8 @@
     "core:webview:allow-webview-hide",
     "core:webview:allow-webview-show",
     "core:webview:allow-get-all-webviews",
-    "opener:default"
+    "opener:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
   ]
 }
