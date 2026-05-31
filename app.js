@@ -1,3 +1,4 @@
+(function() {
 'use strict';
 
 /* ═══════════════════════════════════════════════════════════════
@@ -86,6 +87,12 @@ const THEMES = {
 const WS_PORT = 7681;
 const PROXY_PORT = 7682;
 
+function isTauri() {
+  return !!window.__TAURI_INTERNALS__ ||
+    window.location.protocol === 'tauri:' ||
+    window.location.hostname === 'tauri.localhost';
+}
+
 /* ═══════════════════════════════════════════════════════════════
    STATE
 ═══════════════════════════════════════════════════════════════ */
@@ -112,7 +119,7 @@ const ID_LEN = 36;
 
 function connectWS() {
   updateConnStatus(false, true);
-  const wsHost = window.location.hostname || '127.0.0.1';
+  const wsHost = isTauri() ? '127.0.0.1' : (window.location.hostname || '127.0.0.1');
   ws = new WebSocket(`ws://${wsHost}:${WS_PORT}`);
   ws.binaryType = 'arraybuffer';
 
@@ -132,7 +139,7 @@ function connectWS() {
         }
       }
     } else {
-      createWorkspace('Main');
+      try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); }
     }
   };
 
@@ -1235,7 +1242,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
     entry.opened = true;
 
     // ── Local proxy (port 7682 on same host as WebSocket server) ──
-    const proxyHost = window.location.hostname || '127.0.0.1';
+    const proxyHost = isTauri() ? '127.0.0.1' : (window.location.hostname || '127.0.0.1');
     const proxyUrl = u => `http://${proxyHost}:${PROXY_PORT}/proxy?url=${encodeURIComponent(u)}`;
 
     let loading = false;
@@ -1357,7 +1364,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
         html = html.replace(/<meta[^>]*http-equiv\s*=\s*["']?content-security-policy[^>]*>/gi, '');
 
         // Inject navigation + fetch/XHR interceptor for SPA support
-        const proxyBase = 'http://' + (window.location.hostname || '127.0.0.1') + ':' + PROXY_PORT + '/proxy?url=';
+        const proxyBase = 'http://' + (isTauri() ? '127.0.0.1' : (window.location.hostname || '127.0.0.1')) + ':' + PROXY_PORT + '/proxy?url=';
         const navBridge = '<script>(' + (function(pxBase, pageUrl){
           // Link click interceptor
           document.addEventListener('click', function(e){
@@ -2319,7 +2326,29 @@ if (restored) {
   updateStatusBar();
 }
 
-connectWS();
+// In Tauri, delay first connection to ensure server is fully ready
+if (isTauri()) {
+  setTimeout(() => { try { connectWS(); } catch (e) { console.error('connectWS failed:', e); } }, 500);
+} else {
+  try { connectWS(); } catch (e) { console.error('connectWS failed:', e); }
+}
+
+// ── Tauri: activate custom titlebar + window controls ──
+if (isTauri()) {
+  const tb = document.getElementById('titlebar');
+  if (tb) tb.classList.add('tauri-active');
+
+  // Tauri 2 window plugin invoke
+  document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
+    window.__TAURI_INTERNALS__.invoke('plugin:window|minimize');
+  });
+  document.getElementById('titlebar-maximize')?.addEventListener('click', () => {
+    window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize');
+  });
+  document.getElementById('titlebar-close')?.addEventListener('click', () => {
+    window.__TAURI_INTERNALS__.invoke('plugin:window|close');
+  });
+}
 
 // Listen for navigation messages from browser tab iframes
 window.addEventListener('message', function(e) {
@@ -2331,11 +2360,15 @@ window.addEventListener('message', function(e) {
   }
 });
 
-window.addEventListener('beforeunload', (e) => {
-  saveState();
-  const hasTerms = workspaces.some(ws => getWorkspaceTerminals(ws).length > 0);
-  if (hasTerms) {
-    e.preventDefault();
-    e.returnValue = '';
-  }
-});
+if (!isTauri()) {
+  window.addEventListener('beforeunload', (e) => {
+    saveState();
+    const hasTerms = workspaces.some(ws => getWorkspaceTerminals(ws).length > 0);
+    if (hasTerms) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+}
+
+})();
