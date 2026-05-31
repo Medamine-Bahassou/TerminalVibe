@@ -13,7 +13,7 @@ const THEMES = {
   'catppuccin-mocha': {
     label: 'Catppuccin Mocha',
     bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#585b70',
-    swatches: ['#f38ba8','#a6e3a1','#89b4fa'],
+    swatches: ['#1e1e2e','#cdd6f4','#f5e0dc'],
     palette: [
       '#1e1e2e','#f38ba8','#a6e3a1','#f9e2af',
       '#89b4fa','#f5c2e7','#94e2d5','#cdd6f4',
@@ -24,7 +24,7 @@ const THEMES = {
   'catppuccin-latte': {
     label: 'Catppuccin Latte',
     bg: '#eff1f5', fg: '#4c4f69', cursor: '#dc8a78', selection: '#bcc0cc',
-    swatches: ['#d20f39','#40a02b','#1e66f5'],
+    swatches: ['#eff1f5','#4c4f69','#dc8a78'],
     palette: [
       '#eff1f5','#d20f39','#40a02b','#df8e1d',
       '#1e66f5','#ea76cb','#179299','#acb0be',
@@ -35,7 +35,7 @@ const THEMES = {
   'dracula': {
     label: 'Dracula',
     bg: '#282a36', fg: '#f8f8f2', cursor: '#f8f8f2', selection: '#44475a',
-    swatches: ['#ff5555','#50fa7b','#bd93f9'],
+    swatches: ['#282a36','#f8f8f2','#bd93f9'],
     palette: [
       '#21222c','#ff5555','#50fa7b','#f1fa8c',
       '#bd93f9','#ff79c6','#8be9fd','#f8f8f2',
@@ -46,7 +46,7 @@ const THEMES = {
   'gruvbox': {
     label: 'Gruvbox',
     bg: '#282828', fg: '#ebdbb2', cursor: '#ebdbb2', selection: '#504945',
-    swatches: ['#cc241d','#98971a','#458588'],
+    swatches: ['#282828','#ebdbb2','#d79921'],
     palette: [
       '#282828','#cc241d','#98971a','#d79921',
       '#458588','#b16286','#689d6a','#a89984',
@@ -57,7 +57,7 @@ const THEMES = {
   'tokyo-night': {
     label: 'Tokyo Night',
     bg: '#1a1b26', fg: '#c0caf5', cursor: '#c0caf5', selection: '#33467c',
-    swatches: ['#f7768e','#9ece6a','#7aa2f7'],
+    swatches: ['#1a1b26','#c0caf5','#7aa2f7'],
     palette: [
       '#15161e','#f7768e','#9ece6a','#e0af68',
       '#7aa2f7','#bb9af7','#7dcfff','#a9b1d6',
@@ -68,7 +68,7 @@ const THEMES = {
   'nord': {
     label: 'Nord',
     bg: '#2e3440', fg: '#d8dee9', cursor: '#d8dee9', selection: '#434c5e',
-    swatches: ['#bf616a','#a3be8c','#81a1c1'],
+    swatches: ['#2e3440','#d8dee9','#81a1c1'],
     palette: [
       '#3b4252','#bf616a','#a3be8c','#ebcb8b',
       '#81a1c1','#b48ead','#88c0d0','#e5e9f0',
@@ -79,7 +79,7 @@ const THEMES = {
   'solarized-dark': {
     label: 'Solarized Dark',
     bg: '#002b36', fg: '#839496', cursor: '#839496', selection: '#073642',
-    swatches: ['#dc322f','#859900','#268bd2'],
+    swatches: ['#002b36','#839496','#268bd2'],
     palette: [
       '#073642','#dc322f','#859900','#b58900',
       '#268bd2','#d33682','#2aa198','#eee8d5',
@@ -2130,9 +2130,6 @@ document.getElementById('search-close').addEventListener('click', closeSearch);
 /* ═══════════════════════════════════════════════════════════════
    TOOLBAR BUTTONS
 ═══════════════════════════════════════════════════════════════ */
-document.getElementById('btn-search').addEventListener('click', () => {
-  searchbar.classList.contains('open') ? closeSearch() : openSearch();
-});
 
 /* ═══════════════════════════════════════════════════════════════
    CUSTOM DROPDOWN
