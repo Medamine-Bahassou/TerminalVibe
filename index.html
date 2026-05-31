@@ -53,9 +53,6 @@
       <div class="sa-btn" id="btn-search" title="Search (Ctrl+Shift+F)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </div>
-      <div class="sa-btn" id="btn-theme" title="Change theme">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 010 20"/><circle cx="12" cy="12" r="3"/></svg>
-      </div>
       <div class="sa-btn" id="btn-settings" title="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
       </div>
@@ -105,8 +102,6 @@
 
 <!-- Context menu -->
 <div id="ctx"></div>
-<!-- Theme menu -->
-<div id="theme-menu"></div>
 <!-- Settings -->
 <div id="settings-overlay">
   <div id="settings-modal">
@@ -114,79 +109,93 @@
       <h2>Settings</h2>
       <div class="settings-close" id="settings-close">✕</div>
     </div>
-    <div class="settings-body">
-
-      <div class="settings-section">
-        <div class="settings-section-title">Appearance</div>
-        <div class="settings-row">
-          <span class="settings-label">Theme</span>
-          <div class="settings-control">
-            <select id="set-theme"></select>
+    <div class="settings-layout">
+      <div class="settings-sidebar">
+        <div class="settings-cat-btn active" data-cat="appearance">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 010 20"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Appearance</span>
+        </div>
+        <div class="settings-cat-btn" data-cat="terminal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          <span>Terminal</span>
+        </div>
+        <div class="settings-cat-btn" data-cat="shortcuts">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="8" x2="6" y2="8.01"/><line x1="10" y1="8" x2="10" y2="8.01"/><line x1="14" y1="8" x2="14" y2="8.01"/><line x1="18" y1="8" x2="18" y2="8.01"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="6" y1="16" x2="6" y2="16.01"/><line x1="18" y1="16" x2="18" y2="16.01"/></svg>
+          <span>Shortcuts</span>
+        </div>
+      </div>
+      <div class="settings-body">
+        <div class="settings-section" data-cat="appearance">
+          <div class="settings-section-title">Appearance</div>
+          <div class="settings-row">
+            <span class="settings-label">Theme</span>
+            <div class="settings-control">
+              <select id="set-theme" class="native-select-hidden"></select>
+              <div class="custom-dropdown" data-for="set-theme"></div>
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">Font size</span>
+            <div class="settings-control">
+              <input type="range" id="set-fontsize" min="8" max="32" step="1">
+              <span class="settings-value" id="set-fontsize-val"></span>
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">Font family</span>
+            <div class="settings-control">
+              <input type="text" id="set-fontfamily" spellcheck="false" autocomplete="off">
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">Line height</span>
+            <div class="settings-control">
+              <input type="range" id="set-lineheight" min="1.0" max="2.0" step="0.1">
+              <span class="settings-value" id="set-lineheight-val"></span>
+            </div>
           </div>
         </div>
-        <div class="settings-row">
-          <span class="settings-label">Font size</span>
-          <div class="settings-control">
-            <input type="range" id="set-fontsize" min="8" max="32" step="1">
-            <span class="settings-value" id="set-fontsize-val"></span>
+        <div class="settings-section" data-cat="terminal">
+          <div class="settings-section-title">Terminal</div>
+          <div class="settings-row">
+            <span class="settings-label">Cursor style</span>
+            <div class="settings-control">
+              <select id="set-cursor" class="native-select-hidden">
+                <option value="block">Block</option>
+                <option value="underline">Underline</option>
+                <option value="bar">Bar</option>
+              </select>
+              <div class="custom-dropdown" data-for="set-cursor"></div>
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">Cursor blink</span>
+            <div class="settings-control">
+              <div class="toggle-switch" id="set-cursorblink"></div>
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">Scrollback</span>
+            <div class="settings-control">
+              <input type="range" id="set-scrollback" min="1000" max="50000" step="1000">
+              <span class="settings-value" id="set-scrollback-val"></span>
+            </div>
           </div>
         </div>
-        <div class="settings-row">
-          <span class="settings-label">Font family</span>
-          <div class="settings-control">
-            <input type="text" id="set-fontfamily" spellcheck="false" autocomplete="off">
-          </div>
-        </div>
-        <div class="settings-row">
-          <span class="settings-label">Line height</span>
-          <div class="settings-control">
-            <input type="range" id="set-lineheight" min="1.0" max="2.0" step="0.1">
-            <span class="settings-value" id="set-lineheight-val"></span>
+        <div class="settings-section" data-cat="shortcuts">
+          <div class="settings-section-title">Keyboard Shortcuts</div>
+          <div class="settings-shortcuts">
+            <div class="shortcut-item"><span>New terminal</span><span class="shortcut-key">Ctrl+Shift+T</span></div>
+            <div class="shortcut-item"><span>Close terminal</span><span class="shortcut-key">Ctrl+Shift+W</span></div>
+            <div class="shortcut-item"><span>Split horizontal</span><span class="shortcut-key">Ctrl+Shift+D</span></div>
+            <div class="shortcut-item"><span>Split vertical</span><span class="shortcut-key">Ctrl+Shift+E</span></div>
+            <div class="shortcut-item"><span>Search</span><span class="shortcut-key">Ctrl+Shift+F</span></div>
+            <div class="shortcut-item"><span>Prev/Next tab</span><span class="shortcut-key">Ctrl+Tab</span></div>
+            <div class="shortcut-item"><span>Focus pane</span><span class="shortcut-key">Alt+H/J/K/L</span></div>
+            <div class="shortcut-item"><span>Font size</span><span class="shortcut-key">Ctrl+Scroll</span></div>
           </div>
         </div>
       </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">Terminal</div>
-        <div class="settings-row">
-          <span class="settings-label">Cursor style</span>
-          <div class="settings-control">
-            <select id="set-cursor">
-              <option value="block">Block</option>
-              <option value="underline">Underline</option>
-              <option value="bar">Bar</option>
-            </select>
-          </div>
-        </div>
-        <div class="settings-row">
-          <span class="settings-label">Cursor blink</span>
-          <div class="settings-control">
-            <div class="toggle-switch" id="set-cursorblink"></div>
-          </div>
-        </div>
-        <div class="settings-row">
-          <span class="settings-label">Scrollback</span>
-          <div class="settings-control">
-            <input type="range" id="set-scrollback" min="1000" max="50000" step="1000">
-            <span class="settings-value" id="set-scrollback-val"></span>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">Keyboard Shortcuts</div>
-        <div class="settings-shortcuts">
-          <div class="shortcut-item"><span>New terminal</span><span class="shortcut-key">Ctrl+Shift+T</span></div>
-          <div class="shortcut-item"><span>Close terminal</span><span class="shortcut-key">Ctrl+Shift+W</span></div>
-          <div class="shortcut-item"><span>Split horizontal</span><span class="shortcut-key">Ctrl+Shift+D</span></div>
-          <div class="shortcut-item"><span>Split vertical</span><span class="shortcut-key">Ctrl+Shift+E</span></div>
-          <div class="shortcut-item"><span>Search</span><span class="shortcut-key">Ctrl+Shift+F</span></div>
-          <div class="shortcut-item"><span>Prev/Next tab</span><span class="shortcut-key">Ctrl+Tab</span></div>
-          <div class="shortcut-item"><span>Focus pane</span><span class="shortcut-key">Alt+H/J/K/L</span></div>
-          <div class="shortcut-item"><span>Font size</span><span class="shortcut-key">Ctrl+Scroll</span></div>
-        </div>
-      </div>
-
     </div>
   </div>
 </div>
