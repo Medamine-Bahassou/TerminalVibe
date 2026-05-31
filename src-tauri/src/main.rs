@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|_app| {
             // Auto-start the Node.js backend if not already running
             if TcpStream::connect("127.0.0.1:7681").is_err() {

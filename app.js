@@ -98,6 +98,14 @@ function isTauri() {
     window.location.hostname === 'tauri.localhost';
 }
 
+function openExternalUrl(url) {
+  if (isTauri() && window.__TAURI_INTERNALS__) {
+    window.__TAURI_INTERNALS__.invoke('plugin:opener|open_url', { url });
+  } else {
+    window.open(url, '_blank');
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════
    STATE
 ═══════════════════════════════════════════════════════════════ */
@@ -593,7 +601,7 @@ function _createTermEntry(wsp, id, label) {
 
   const fitAddon = new FitAddon.FitAddon();
   const searchAddon = new SearchAddon.SearchAddon();
-  const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+  const webLinksAddon = new WebLinksAddon.WebLinksAddon((e, uri) => openExternalUrl(uri));
   try { const u11 = new Unicode11Addon.Unicode11Addon(); term.loadAddon(u11); term.unicode.activeVersion = '11'; } catch {}
   term.loadAddon(fitAddon);
   term.loadAddon(searchAddon);
@@ -680,7 +688,7 @@ function addTerminal(wsId, targetGroupId) {
             if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
             else activateTerminal(wsp.id, entry.id);
           });
-          tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', entry.id); });
+          tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
           // Drag & drop
           tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.dragSourceGroupId = targetGroup.id; });
           tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
@@ -777,7 +785,7 @@ function addBrowserTab(wsId, targetGroupId, url) {
             if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
             else activateTerminal(wsp.id, entry.id);
           });
-          tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', entry.id); });
+          tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
           tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.dragSourceGroupId = targetGroup.id; });
           tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
           tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
@@ -1522,7 +1530,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
           </div>
         </div>`;
       pageView.querySelector('#err-retry')?.addEventListener('click', () => loadUrl(entry.url));
-      pageView.querySelector('#err-ext')?.addEventListener('click', () => window.open(entry.url, '_blank'));
+      pageView.querySelector('#err-ext')?.addEventListener('click', () => openExternalUrl(entry.url));
     }
 
     function showStartPage() {
@@ -1713,7 +1721,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
       }
     });
     btnReload.addEventListener('click', () => { if (!loading) loadUrl(entry.url); });
-    btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') window.open(entry.url, '_blank'); });
+    btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') openExternalUrl(entry.url); });
 
     slot.addEventListener('mousedown', () => {
       document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));

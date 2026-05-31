@@ -19,6 +19,7 @@
     "core:webview:allow-set-webview-focus",
     "core:webview:allow-webview-hide",
     "core:webview:allow-webview-show",
-    "core:webview:allow-get-all-webviews"
+    "core:webview:allow-get-all-webviews",
+    "opener:default"
   ]
 }
