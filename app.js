@@ -186,6 +186,7 @@ function doPaste(entry) {
 
 // Fallback paste handler for native Ctrl+V (non-Tauri)
 document.addEventListener('paste', e => {
+  if (Date.now() < _suppressPasteUntil) { e.preventDefault(); e.stopPropagation(); return; }
   const t = activeTerminal();
   if (!t || t.type === 'browser') return;
   const text = e.clipboardData?.getData('text/plain');
@@ -542,7 +543,7 @@ function saveState() {
     cursorBlink: currentCursorBlink,
     scrollback: currentScrollback,
     sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
-    sidebarWidth: savedSidebarWidth || parseInt(document.getElementById('sidebar').style.width) || null,
+    sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
     shortcuts: customShortcuts,
     activeWsId,
     workspaces: workspaces.map(ws => ({
@@ -580,11 +581,11 @@ function restoreState() {
     }
     if (state.sidebarExpanded) document.getElementById('sidebar').classList.add('expanded');
     if (state.sidebarWidth) {
-      savedSidebarWidth = state.sidebarWidth;
-      const sb = document.getElementById('sidebar');
-      if (sb.classList.contains('expanded')) {
-        sb.style.width = state.sidebarWidth + 'px';
-        sb.style.minWidth = state.sidebarWidth + 'px';
+      savedSidebarWidth = Math.max(state.sidebarWidth, SB_EXPANDED_MIN);
+      if (state.sidebarExpanded && sidebarSplit) {
+        const containerW = document.getElementById('app').offsetWidth;
+        const pct = Math.max(5, (savedSidebarWidth / containerW) * 100);
+        sidebarSplit.setSizes([pct, 100 - pct]);
       }
     }
 
@@ -614,7 +615,7 @@ let wsCount = 0;
 function createWorkspace(label) {
   wsCount++;
   const id = uuid();
-  const ws = { id, label: label || `WS ${wsCount}`, layout: null, activeTermId: null };
+  const ws = { id, label: label || 'Workspace', layout: null, activeTermId: null };
   workspaces.push(ws);
   activateWorkspace(id);
   addTerminal(id);
@@ -790,7 +791,7 @@ function addTerminal(wsId, targetGroupId) {
           tab.title = entry.label;
           tab.draggable = true;
           tab.addEventListener('dblclick', () => renameTerminalInGroup(wsp.id, entry.id));
-          tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); removeTerminal(wsp.id, entry.id); } });
+          tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
           tab.addEventListener('click', e => {
             if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
             else activateTerminal(wsp.id, entry.id);
@@ -887,7 +888,7 @@ function addBrowserTab(wsId, targetGroupId, url) {
           tab.title = entry.label;
           tab.draggable = true;
           tab.addEventListener('dblclick', () => renameTerminalInGroup(wsp.id, entry.id));
-          tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); removeTerminal(wsp.id, entry.id); } });
+          tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
           tab.addEventListener('click', e => {
             if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
             else activateTerminal(wsp.id, entry.id);
@@ -1319,7 +1320,7 @@ function buildNodeDom(node, wsp) {
       tab.title = t.label;
 
       tab.addEventListener('dblclick', () => renameTerminalInGroup(wsp.id, t.id));
-      tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); removeTerminal(wsp.id, t.id); } });
+      tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, t.id); } });
       tab.addEventListener('click', e => {
         if (e.target.classList.contains('tg-tab-close')) {
           removeTerminal(wsp.id, t.id);
@@ -1889,6 +1890,9 @@ function makeSashDraggableTree(sash, container, node, childIdx) {
 
     const panes = [...container.children].filter(c => !c.classList.contains('sash'));
     startSizes = panes.map(p => isRow ? p.offsetWidth : p.offsetHeight);
+    const dim = isRow ? 'width' : 'height';
+    for (const p of panes) p.style.willChange = dim;
+    _suppressResize = true;
 
     const onMove = (ev) => {
       const pos = isRow ? ev.clientX : ev.clientY;
@@ -1906,25 +1910,28 @@ function makeSashDraggableTree(sash, container, node, childIdx) {
 
       prevPane.style.flex = 'none';
       nextPane.style.flex = 'none';
-      prevPane.style[isRow ? 'width' : 'height'] = actualPrev + 'px';
-      nextPane.style[isRow ? 'width' : 'height'] = newNext + 'px';
-
-      refitNodeTerminals(node.children[prevIdx]);
-      refitNodeTerminals(node.children[nextIdx]);
+      prevPane.style[dim] = actualPrev + 'px';
+      nextPane.style[dim] = newNext + 'px';
     };
 
     const onUp = () => {
       sash.classList.remove('dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      for (const p of panes) p.style.willChange = '';
+      _suppressResize = false;
 
-      const panes = [...container.children].filter(c => !c.classList.contains('sash'));
-      const currentSizes = panes.map(p => isRow ? p.offsetWidth : p.offsetHeight);
+      const panes2 = [...container.children].filter(c => !c.classList.contains('sash'));
+      const currentSizes = panes2.map(p => isRow ? p.offsetWidth : p.offsetHeight);
       const total = currentSizes.reduce((a, b) => a + b, 0);
       if (total > 0) {
         node.sizes = currentSizes.map(s => (s / total) * 100);
       }
       renderPaneArea();
+      const wsp = activeWs();
+      if (wsp) {
+        for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+      }
       saveState();
     };
 
@@ -1937,8 +1944,12 @@ function makeSashDraggableTree(sash, container, node, childIdx) {
    DRAG AND DROP HANDLERS
 ═══════════════════════════════════════════════════════════════ */
 function setupGroupDragAndDrop(bodyEl, groupNode, wsp, overlay) {
+  let dragDepth = 0;
+
   bodyEl.addEventListener('dragenter', e => {
     e.preventDefault();
+    dragDepth++;
+    overlay.classList.add('active');
   });
 
   bodyEl.addEventListener('dragover', e => {
@@ -1958,7 +1969,6 @@ function setupGroupDragAndDrop(bodyEl, groupNode, wsp, overlay) {
     else if (y < h * 0.25) zone = 'top';
     else if (y > h * 0.75) zone = 'bottom';
 
-    overlay.classList.add('active');
     if (zone === 'left') {
       overlay.style.left = '0'; overlay.style.top = '0';
       overlay.style.width = '50%'; overlay.style.height = '100%';
@@ -1978,11 +1988,16 @@ function setupGroupDragAndDrop(bodyEl, groupNode, wsp, overlay) {
   });
 
   bodyEl.addEventListener('dragleave', () => {
-    overlay.classList.remove('active');
+    dragDepth--;
+    if (dragDepth <= 0) {
+      dragDepth = 0;
+      overlay.classList.remove('active');
+    }
   });
 
   bodyEl.addEventListener('drop', e => {
     e.preventDefault();
+    dragDepth = 0;
     overlay.classList.remove('active');
 
     const draggedId = e.dataTransfer.getData('text/plain') || window.draggedTermId;
@@ -2584,75 +2599,147 @@ document.getElementById('sidebar').addEventListener('mousedown', e => {
 });
 document.getElementById('statusbar').addEventListener('mousedown', e => e.preventDefault());
 
-// Sidebar toggle
+// Sidebar Split.js
+let sidebarSplit = null;
 let savedSidebarWidth = null;
+const SB_EXPANDED_MIN = 200;
+const SB_MAX = 400;
+const SB_SPLIT_OPTS = {
+  gutterSize: 4,
+  snapOffset: 0,
+  maxSize: [SB_MAX, Infinity],
+  elementStyle(dimension, size, gutterSize) {
+    return { 'flex-basis': `calc(${size}% - ${gutterSize}px)` };
+  },
+  gutterStyle(dimension, gutterSize) {
+    return { 'flex-basis': gutterSize + 'px' };
+  },
+};
+
+function initSidebarSplit() {
+  const sb = document.getElementById('sidebar');
+  const main = document.getElementById('main');
+  const expanded = sb.classList.contains('expanded');
+  const savedPx = savedSidebarWidth || (expanded ? SB_EXPANDED_MIN : null);
+  const containerW = document.getElementById('app').offsetWidth;
+  const initialPct = savedPx ? Math.max(5, (savedPx / containerW) * 100) : (expanded ? 15 : 0);
+
+  sidebarSplit = Split([sb, main], {
+    ...SB_SPLIT_OPTS,
+    sizes: [initialPct, 100 - initialPct],
+    minSize: expanded ? [SB_EXPANDED_MIN, 200] : [0, 200],
+    onDragStart() {
+      _suppressResize = true;
+      sb.style.willChange = 'flex-basis';
+      main.style.willChange = 'flex-basis';
+      sb.style.overflowY = 'hidden';
+    },
+    onDragEnd(sizes) {
+      _suppressResize = false;
+      sb.style.willChange = '';
+      main.style.willChange = '';
+      sb.style.overflowY = '';
+      // Enforce 300px minimum when expanded
+      if (sb.classList.contains('expanded')) {
+        const containerW = document.getElementById('app').offsetWidth;
+        const sidebarPx = containerW * sizes[0] / 100;
+        if (sidebarPx < SB_EXPANDED_MIN) {
+          const pct = (SB_EXPANDED_MIN / containerW) * 100;
+          sidebarSplit.setSizes([pct, 100 - pct]);
+        }
+      }
+      const wsp = activeWs();
+      if (wsp) {
+        for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+      }
+    },
+  });
+}
+
+initSidebarSplit();
+
+// Sidebar toggle
 document.getElementById('sidebar-toggle').addEventListener('mousedown', e => e.preventDefault());
 document.getElementById('sidebar-toggle').addEventListener('click', () => {
   const sb = document.getElementById('sidebar');
+  const main = document.getElementById('main');
+  _suppressResize = true;
+  main.style.overflow = 'hidden';
   if (sb.classList.contains('expanded')) {
     savedSidebarWidth = sb.offsetWidth;
-    sb.style.width = '';
-    sb.style.minWidth = '';
     sb.classList.remove('expanded');
+    sidebarSplit.destroy(false, false);
+    sidebarSplit = Split([sb, main], {
+      ...SB_SPLIT_OPTS,
+      sizes: [0, 100],
+      minSize: [0, 200],
+      onDragStart() {
+        _suppressResize = true;
+        main.style.overflow = 'hidden';
+      },
+      onDragEnd(sizes) {
+        _suppressResize = false;
+        main.style.overflow = '';
+        if (sb.classList.contains('expanded')) {
+          const containerW = document.getElementById('app').offsetWidth;
+          const sidebarPx = containerW * sizes[0] / 100;
+          if (sidebarPx < SB_EXPANDED_MIN) {
+            const pct = (SB_EXPANDED_MIN / containerW) * 100;
+            sidebarSplit.setSizes([pct, 100 - pct]);
+          }
+        }
+        requestAnimationFrame(() => {
+          const wsp = activeWs();
+          if (wsp) {
+            for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+          }
+        });
+      },
+    });
   } else {
     sb.classList.add('expanded');
-    if (savedSidebarWidth) {
-      const w = Math.max(56, Math.min(400, savedSidebarWidth));
-      sb.style.width = w + 'px';
-      sb.style.minWidth = w + 'px';
-    }
+    sidebarSplit.destroy(false, false);
+    const w = Math.max(savedSidebarWidth || SB_EXPANDED_MIN, SB_EXPANDED_MIN);
+    const containerW = document.getElementById('app').offsetWidth;
+    const pct = Math.max(5, (w / containerW) * 100);
+    sidebarSplit = Split([sb, main], {
+      ...SB_SPLIT_OPTS,
+      sizes: [pct, 100 - pct],
+      minSize: [SB_EXPANDED_MIN, 200],
+      onDragStart() {
+        _suppressResize = true;
+        main.style.overflow = 'hidden';
+      },
+      onDragEnd(sizes) {
+        _suppressResize = false;
+        main.style.overflow = '';
+        if (sb.classList.contains('expanded')) {
+          const containerW = document.getElementById('app').offsetWidth;
+          const sidebarPx = containerW * sizes[0] / 100;
+          if (sidebarPx < SB_EXPANDED_MIN) {
+            const pct = (SB_EXPANDED_MIN / containerW) * 100;
+            sidebarSplit.setSizes([pct, 100 - pct]);
+          }
+        }
+        requestAnimationFrame(() => {
+          const wsp = activeWs();
+          if (wsp) {
+            for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+          }
+        });
+      },
+    });
   }
   renderSidebar();
-  setTimeout(() => {
+  requestAnimationFrame(() => {
+    main.style.overflow = '';
+    _suppressResize = false;
     const wsp = activeWs();
     if (wsp) {
-      const terms = getWorkspaceTerminals(wsp);
-      for (const t of terms) fitTerm(t);
+      for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
     }
-  }, 220);
+  });
 });
-
-// Sidebar resize sash
-(function() {
-  const sash = document.getElementById('sidebar-sash');
-  const sidebar = document.getElementById('sidebar');
-  const MIN_W = 56;
-  const MAX_W = 400;
-  let dragging = false;
-  let startX = 0;
-  let startW = 0;
-
-  sash.addEventListener('mousedown', e => {
-    e.preventDefault();
-    dragging = true;
-    startX = e.clientX;
-    startW = sidebar.offsetWidth;
-    sash.classList.add('dragging');
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  });
-
-  document.addEventListener('mousemove', e => {
-    if (!dragging) return;
-    const delta = e.clientX - startX;
-    const newW = Math.max(MIN_W, Math.min(MAX_W, startW + delta));
-    sidebar.style.width = newW + 'px';
-    sidebar.style.minWidth = newW + 'px';
-  });
-
-  document.addEventListener('mouseup', () => {
-    if (!dragging) return;
-    dragging = false;
-    sash.classList.remove('dragging');
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    const wsp = activeWs();
-    if (wsp) {
-      const terms = getWorkspaceTerminals(wsp);
-      for (const t of terms) fitTerm(t);
-    }
-  });
-})();
 
 /* ═══════════════════════════════════════════════════════════════
    DIRECTIONAL PANE NAVIGATION (Alt + H/J/K/L)
@@ -2861,6 +2948,21 @@ function nextTab() {
   activateTerminal(wsp.id, next.id);
 }
 
+// Block middle-click paste on tabs (prevents xterm.js from seeing it)
+function _handleTabMiddleClick(e) {
+  const tab = e.target.closest('.tg-tab');
+  if (tab) {
+    e.preventDefault();
+    e.stopPropagation();
+    _suppressPasteUntil = Date.now() + 200;
+    const tabId = tab.dataset.termid;
+    const wsp = activeWs();
+    if (tabId && wsp) removeTerminal(wsp.id, tabId);
+  }
+}
+document.addEventListener('mousedown', e => { if (e.button === 1) _handleTabMiddleClick(e); }, true);
+document.addEventListener('auxclick', e => { if (e.button === 1) _handleTabMiddleClick(e); }, true);
+
 // Horizontal scroll on tab bar with mouse wheel
 document.addEventListener('wheel', e => {
   const tabs = e.target.closest('.term-group-tabs');
@@ -2875,7 +2977,10 @@ document.addEventListener('wheel', e => {
    RESIZE OBSERVER
 ═══════════════════════════════════════════════════════════════ */
 let resizeRaf = null;
+let _suppressResize = false;
+let _suppressPasteUntil = 0;
 const ro = new ResizeObserver(() => {
+  if (_suppressResize) return;
   if (resizeRaf) return;
   resizeRaf = requestAnimationFrame(() => {
     resizeRaf = null;

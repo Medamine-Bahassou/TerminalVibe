@@ -90,9 +90,7 @@ body { display: flex; flex-direction: column; height: 100vh; }
    SIDEBAR (vertical workspace tabs)
 ────────────────────────────────────────── */
 #sidebar {
-  --sidebar-expanded-w: 180px;
-  width: var(--sidebar-w);
-  min-width: var(--sidebar-w);
+  --sidebar-expanded-w: 200px;
   background: color-mix(in srgb, var(--bg) 80%, #000 20%);
   border-right: 1px solid var(--border);
   display: flex;
@@ -104,13 +102,16 @@ body { display: flex; flex-direction: column; height: 100vh; }
   overflow-x: hidden;
   z-index: 20;
   scrollbar-width: none;
-  transition: width 0.2s ease, min-width 0.2s ease;
+  min-width: fit-content;
+}
+#sidebar.expanded {
+  min-width: 200px;
+}
+#sidebar:not(.expanded) ~ .gutter {
+  pointer-events: none;
+  display: none;
 }
 #sidebar::-webkit-scrollbar { display: none; }
-#sidebar.expanded {
-  width: var(--sidebar-expanded-w);
-  min-width: var(--sidebar-expanded-w);
-}
 
 .sidebar-header {
   display: flex;
@@ -368,16 +369,17 @@ body { display: flex; flex-direction: column; height: 100vh; }
 }
 .sash:hover, .sash.dragging { background: var(--accent); }
 
-/* Sidebar resize sash */
-.sidebar-sash {
-  width: 4px;
-  cursor: col-resize;
-  background: var(--border);
+/* Split.js gutter */
+.gutter {
+  background-color: var(--border);
+  background-repeat: no-repeat;
+  background-position: 50%;
   flex-shrink: 0;
-  transition: background 0.15s;
+  transition: background-color 0.15s;
   z-index: 25;
 }
-.sidebar-sash:hover, .sidebar-sash.dragging { background: var(--accent); }
+.gutter:hover, .gutter.dragging { background-color: var(--accent); }
+.gutter.gutter-horizontal { cursor: col-resize; }
 
 /* Terminal Group Structure */
 .term-group {
@@ -519,7 +521,6 @@ body { display: flex; flex-direction: column; height: 100vh; }
   z-index: 1000;
   opacity: 0;
   left: 0; top: 0; width: 0; height: 0;
-  transition: opacity 0.12s, left 0.12s, top 0.12s, width 0.12s, height 0.12s;
 }
 .drag-indicator-overlay.active {
   opacity: 1;
