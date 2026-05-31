@@ -2594,6 +2594,16 @@ function nextTab() {
   activateTerminal(wsp.id, next.id);
 }
 
+// Horizontal scroll on tab bar with mouse wheel
+document.addEventListener('wheel', e => {
+  const tabs = e.target.closest('.term-group-tabs');
+  if (!tabs) return;
+  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+    e.preventDefault();
+    tabs.scrollLeft += e.deltaY;
+  }
+}, { passive: false });
+
 /* ═══════════════════════════════════════════════════════════════
    RESIZE OBSERVER
 ═══════════════════════════════════════════════════════════════ */
