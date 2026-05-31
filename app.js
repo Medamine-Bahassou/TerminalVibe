@@ -7,6 +7,71 @@ function tauriWindow() { return window.__TAURI__ && window.__TAURI__.window; }
 function loadTauriApi() { /* no-op: API available via window.__TAURI__ at runtime */ }
 
 /* ═══════════════════════════════════════════════════════════════
+   KEYBOARD SHORTCUTS
+═══════════════════════════════════════════════════════════════ */
+const DEFAULT_SHORTCUTS = {
+  newTerminal:    { ctrl: true, shift: true, key: 'T', label: 'Ctrl+Shift+T' },
+  closeTerminal:  { ctrl: true, shift: true, key: 'W', label: 'Ctrl+Shift+W' },
+  splitH:         { ctrl: true, shift: true, key: 'D', label: 'Ctrl+Shift+D' },
+  splitV:         { ctrl: true, shift: true, key: 'E', label: 'Ctrl+Shift+E' },
+  search:         { ctrl: true, shift: true, key: 'F', label: 'Ctrl+Shift+F' },
+  browserTab:     { ctrl: true, shift: true, key: 'B', label: 'Ctrl+Shift+B' },
+  copy:           { ctrl: true, shift: true, key: 'C', label: 'Ctrl+Shift+C' },
+  paste:          { ctrl: true, shift: true, key: 'V', label: 'Ctrl+Shift+V' },
+  nextTab:        { ctrl: true, shift: false, key: 'PageDown', label: 'Ctrl+PageDown' },
+  prevTab:        { ctrl: true, shift: false, key: 'PageUp', label: 'Ctrl+PageUp' },
+  focusLeft:      { alt: true, key: 'h', label: 'Alt+H' },
+  focusDown:      { alt: true, key: 'j', label: 'Alt+J' },
+  focusUp:        { alt: true, key: 'k', label: 'Alt+K' },
+  focusRight:     { alt: true, key: 'l', label: 'Alt+L' },
+  nextWorkspace:  { ctrl: true, shift: true, key: 'PageDown', label: 'Ctrl+Shift+PageDown' },
+  prevWorkspace:  { ctrl: true, shift: true, key: 'PageUp', label: 'Ctrl+Shift+PageUp' },
+};
+
+const SHORTCUT_LABELS = {
+  newTerminal: 'New terminal', closeTerminal: 'Close terminal',
+  splitH: 'Split horizontal', splitV: 'Split vertical',
+  search: 'Search', browserTab: 'New browser tab',
+  copy: 'Copy selection', paste: 'Paste',
+  nextTab: 'Next tab', prevTab: 'Previous tab',
+  focusLeft: 'Focus left pane', focusDown: 'Focus down pane',
+  focusUp: 'Focus up pane', focusRight: 'Focus right pane',
+  nextWorkspace: 'Next workspace', prevWorkspace: 'Previous workspace',
+};
+
+let customShortcuts = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS));
+
+function matchShortcut(e, action) {
+  const s = customShortcuts[action];
+  if (!s) return false;
+  const keyMatch = s.key.length === 1
+    ? e.key.toLowerCase() === s.key.toLowerCase()
+    : e.key === s.key || e.code === s.key;
+  return keyMatch
+    && !!e.ctrlKey === !!s.ctrl
+    && !!e.shiftKey === !!s.shift
+    && !!e.altKey === !!s.alt
+    && !!e.metaKey === !!s.meta;
+}
+
+function formatKeyCombo(s) {
+  const parts = [];
+  if (s.ctrl) parts.push('Ctrl');
+  if (s.alt) parts.push('Alt');
+  if (s.shift) parts.push('Shift');
+  if (s.meta) parts.push('Meta');
+  const k = s.key;
+  if (k === 'PageDown') parts.push('PageDown');
+  else if (k === 'PageUp') parts.push('PageUp');
+  else if (k === 'ArrowLeft') parts.push('Left');
+  else if (k === 'ArrowRight') parts.push('Right');
+  else if (k === 'ArrowUp') parts.push('Up');
+  else if (k === 'ArrowDown') parts.push('Down');
+  else parts.push(k.length === 1 ? k.toUpperCase() : k);
+  return parts.join('+');
+}
+
+/* ═══════════════════════════════════════════════════════════════
    THEMES — mirror Python THEMES dict exactly
 ═══════════════════════════════════════════════════════════════ */
 const THEMES = {
@@ -478,6 +543,7 @@ function saveState() {
     scrollback: currentScrollback,
     sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
     sidebarWidth: savedSidebarWidth || parseInt(document.getElementById('sidebar').style.width) || null,
+    shortcuts: customShortcuts,
     activeWsId,
     workspaces: workspaces.map(ws => ({
       id: ws.id,
@@ -507,6 +573,11 @@ function restoreState() {
     if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
     if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
     if (state.scrollback) currentScrollback = state.scrollback;
+    if (state.shortcuts) {
+      for (const [k, v] of Object.entries(state.shortcuts)) {
+        if (customShortcuts[k]) customShortcuts[k] = v;
+      }
+    }
     if (state.sidebarExpanded) document.getElementById('sidebar').classList.add('expanded');
     if (state.sidebarWidth) {
       savedSidebarWidth = state.sidebarWidth;
@@ -558,6 +629,18 @@ function activateWorkspace(id, skipRender) {
     updateStatusBar();
   }
   saveState();
+}
+
+function nextWorkspace() {
+  if (workspaces.length <= 1) return;
+  const idx = workspaces.findIndex(w => w.id === activeWsId);
+  activateWorkspace(workspaces[(idx + 1) % workspaces.length].id);
+}
+
+function prevWorkspace() {
+  if (workspaces.length <= 1) return;
+  const idx = workspaces.findIndex(w => w.id === activeWsId);
+  activateWorkspace(workspaces[(idx - 1 + workspaces.length) % workspaces.length].id);
 }
 
 function removeWorkspace(id) {
@@ -2280,6 +2363,9 @@ function openSettings() {
   document.getElementById('set-scrollback').value = currentScrollback;
   document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
 
+  // Shortcuts
+  renderShortcutsList();
+
   // Activate first category
   switchSettingsCat('appearance');
   settingsOverlay.classList.add('open');
@@ -2288,6 +2374,130 @@ function openSettings() {
 function closeSettings() {
   settingsOverlay.classList.remove('open');
 }
+
+function renderShortcutsList() {
+  const list = document.getElementById('shortcuts-list');
+  if (!list) return;
+  list.innerHTML = '';
+  for (const [action, sc] of Object.entries(customShortcuts)) {
+    const item = document.createElement('div');
+    item.className = 'shortcut-item';
+    const label = document.createElement('span');
+    label.textContent = SHORTCUT_LABELS[action] || action;
+    const key = document.createElement('span');
+    key.className = 'shortcut-key';
+    key.textContent = formatKeyCombo(sc);
+    key.addEventListener('click', () => startRecording(item, key, action));
+    item.appendChild(label);
+    item.appendChild(key);
+    list.appendChild(item);
+  }
+}
+
+function startRecording(item, keyEl, action) {
+  // Cancel any existing recording
+  document.querySelectorAll('.shortcut-key.recording').forEach(el => el.classList.remove('recording'));
+  keyEl.classList.add('recording');
+  keyEl.textContent = 'Press a key...';
+
+  let pressed = {};      // track held keys by code
+  let mainKey = null;     // the non-modifier key
+  let modState = { ctrl: false, shift: false, alt: false, meta: false };
+  let cancelled = false;
+
+  function cleanup() {
+    document.removeEventListener('keydown', onDown, true);
+    document.removeEventListener('keyup', onUp, true);
+  }
+
+  function apply(combo) {
+    cleanup();
+    keyEl.classList.remove('recording');
+
+    // Need at least one modifier
+    if (!combo.ctrl && !combo.alt && !combo.meta) {
+      keyEl.textContent = formatKeyCombo(customShortcuts[action]);
+      return;
+    }
+
+    // Check for conflicts — swap if needed
+    for (const [otherAction, otherSc] of Object.entries(customShortcuts)) {
+      if (otherAction === action) continue;
+      if (otherSc.key === combo.key && !!otherSc.ctrl === !!combo.ctrl
+        && !!otherSc.shift === !!combo.shift && !!otherSc.alt === !!combo.alt
+        && !!otherSc.meta === !!combo.meta) {
+        customShortcuts[otherAction] = customShortcuts[action];
+        break;
+      }
+    }
+
+    combo.label = formatKeyCombo(combo);
+    customShortcuts[action] = combo;
+    saveState();
+    renderShortcutsList();
+  }
+
+  function onDown(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Escape cancels
+    if (e.code === 'Escape') {
+      cancelled = true;
+      cleanup();
+      keyEl.classList.remove('recording');
+      keyEl.textContent = formatKeyCombo(customShortcuts[action]);
+      return;
+    }
+
+    pressed[e.code] = true;
+
+    // Track modifier state from keydown (reliable)
+    modState.ctrl = e.ctrlKey;
+    modState.shift = e.shiftKey;
+    modState.alt = e.altKey;
+    modState.meta = e.metaKey;
+
+    // Track non-modifier key (use e.key for correct layout mapping, e.g. AZERTY)
+    const isMod = e.code.startsWith('Control') || e.code.startsWith('Shift')
+      || e.code.startsWith('Alt') || e.code.startsWith('Meta');
+    if (!isMod) mainKey = e.key;
+
+    // Show live preview
+    if (mainKey) keyEl.textContent = formatKeyCombo({ ...modState, key: mainKey });
+  }
+
+  function onUp(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    delete pressed[e.code];
+
+    // If cancelled or no main key yet, keep waiting
+    if (cancelled) return;
+
+    // All keys released — finalize
+    if (Object.keys(pressed).length === 0 && mainKey) {
+      apply({ ...modState, key: mainKey });
+    } else if (Object.keys(pressed).length === 0 && !mainKey) {
+      // Only modifiers released without a main key — reset display
+      keyEl.textContent = 'Press a key...';
+      modState = { ctrl: false, shift: false, alt: false, meta: false };
+    }
+  }
+
+  document.addEventListener('keydown', onDown, true);
+  document.addEventListener('keyup', onUp, true);
+}
+
+// Reset shortcuts to defaults
+document.addEventListener('click', e => {
+  if (e.target.id === 'shortcuts-reset') {
+    customShortcuts = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS));
+    saveState();
+    renderShortcutsList();
+  }
+});
 
 function switchSettingsCat(cat) {
   document.querySelectorAll('.settings-cat-btn').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
@@ -2508,76 +2718,75 @@ function focusAdjacentGroup(direction) {
 /* ═══════════════════════════════════════════════════════════════
    KEYBOARD SHORTCUTS
 ═══════════════════════════════════════════════════════════════ */
-// Capture-phase Alt+H/J/K/L — intercepts before xterm.js
+// Capture-phase — intercepts before xterm.js
 document.addEventListener('keydown', e => {
-  if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
-    const dirMap = { KeyH: 'left', KeyJ: 'down', KeyK: 'up', KeyL: 'right' };
-    if (dirMap[e.code]) {
-      e.preventDefault();
-      e.stopPropagation();
-      focusAdjacentGroup(dirMap[e.code]);
-      return;
-    }
-  }
-  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-    if (e.code === 'PageUp') { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
-    if (e.code === 'PageDown') { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
-  }
-  if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
-    if (e.code === 'KeyW' || e.key === 'W' || e.key === 'w') {
+  // Focus adjacent pane
+  for (const dir of ['Left', 'Down', 'Up', 'Right']) {
+    const action = 'focus' + dir.charAt(0).toUpperCase() + dir.slice(1).toLowerCase();
+    if (matchShortcut(e, action)) {
       e.preventDefault(); e.stopPropagation();
-      const wsp = activeWs();
-      if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
-      return;
-    }
-    if (e.code === 'KeyC' || e.key === 'C' || e.key === 'c') {
-      const t = activeTerminal();
-      if (t && t.type !== 'browser' && t.term.hasSelection()) {
-        e.preventDefault(); e.stopPropagation();
-        const text = t.term.getSelection();
-        if (isTauri() && window.__TAURI_INTERNALS__) {
-          window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
-        } else {
-          navigator.clipboard.writeText(text);
-        }
-      }
-      return;
-    }
-    if (e.code === 'KeyV' || e.key === 'V' || e.key === 'v') {
-      const t = activeTerminal();
-      if (t && t.type !== 'browser') {
-        e.preventDefault(); e.stopPropagation();
-        if (isTauri() && window.__TAURI_INTERNALS__) {
-          window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
-            .then(text => { if (text) t.term.paste(text); })
-            .catch(() => {});
-        } else {
-          navigator.clipboard.readText()
-            .then(text => { if (text) t.term.paste(text); })
-            .catch(() => {});
-        }
-      }
+      focusAdjacentGroup(dir.toLowerCase());
       return;
     }
   }
-  // Paste: Ctrl+V (Tauri clipboard plugin)
-  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.code === 'KeyV' || e.key === 'v')) {
+  // Tab switching
+  if (matchShortcut(e, 'prevTab')) { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
+  if (matchShortcut(e, 'nextTab')) { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
+  // Close terminal
+  if (matchShortcut(e, 'closeTerminal')) {
+    e.preventDefault(); e.stopPropagation();
+    const wsp = activeWs();
+    if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
+    return;
+  }
+  // Copy
+  if (matchShortcut(e, 'copy')) {
     const t = activeTerminal();
-    if (t && t.type !== 'browser') {
-      e.preventDefault();
-      e.stopPropagation();
+    if (t && t.type !== 'browser' && t.term.hasSelection()) {
+      e.preventDefault(); e.stopPropagation();
+      const text = t.term.getSelection();
       if (isTauri() && window.__TAURI_INTERNALS__) {
-        window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
-          .then(text => { if (text) t.term.paste(text); })
-          .catch(() => {});
+        window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
       } else {
-        navigator.clipboard.readText()
-          .then(text => { if (text) t.term.paste(text); })
-          .catch(() => {});
+        navigator.clipboard.writeText(text);
       }
     }
     return;
   }
+  // Paste
+  if (matchShortcut(e, 'paste')) {
+    const t = activeTerminal();
+    if (t && t.type !== 'browser') {
+      e.preventDefault(); e.stopPropagation();
+      if (isTauri() && window.__TAURI_INTERNALS__) {
+        window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
+          .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+      } else {
+        navigator.clipboard.readText()
+          .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+      }
+    }
+    return;
+  }
+  // Ctrl+V paste (non-shift variant)
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') {
+    const t = activeTerminal();
+    if (t && t.type !== 'browser') {
+      e.preventDefault(); e.stopPropagation();
+      if (isTauri() && window.__TAURI_INTERNALS__) {
+        window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
+          .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+      } else {
+        navigator.clipboard.readText()
+          .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+      }
+    }
+    return;
+  }
+  // Workspace switching
+  if (matchShortcut(e, 'nextWorkspace')) { e.preventDefault(); e.stopPropagation(); nextWorkspace(); return; }
+  if (matchShortcut(e, 'prevWorkspace')) { e.preventDefault(); e.stopPropagation(); prevWorkspace(); return; }
+  // Ctrl+Tab / Ctrl+Shift+Tab
   if (e.ctrlKey && e.code === 'Tab') {
     e.preventDefault(); e.stopPropagation();
     e.shiftKey ? prevTab() : nextTab();
@@ -2585,42 +2794,42 @@ document.addEventListener('keydown', e => {
   }
 }, true);
 
+// Bubble-phase shortcuts
 document.addEventListener('keydown', e => {
-  const cs = e.ctrlKey && e.shiftKey;
-
-  if (cs) {
-    if (e.code === 'KeyT') { e.preventDefault(); addTerminal(); return; }
-    if (e.code === 'KeyD') {
-      e.preventDefault();
-      const wsp = activeWs();
-      const active = activeTerminal();
-      if (wsp && active) {
-        const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
-        if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'row');
-      }
-      return;
+  if (matchShortcut(e, 'newTerminal')) { e.preventDefault(); addTerminal(); return; }
+  if (matchShortcut(e, 'splitH')) {
+    e.preventDefault();
+    const wsp = activeWs();
+    const active = activeTerminal();
+    if (wsp && active) {
+      const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
+      if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'row');
     }
-    if (e.code === 'KeyE') {
-      e.preventDefault();
-      const wsp = activeWs();
-      const active = activeTerminal();
-      if (wsp && active) {
-        const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
-        if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'column');
-      }
-      return;
+    return;
+  }
+  if (matchShortcut(e, 'splitV')) {
+    e.preventDefault();
+    const wsp = activeWs();
+    const active = activeTerminal();
+    if (wsp && active) {
+      const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
+      if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'column');
     }
-    if (e.code === 'KeyF') { e.preventDefault(); openSearch(); return; }
-    if (e.code === 'KeyB') {
-      e.preventDefault();
-      const wsp = activeWs();
-      const active = activeTerminal();
-      if (wsp) {
-        const activeGroup = active ? findGroupContainingTerm(wsp.layout, active.id) : findFirstGroup(wsp.layout);
-        if (activeGroup) addBrowserTab(wsp.id, activeGroup.id);
-      }
-      return;
+    return;
+  }
+  if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
+  if (matchShortcut(e, 'browserTab')) {
+    e.preventDefault();
+    const wsp = activeWs();
+    const active = activeTerminal();
+    if (wsp) {
+      const activeGroup = active ? findGroupContainingTerm(wsp.layout, active.id) : findFirstGroup(wsp.layout);
+      if (activeGroup) addBrowserTab(wsp.id, activeGroup.id);
     }
+    return;
+  }
+  // Arrow key tab switching (legacy)
+  if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
     if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
     if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
   }
