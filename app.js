@@ -1342,7 +1342,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
         }
       } catch (err) {
         if (err.name === 'AbortError') { showLoading(false); return; }
-        lastErr = 'Could not reach proxy server (is terminal_server.py running?): ' + err.message;
+        lastErr = 'Could not reach proxy server (is server.js running?): ' + err.message;
       }
 
       showLoading(false);

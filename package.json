@@ -1,0 +1,14 @@
+{
+  "name": "terminus",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Terminal multiplexer with browser proxy",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}
