@@ -697,8 +697,13 @@ function addTerminal(wsId, targetGroupId) {
           slot.classList.add('focused');
           body.appendChild(slot);
           focusedSlotId = slot.id;
-          entry.term.focus();
-          fitTerm(entry);
+          // Double RAF ensures DOM has rendered and canvas is ready
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              fitTerm(entry);
+              entry.term.focus();
+            });
+          });
         }
       }
     } else {
@@ -712,7 +717,9 @@ function addTerminal(wsId, targetGroupId) {
   setTimeout(() => {
     const slot = getSlotDimensions(entry);
     sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows });
-  }, 50);
+    // Fit again after PTY is connected
+    requestAnimationFrame(() => fitTerm(entry));
+  }, 80);
 
   saveState();
   return entry;
@@ -1062,7 +1069,8 @@ function splitGroupDirectly(wsId, groupId, direction) {
   setTimeout(() => {
     const slot = getSlotDimensions(entry);
     sendControl({ type: 'create', id: newId, cols: slot.cols, rows: slot.rows });
-  }, 50);
+    requestAnimationFrame(() => fitTerm(entry));
+  }, 80);
   saveState();
 }
 
