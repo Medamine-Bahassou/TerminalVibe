@@ -106,6 +106,30 @@ function openExternalUrl(url) {
   }
 }
 
+function doPaste(entry) {
+  if (!entry || !entry.term) return;
+  if (isTauri() && window.__TAURI_INTERNALS__) {
+    window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text').then(text => {
+      if (text) sendStdin(entry.id, new TextEncoder().encode(text));
+    }).catch(err => console.warn('Paste failed:', err));
+  } else {
+    navigator.clipboard.readText().then(text => {
+      if (text) sendStdin(entry.id, new TextEncoder().encode(text));
+    }).catch(() => {});
+  }
+}
+
+// Fallback paste handler for native Ctrl+V (non-Tauri)
+document.addEventListener('paste', e => {
+  const t = activeTerminal();
+  if (!t || t.type === 'browser') return;
+  const text = e.clipboardData?.getData('text/plain');
+  if (text) {
+    e.preventDefault();
+    t.term.paste(text);
+  }
+}, true);
+
 /* ═══════════════════════════════════════════════════════════════
    STATE
 ═══════════════════════════════════════════════════════════════ */
@@ -2510,7 +2534,12 @@ document.addEventListener('keydown', e => {
       const t = activeTerminal();
       if (t && t.type !== 'browser' && t.term.hasSelection()) {
         e.preventDefault(); e.stopPropagation();
-        navigator.clipboard.writeText(t.term.getSelection());
+        const text = t.term.getSelection();
+        if (isTauri() && window.__TAURI_INTERNALS__) {
+          window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
+        } else {
+          navigator.clipboard.writeText(text);
+        }
       }
       return;
     }
@@ -2518,12 +2547,36 @@ document.addEventListener('keydown', e => {
       const t = activeTerminal();
       if (t && t.type !== 'browser') {
         e.preventDefault(); e.stopPropagation();
-        navigator.clipboard.readText().then(text => {
-          if (text) sendStdin(t.id, new TextEncoder().encode(text));
-        });
+        if (isTauri() && window.__TAURI_INTERNALS__) {
+          window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
+            .then(text => { if (text) t.term.paste(text); })
+            .catch(() => {});
+        } else {
+          navigator.clipboard.readText()
+            .then(text => { if (text) t.term.paste(text); })
+            .catch(() => {});
+        }
       }
       return;
     }
+  }
+  // Paste: Ctrl+V (Tauri clipboard plugin)
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.code === 'KeyV' || e.key === 'v')) {
+    const t = activeTerminal();
+    if (t && t.type !== 'browser') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isTauri() && window.__TAURI_INTERNALS__) {
+        window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
+          .then(text => { if (text) t.term.paste(text); })
+          .catch(() => {});
+      } else {
+        navigator.clipboard.readText()
+          .then(text => { if (text) t.term.paste(text); })
+          .catch(() => {});
+      }
+    }
+    return;
   }
   if (e.ctrlKey && e.code === 'Tab') {
     e.preventDefault(); e.stopPropagation();
