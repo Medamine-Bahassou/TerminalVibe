@@ -288,6 +288,12 @@ function findGroupContainingTerm(node, termId) {
   return null;
 }
 
+function countGroups(node) {
+  if (!node) return 0;
+  if (node.type === 'group') return 1;
+  return node.children.reduce((s, c) => s + countGroups(c), 0);
+}
+
 function removeEmptyGroups(node) {
   if (!node) return null;
   if (node.type === 'split') {
@@ -604,6 +610,8 @@ function _createTermEntry(wsp, id, label) {
       // Lightweight update: just change the tab label in the DOM
       const tabEl = document.querySelector(`.tg-tab[data-termid="${id}"] .tg-tab-name`);
       if (tabEl) tabEl.textContent = t.label;
+      const tabWrap = document.querySelector(`.tg-tab[data-termid="${id}"]`);
+      if (tabWrap) tabWrap.title = t.label;
       renderSidebar();
     }
   });
@@ -628,27 +636,68 @@ function addTerminal(wsId, targetGroupId) {
       terminals: [entry],
       activeTermId: id
     };
+    renderPaneArea();
+    activateTerminal(wsp.id, id);
   } else {
     let targetGroup = null;
-    if (targetGroupId) {
-      targetGroup = findGroupById(wsp.layout, targetGroupId);
-    }
+    if (targetGroupId) targetGroup = findGroupById(wsp.layout, targetGroupId);
     if (!targetGroup) {
       const active = activeTerminal();
       if (active) targetGroup = findGroupContainingTerm(wsp.layout, active.id);
     }
-    if (!targetGroup) {
-      targetGroup = findFirstGroup(wsp.layout);
-    }
+    if (!targetGroup) targetGroup = findFirstGroup(wsp.layout);
 
     if (targetGroup) {
       targetGroup.terminals.push(entry);
       targetGroup.activeTermId = id;
+      // Incremental DOM update: add tab + slot without rebuilding everything
+      const groupEl = document.getElementById('group-' + targetGroup.id);
+      if (groupEl) {
+        const tabsContainer = groupEl.querySelector('.term-group-tabs');
+        const body = groupEl.querySelector('.term-group-body');
+        if (tabsContainer && body) {
+          // Remove active from other tabs
+          tabsContainer.querySelectorAll('.tg-tab').forEach(t => t.classList.remove('active'));
+          // Create and add the new tab element (reuse renderPaneArea's tab builder logic)
+          const tab = document.createElement('div');
+          tab.className = 'tg-tab active';
+          tab.dataset.termid = entry.id;
+          tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
+          tab.title = entry.label;
+          tab.draggable = true;
+          tab.addEventListener('dblclick', () => renameTerminalInGroup(wsp.id, entry.id));
+          tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); removeTerminal(wsp.id, entry.id); } });
+          tab.addEventListener('click', e => {
+            if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
+            else activateTerminal(wsp.id, entry.id);
+          });
+          tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', entry.id); });
+          // Drag & drop
+          tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.dragSourceGroupId = targetGroup.id; });
+          tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+          tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
+          tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
+          tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+          const addBtn = tabsContainer.querySelector('.tg-tab-add');
+          if (addBtn) tabsContainer.insertBefore(tab, addBtn);
+          else tabsContainer.appendChild(tab);
+          // Create and add the slot
+          const slot = getOrCreateSlot(entry, wsp, body);
+          body.querySelectorAll('.term-slot').forEach(s => { s.style.display = 'none'; s.classList.remove('focused'); });
+          slot.style.display = 'block';
+          slot.classList.add('focused');
+          body.appendChild(slot);
+          focusedSlotId = slot.id;
+          entry.term.focus();
+          fitTerm(entry);
+        }
+      }
+    } else {
+      renderPaneArea();
+      activateTerminal(wsp.id, id);
     }
   }
 
-  renderPaneArea();
-  activateTerminal(wsp.id, id);
   renderSidebar();
 
   setTimeout(() => {
@@ -675,6 +724,8 @@ function addBrowserTab(wsId, targetGroupId, url) {
       terminals: [entry],
       activeTermId: id
     };
+    renderPaneArea();
+    activateTerminal(wsp.id, id);
   } else {
     let targetGroup = null;
     if (targetGroupId) targetGroup = findGroupById(wsp.layout, targetGroupId);
@@ -683,14 +734,55 @@ function addBrowserTab(wsId, targetGroupId, url) {
       if (active) targetGroup = findGroupContainingTerm(wsp.layout, active.id);
     }
     if (!targetGroup) targetGroup = findFirstGroup(wsp.layout);
+
     if (targetGroup) {
       targetGroup.terminals.push(entry);
       targetGroup.activeTermId = id;
+      // Incremental DOM update
+      const groupEl = document.getElementById('group-' + targetGroup.id);
+      if (groupEl) {
+        const tabsContainer = groupEl.querySelector('.term-group-tabs');
+        const body = groupEl.querySelector('.term-group-body');
+        if (tabsContainer && body) {
+          tabsContainer.querySelectorAll('.tg-tab').forEach(t => t.classList.remove('active'));
+          const tab = document.createElement('div');
+          tab.className = 'tg-tab active';
+          tab.dataset.termid = entry.id;
+          tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
+          tab.title = entry.label;
+          tab.draggable = true;
+          tab.addEventListener('dblclick', () => renameTerminalInGroup(wsp.id, entry.id));
+          tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); removeTerminal(wsp.id, entry.id); } });
+          tab.addEventListener('click', e => {
+            if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
+            else activateTerminal(wsp.id, entry.id);
+          });
+          tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', entry.id); });
+          tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.dragSourceGroupId = targetGroup.id; });
+          tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+          tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
+          tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
+          tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+          const addBtn = tabsContainer.querySelector('.tg-tab-add');
+          if (addBtn) tabsContainer.insertBefore(tab, addBtn);
+          else tabsContainer.appendChild(tab);
+          // Create slot
+          const slot = getOrCreateSlot(entry, wsp, body);
+          body.querySelectorAll('.term-slot').forEach(s => { s.style.display = 'none'; s.classList.remove('focused'); });
+          slot.style.display = 'flex';
+          slot.classList.add('focused');
+          body.appendChild(slot);
+          focusedSlotId = slot.id;
+          // Focus URL input
+          setTimeout(() => { const urlInput = slot.querySelector('.browser-url'); if (urlInput) urlInput.focus(); }, 20);
+        }
+      }
+    } else {
+      renderPaneArea();
+      activateTerminal(wsp.id, id);
     }
   }
 
-  renderPaneArea();
-  activateTerminal(wsp.id, id);
   renderSidebar();
   return entry;
 }
@@ -730,7 +822,7 @@ function activateTerminal(wsId, termId) {
           const isActive = t.id === termId;
           const showAs = t.type === 'browser' ? 'flex' : 'block';
           slot.style.display = isActive ? showAs : 'none';
-          slot.classList.toggle('focused', isActive);
+          slot.classList.remove('focused');
           // Show/hide native webview
           if (t._webview) {
             try { isActive ? t._webview.show() : t._webview.hide(); } catch {}
@@ -743,6 +835,7 @@ function activateTerminal(wsId, termId) {
     const t = terms.find(x => x.id === termId);
     if (t && t.el) {
       focusedSlotId = t.el.id;
+      t.el.classList.add('focused');
       if (t.type === 'browser') {
         setTimeout(() => {
           const urlInput = t.el.querySelector('.browser-url');
@@ -779,19 +872,63 @@ function removeTerminal(wsId, termId, skipRender) {
   group.terminals.splice(idx, 1);
 
   if (group.activeTermId === termId) {
-    const next = group.terminals[Math.min(idx, group.terminals.length - 1)];
-    group.activeTermId = next ? next.id : null;
+    // Prefer next terminal over browser tab
+    const nextTerm = group.terminals.slice(idx).concat(group.terminals.slice(0, idx)).find(t => t.type !== 'browser');
+    group.activeTermId = nextTerm ? nextTerm.id : (group.terminals.length ? group.terminals[Math.min(idx, group.terminals.length - 1)].id : null);
   }
 
   if (wsp.activeTermId === termId) {
-    const all = getWorkspaceTerminals(wsp);
-    wsp.activeTermId = all.length ? all[0].id : null;
+    wsp.activeTermId = group.activeTermId || null;
   }
 
+  const groupCountBefore = countGroups(wsp.layout);
   wsp.layout = removeEmptyGroups(wsp.layout);
+  const structureChanged = countGroups(wsp.layout) !== groupCountBefore;
 
   if (!skipRender && activeWsId === wsId) {
-    renderPaneArea();
+    if (structureChanged) {
+      // Layout structure changed (split collapsed) — full rebuild needed
+      renderPaneArea();
+    } else {
+      // Just update the affected group's tabs + slot visibility
+      const groupEl = document.getElementById('group-' + group.id);
+      if (groupEl) {
+        // Remove the closed tab's DOM elements
+        const oldTab = groupEl.querySelector(`.tg-tab[data-termid="${termId}"]`);
+        if (oldTab) oldTab.remove();
+        // Update active state on remaining tabs
+        groupEl.querySelectorAll('.tg-tab').forEach(tab => {
+          tab.classList.toggle('active', tab.dataset.termid === group.activeTermId);
+        });
+        // Show/hide slots
+        const body = groupEl.querySelector('.term-group-body');
+        if (body) {
+          body.querySelectorAll('.term-slot').forEach(s => s.classList.remove('focused'));
+          group.terminals.forEach(t => {
+            const slot = document.getElementById('slot-' + t.id);
+            if (!slot) return;
+            const isActive = t.id === group.activeTermId;
+            slot.style.display = isActive ? (t.type === 'browser' ? 'flex' : 'block') : 'none';
+            if (isActive) slot.classList.add('focused');
+          });
+        }
+      }
+    }
+    // Focus the new active tab
+    const newActiveId = wsp.activeTermId || group.activeTermId;
+    if (newActiveId) {
+      const newEntry = getWorkspaceTerminals(wsp).find(x => x.id === newActiveId);
+      if (newEntry && newEntry.el) {
+        focusedSlotId = newEntry.el.id;
+        newEntry.el.classList.add('focused');
+        if (newEntry.type === 'browser') {
+          setTimeout(() => { const inp = newEntry.el.querySelector('.browser-url'); if (inp) inp.focus(); }, 20);
+        } else if (newEntry.term) {
+          getWorkspaceTerminals(wsp).forEach(t => { if (t._webview) { try { t._webview.hide(); } catch {} } });
+          setTimeout(() => { newEntry.term.focus(); fitTerm(newEntry); }, 20);
+        }
+      }
+    }
     updateStatusBar();
   }
   renderSidebar();
@@ -822,6 +959,7 @@ function renameTerminalInGroup(wsId, termId) {
     span.className = 'tg-tab-name';
     span.textContent = t.label;
     inp.replaceWith(span);
+    tab.title = t.label;
     renderSidebar();
     updateStatusBar();
   };
@@ -1000,6 +1138,7 @@ function buildNodeDom(node, wsp) {
 
     const header = document.createElement('div');
     header.className = 'term-group-header';
+    header.addEventListener('mousedown', e => { if (!e.target.closest('[draggable]')) e.preventDefault(); });
 
     const tabsContainer = document.createElement('div');
     tabsContainer.className = 'term-group-tabs';
@@ -1016,8 +1155,10 @@ function buildNodeDom(node, wsp) {
         <span class="tg-tab-name">${escHtml(t.label)}</span>
         <span class="tg-tab-close" title="Close">✕</span>
       `;
+      tab.title = t.label;
 
       tab.addEventListener('dblclick', () => renameTerminalInGroup(wsp.id, t.id));
+      tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); removeTerminal(wsp.id, t.id); } });
       tab.addEventListener('click', e => {
         if (e.target.classList.contains('tg-tab-close')) {
           removeTerminal(wsp.id, t.id);
@@ -1098,6 +1239,7 @@ function buildNodeDom(node, wsp) {
     addTabBtn.className = 'tg-tab-add';
     addTabBtn.title = 'New terminal in this group';
     addTabBtn.textContent = '+';
+    addTabBtn.addEventListener('mousedown', e => e.preventDefault());
     addTabBtn.addEventListener('click', () => addTerminal(wsp.id, node.id));
     tabsContainer.appendChild(addTabBtn);
 
@@ -1105,6 +1247,7 @@ function buildNodeDom(node, wsp) {
 
     const actions = document.createElement('div');
     actions.className = 'term-group-actions';
+    actions.addEventListener('mousedown', e => e.preventDefault());
 
     const splitH = document.createElement('div');
     splitH.className = 'tg-btn';
@@ -1126,14 +1269,6 @@ function buildNodeDom(node, wsp) {
     `;
     splitV.onclick = () => splitGroupDirectly(wsp.id, node.id, 'column');
 
-    const closeGrp = document.createElement('div');
-    closeGrp.className = 'tg-btn';
-    closeGrp.title = 'Close Group';
-    closeGrp.innerHTML = '✕';
-    closeGrp.onclick = () => {
-      [...node.terminals].forEach(t => removeTerminal(wsp.id, t.id));
-    };
-
     const addBrowserBtn = document.createElement('div');
     addBrowserBtn.className = 'tg-btn';
     addBrowserBtn.title = 'New browser tab';
@@ -1143,7 +1278,6 @@ function buildNodeDom(node, wsp) {
     actions.appendChild(splitH);
     actions.appendChild(splitV);
     actions.appendChild(addBrowserBtn);
-    actions.appendChild(closeGrp);
     header.appendChild(actions);
     groupEl.appendChild(header);
 
@@ -1159,8 +1293,10 @@ function buildNodeDom(node, wsp) {
       const slot = getOrCreateSlot(t, wsp, body);
       const showAs = t.type === 'browser' ? 'flex' : 'block';
       slot.style.display = isAct ? showAs : 'none';
-      if (isAct) slot.classList.add('focused');
+      if (isAct && slot.id === focusedSlotId) slot.classList.add('focused');
       else slot.classList.remove('focused');
+      // Show/hide native webview
+      if (t._webview) { try { isAct ? t._webview.show() : t._webview.hide(); } catch {} }
       body.appendChild(slot);
     });
 
@@ -1248,6 +1384,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
 
     // ── Tauri native webview (lazy-created) ──
     let wvNative = null;
+    let wvCurrentUrl = null;
     let resizeObs = null;
 
     function positionWebview() {
@@ -1259,14 +1396,34 @@ function getOrCreateSlot(entry, wsp, parentEl) {
       wvNative.setSize(new dpi.LogicalSize(r.width, r.height));
     }
 
+    async function destroyWebview() {
+      if (wvNative) {
+        try { await wvNative.close(); } catch {}
+        wvNative = null;
+        wvCurrentUrl = null;
+        entry._webview = null;
+      }
+    }
+
     async function ensureWebview(url) {
       const wvApi = tauriWebview();
       const winApi = tauriWindow();
       if (!wvApi || !winApi) return false;
-      if (wvNative) return true;
+
+      // If webview exists with same URL, just show it
+      if (wvNative && wvCurrentUrl === url) {
+        wvNative.show();
+        positionWebview();
+        return true;
+      }
+
+      // Destroy existing webview if URL changed
+      await destroyWebview();
+
       try {
         const appWindow = winApi.getCurrentWindow();
-        wvNative = new wvApi.Webview(appWindow, 'browser-' + entry.id, {
+        const label = 'browser-' + entry.id + '-' + Date.now();
+        wvNative = new wvApi.Webview(appWindow, label, {
           url: url,
           x: 0, y: 0, width: 800, height: 600
         });
@@ -1274,6 +1431,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
           wvNative.once('tauri://created', res);
           wvNative.once('tauri://error', e => rej(e));
         });
+        wvCurrentUrl = url;
         positionWebview();
         wvNative.setAutoResize(false);
         if (!resizeObs) {
@@ -1282,25 +1440,11 @@ function getOrCreateSlot(entry, wsp, parentEl) {
           entry._resizeObs = resizeObs;
         }
         entry._webview = wvNative;
-        // Sync URL bar with internal navigation
-        wvNative.listen('page-url-changed', ev => {
-          const newUrl = ev.payload;
-          if (newUrl && newUrl !== 'about:blank') {
-            entry.url = newUrl;
-            urlInput.value = newUrl;
-            entry.label = newUrl.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
-            if (entry._history[entry._historyIdx] !== newUrl) {
-              entry._history = entry._history.slice(0, entry._historyIdx + 1);
-              entry._history.push(newUrl);
-              entry._historyIdx = entry._history.length - 1;
-            }
-            updateNavButtons();
-            renderSidebar();
-          }
-        });
         return true;
       } catch (e) {
         console.error('Failed to create webview:', e);
+        wvNative = null;
+        wvCurrentUrl = null;
         return false;
       }
     }
@@ -1380,11 +1524,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
       if (isTauri() && tauriWebview() && tauriWindow()) {
         pageView.style.display = 'none';
         const ok = await ensureWebview(url);
-        if (ok) {
-          wvNative.show();
-          wvNative.setUrl(url);
-          positionWebview();
-        } else {
+        if (!ok) {
           showError(url, 'Failed to create native webview');
         }
         showLoading(false);
@@ -1778,10 +1918,6 @@ function renderSidebar() {
       activateWorkspace(wsp.id);
     });
     btn.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'workspace', wsp.id); });
-    if (!expanded) {
-      btn.addEventListener('mouseenter', () => showTooltip(btn, wsp.label));
-      btn.addEventListener('mouseleave', hideTooltip);
-    }
     btn.querySelector('.ws-rename').addEventListener('click', (e) => {
       e.stopPropagation();
       renameWorkspace(wsp.id);
@@ -2089,8 +2225,15 @@ document.getElementById('set-scrollback').addEventListener('input', e => {
   applySettings();
 });
 
+// Prevent sidebar and statusbar from stealing terminal focus
+document.getElementById('sidebar').addEventListener('mousedown', e => {
+  if (!e.target.closest('input, textarea, select, [contenteditable]')) e.preventDefault();
+});
+document.getElementById('statusbar').addEventListener('mousedown', e => e.preventDefault());
+
 // Sidebar toggle
 let savedSidebarWidth = null;
+document.getElementById('sidebar-toggle').addEventListener('mousedown', e => e.preventDefault());
 document.getElementById('sidebar-toggle').addEventListener('click', () => {
   const sb = document.getElementById('sidebar');
   if (sb.classList.contains('expanded')) {
@@ -2233,6 +2376,23 @@ document.addEventListener('keydown', e => {
       return;
     }
   }
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+    if (e.code === 'PageUp') { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
+    if (e.code === 'PageDown') { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
+  }
+  if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
+    if (e.code === 'KeyW' || e.key === 'W' || e.key === 'w') {
+      e.preventDefault(); e.stopPropagation();
+      const wsp = activeWs();
+      if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
+      return;
+    }
+  }
+  if (e.ctrlKey && e.code === 'Tab') {
+    e.preventDefault(); e.stopPropagation();
+    e.shiftKey ? prevTab() : nextTab();
+    return;
+  }
 }, true);
 
 document.addEventListener('keydown', e => {
@@ -2240,12 +2400,6 @@ document.addEventListener('keydown', e => {
 
   if (cs) {
     if (e.code === 'KeyT') { e.preventDefault(); addTerminal(); return; }
-    if (e.code === 'KeyW') {
-      e.preventDefault();
-      const wsp = activeWs();
-      if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
-      return;
-    }
     if (e.code === 'KeyD') {
       e.preventDefault();
       const wsp = activeWs();
@@ -2279,11 +2433,6 @@ document.addEventListener('keydown', e => {
     }
     if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
     if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
-  }
-  if (e.ctrlKey && e.code === 'Tab') {
-    e.preventDefault();
-    e.shiftKey ? prevTab() : nextTab();
-    return;
   }
 });
 
@@ -2329,19 +2478,6 @@ const ro = new ResizeObserver(() => {
   });
 });
 ro.observe(document.getElementById('pane-area'));
-
-/* ═══════════════════════════════════════════════════════════════
-   TOOLTIP
-═══════════════════════════════════════════════════════════════ */
-const tooltipEl = document.getElementById('tooltip');
-function showTooltip(anchor, text) {
-  tooltipEl.textContent = text;
-  const r = anchor.getBoundingClientRect();
-  tooltipEl.style.top = (r.top + r.height/2 - 10) + 'px';
-  tooltipEl.style.left = (r.right + 10) + 'px';
-  tooltipEl.style.display = 'block';
-}
-function hideTooltip() { tooltipEl.style.display = 'none'; }
 
 /* ═══════════════════════════════════════════════════════════════
    UTIL

@@ -427,6 +427,8 @@ body { display: flex; flex-direction: column; height: 100vh; }
   transition: background 0.1s, color 0.1s;
   flex-shrink: 0;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .tg-tab:hover { background: var(--tab-hover-bg); color: var(--fg); }
 .tg-tab.active {
@@ -474,6 +476,8 @@ body { display: flex; flex-direction: column; height: 100vh; }
   font-size: 16px;
   transition: color 0.12s, background 0.12s;
   flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .tg-tab-add:hover { color: var(--accent); background: var(--accent-dim); }
 
@@ -484,6 +488,8 @@ body { display: flex; flex-direction: column; height: 100vh; }
   gap: 4px;
   height: 100%;
   border-left: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
 }
 .tg-btn {
   width: 22px; height: 22px;
@@ -710,20 +716,7 @@ body { display: flex; flex-direction: column; height: 100vh; }
 /* ──────────────────────────────────────────
    TOOLTIP
 ────────────────────────────────────────── */
-#tooltip {
-  position: fixed;
-  background: color-mix(in srgb, var(--bg) 90%, #fff 10%);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 4px 9px;
-  font-size: 11.5px;
-  color: var(--fg);
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 9999;
-  display: none;
-  box-shadow: 0 3px 10px rgba(0,0,0,0.4);
-}
+
 
 /* Rename input in tabs */
 .term-group-tabs input {
@@ -968,6 +961,8 @@ body { display: flex; flex-direction: column; height: 100vh; }
   height: 36px;
   flex-shrink: 0;
   z-index: 1;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Override term-slot layout for browser */
