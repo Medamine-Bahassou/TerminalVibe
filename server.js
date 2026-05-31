@@ -4,7 +4,7 @@
  *
  * WebSocket server  ws://127.0.0.1:7681   — PTY multiplexer
  * HTTP proxy server http://127.0.0.1:7682 — transparent page fetcher for the browser tab
- * App server        http://127.0.0.1:6969 — serves terminal.html + static files
+ * App server        http://127.0.0.1:6969 — serves index.html + static files
  */
 
 const http = require("http");
@@ -361,7 +361,7 @@ const proxyServer = http.createServer(async (req, res) => {
 
 const appServer = http.createServer((req, res) => {
   let filePath = url.parse(req.url).pathname.replace(/^\//, "");
-  if (!filePath) filePath = "terminal.html";
+  if (!filePath) filePath = "index.html";
 
   const fullPath = path.resolve(path.join(APP_DIR, filePath));
 
@@ -410,7 +410,7 @@ class PTYSession {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
-      cwd: process.env.HOME,
+      cwd: process.env.HOME || "/root",
       env: {
         ...process.env,
         TERM: "xterm-256color",
@@ -554,9 +554,14 @@ proxyServer.listen(PROXY_PORT, HOST, () => {
   console.log(`Terminus proxy server listening on http://${HOST}:${PROXY_PORT}`);
 });
 
-appServer.listen(APP_PORT, HOST, () => {
-  console.log(`Terminus app server listening on http://${HOST}:${APP_PORT}`);
-});
+// Skip static app server in Tauri mode (Tauri serves assets via its own protocol)
+const isTauriMode = process.env.TAURI === "1" || process.env.TAURI_ENV === "1";
+
+if (!isTauriMode) {
+  appServer.listen(APP_PORT, HOST, () => {
+    console.log(`Terminus app server listening on http://${HOST}:${APP_PORT}`);
+  });
+  console.log(`Open http://${HOST}:${APP_PORT} in your browser`);
+}
 
 console.log(`Terminus PTY server listening on ws://${HOST}:${PORT}`);
-console.log(`Open http://${HOST}:${APP_PORT} in your browser`);

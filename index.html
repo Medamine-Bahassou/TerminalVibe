@@ -4,15 +4,32 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Terminus</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
 <link rel="stylesheet" href="style.css">
-<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/lib/xterm-addon-search.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.8.0/lib/xterm-addon-unicode11.js"></script>
+<script src="vendor/xterm/xterm.js"></script>
+<script src="vendor/xterm/xterm-addon-fit.js"></script>
+<script src="vendor/xterm/xterm-addon-web-links.js"></script>
+<script src="vendor/xterm/xterm-addon-search.js"></script>
+<script src="vendor/xterm/xterm-addon-unicode11.js"></script>
 </head>
 <body>
+<!-- ── Custom Titlebar (Tauri) ── -->
+<div id="titlebar" data-tauri-drag-region>
+  <div class="titlebar-drag" data-tauri-drag-region>
+    <span data-tauri-drag-region>Terminus</span>
+  </div>
+  <div class="titlebar-controls">
+    <button id="titlebar-minimize" title="Minimize">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+    <button id="titlebar-maximize" title="Maximize">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+    </button>
+    <button id="titlebar-close" title="Close">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+    </button>
+  </div>
+</div>
 <div id="app">
   <!-- ── Sidebar ── -->
   <nav id="sidebar">

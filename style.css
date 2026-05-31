@@ -19,14 +19,70 @@
   --muted-text: rgba(255,255,255,0.5);
 }
 
-html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; }
+html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; margin: 0; }
+
+body { display: flex; flex-direction: column; height: 100vh; }
+
+/* ──────────────────────────────────────────
+   TITLEBAR (Tauri custom)
+────────────────────────────────────────── */
+#titlebar {
+  display: none; /* shown via JS in Tauri mode */
+  flex-shrink: 0;
+  height: 32px;
+  background: color-mix(in srgb, var(--bg) 90%, #000 10%);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  -webkit-user-select: none;
+  z-index: 9999;
+}
+
+#titlebar.tauri-active { display: flex; }
+
+.titlebar-drag {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  font-size: 12px;
+  color: var(--muted-text);
+  pointer-events: none;
+}
+
+.titlebar-drag span { pointer-events: none; }
+
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.titlebar-controls button {
+  width: 46px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.titlebar-controls button:hover { opacity: 1; background: rgba(255,255,255,0.08); }
+.titlebar-controls button svg { width: 16px; height: 16px; }
+#titlebar-close:hover { background: #e81123 !important; color: #fff; }
 
 /* ──────────────────────────────────────────
    APP LAYOUT
 ────────────────────────────────────────── */
 #app {
   display: flex;
-  height: 100vh;
+  flex: 1;
   overflow: hidden;
 }
 
