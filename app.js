@@ -392,6 +392,7 @@ function serializeLayout(node) {
       type: 'group',
       id: node.id,
       activeTermId: node.activeTermId,
+      history: node._history || [],
       terminals: node.terminals.map(t => {
         const o = { id: t.id, label: t.label };
         if (t.type === 'browser') { o.type = 'browser'; o.url = t.url; }
@@ -417,6 +418,7 @@ function deserializeLayout(data, ws) {
       type: 'group',
       id: data.id,
       activeTermId: data.activeTermId,
+      _history: data.history || [],
       terminals: []
     };
     for (const tData of data.terminals) {
@@ -523,6 +525,7 @@ function activateWorkspace(id, skipRender) {
     renderPaneArea();
     updateStatusBar();
   }
+  saveState();
 }
 
 function removeWorkspace(id) {
@@ -539,6 +542,7 @@ function removeWorkspace(id) {
   } else {
     renderSidebar();
   }
+  saveState();
 }
 
 function renameWorkspace(id) {
@@ -561,6 +565,7 @@ function renameWorkspace(id) {
     ws.label = inp.value.trim() || old;
     renderSidebar();
     updateStatusBar();
+    saveState();
   };
   inp.onblur = done;
   inp.onkeydown = e => { if (e.key==='Enter') inp.blur(); if (e.key==='Escape') { inp.value=old; inp.blur(); } e.stopPropagation(); };
@@ -649,7 +654,11 @@ function addTerminal(wsId, targetGroupId) {
 
     if (targetGroup) {
       targetGroup.terminals.push(entry);
+      // Push old active to history before switching
+      if (!targetGroup._history) targetGroup._history = [];
+      if (targetGroup.activeTermId) targetGroup._history.push(targetGroup.activeTermId);
       targetGroup.activeTermId = id;
+      wsp.activeTermId = id;
       // Incremental DOM update: add tab + slot without rebuilding everything
       const groupEl = document.getElementById('group-' + targetGroup.id);
       if (groupEl) {
@@ -705,6 +714,7 @@ function addTerminal(wsId, targetGroupId) {
     sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows });
   }, 50);
 
+  saveState();
   return entry;
 }
 
@@ -737,7 +747,10 @@ function addBrowserTab(wsId, targetGroupId, url) {
 
     if (targetGroup) {
       targetGroup.terminals.push(entry);
+      if (!targetGroup._history) targetGroup._history = [];
+      if (targetGroup.activeTermId) targetGroup._history.push(targetGroup.activeTermId);
       targetGroup.activeTermId = id;
+      wsp.activeTermId = id;
       // Incremental DOM update
       const groupEl = document.getElementById('group-' + targetGroup.id);
       if (groupEl) {
@@ -784,6 +797,7 @@ function addBrowserTab(wsId, targetGroupId, url) {
   }
 
   renderSidebar();
+  saveState();
   return entry;
 }
 
@@ -803,7 +817,13 @@ function activateTerminal(wsId, termId) {
   wsp.activeTermId = termId;
 
   const group = findGroupContainingTerm(wsp.layout, termId);
-  if (group) group.activeTermId = termId;
+  if (group) {
+    // Track activation history (stack) for LIFO tab switching
+    if (!group._history) group._history = [];
+    group._history = group._history.filter(id => id !== termId);
+    if (group.activeTermId && group.activeTermId !== termId) group._history.push(group.activeTermId);
+    group.activeTermId = termId;
+  }
 
   if (activeWsId === wsId) {
     // Lightweight update: toggle visibility without rebuilding the DOM
@@ -846,6 +866,8 @@ function activateTerminal(wsId, termId) {
       }
     }
   }
+  clearTimeout(activateTerminal._saveTimer);
+  activateTerminal._saveTimer = setTimeout(saveState, 500);
 }
 
 function removeTerminal(wsId, termId, skipRender) {
@@ -872,9 +894,22 @@ function removeTerminal(wsId, termId, skipRender) {
   group.terminals.splice(idx, 1);
 
   if (group.activeTermId === termId) {
-    // Prefer next terminal over browser tab
-    const nextTerm = group.terminals.slice(idx).concat(group.terminals.slice(0, idx)).find(t => t.type !== 'browser');
-    group.activeTermId = nextTerm ? nextTerm.id : (group.terminals.length ? group.terminals[Math.min(idx, group.terminals.length - 1)].id : null);
+    // Use history stack to find last active tab, preferring terminals
+    let nextId = null;
+    if (group._history) {
+      while (group._history.length) {
+        const candidate = group._history.pop();
+        if (candidate !== termId && group.terminals.some(t => t.id === candidate)) {
+          nextId = candidate;
+          break;
+        }
+      }
+    }
+    if (!nextId) {
+      const nextTerm = group.terminals.slice(idx).concat(group.terminals.slice(0, idx)).find(t => t.type !== 'browser');
+      nextId = nextTerm ? nextTerm.id : (group.terminals.length ? group.terminals[Math.min(idx, group.terminals.length - 1)].id : null);
+    }
+    group.activeTermId = nextId;
   }
 
   if (wsp.activeTermId === termId) {
@@ -932,6 +967,7 @@ function removeTerminal(wsId, termId, skipRender) {
     updateStatusBar();
   }
   renderSidebar();
+  saveState();
 }
 
 function renameTerminal(wsId, termId) {
@@ -962,6 +998,7 @@ function renameTerminalInGroup(wsId, termId) {
     tab.title = t.label;
     renderSidebar();
     updateStatusBar();
+    saveState();
   };
   inp.onblur = done;
   inp.onkeydown = e => { if (e.key==='Enter') inp.blur(); if (e.key==='Escape'){ inp.value=t.label; inp.blur(); } e.stopPropagation(); };
@@ -1026,6 +1063,7 @@ function splitGroupDirectly(wsId, groupId, direction) {
     const slot = getSlotDimensions(entry);
     sendControl({ type: 'create', id: newId, cols: slot.cols, rows: slot.rows });
   }, 50);
+  saveState();
 }
 
 function splitGroupNodeInTree(root, destGroupId, newGroup, direction, isFirst) {
@@ -1222,6 +1260,7 @@ function buildNodeDom(node, wsp) {
           node.terminals.splice(insertIdx, 0, moved);
           node.activeTermId = draggedId;
           renderPaneArea();
+          saveState();
         } else {
           handleTerminalDrop(draggedId, node.id, 'center', wsp);
         }
@@ -1763,6 +1802,7 @@ function makeSashDraggableTree(sash, container, node, childIdx) {
         node.sizes = currentSizes.map(s => (s / total) * 100);
       }
       renderPaneArea();
+      saveState();
     };
 
     document.addEventListener('mousemove', onMove);
@@ -1889,6 +1929,7 @@ function handleTerminalDrop(draggedId, targetGroupId, zone, wsp) {
 
   activateTerminal(wsp.id, draggedId);
   renderPaneArea();
+  saveState();
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2533,15 +2574,21 @@ window.addEventListener('message', function(e) {
   }
 });
 
-if (!isTauri()) {
-  window.addEventListener('beforeunload', (e) => {
-    saveState();
+// Auto-save every 30 seconds
+setInterval(saveState, 30000);
+
+// Save on close (browser) or Tauri destroy event
+window.addEventListener('beforeunload', (e) => {
+  saveState();
+  if (!isTauri()) {
     const hasTerms = workspaces.some(ws => getWorkspaceTerminals(ws).length > 0);
-    if (hasTerms) {
-      e.preventDefault();
-      e.returnValue = '';
-    }
-  });
+    if (hasTerms) { e.preventDefault(); e.returnValue = ''; }
+  }
+});
+
+// Tauri: save on window destroy
+if (isTauri() && window.__TAURI__ && window.__TAURI__.event) {
+  window.__TAURI__.event.listen('tauri://close-requested', () => saveState());
 }
 
 })();
