@@ -292,6 +292,7 @@ body { display: flex; flex-direction: column; height: 100vh; }
   flex-shrink: 0;
 }
 .sidebar-actions .sa-btn:hover { background: var(--tab-hover-bg); color: var(--fg); }
+#btn-settings:hover { background: none; }
 .sidebar-actions .sa-btn:active { transform: scale(0.9); }
 .sidebar-actions .sa-btn svg { width: 16px; height: 16px; pointer-events: none; }
 
@@ -441,19 +442,6 @@ body { display: flex; flex-direction: column; height: 100vh; }
 .focused-group.maximized .tg-tab.active { border-bottom-color: #f5e0dc; }
 .focused-group.maximized .tg-tab.active[data-color] { border-bottom-color: var(--tab-color); }
 .focused-group.maximized .tg-tab.active .tg-tab-dot { background: #f5e0dc; }
-
-.tg-tab-add {
-  width: 30px; min-width: 30px;
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
-  color: var(--dim-text);
-  font-size: 16px;
-  transition: color 0.12s, background 0.12s;
-  flex-shrink: 0;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.tg-tab-add:hover { color: var(--accent); background: var(--accent-dim); }
 
 .term-group-actions {
   display: flex;

@@ -786,11 +786,17 @@ function addTerminal(wsId, targetGroupId) {
           tab.title = entry.label;
           applyTabColor(tab, entry.color);
           tab.draggable = true;
-          tab.addEventListener('dblclick', () => toggleMaximizeTerminal(wsp.id, entry.id));
           tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
           tab.addEventListener('click', e => {
-            if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
-            else activateTerminal(wsp.id, entry.id);
+            if (e.target.classList.contains('tg-tab-close')) { removeTerminal(wsp.id, entry.id); return; }
+            const now = Date.now();
+            if (now - _lastTabClickTime < 350 && _lastTabClickTermId === entry.id) {
+              _lastTabClickTime = 0; _lastTabClickTermId = null;
+              toggleMaximizeTerminal(wsp.id, entry.id);
+            } else {
+              _lastTabClickTime = now; _lastTabClickTermId = entry.id;
+              activateTerminal(wsp.id, entry.id);
+            }
           });
           tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
           // Drag & drop
@@ -799,9 +805,7 @@ function addTerminal(wsId, targetGroupId) {
           tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
           tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
           tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
-          const addBtn = tabsContainer.querySelector('.tg-tab-add');
-          if (addBtn) tabsContainer.insertBefore(tab, addBtn);
-          else tabsContainer.appendChild(tab);
+          tabsContainer.appendChild(tab);
           // Create and add the slot
           const slot = getOrCreateSlot(entry, wsp, body);
           body.querySelectorAll('.term-slot').forEach(s => { s.style.display = 'none'; s.classList.remove('focused'); });
@@ -884,11 +888,17 @@ function addBrowserTab(wsId, targetGroupId, url) {
           tab.title = entry.label;
           applyTabColor(tab, entry.color);
           tab.draggable = true;
-          tab.addEventListener('dblclick', () => toggleMaximizeTerminal(wsp.id, entry.id));
           tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
           tab.addEventListener('click', e => {
-            if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
-            else activateTerminal(wsp.id, entry.id);
+            if (e.target.classList.contains('tg-tab-close')) { removeTerminal(wsp.id, entry.id); return; }
+            const now = Date.now();
+            if (now - _lastTabClickTime < 350 && _lastTabClickTermId === entry.id) {
+              _lastTabClickTime = 0; _lastTabClickTermId = null;
+              toggleMaximizeTerminal(wsp.id, entry.id);
+            } else {
+              _lastTabClickTime = now; _lastTabClickTermId = entry.id;
+              activateTerminal(wsp.id, entry.id);
+            }
           });
           tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
           tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.dragSourceGroupId = targetGroup.id; });
@@ -896,9 +906,7 @@ function addBrowserTab(wsId, targetGroupId, url) {
           tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
           tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
           tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
-          const addBtn = tabsContainer.querySelector('.tg-tab-add');
-          if (addBtn) tabsContainer.insertBefore(tab, addBtn);
-          else tabsContainer.appendChild(tab);
+          tabsContainer.appendChild(tab);
           // Create slot
           const slot = getOrCreateSlot(entry, wsp, body);
           body.querySelectorAll('.term-slot').forEach(s => { s.style.display = 'none'; s.classList.remove('focused'); });
@@ -1252,7 +1260,6 @@ function toggleMaximizeTerminal(wsId, termId) {
     const group = findGroupContainingTerm(wsp.layout, termId);
     if (!group) return;
     wsp._maximizedGroupId = group.id;
-    activateTerminal(wsId, termId);
   }
 
   renderPaneArea();
@@ -1365,12 +1372,18 @@ function buildNodeDom(node, wsp) {
       tab.title = t.label;
       applyTabColor(tab, t.color);
 
-      tab.addEventListener('dblclick', () => toggleMaximizeTerminal(wsp.id, t.id));
       tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, t.id); } });
       tab.addEventListener('click', e => {
         if (e.target.classList.contains('tg-tab-close')) {
           removeTerminal(wsp.id, t.id);
+          return;
+        }
+        const now = Date.now();
+        if (now - _lastTabClickTime < 350 && _lastTabClickTermId === t.id) {
+          _lastTabClickTime = 0; _lastTabClickTermId = null;
+          toggleMaximizeTerminal(wsp.id, t.id);
         } else {
+          _lastTabClickTime = now; _lastTabClickTermId = t.id;
           activateTerminal(wsp.id, t.id);
         }
       });
@@ -1444,19 +1457,17 @@ function buildNodeDom(node, wsp) {
       tabsContainer.appendChild(tab);
     });
 
-    const addTabBtn = document.createElement('div');
-    addTabBtn.className = 'tg-tab-add';
-    addTabBtn.title = 'New terminal in this group';
-    addTabBtn.textContent = '+';
-    addTabBtn.addEventListener('mousedown', e => e.preventDefault());
-    addTabBtn.addEventListener('click', () => addTerminal(wsp.id, node.id));
-    tabsContainer.appendChild(addTabBtn);
-
     header.appendChild(tabsContainer);
 
     const actions = document.createElement('div');
     actions.className = 'term-group-actions';
     actions.addEventListener('mousedown', e => e.preventDefault());
+
+    const addTabBtn = document.createElement('div');
+    addTabBtn.className = 'tg-btn';
+    addTabBtn.title = 'New terminal in this group';
+    addTabBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+    addTabBtn.addEventListener('click', () => addTerminal(wsp.id, node.id));
 
     const splitH = document.createElement('div');
     splitH.className = 'tg-btn';
@@ -1484,9 +1495,10 @@ function buildNodeDom(node, wsp) {
     addBrowserBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>';
     addBrowserBtn.onclick = () => addBrowserTab(wsp.id, node.id);
 
+    actions.appendChild(addTabBtn);
+    actions.appendChild(addBrowserBtn);
     actions.appendChild(splitH);
     actions.appendChild(splitV);
-    actions.appendChild(addBrowserBtn);
     header.appendChild(actions);
     groupEl.appendChild(header);
 
@@ -3089,6 +3101,8 @@ document.addEventListener('wheel', e => {
 let resizeRaf = null;
 let _suppressResize = false;
 let _suppressPasteUntil = 0;
+let _lastTabClickTime = 0;
+let _lastTabClickTermId = null;
 const ro = new ResizeObserver(() => {
   if (_suppressResize) return;
   if (resizeRaf) return;
