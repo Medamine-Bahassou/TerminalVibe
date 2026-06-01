@@ -930,8 +930,8 @@ function addTerminal(wsId, targetGroupId) {
           });
           tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
           // Drag & drop
-          tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.dragSourceGroupId = targetGroup.id; });
-          tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+          tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.dragSourceGroupId = targetGroup.id; startResizing(); });
+          tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
           tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
           tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
           tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
@@ -1031,8 +1031,8 @@ function addBrowserTab(wsId, targetGroupId, url) {
             }
           });
           tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
-          tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.dragSourceGroupId = targetGroup.id; });
-          tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+          tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.dragSourceGroupId = targetGroup.id; startResizing(); });
+          tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
           tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
           tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
           tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
@@ -1492,12 +1492,14 @@ function buildNodeDom(node, wsp) {
         window.draggedTermId = t.id;
         window.dragSourceGroupId = node.id;
         tab.classList.add('dragging');
+        startResizing();
       });
       tab.addEventListener('dragend', () => {
         tab.classList.remove('dragging');
         tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
           el.classList.remove('drop-left', 'drop-right');
         });
+        stopResizing();
       });
 
       tab.addEventListener('dragover', e => {
@@ -2047,6 +2049,7 @@ function makeSashDraggableTree(sash, container, node, childIdx) {
     const dim = isRow ? 'width' : 'height';
     for (const p of panes) p.style.willChange = dim;
     _suppressResize = true;
+    startResizing();
 
     const onMove = (ev) => {
       const pos = isRow ? ev.clientX : ev.clientY;
@@ -2081,13 +2084,14 @@ function makeSashDraggableTree(sash, container, node, childIdx) {
       if (total > 0) {
         node.sizes = currentSizes.map(s => (s / total) * 100);
       }
-      // Skip renderPaneArea() — DOM is already correct from onMove.
-      // Per-webview ResizeObservers handle repositioning browser tabs.
+      // Skip renderPaneArea() — DOM already has correct sizes from the drag.
+      // Rebuilding would destroy and recreate iframes/webviews, causing page reloads.
       const wsp = activeWs();
       if (wsp) {
-        for (const t of getWorkspaceTerminals(wsp)) { if (t.type !== 'browser') fitTerm(t); }
+        for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
       }
       saveState();
+      stopResizing();
     };
 
     document.addEventListener('mousemove', onMove);
@@ -2854,6 +2858,7 @@ function initSidebarSplit() {
       sb.style.willChange = 'flex-basis';
       main.style.willChange = 'flex-basis';
       sb.style.overflowY = 'hidden';
+      startResizing();
     },
     onDragEnd(sizes) {
       _suppressResize = false;
@@ -2873,6 +2878,7 @@ function initSidebarSplit() {
       if (wsp) {
         for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
       }
+      stopResizing();
     },
   });
 }
@@ -2885,6 +2891,7 @@ function toggleSidebar() {
   const main = document.getElementById('main');
   _suppressResize = true;
   main.style.overflow = 'hidden';
+  startResizing();
   const onDragEnd = (sizes) => {
     _suppressResize = false;
     main.style.overflow = '';
@@ -2902,6 +2909,7 @@ function toggleSidebar() {
         for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
       }
     });
+    stopResizing();
   };
   if (sb.classList.contains('expanded')) {
     savedSidebarWidth = sb.offsetWidth;
@@ -2911,7 +2919,7 @@ function toggleSidebar() {
       ...SB_SPLIT_OPTS,
       sizes: [0, 100],
       minSize: [0, 200],
-      onDragStart() { _suppressResize = true; main.style.overflow = 'hidden'; },
+      onDragStart() { _suppressResize = true; main.style.overflow = 'hidden'; startResizing(); },
       onDragEnd,
     });
   } else {
@@ -2924,7 +2932,7 @@ function toggleSidebar() {
       ...SB_SPLIT_OPTS,
       sizes: [pct, 100 - pct],
       minSize: [SB_EXPANDED_MIN, 200],
-      onDragStart() { _suppressResize = true; main.style.overflow = 'hidden'; },
+      onDragStart() { _suppressResize = true; main.style.overflow = 'hidden'; startResizing(); },
       onDragEnd,
     });
   }
@@ -2936,6 +2944,7 @@ function toggleSidebar() {
     if (wsp) {
       for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
     }
+    stopResizing();
   });
 }
 
@@ -3193,6 +3202,46 @@ document.addEventListener('wheel', e => {
 /* ═══════════════════════════════════════════════════════════════
    RESIZE OBSERVER
 ═══════════════════════════════════════════════════════════════ */
+/* ── Webview resizing overlay controllers ── */
+function startResizing() {
+  document.body.classList.add('resizing');
+  for (const wsp of workspaces) {
+    const terms = getWorkspaceTerminals(wsp);
+    for (const t of terms) {
+      if (t._webview) {
+        try { t._webview.hide(); } catch {}
+      }
+    }
+  }
+}
+
+function stopResizing() {
+  document.body.classList.remove('resizing');
+  const wsp = activeWs();
+  if (wsp) {
+    // Collect active terminal IDs from all groups (not just workspace-level)
+    const activeIds = new Set();
+    function collectActiveIds(node) {
+      if (!node) return;
+      if (node.type === 'group') { if (node.activeTermId) activeIds.add(node.activeTermId); }
+      else if (node.type === 'split') { node.children.forEach(collectActiveIds); }
+    }
+    collectActiveIds(wsp.layout);
+
+    const terms = getWorkspaceTerminals(wsp);
+    for (const t of terms) {
+      if (t._webview && activeIds.has(t.id)) {
+        try {
+          t._webview.show();
+          if (typeof t._positionWebview === 'function') {
+            t._positionWebview();
+          }
+        } catch {}
+      }
+    }
+  }
+}
+
 let resizeRaf = null;
 let _suppressResize = false;
 let _suppressPasteUntil = 0;

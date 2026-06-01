@@ -1089,6 +1089,12 @@ body { display: flex; flex-direction: column; height: 100vh; }
 }
 .shortcuts-reset:hover { color: var(--accent); }
 
+/* Disable pointer events on webviews / iframes while resizing or dragging tabs */
+body.resizing iframe,
+body.resizing .browser-content {
+  pointer-events: none !important;
+}
+
 /* ── Browser Tab ── */
 .browser-toolbar {
   display: flex;
