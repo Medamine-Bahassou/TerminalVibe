@@ -210,6 +210,7 @@ let currentScrollback = 10000;
 
 let workspaces = [];       // [{id, label, activeTermId, layout: (Node)}]
 let activeWsId = null;
+let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
 let focusedSlotId = null;  // DOM id of focused .term-slot
 function updateFocusedGroup() {
   document.querySelectorAll('.term-group.focused-group').forEach(g => g.classList.remove('focused-group'));
@@ -702,10 +703,68 @@ function activateWorkspace(id, skipRender) {
   activeWsId = id;
   if (!skipRender) {
     renderSidebar();
-    renderPaneArea();
+    switchWorkspacePane();
     updateStatusBar();
   }
   saveState();
+}
+
+function switchWorkspacePane() {
+  const area = document.getElementById('pane-area');
+  const empty = document.getElementById('empty-state');
+  const wsp = activeWs();
+
+  // Hide all cached workspace containers
+  Object.values(_wsDomCache).forEach(el => { el.style.display = 'none'; });
+
+  if (!wsp || !wsp.layout) {
+    empty.style.display = 'flex';
+    return;
+  }
+  empty.style.display = 'none';
+
+  let container = _wsDomCache[wsp.id];
+  if (!container) {
+    container = document.createElement('div');
+    container.className = 'ws-pane-container';
+    container.dataset.wsId = wsp.id;
+    container.style.position = 'absolute';
+    container.style.inset = '0';
+    _wsDomCache[wsp.id] = container;
+
+    if (wsp._maximizedGroupId) {
+      const group = findGroupById(wsp.layout, wsp._maximizedGroupId);
+      if (group) {
+        const groupDom = buildNodeDom(group, wsp);
+        if (groupDom) {
+          groupDom.style.position = 'absolute';
+          groupDom.style.inset = '0';
+          container.appendChild(groupDom);
+          const groupEl = document.getElementById('group-' + group.id);
+          if (groupEl) groupEl.classList.add('maximized');
+        }
+      } else {
+        wsp._maximizedGroupId = null;
+        const rootDom = buildNodeDom(wsp.layout, wsp);
+        if (rootDom) container.appendChild(rootDom);
+      }
+    } else {
+      const rootDom = buildNodeDom(wsp.layout, wsp);
+      if (rootDom) container.appendChild(rootDom);
+    }
+    area.appendChild(container);
+  }
+
+  container.style.display = 'block';
+
+  setTimeout(() => {
+    const all = getWorkspaceTerminals(wsp);
+    all.forEach(fitTerm);
+    const active = all.find(x => x.id === wsp.activeTermId);
+    if (active && active.type !== 'browser') active.term.focus();
+    updateStatusBar();
+    updateFocusedGroup();
+  }, 30);
 }
 
 function nextWorkspace() {
@@ -725,6 +784,9 @@ function removeWorkspace(id) {
   if (!ws) return;
   const terms = getWorkspaceTerminals(ws);
   terms.forEach(t => removeTerminal(ws.id, t.id, true));
+
+  // Clean up cached DOM
+  if (_wsDomCache[id]) { _wsDomCache[id].remove(); delete _wsDomCache[id]; }
 
   const idx = workspaces.findIndex(w => w.id === id);
   workspaces.splice(idx, 1);
@@ -1342,54 +1404,13 @@ function toggleMaximizeTerminal(wsId, termId) {
    PANE AREA RENDERING (Recursive execution tree)
 ═══════════════════════════════════════════════════════════════ */
 function renderPaneArea() {
-  const area = document.getElementById('pane-area');
-  const empty = document.getElementById('empty-state');
-
   const wsp = activeWs();
-
-  [...area.children].forEach(el => {
-    if (el.id !== 'empty-state' && el.id !== 'searchbar') el.remove();
-  });
-
-  if (!wsp || !wsp.layout) {
-    empty.style.display = 'flex';
-    return;
+  // Invalidate cache for current workspace so switchWorkspacePane rebuilds it
+  if (wsp && _wsDomCache[wsp.id]) {
+    _wsDomCache[wsp.id].remove();
+    delete _wsDomCache[wsp.id];
   }
-  empty.style.display = 'none';
-
-  // If a group is maximized, only show that group
-  if (wsp._maximizedGroupId) {
-    const group = findGroupById(wsp.layout, wsp._maximizedGroupId);
-    if (group) {
-      const groupDom = buildNodeDom(group, wsp);
-      if (groupDom) {
-        groupDom.style.position = 'absolute';
-        groupDom.style.inset = '0';
-        area.appendChild(groupDom);
-        const groupEl = document.getElementById('group-' + group.id);
-        if (groupEl) groupEl.classList.add('maximized');
-      }
-    } else {
-      // Group no longer exists, clear maximized state
-      wsp._maximizedGroupId = null;
-    }
-  } else {
-    const rootDom = buildNodeDom(wsp.layout, wsp);
-    if (rootDom) {
-      rootDom.style.position = 'absolute';
-      rootDom.style.inset = '0';
-      area.appendChild(rootDom);
-    }
-  }
-
-  setTimeout(() => {
-    const all = getWorkspaceTerminals(wsp);
-    all.forEach(fitTerm);
-    const active = all.find(x => x.id === wsp.activeTermId);
-    if (active && active.type !== 'browser') active.term.focus();
-    updateStatusBar();
-    updateFocusedGroup();
-  }, 30);
+  switchWorkspacePane();
 }
 
 function buildNodeDom(node, wsp) {
@@ -2060,10 +2081,11 @@ function makeSashDraggableTree(sash, container, node, childIdx) {
       if (total > 0) {
         node.sizes = currentSizes.map(s => (s / total) * 100);
       }
-      renderPaneArea();
+      // Skip renderPaneArea() — DOM is already correct from onMove.
+      // Per-webview ResizeObservers handle repositioning browser tabs.
       const wsp = activeWs();
       if (wsp) {
-        for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+        for (const t of getWorkspaceTerminals(wsp)) { if (t.type !== 'browser') fitTerm(t); }
       }
       saveState();
     };
