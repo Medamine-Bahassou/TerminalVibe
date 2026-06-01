@@ -22,6 +22,8 @@
     "core:webview:allow-get-all-webviews",
     "opener:default",
     "clipboard-manager:allow-read-text",
-    "clipboard-manager:allow-write-text"
+    "clipboard-manager:allow-write-text",
+    "core:event:default",
+    "core:event:allow-listen"
   ]
 }
