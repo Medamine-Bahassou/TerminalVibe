@@ -843,7 +843,7 @@ function addTerminal(wsId, targetGroupId) {
     const slot = getSlotDimensions(entry);
     sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows });
     // Fit again after PTY is connected
-    requestAnimationFrame(() => fitTerm(entry, true));
+    requestAnimationFrame(() => fitTerm(entry));
   }, 80);
 
   saveState();
@@ -1162,33 +1162,14 @@ function handleError(id, msg) {
   }
 }
 
-function fitTerm(entry, immediate) {
+function fitTerm(entry) {
   if (!entry || !entry.el || entry.type === 'browser') return;
   try {
-    const proposed = entry.fit.proposeDimensions();
-    if (!proposed || isNaN(proposed.cols) || isNaN(proposed.rows)) return;
-    if (entry.term.cols === proposed.cols && entry.term.rows === proposed.rows) return;
-
-    // Disable xterm.js reflow to prevent Zsh duplicate lines on resize
-    const core = entry.term._core;
-    const buffer = core._bufferService.buffer;
-    const origReflow = buffer._reflow;
-    buffer._reflow = () => {};
-
-    entry.term.resize(proposed.cols, proposed.rows);
-
-    buffer._reflow = origReflow;
-
-    entry._lastCols = proposed.cols;
-    entry._lastRows = proposed.rows;
-    if (immediate) {
-      sendControl({ type: 'resize', id: entry.id, cols: proposed.cols, rows: proposed.rows });
-    } else {
-      clearTimeout(entry._resizeTimer);
-      entry._resizeTimer = setTimeout(() => {
-        sendControl({ type: 'resize', id: entry.id, cols: proposed.cols, rows: proposed.rows });
-      }, 150);
-    }
+    entry.fit.fit();
+    const dims = entry.term.rows && entry.term.cols
+      ? { cols: entry.term.cols, rows: entry.term.rows }
+      : { cols: 80, rows: 24 };
+    sendControl({ type: 'resize', id: entry.id, cols: dims.cols, rows: dims.rows });
     updateStatusBar();
   } catch {}
 }
@@ -1222,7 +1203,7 @@ function splitGroupDirectly(wsId, groupId, direction) {
   setTimeout(() => {
     const slot = getSlotDimensions(entry);
     sendControl({ type: 'create', id: newId, cols: slot.cols, rows: slot.rows });
-    requestAnimationFrame(() => fitTerm(entry, true));
+    requestAnimationFrame(() => fitTerm(entry));
   }, 80);
   saveState();
 }
