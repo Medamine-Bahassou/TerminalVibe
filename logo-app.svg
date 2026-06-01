@@ -1,0 +1,16 @@
+<svg class="w-full h-auto drop-shadow" viewBox="0 0 500 400" xmlns="http://www.w3.org/2000/svg">
+  <g 
+    class="fill-slate-50 stroke-slate-200 hover:fill-blue-50 hover:stroke-blue-400 transition-colors duration-300" 
+    stroke-width="1" 
+    stroke-linejoin="miter"
+  >
+    <!-- Left Chevron -->
+    <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z" />
+    
+    <!-- Top Bar -->
+    <rect x="228" y="60" width="237" height="80" />
+    
+    <!-- Bottom Bar -->
+    <rect x="228" y="260" width="237" height="80" />
+  </g>
+</svg>

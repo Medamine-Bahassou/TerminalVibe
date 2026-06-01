@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "identifier": "com.terminus.app",
   "build": {
-    "beforeDevCommand": "bash -c 'dir=$(dirname $(dirname $0)); mkdir -p $dir/dist/vendor/xterm && cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/dist/ && cp -r $dir/vendor/xterm/* $dir/dist/vendor/xterm/; while sleep 2; do cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/dist/ 2>/dev/null; done' bash",
-    "beforeBuildCommand": "bash -c 'dir=$(dirname $(dirname $0)); mkdir -p $dir/dist/vendor/xterm && cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/dist/ && cp -r $dir/vendor/xterm/* $dir/dist/vendor/xterm/' bash",
+    "beforeDevCommand": "bash -c 'dir=$(dirname $(dirname $0)); mkdir -p $dir/dist/vendor/xterm && cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/logo-app.svg $dir/dist/ && cp -r $dir/vendor/xterm/* $dir/dist/vendor/xterm/; while sleep 2; do cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/logo-app.svg $dir/dist/ 2>/dev/null; done' bash",
+    "beforeBuildCommand": "bash -c 'dir=$(dirname $(dirname $0)); mkdir -p $dir/dist/vendor/xterm && cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/logo-app.svg $dir/dist/ && cp -r $dir/vendor/xterm/* $dir/dist/vendor/xterm/' bash",
     "frontendDist": "../dist"
   },
   "app": {
