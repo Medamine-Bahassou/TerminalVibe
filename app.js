@@ -220,6 +220,8 @@ function updateFocusedGroup() {
 
 let ws = null;             // WebSocket
 let wsReady = false;
+let tauriPtyReady = false; // Tauri native PTY backend ready
+let _ptyListeners = {};    // termId -> unlisten function for Tauri PTY events
 
 /* ═══════════════════════════════════════════════════════════════
    WEBSOCKET
@@ -280,11 +282,25 @@ function connectWS() {
 }
 
 function sendControl(obj) {
+  if (isTauri() && tauriPtyReady) {
+    if (obj.type === 'create') {
+      window.__TAURI_INTERNALS__.invoke('create_terminal', { id: obj.id, cols: obj.cols, rows: obj.rows }).catch(() => {});
+    } else if (obj.type === 'resize') {
+      window.__TAURI_INTERNALS__.invoke('resize_terminal', { id: obj.id, cols: obj.cols, rows: obj.rows }).catch(() => {});
+    } else if (obj.type === 'close') {
+      window.__TAURI_INTERNALS__.invoke('close_terminal', { id: obj.id }).catch(() => {});
+    }
+    return;
+  }
   if (ws && ws.readyState === WebSocket.OPEN)
     ws.send(JSON.stringify(obj));
 }
 
 function sendStdin(sid, data) {
+  if (isTauri() && tauriPtyReady) {
+    window.__TAURI_INTERNALS__.invoke('write_terminal', { id: sid, data: Array.from(data) }).catch(() => {});
+    return;
+  }
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const enc = new TextEncoder();
   const sidBytes = new Uint8Array(ID_LEN).fill(32);
@@ -305,6 +321,58 @@ function updateConnStatus(connected, connecting) {
   } else {
     dot.style.background = connected ? currentTheme.palette[2] : currentTheme.palette[1];
     txt.textContent = connected ? 'Connected' : 'Disconnected';
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TAURI NATIVE PTY
+═══════════════════════════════════════════════════════════════ */
+function connectTauriPTY() {
+  updateConnStatus(true);
+  wsReady = true;
+  tauriPtyReady = true;
+
+  // Listen for PTY events using __TAURI_INTERNALS__ (always available)
+  function tauriListen(eventName, handler) {
+    try {
+      // Try high-level API first
+      if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen) {
+        window.__TAURI__.event.listen(eventName, handler);
+        return;
+      }
+    } catch {}
+    // Fallback: use internal callback mechanism
+    try {
+      const cbId = window.__TAURI_INTERNALS__.transformCallback(handler, false);
+      window.__TAURI_INTERNALS__.invoke('plugin:event|listen', { event: eventName, target: { kind: 'Any' }, handler: cbId });
+    } catch (e) { console.error('tauriListen failed for', eventName, e); }
+  }
+
+  tauriListen('pty://output', (e) => {
+    const { id, data } = e.payload;
+    const result = findTermById(id);
+    if (result) result.term.term.write(new Uint8Array(data));
+  });
+
+  tauriListen('pty://exit', (e) => {
+    const { id, code } = e.payload;
+    handleExit(id, code);
+  });
+
+  // Create initial workspace or restore pending terminals
+  if (workspaces.length) {
+    for (const wsp of workspaces) {
+      const terms = getWorkspaceTerminals(wsp);
+      for (const t of terms) {
+        if (t.pending) {
+          const slot = getSlotDimensions(t);
+          sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows });
+          t.pending = false;
+        }
+      }
+    }
+  } else {
+    try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); }
   }
 }
 
@@ -1015,7 +1083,12 @@ function removeTerminal(wsId, termId, skipRender) {
 
   const entry = group.terminals[idx];
   if (entry.type !== 'browser') {
-    sendControl({ type: 'close', id: termId });
+    if (isTauri() && tauriPtyReady) {
+      window.__TAURI_INTERNALS__.invoke('close_terminal', { id: termId }).catch(() => {});
+    } else {
+      sendControl({ type: 'close', id: termId });
+    }
+    if (_ptyListeners[termId]) { _ptyListeners[termId](); delete _ptyListeners[termId]; }
     entry.term.dispose();
   } else {
     if (entry._msgCleanup) entry._msgCleanup();
@@ -1144,7 +1217,7 @@ function handleExit(id, code) {
   const result = findTermById(id);
   if (!result) return;
   const { ws, term: t } = result;
-  sendControl({ type: 'close', id });
+  if (!isTauri()) sendControl({ type: 'close', id });
   removeTerminal(ws.id, id);
 }
 
@@ -3136,10 +3209,10 @@ if (restored) {
   updateStatusBar();
 }
 
-// In Tauri, delay first connection to ensure server is fully ready
+// In Tauri, use native PTY via Rust backend; otherwise WebSocket
 if (isTauri()) {
   loadTauriApi(); // preload webview + window API for browser tabs
-  setTimeout(() => { try { connectWS(); } catch (e) { console.error('connectWS failed:', e); } }, 500);
+  setTimeout(() => { try { connectTauriPTY(); } catch (e) { console.error('connectTauriPTY failed:', e); } }, 100);
 } else {
   try { connectWS(); } catch (e) { console.error('connectWS failed:', e); }
 }
@@ -3184,8 +3257,15 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 // Tauri: save on window destroy
-if (isTauri() && window.__TAURI__ && window.__TAURI__.event) {
-  window.__TAURI__.event.listen('tauri://close-requested', () => saveState());
+if (isTauri()) {
+  try {
+    if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen) {
+      window.__TAURI__.event.listen('tauri://close-requested', () => saveState());
+    } else {
+      const cbId = window.__TAURI_INTERNALS__.transformCallback(() => saveState(), false);
+      window.__TAURI_INTERNALS__.invoke('plugin:event|listen', { event: 'tauri://close-requested', target: { kind: 'Any' }, handler: cbId });
+    }
+  } catch {}
 }
 
 })();
