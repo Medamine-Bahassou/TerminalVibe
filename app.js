@@ -761,9 +761,13 @@ function switchWorkspacePane() {
     const all = getWorkspaceTerminals(wsp);
     all.forEach(fitTerm);
     const active = all.find(x => x.id === wsp.activeTermId);
-    if (active && active.type !== 'browser') active.term.focus();
-    updateStatusBar();
+    if (active && active.el) {
+      focusedSlotId = active.el.id;
+      active.el.classList.add('focused');
+      if (active.type !== 'browser') active.term.focus();
+    }
     updateFocusedGroup();
+    updateStatusBar();
   }, 30);
 }
 
