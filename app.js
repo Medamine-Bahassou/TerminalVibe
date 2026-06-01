@@ -211,6 +211,12 @@ let currentScrollback = 10000;
 let workspaces = [];       // [{id, label, activeTermId, layout: (Node)}]
 let activeWsId = null;
 let focusedSlotId = null;  // DOM id of focused .term-slot
+function updateFocusedGroup() {
+  document.querySelectorAll('.term-group.focused-group').forEach(g => g.classList.remove('focused-group'));
+  if (!focusedSlotId) return;
+  const slot = document.getElementById(focusedSlotId);
+  if (slot) { const g = slot.closest('.term-group'); if (g) g.classList.add('focused-group'); }
+}
 
 let ws = null;             // WebSocket
 let wsReady = false;
@@ -493,6 +499,7 @@ function serializeLayout(node) {
       history: node._history || [],
       terminals: node.terminals.map(t => {
         const o = { id: t.id, label: t.label };
+        if (t.color) o.color = t.color;
         if (t.type === 'browser') { o.type = 'browser'; o.url = t.url; }
         return o;
       })
@@ -527,6 +534,7 @@ function deserializeLayout(data, ws) {
         entry = _createTermEntry(ws, tData.id, tData.label);
         entry.pending = true;
       }
+      if (tData.color) entry.color = tData.color;
       group.terminals.push(entry);
     }
     return group;
@@ -789,8 +797,9 @@ function addTerminal(wsId, targetGroupId) {
           tab.dataset.termid = entry.id;
           tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
           tab.title = entry.label;
+          applyTabColor(tab, entry.color);
           tab.draggable = true;
-          tab.addEventListener('dblclick', () => renameTerminalInGroup(wsp.id, entry.id));
+          tab.addEventListener('dblclick', () => toggleMaximizeTerminal(wsp.id, entry.id));
           tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
           tab.addEventListener('click', e => {
             if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
@@ -812,7 +821,7 @@ function addTerminal(wsId, targetGroupId) {
           slot.style.display = 'block';
           slot.classList.add('focused');
           body.appendChild(slot);
-          focusedSlotId = slot.id;
+          focusedSlotId = slot.id; updateFocusedGroup();
           // Double RAF ensures DOM has rendered and canvas is ready
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
@@ -886,8 +895,9 @@ function addBrowserTab(wsId, targetGroupId, url) {
           tab.dataset.termid = entry.id;
           tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
           tab.title = entry.label;
+          applyTabColor(tab, entry.color);
           tab.draggable = true;
-          tab.addEventListener('dblclick', () => renameTerminalInGroup(wsp.id, entry.id));
+          tab.addEventListener('dblclick', () => toggleMaximizeTerminal(wsp.id, entry.id));
           tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
           tab.addEventListener('click', e => {
             if (e.target.classList.contains('tg-tab-close')) removeTerminal(wsp.id, entry.id);
@@ -908,7 +918,7 @@ function addBrowserTab(wsId, targetGroupId, url) {
           slot.style.display = 'flex';
           slot.classList.add('focused');
           body.appendChild(slot);
-          focusedSlotId = slot.id;
+          focusedSlotId = slot.id; updateFocusedGroup();
           // Focus URL input
           setTimeout(() => { const urlInput = slot.querySelector('.browser-url'); if (urlInput) urlInput.focus(); }, 20);
         }
@@ -977,7 +987,7 @@ function activateTerminal(wsId, termId) {
     const terms = getWorkspaceTerminals(wsp);
     const t = terms.find(x => x.id === termId);
     if (t && t.el) {
-      focusedSlotId = t.el.id;
+      focusedSlotId = t.el.id; updateFocusedGroup();
       t.el.classList.add('focused');
       if (t.type === 'browser') {
         setTimeout(() => {
@@ -999,6 +1009,11 @@ function removeTerminal(wsId, termId, skipRender) {
 
   const group = findGroupContainingTerm(wsp.layout, termId);
   if (!group) return;
+
+  // If maximized and removing the last terminal in the maximized group, unmaximize first
+  if (wsp._maximizedGroupId === group.id && group.terminals.length <= 1) {
+    wsp._maximizedGroupId = null;
+  }
 
   const idx = group.terminals.findIndex(t => t.id === termId);
   if (idx === -1) return;
@@ -1077,7 +1092,7 @@ function removeTerminal(wsId, termId, skipRender) {
     if (newActiveId) {
       const newEntry = getWorkspaceTerminals(wsp).find(x => x.id === newActiveId);
       if (newEntry && newEntry.el) {
-        focusedSlotId = newEntry.el.id;
+        focusedSlotId = newEntry.el.id; updateFocusedGroup();
         newEntry.el.classList.add('focused');
         if (newEntry.type === 'browser') {
           setTimeout(() => { const inp = newEntry.el.querySelector('.browser-url'); if (inp) inp.focus(); }, 20);
@@ -1093,6 +1108,16 @@ function removeTerminal(wsId, termId, skipRender) {
   saveState();
 }
 
+function applyTabColor(tabEl, color) {
+  if (color) {
+    tabEl.dataset.color = color;
+    tabEl.style.setProperty('--tab-color', color);
+  } else {
+    delete tabEl.dataset.color;
+    tabEl.style.removeProperty('--tab-color');
+  }
+}
+
 function renameTerminal(wsId, termId) {
   renameTerminalInGroup(wsId, termId);
 }
@@ -1104,27 +1129,20 @@ function renameTerminalInGroup(wsId, termId) {
   const t = terms.find(x => x.id === termId);
   if (!t) return;
 
-  const tab = document.querySelector(`.tg-tab[data-termid="${termId}"]`);
-  if (!tab) return;
-  const nameEl = tab.querySelector('.tg-tab-name');
-  const inp = document.createElement('input');
-  inp.value = t.label;
-  nameEl.replaceWith(inp);
-  inp.focus(); inp.select();
-  const done = () => {
-    t.label = inp.value.trim() || t.label;
-    // Replace input with a span showing the new name
-    const span = document.createElement('span');
-    span.className = 'tg-tab-name';
-    span.textContent = t.label;
-    inp.replaceWith(span);
-    tab.title = t.label;
+  showPrompt('Edit tab', t.label, { color: t.color || '' }, (value, color) => {
+    t.label = value.trim() || t.label;
+    t.color = color || undefined;
+    const tabEl = document.querySelector(`.tg-tab[data-termid="${termId}"] .tg-tab-name`);
+    if (tabEl) tabEl.textContent = t.label;
+    const tabWrap = document.querySelector(`.tg-tab[data-termid="${termId}"]`);
+    if (tabWrap) {
+      tabWrap.title = t.label;
+      applyTabColor(tabWrap, t.color);
+    }
     renderSidebar();
     updateStatusBar();
     saveState();
-  };
-  inp.onblur = done;
-  inp.onkeydown = e => { if (e.key==='Enter') inp.blur(); if (e.key==='Escape'){ inp.value=t.label; inp.blur(); } e.stopPropagation(); };
+  });
 }
 
 function handleExit(id, code) {
@@ -1234,28 +1252,67 @@ function splitGroupNodeInTree(root, destGroupId, newGroup, direction, isFirst) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   MAXIMIZE / RESTORE TAB
+═══════════════════════════════════════════════════════════════ */
+function toggleMaximizeTerminal(wsId, termId) {
+  const wsp = findWs(wsId);
+  if (!wsp) return;
+
+  if (wsp._maximizedGroupId) {
+    // Unmaximize
+    wsp._maximizedGroupId = null;
+  } else {
+    const group = findGroupContainingTerm(wsp.layout, termId);
+    if (!group) return;
+    wsp._maximizedGroupId = group.id;
+    activateTerminal(wsId, termId);
+  }
+
+  renderPaneArea();
+}
+
+/* ═══════════════════════════════════════════════════════════════
    PANE AREA RENDERING (Recursive execution tree)
 ═══════════════════════════════════════════════════════════════ */
 function renderPaneArea() {
   const area = document.getElementById('pane-area');
   const empty = document.getElementById('empty-state');
 
+  const wsp = activeWs();
+
   [...area.children].forEach(el => {
     if (el.id !== 'empty-state' && el.id !== 'searchbar') el.remove();
   });
 
-  const wsp = activeWs();
   if (!wsp || !wsp.layout) {
     empty.style.display = 'flex';
     return;
   }
   empty.style.display = 'none';
 
-  const rootDom = buildNodeDom(wsp.layout, wsp);
-  if (rootDom) {
-    rootDom.style.position = 'absolute';
-    rootDom.style.inset = '0';
-    area.appendChild(rootDom);
+  // If a group is maximized, only show that group
+  if (wsp._maximizedGroupId) {
+    const group = findGroupById(wsp.layout, wsp._maximizedGroupId);
+    if (group) {
+      const groupDom = buildNodeDom(group, wsp);
+      if (groupDom) {
+        groupDom.style.position = 'absolute';
+        groupDom.style.inset = '0';
+        area.appendChild(groupDom);
+        const groupEl = document.getElementById('group-' + group.id);
+        if (groupEl) groupEl.classList.add('maximized');
+      }
+    } else {
+      // Group no longer exists, clear maximized state
+      wsp._maximizedGroupId = null;
+    }
+  } else {
+    const rootDom = buildNodeDom(wsp.layout, wsp);
+    if (rootDom) {
+      rootDom.style.position = 'absolute';
+      rootDom.style.inset = '0';
+      area.appendChild(rootDom);
+    }
   }
 
   setTimeout(() => {
@@ -1264,6 +1321,7 @@ function renderPaneArea() {
     const active = all.find(x => x.id === wsp.activeTermId);
     if (active && active.type !== 'browser') active.term.focus();
     updateStatusBar();
+    updateFocusedGroup();
   }, 30);
 }
 
@@ -1318,8 +1376,9 @@ function buildNodeDom(node, wsp) {
         <span class="tg-tab-close" title="Close">✕</span>
       `;
       tab.title = t.label;
+      applyTabColor(tab, t.color);
 
-      tab.addEventListener('dblclick', () => renameTerminalInGroup(wsp.id, t.id));
+      tab.addEventListener('dblclick', () => toggleMaximizeTerminal(wsp.id, t.id));
       tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, t.id); } });
       tab.addEventListener('click', e => {
         if (e.target.classList.contains('tg-tab-close')) {
@@ -1835,6 +1894,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
       document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
       slot.classList.add('focused');
       focusedSlotId = slot.id;
+      updateFocusedGroup();
       wsp.activeTermId = entry.id;
       const group = findGroupContainingTerm(wsp.layout, entry.id);
       if (group) group.activeTermId = entry.id;
@@ -1865,6 +1925,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
     document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
     slot.classList.add('focused');
     focusedSlotId = slot.id;
+    updateFocusedGroup();
     wsp.activeTermId = entry.id;
 
     const group = findGroupContainingTerm(wsp.layout, entry.id);
@@ -2077,11 +2138,7 @@ function renderSidebar() {
   const sb = document.getElementById('sidebar');
   const actionsEl = sb.querySelector('.sidebar-actions');
   const expanded = sb.classList.contains('expanded');
-  sb.querySelectorAll('.ws-btn, .ws-add, .sidebar-sep:not(:first-of-type)').forEach(e => e.remove());
-
-  const sep = document.createElement('div');
-  sep.className = 'sidebar-sep';
-  sb.insertBefore(sep, actionsEl);
+  sb.querySelectorAll('.ws-btn, .ws-add').forEach(e => e.remove());
 
   for (const wsp of workspaces) {
     const btn = document.createElement('div');
@@ -2096,6 +2153,7 @@ function renderSidebar() {
       if (e.target.closest('.ws-action')) return;
       activateWorkspace(wsp.id);
     });
+    btn.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); _suppressPasteUntil = Date.now() + 200; removeWorkspace(wsp.id); } });
     btn.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'workspace', wsp.id); });
     btn.querySelector('.ws-rename').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2165,8 +2223,11 @@ function showCtxMenu(e, type, data) {
     item('✕', 'Close workspace', '', () => removeWorkspace(wsId), true);
   } else if (type === 'terminal') {
     const { wsId, termId } = data;
+    const wsp = findWs(wsId);
+    const isMaximized = wsp && wsp._maximizedGroupId && findGroupContainingTerm(wsp.layout, termId)?.id === wsp._maximizedGroupId;
+    item(isMaximized ? '⧉' : '⛶', isMaximized ? 'Restore tab' : 'Maximize tab', '', () => toggleMaximizeTerminal(wsId, termId));
     item('⊞', 'New terminal', 'Ctrl+Shift+T', () => addTerminal(wsId));
-    item('✎', 'Rename tab', '', () => renameTerminal(wsId, termId));
+    item('✎', 'Edit tab', '', () => renameTerminal(wsId, termId));
     sep();
     item('✕', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
   }
@@ -2184,6 +2245,68 @@ function showCtxMenu(e, type, data) {
 
 function hideCtxMenu() { ctxEl.classList.remove('open'); }
 document.addEventListener('click', e => { if (!e.target.closest('#ctx')) hideCtxMenu(); });
+
+/* ═══════════════════════════════════════════════════════════════
+   PROMPT MODAL
+═══════════════════════════════════════════════════════════════ */
+const promptOverlay = document.getElementById('prompt-overlay');
+const promptInput = document.getElementById('prompt-input');
+const promptLabel = document.getElementById('prompt-label');
+const promptOk = document.getElementById('prompt-ok');
+const promptCancel = document.getElementById('prompt-cancel');
+const promptColors = document.getElementById('prompt-colors');
+const promptSwatches = promptColors.querySelectorAll('.prompt-swatch');
+
+function showPrompt(label, value, opts, callback) {
+  if (typeof opts === 'function') { callback = opts; opts = {}; }
+  promptLabel.textContent = label;
+  promptInput.value = value;
+
+  // Color swatches
+  let selectedColor = '';
+  if (opts.color !== undefined) {
+    promptColors.style.display = 'block';
+    selectedColor = opts.color || '';
+    promptSwatches.forEach(s => {
+      s.classList.toggle('active', s.dataset.color === selectedColor);
+      s.onclick = () => {
+        selectedColor = s.dataset.color;
+        promptSwatches.forEach(x => x.classList.remove('active'));
+        s.classList.add('active');
+      };
+    });
+  } else {
+    promptColors.style.display = 'none';
+  }
+
+  promptOverlay.classList.add('open');
+  promptInput.focus();
+  promptInput.select();
+
+  const close = () => {
+    promptOverlay.classList.remove('open');
+    promptOk.onclick = null;
+    promptCancel.onclick = null;
+    promptInput.onkeydown = null;
+    promptOverlay.onclick = null;
+    promptSwatches.forEach(s => { s.onclick = null; });
+  };
+
+  const submit = () => {
+    const val = promptInput.value;
+    close();
+    callback(val, selectedColor);
+  };
+
+  promptOk.onclick = submit;
+  promptCancel.onclick = close;
+  promptInput.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') submit();
+    if (e.key === 'Escape') close();
+  };
+  promptOverlay.onclick = e => { if (e.target === promptOverlay) close(); };
+}
 
 /* ═══════════════════════════════════════════════════════════════
    FONT SIZE (Ctrl+Scroll)
@@ -2659,12 +2782,29 @@ function initSidebarSplit() {
 initSidebarSplit();
 
 // Sidebar toggle
-document.getElementById('sidebar-toggle').addEventListener('mousedown', e => e.preventDefault());
-document.getElementById('sidebar-toggle').addEventListener('click', () => {
+function toggleSidebar() {
   const sb = document.getElementById('sidebar');
   const main = document.getElementById('main');
   _suppressResize = true;
   main.style.overflow = 'hidden';
+  const onDragEnd = (sizes) => {
+    _suppressResize = false;
+    main.style.overflow = '';
+    if (sb.classList.contains('expanded')) {
+      const containerW = document.getElementById('app').offsetWidth;
+      const sidebarPx = containerW * sizes[0] / 100;
+      if (sidebarPx < SB_EXPANDED_MIN) {
+        const pct = (SB_EXPANDED_MIN / containerW) * 100;
+        sidebarSplit.setSizes([pct, 100 - pct]);
+      }
+    }
+    requestAnimationFrame(() => {
+      const wsp = activeWs();
+      if (wsp) {
+        for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+      }
+    });
+  };
   if (sb.classList.contains('expanded')) {
     savedSidebarWidth = sb.offsetWidth;
     sb.classList.remove('expanded');
@@ -2673,28 +2813,8 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
       ...SB_SPLIT_OPTS,
       sizes: [0, 100],
       minSize: [0, 200],
-      onDragStart() {
-        _suppressResize = true;
-        main.style.overflow = 'hidden';
-      },
-      onDragEnd(sizes) {
-        _suppressResize = false;
-        main.style.overflow = '';
-        if (sb.classList.contains('expanded')) {
-          const containerW = document.getElementById('app').offsetWidth;
-          const sidebarPx = containerW * sizes[0] / 100;
-          if (sidebarPx < SB_EXPANDED_MIN) {
-            const pct = (SB_EXPANDED_MIN / containerW) * 100;
-            sidebarSplit.setSizes([pct, 100 - pct]);
-          }
-        }
-        requestAnimationFrame(() => {
-          const wsp = activeWs();
-          if (wsp) {
-            for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-          }
-        });
-      },
+      onDragStart() { _suppressResize = true; main.style.overflow = 'hidden'; },
+      onDragEnd,
     });
   } else {
     sb.classList.add('expanded');
@@ -2706,28 +2826,8 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
       ...SB_SPLIT_OPTS,
       sizes: [pct, 100 - pct],
       minSize: [SB_EXPANDED_MIN, 200],
-      onDragStart() {
-        _suppressResize = true;
-        main.style.overflow = 'hidden';
-      },
-      onDragEnd(sizes) {
-        _suppressResize = false;
-        main.style.overflow = '';
-        if (sb.classList.contains('expanded')) {
-          const containerW = document.getElementById('app').offsetWidth;
-          const sidebarPx = containerW * sizes[0] / 100;
-          if (sidebarPx < SB_EXPANDED_MIN) {
-            const pct = (SB_EXPANDED_MIN / containerW) * 100;
-            sidebarSplit.setSizes([pct, 100 - pct]);
-          }
-        }
-        requestAnimationFrame(() => {
-          const wsp = activeWs();
-          if (wsp) {
-            for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-          }
-        });
-      },
+      onDragStart() { _suppressResize = true; main.style.overflow = 'hidden'; },
+      onDragEnd,
     });
   }
   renderSidebar();
@@ -2739,7 +2839,11 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
       for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
     }
   });
-});
+}
+
+// Titlebar sidebar toggle
+document.getElementById('titlebar-sidebar-toggle').addEventListener('mousedown', e => e.preventDefault());
+document.getElementById('titlebar-sidebar-toggle').addEventListener('click', toggleSidebar);
 
 /* ═══════════════════════════════════════════════════════════════
    DIRECTIONAL PANE NAVIGATION (Alt + H/J/K/L)
@@ -2960,8 +3064,23 @@ function _handleTabMiddleClick(e) {
     if (tabId && wsp) removeTerminal(wsp.id, tabId);
   }
 }
-document.addEventListener('mousedown', e => { if (e.button === 1) _handleTabMiddleClick(e); }, true);
-document.addEventListener('auxclick', e => { if (e.button === 1) _handleTabMiddleClick(e); }, true);
+// Block middle-click paste on workspace buttons
+function _handleWsMiddleClick(e) {
+  const btn = e.target.closest('.ws-btn');
+  if (btn) {
+    e.preventDefault();
+    e.stopPropagation();
+    _suppressPasteUntil = Date.now() + 200;
+    const wsId = btn.dataset.wsid;
+    if (wsId) removeWorkspace(wsId);
+  }
+}
+document.addEventListener('mousedown', e => {
+  if (e.button === 1) { _handleTabMiddleClick(e); _handleWsMiddleClick(e); }
+}, true);
+document.addEventListener('auxclick', e => {
+  if (e.button === 1) { _handleTabMiddleClick(e); _handleWsMiddleClick(e); }
+}, true);
 
 // Horizontal scroll on tab bar with mouse wheel
 document.addEventListener('wheel', e => {
