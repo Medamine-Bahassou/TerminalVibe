@@ -554,12 +554,11 @@ function saveState() {
     sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
     shortcuts: customShortcuts,
     activeWsId,
-    workspaces: workspaces.map(ws => ({
-      id: ws.id,
-      label: ws.label,
-      activeTermId: ws.activeTermId,
-      layout: serializeLayout(ws.layout)
-    })),
+    workspaces: workspaces.map(ws => {
+      const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
+      if (ws.color) o.color = ws.color;
+      return o;
+    }),
   };
   try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch {}
 }
@@ -604,6 +603,7 @@ function restoreState() {
         activeTermId: wsData.activeTermId,
         layout: null
       };
+      if (wsData.color) ws.color = wsData.color;
 
       ws.layout = deserializeLayout(wsData.layout, ws);
       workspaces.push(ws);
@@ -672,27 +672,14 @@ function removeWorkspace(id) {
 function renameWorkspace(id) {
   const ws = findWs(id);
   if (!ws) return;
-  const btn = document.querySelector(`[data-wsid="${id}"]`);
-  if (!btn) return;
-  const el = btn.querySelector('.ws-label');
-  const nameEl = btn.querySelector('.ws-name');
-  if (!el) return;
-  const old = ws.label;
-  const inp = document.createElement('input');
-  inp.style.cssText = 'background:transparent;border:none;outline:1px solid var(--accent);border-radius:2px;color:var(--fg);font:inherit;font-size:10px;width:80px;text-align:left;padding:0 2px;';
-  inp.value = old;
-  if (nameEl) nameEl.style.display = 'none';
-  el.replaceWith(inp);
-  inp.focus(); inp.select();
-  const done = () => {
-    if (nameEl) nameEl.style.display = '';
-    ws.label = inp.value.trim() || old;
+
+  showPrompt('Edit workspace', ws.label, { color: ws.color || '' }, (value, color) => {
+    ws.label = value.trim() || ws.label;
+    ws.color = color || undefined;
     renderSidebar();
     updateStatusBar();
     saveState();
-  };
-  inp.onblur = done;
-  inp.onkeydown = e => { if (e.key==='Enter') inp.blur(); if (e.key==='Escape') { inp.value=old; inp.blur(); } e.stopPropagation(); };
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2149,6 +2136,10 @@ function renderSidebar() {
     const tabCount = getWorkspaceTerminals(wsp).length;
     btn.innerHTML = `<span class="ws-strip"></span><span class="ws-label">${abbr}</span><span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions"><span class="ws-action ws-rename" title="Rename">✎</span><span class="ws-action ws-remove" title="Close">✕</span></span><span class="ws-count">${tabCount}</span>`;
     btn.title = wsp.label;
+    if (wsp.color) {
+      btn.dataset.color = wsp.color;
+      btn.style.setProperty('--ws-color', wsp.color);
+    }
     btn.addEventListener('click', (e) => {
       if (e.target.closest('.ws-action')) return;
       activateWorkspace(wsp.id);
@@ -2218,7 +2209,7 @@ function showCtxMenu(e, type, data) {
     const wsId = data;
     item('⊞', 'New terminal', 'Ctrl+Shift+T', () => { activateWorkspace(wsId); addTerminal(wsId); });
     sep();
-    item('✎', 'Rename workspace', '', () => renameWorkspace(wsId));
+    item('✎', 'Edit workspace', '', () => renameWorkspace(wsId));
     sep();
     item('✕', 'Close workspace', '', () => removeWorkspace(wsId), true);
   } else if (type === 'terminal') {
