@@ -692,7 +692,7 @@ let wsCount = 0;
 function createWorkspace(label) {
   wsCount++;
   const id = uuid();
-  const ws = { id, label: label || 'Workspace', layout: null, activeTermId: null };
+  const ws = { id, label: label || ('Workspace ' + (workspaces.length + 1)), layout: null, activeTermId: null };
   workspaces.push(ws);
   activateWorkspace(id);
   addTerminal(id);
@@ -1471,6 +1471,7 @@ function buildNodeDom(node, wsp) {
     const groupEl = document.createElement('div');
     groupEl.className = 'term-group';
     groupEl.id = 'group-' + node.id;
+    groupEl.dataset.groupId = node.id;
 
     const header = document.createElement('div');
     header.className = 'term-group-header';
@@ -1662,6 +1663,27 @@ function buildNodeDom(node, wsp) {
     });
 
     setupGroupDragAndDrop(body, node, wsp, overlay);
+
+    // Click on group body focuses the active terminal
+    body.addEventListener('mousedown', () => {
+      document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+      const activeSlot = body.querySelector('.term-slot[style*="display: block"], .term-slot[style*="display: flex"]');
+      if (activeSlot) {
+        activeSlot.classList.add('focused');
+        focusedSlotId = activeSlot.id;
+      }
+      updateFocusedGroup();
+      const activeEntry = node.terminals.find(t => t.id === node.activeTermId);
+      if (activeEntry) {
+        wsp.activeTermId = activeEntry.id;
+        if (activeEntry.type === 'browser') {
+          const urlInput = activeEntry.el?.querySelector('.browser-url');
+          if (urlInput) setTimeout(() => urlInput.focus(), 20);
+        } else if (activeEntry.term) {
+          setTimeout(() => activeEntry.term.focus(), 20);
+        }
+      }
+    });
 
     groupEl.appendChild(body);
     return groupEl;
@@ -1906,7 +1928,7 @@ function getOrCreateSlot(entry, wsp, parentEl) {
       }
 
       // Non-Tauri fallback: proxy fetch + iframe
-      const proxyHost = window.location.hostname || '127.0.0.1';
+      const proxyHost = (window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname) || '127.0.0.1';
       const proxyUrlFn = u => `http://${proxyHost}:${PROXY_PORT}/proxy?url=${encodeURIComponent(u)}`;
       let html = null;
       let lastErr = '';
@@ -2703,6 +2725,8 @@ function openSettings() {
   // Activate first category
   switchSettingsCat('appearance');
   settingsOverlay.classList.add('open');
+  document.activeElement?.blur();
+  settingsOverlay.focus({ preventScroll: true });
 }
 
 function closeSettings() {
@@ -2865,6 +2889,10 @@ function applySettings() {
 document.getElementById('btn-settings').addEventListener('click', openSettings);
 document.getElementById('settings-close').addEventListener('click', closeSettings);
 settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) { closeSettings(); e.stopPropagation(); }
+  if (e.ctrlKey && e.key === ',' && !e.metaKey && !e.altKey) { e.preventDefault(); openSettings(); }
+});
 
 // Theme change
 document.getElementById('set-theme').addEventListener('change', e => {
