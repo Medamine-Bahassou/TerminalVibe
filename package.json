@@ -7,8 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "tauri": "tauri",
-    "dev": "npm run tauri dev",
-    "build": "npm run tauri build"
+    "dev": "GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 npm run tauri dev",
+    "build": "GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 npm run tauri build"
   },
   "dependencies": {
     "node-pty": "^1.0.0",
