@@ -787,6 +787,16 @@ function prevWorkspace() {
 function removeWorkspace(id) {
   const ws = findWs(id);
   if (!ws) return;
+  const termCount = getWorkspaceTerminals(ws).length;
+  const msg = termCount > 0
+    ? `Close "${ws.label}" with ${termCount} terminal${termCount > 1 ? 's' : ''}?`
+    : `Close "${ws.label}"?`;
+  showConfirm(msg, () => _removeWorkspace(id));
+}
+
+function _removeWorkspace(id) {
+  const ws = findWs(id);
+  if (!ws) return;
   const terms = getWorkspaceTerminals(ws);
   terms.forEach(t => removeTerminal(ws.id, t.id, true));
 
@@ -1141,6 +1151,13 @@ function activateTerminal(wsId, termId) {
 function removeTerminal(wsId, termId, skipRender) {
   const wsp = findWs(wsId);
   if (!wsp || !wsp.layout) return;
+
+  // Last tab in workspace — remove the workspace with confirmation
+  if (!skipRender && getWorkspaceTerminals(wsp).length <= 1) {
+    const label = wsp.label;
+    showConfirm(`Close "${label}"?`, () => _removeWorkspace(wsId));
+    return;
+  }
 
   const group = findGroupContainingTerm(wsp.layout, termId);
   if (!group) return;
@@ -1608,10 +1625,20 @@ function buildNodeDom(node, wsp) {
     addBrowserBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>';
     addBrowserBtn.onclick = () => addBrowserTab(wsp.id, node.id);
 
+    const isMax = wsp._maximizedGroupId === node.id;
+    const maxBtn = document.createElement('div');
+    maxBtn.className = 'tg-btn';
+    maxBtn.title = isMax ? 'Restore' : 'Maximize';
+    maxBtn.innerHTML = isMax
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+    maxBtn.onclick = () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); };
+
     actions.appendChild(addTabBtn);
     actions.appendChild(addBrowserBtn);
     actions.appendChild(splitH);
     actions.appendChild(splitV);
+    actions.appendChild(maxBtn);
     header.appendChild(actions);
     groupEl.appendChild(header);
 
@@ -2443,6 +2470,38 @@ function showPrompt(label, value, opts, callback) {
     if (e.key === 'Escape') close();
   };
   promptOverlay.onclick = e => { if (e.target === promptOverlay) close(); };
+}
+
+function showConfirm(message, callback) {
+  promptLabel.textContent = message;
+  promptInput.style.display = 'none';
+  promptColors.style.display = 'none';
+
+  promptOverlay.classList.add('open');
+  promptOk.focus();
+
+  let onKey;
+  const close = () => {
+    promptOverlay.classList.remove('open');
+    promptInput.style.display = '';
+    promptOk.onclick = null;
+    promptCancel.onclick = null;
+    promptOverlay.onclick = null;
+    document.removeEventListener('keydown', onKey, true);
+  };
+
+  const submit = () => { close(); callback(); };
+
+  onKey = e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') submit();
+    if (e.key === 'Escape') close();
+  };
+
+  promptOk.onclick = submit;
+  promptCancel.onclick = close;
+  promptOverlay.onclick = e => { if (e.target === promptOverlay) close(); };
+  document.addEventListener('keydown', onKey, true);
 }
 
 /* ═══════════════════════════════════════════════════════════════
