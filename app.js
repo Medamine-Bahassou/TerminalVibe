@@ -979,7 +979,7 @@
             const tab = document.createElement('div');
             tab.className = 'tg-tab active';
             tab.dataset.termid = entry.id;
-            tab.innerHTML = `<span class="tg-tab-dot tg-tab-icon"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
+            tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
             tab.title = entry.label;
             applyTabColor(tab, entry.color);
             tab.draggable = true;
