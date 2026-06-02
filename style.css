@@ -1103,10 +1103,10 @@ box-shadow: 0 16px 48px rgba(0,0,0,0.6);
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
-.shortcuts-section-header {
+.shortcuts-reset-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
+  margin-top: 6px;
 }
 .shortcuts-reset {
   font-size: 11px;
