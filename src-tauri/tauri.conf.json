@@ -1,10 +1,10 @@
 {
-  "productName": "Terminus",
+  "productName": "TerminalVibe",
   "version": "0.1.0",
-  "identifier": "com.terminus.app",
+  "identifier": "com.terminalvibe.app",
   "build": {
     "beforeDevCommand": "bash -c 'dir=$(dirname $(dirname $0)); mkdir -p $dir/dist/vendor/xterm && cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/logo-app.svg $dir/dist/ && cp -r $dir/vendor/xterm/* $dir/dist/vendor/xterm/; while sleep 2; do cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/logo-app.svg $dir/dist/ 2>/dev/null; done' bash",
-    "beforeBuildCommand": "bash -c 'dir=$(dirname $(dirname $0)); mkdir -p $dir/dist/vendor/xterm && cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/logo-app.svg $dir/dist/ && cp -r $dir/vendor/xterm/* $dir/dist/vendor/xterm/' bash",
+    "beforeBuildCommand": "bash -c 'dir=$(dirname $(dirname $0)); rm -rf $dir/src-tauri/server-dist; mkdir -p $dir/dist/vendor/xterm; cp $dir/index.html $dir/app.js $dir/style.css $dir/logo.png $dir/logo-app.svg $dir/dist/; cp -r $dir/vendor/xterm/* $dir/dist/vendor/xterm/; mkdir -p $dir/src-tauri/server-dist/node_modules; cp $dir/server.js $dir/src-tauri/server-dist/; cp -r $dir/node_modules/ws $dir/src-tauri/server-dist/node_modules/; mkdir -p $dir/src-tauri/server-dist/node_modules/node-pty/lib $dir/src-tauri/server-dist/node_modules/node-pty/build/Release; cp $dir/node_modules/node-pty/package.json $dir/src-tauri/server-dist/node_modules/node-pty/; cp -r $dir/node_modules/node-pty/lib/* $dir/src-tauri/server-dist/node_modules/node-pty/lib/; cp $dir/node_modules/node-pty/build/Release/pty.node $dir/src-tauri/server-dist/node_modules/node-pty/build/Release/' bash",
     "frontendDist": "../dist"
   },
   "app": {
@@ -14,7 +14,7 @@
     },
     "windows": [
       {
-        "title": "Terminus",
+        "title": "TerminalVibe",
         "width": 1200,
         "height": 684,
         "minWidth": 600,
@@ -28,6 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["appimage"],
+    "resources": ["server-dist/*", "server-dist/**/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

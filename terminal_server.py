@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Terminus WebSocket PTY server  +  HTTP browser-proxy server.
+TerminalVibe WebSocket PTY server  +  HTTP browser-proxy server.
 
 WebSocket server  ws://127.0.0.1:7681   — PTY multiplexer
 HTTP proxy server http://127.0.0.1:7682 — transparent page fetcher for the browser tab
@@ -419,13 +419,13 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 
 def run_proxy_server():
     server = ThreadingHTTPServer((HOST, PROXY_PORT), ProxyHandler)
-    print(f"Terminus proxy server listening on http://{HOST}:{PROXY_PORT}", flush=True)
+    print(f"TerminalVibe proxy server listening on http://{HOST}:{PROXY_PORT}", flush=True)
     server.serve_forever()
 
 
 def run_app_server():
     server = ThreadingHTTPServer((HOST, APP_PORT), AppHandler)
-    print(f"Terminus app server listening on http://{HOST}:{APP_PORT}", flush=True)
+    print(f"TerminalVibe app server listening on http://{HOST}:{APP_PORT}", flush=True)
     server.serve_forever()
 
 
@@ -640,7 +640,7 @@ async def main():
     app_thread = threading.Thread(target=run_app_server, daemon=True)
     app_thread.start()
 
-    print(f"Terminus PTY server listening on ws://{HOST}:{PORT}", flush=True)
+    print(f"TerminalVibe PTY server listening on ws://{HOST}:{PORT}", flush=True)
     print(f"Open http://{HOST}:{APP_PORT} in your browser", flush=True)
     async with websockets.serve(handler, HOST, PORT, max_size=None, ping_interval=20):
         await asyncio.Future()
