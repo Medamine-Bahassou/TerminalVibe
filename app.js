@@ -1820,6 +1820,14 @@
       function showError(url, msg) {
         contentWrap.style.background = '#fff';
         pageView.style.display = '';
+        var friendlyMsg = msg;
+        if (msg.includes('connect') || msg.includes('ECONNREFUSED') || msg.includes('timed out')) {
+          friendlyMsg = 'Cannot connect to the site. The proxy server may be down or the site is unreachable.';
+        } else if (msg.includes('CORS') || msg.includes('Access-Control')) {
+          friendlyMsg = 'The site blocked the request due to CORS policy. Try reloading or opening in an external browser.';
+        } else if (msg.includes('404')) {
+          friendlyMsg = 'Page not found on the remote server.';
+        }
         pageView.innerHTML = `
         <div class="browser-error-page">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
@@ -1828,7 +1836,7 @@
         </svg>
         <h2>Can't reach this page</h2>
         <p class="browser-error-url">${escHtml(url)}</p>
-        <p class="browser-error-msg">${escHtml(msg)}</p>
+        <p class="browser-error-msg">${escHtml(friendlyMsg)}</p>
         <div class="browser-error-actions">
         <button class="browser-error-btn" id="err-retry">Try again</button>
         <button class="browser-error-btn browser-error-btn-ext" id="err-ext">Open in browser ↗</button>
@@ -1908,7 +1916,17 @@
             iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads';
             iframe.referrerPolicy = 'no-referrer';
             iframe.allow = 'clipboard-read; clipboard-write; fullscreen';
-            iframe.onload = () => { showLoading(false); resumeBrowserTab(entry); };
+            var loadTimer = setTimeout(function() {
+              if (loading) {
+                showLoading(false);
+                showError(url, 'Page load timed out. The proxy may not be able to reach this site, or the site may require authentication.');
+              }
+            }, 20000);
+            iframe.onload = function() {
+              clearTimeout(loadTimer);
+              showLoading(false);
+              resumeBrowserTab(entry);
+            };
             contentWrap.insertBefore(iframe, pageView);
           }
           pageView.style.display = 'none';
