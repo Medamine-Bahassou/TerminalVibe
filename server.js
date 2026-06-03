@@ -57,67 +57,116 @@ const BROWSER_UA =
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 // ─────────────────────────────────────────────────────────────
-//  URL REWRITING
+//  PATH-BASED PROXY URL
 // ─────────────────────────────────────────────────────────────
+//  Format:  /p/<base64url-origin>/<path-and-query>
+//  Example: /p/aHR0cHM6Ly9leGFtcGxlLmNvbQ==/css/style.css
+//  The <base> tag points to this path so all relative URLs
+//  (including JS-created ones) resolve through the proxy.
 
-function makeProxyUrl(targetUrl) {
-  return `http://${HOST}:${PROXY_PORT}/proxy?url=${encodeURIComponent(targetUrl)}`;
+function toB64url(str) {
+  return Buffer.from(str, "utf-8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
-function absUrl(href, baseUrl) {
-  if (!href || href.startsWith("data:") || href.startsWith("javascript:"))
-    return href;
-  const parsed = new URL(baseUrl);
-  const origin = `${parsed.protocol}//${parsed.host}`;
-  if (href.startsWith("//")) return parsed.protocol + href;
-  if (href.startsWith("/")) return origin + href;
-  if (!href.startsWith("http")) {
-    const basePath = parsed.pathname.replace(/\/[^/]*$/, "");
-    return `${origin}${basePath}/${href}`;
+function fromB64url(str) {
+  return Buffer.from(
+    str.replace(/-/g, "+").replace(/_/g, "/"),
+    "base64"
+  ).toString("utf-8");
+}
+
+/** Build the proxy base URL for a given full target URL (origin + path). */
+function proxyPathUrl(fullUrl) {
+  const u = new URL(fullUrl);
+  const origin = u.origin;
+  const path = fullUrl.substring(origin.length) || "/";
+  return `http://${HOST}:${PROXY_PORT}/p/${toB64url(origin)}${path}`;
+}
+
+/**
+ * Parse a /p/<b64>/<path> request into the full target URL.
+ * Returns null if the path doesn't match.
+ */
+function resolveProxyPath(pathname, search) {
+  const m = pathname.match(/^\/p\/([A-Za-z0-9\-_=]+)(\/.*)?$/);
+  if (!m) return null;
+  const origin = fromB64url(m[1]);
+  if (!origin.startsWith("http://") && !origin.startsWith("https://")) return null;
+  const rest = (m[2] || "/") + search;
+  // Avoid double-slash when origin has a trailing slash
+  return origin.replace(/\/+$/, "") + rest;
+}
+
+/**
+ * Convert an absolute CSS path (`/…`) to a proxy path.
+ */
+function proxyAbsPath(path, baseUrl) {
+  if (!path.startsWith("/")) return null;
+  try {
+    const abs = new URL(path, baseUrl).href;
+    const u = new URL(abs);
+    const rest = abs.substring(u.origin.length) || "/";
+    return `/p/${toB64url(u.origin)}${rest}`;
+  } catch { return null; }
+}
+
+/**
+ * Rewrite HTML for safe iframe embedding.
+ *
+ * Strategy:
+ *  1. Replace/inject <base href> pointing to our path-based proxy so the
+ *     browser resolves all *relative* URLs (including JS-created ones)
+ *     through the proxy.
+ *  2. Rewrite absolute paths (`/…`) in resource attributes — <base> doesn't
+ *     affect these; they'd resolve against the proxy server root instead.
+ *  3. Rewrite url() with absolute paths inside <style> / style="…".
+ *
+ * Absolute URLs (e.g. <img src="https://cdn.example.com/…">) load directly
+ * from the original source — no proxying needed.
+ */
+function rewriteHtml(html, pageUrl) {
+  // Detect existing <base href> — use it as the resolution base
+  let baseHref = pageUrl;
+  const existing = html.match(/<base\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+  if (existing) {
+    try {
+      baseHref = new URL(existing[1], pageUrl).href;
+    } catch {}
   }
-  return href;
-}
 
-function proxy(href, baseUrl) {
-  return makeProxyUrl(absUrl(href, baseUrl));
-}
+  // Directory of the base URL — relative URLs resolve against this
+  const baseDirUrl = new URL(".", baseHref).href;
+  const pb = proxyPathUrl(baseDirUrl);
 
-function rewriteHtml(html, baseUrl) {
-  const parsed = new URL(baseUrl);
-  const origin = `${parsed.protocol}//${parsed.host}`;
-
-  // <base href>
-  html = html.replace(
-    /(<base\b[^>]*?\bhref\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, href, post) => pre + proxy(href, baseUrl) + post
-  );
-  // inject <base> if missing
-  if (!/<base\b/i.test(html)) {
-    const baseTag = `<base href="${proxy(baseUrl, baseUrl)}">`;
+  // Replace existing <base> href or inject a new one
+  if (existing) {
+    html = html.replace(
+      /(<base\b[^>]*?\bhref\s*=\s*["'])([^"']+)(["'])/gi,
+      (m, pre, _href, post) => pre + pb + post
+    );
+  } else {
+    const tag = `<base href="${pb}">`;
     if (/<head>/i.test(html)) {
-      html = html.replace(/<head>/i, `<head>${baseTag}`);
+      html = html.replace(/<head>/i, `<head>${tag}`);
     } else {
-      html = baseTag + html;
+      html = tag + html;
     }
   }
 
-  // <link href>
-  html = html.replace(
-    /(<link\b[^>]*?\bhref\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, href, post) => pre + proxy(href, baseUrl) + post
-  );
-  // <script src>
-  html = html.replace(
-    /(<script\b[^>]*?\bsrc\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, href, post) => pre + proxy(href, baseUrl) + post
-  );
-  // <img src>
-  html = html.replace(
-    /(<img\b[^>]*?\bsrc\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, href, post) => pre + proxy(href, baseUrl) + post
-  );
+  // ── Resource attributes with absolute paths ──
+  // Absolute paths (e.g. <script src="/app.js">) don't follow <base>;
+  // they'd resolve against the proxy server root. Rewrite them.
+  const RESOURCE_ATTRS = /((?:src|href|poster|data)\s*=\s*["'])\/([^"']+)(["'])/gi;
+  html = html.replace(RESOURCE_ATTRS, (m, pre, path, post) => {
+    const proxied = proxyAbsPath("/" + path, pageUrl);
+    return proxied ? pre + proxied + post : m;
+  });
 
-  // srcset
+  // srcset — comma-separated list of "/path descriptor" pairs
   html = html.replace(
     /(\bsrcset\s*=\s*["'])([^"']+)(["'])/gi,
     (m, pre, value, post) => {
@@ -127,7 +176,9 @@ function rewriteHtml(html, baseUrl) {
           part = part.trim();
           if (!part) return "";
           const pieces = part.split(/\s+/);
-          pieces[0] = proxy(pieces[0], baseUrl);
+          if (pieces[0].startsWith("/")) {
+            pieces[0] = proxyAbsPath(pieces[0], pageUrl) || pieces[0];
+          }
           return pieces.join(" ");
         })
         .join(", ");
@@ -135,67 +186,66 @@ function rewriteHtml(html, baseUrl) {
     }
   );
 
-  // url() inside <style> blocks
-  html = html.replace(
-    /(<style\b[^>]*>)(.*?)(<\/style>)/gis,
-    (m, open, body, close) => {
-      const rewritten = body.replace(
-        /url\((["']?)([^)'"]+)\1\)/gi,
-        (m2, q, href) => {
-          if (href.startsWith("data:")) return m2;
-          return `url(${q}${proxy(href, baseUrl)}${q})`;
-        }
-      );
-      return open + rewritten + close;
-    }
-  );
+  // ── CSS url() with absolute paths ──
+  rewriteStyleUrl: {
+    // <style> blocks
+    html = html.replace(
+      /(<style\b[^>]*>)(.*?)(<\/style>)/gis,
+      (m, open, body, close) => {
+        const rewritten = body.replace(
+          /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
+          (m2, q, path) => {
+            const proxied = proxyAbsPath(path, pageUrl);
+            return proxied ? `url(${q}${proxied}${q})` : m2;
+          }
+        );
+        return open + rewritten + close;
+      }
+    );
 
-  // url() in inline style="..."
-  html = html.replace(
-    /(\bstyle\s*=\s*["'])(.*?)(["'])/gi,
-    (m, pre, body, post) => {
-      const rewritten = body.replace(
-        /url\((["']?)([^)'"]+)\1\)/gi,
-        (m2, q, href) => {
-          if (href.startsWith("data:")) return m2;
-          return `url(${q}${proxy(href, baseUrl)}${q})`;
-        }
-      );
-      return pre + rewritten + post;
-    }
-  );
+    // Inline style="…"
+    html = html.replace(
+      /(\bstyle\s*=\s*["'])(.*?)(["'])/gi,
+      (m, pre, body, post) => {
+        const rewritten = body.replace(
+          /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
+          (m2, q, path) => {
+            const proxied = proxyAbsPath(path, pageUrl);
+            return proxied ? `url(${q}${proxied}${q})` : m2;
+          }
+        );
+        return pre + rewritten + post;
+      }
+    );
+  }
 
-  // <video src/poster>, <audio src>, <source src>, <embed src>, <object data>
-  html = html.replace(
-    /(<video\b[^>]*?\b(?:src|poster)\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, href, post) => pre + proxy(href, baseUrl) + post
-  );
-  html = html.replace(
-    /(<audio\b[^>]*?\bsrc\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, href, post) => pre + proxy(href, baseUrl) + post
-  );
-  html = html.replace(
-    /(<source\b[^>]*?\bsrc\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, href, post) => pre + proxy(href, baseUrl) + post
-  );
-  html = html.replace(
-    /(<embed\b[^>]*?\bsrc\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, href, post) => pre + proxy(href, baseUrl) + post
-  );
-  html = html.replace(
-    /(<object\b[^>]*?\bdata\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, href, post) => pre + proxy(href, baseUrl) + post
-  );
+  // ── Service Worker registration ──
+  // Catches absolute-path requests from dynamic JS (import(), fetch(),
+  // createElement('script/src="/path"')) that bypass <base>.
+  const swReg = `<script>try{navigator.serviceWorker.register('/sw.js')}catch(e){}</script>`;
+
+  // ── Navigation tracker — polls location.href so the parent can sync ──
+  // the URL bar, back/fwd buttons, and save-state. Only inject when there
+  // is a </body> tag (real HTML pages, not error pages or fragments).
+  if (/<\/body>/i.test(html)) {
+    const navScript =
+      "<script>(function(){var u=location.href;setInterval(function(){if(location.href!==u){u=location.href;parent.postMessage({terminusNav:u},\"*\")}},200)})()<\/script>";
+    html = html.replace(/<\/body>/i, swReg + navScript + "</body>");
+  }
 
   return html;
 }
 
-function rewriteCss(css, baseUrl) {
+/**
+ * Rewrite CSS for absolute-path url() references (e.g. /fonts/…).
+ * Relative paths resolve correctly since the CSS file URL is a proxy path.
+ */
+function rewriteCss(css, cssUrl) {
   return css.replace(
-    /url\((["']?)([^)'"]+)\1\)/gi,
-    (m, q, href) => {
-      if (href.startsWith("data:")) return m;
-      return `url(${q}${makeProxyUrl(absUrl(href, baseUrl))}${q})`;
+    /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
+    (m, q, path) => {
+      const proxied = proxyAbsPath(path, cssUrl);
+      return proxied ? `url(${q}${proxied}${q})` : m;
     }
   );
 }
@@ -204,10 +254,11 @@ function rewriteCss(css, baseUrl) {
 //  HTTP PROXY SERVER
 // ─────────────────────────────────────────────────────────────
 
-function proxyFetch(targetUrl, reqHeaders) {
+function proxyFetch(targetUrl, reqHeaders, method) {
   return new Promise((resolve, reject) => {
     const targetParsed = new URL(targetUrl);
     const transport = targetParsed.protocol === "https:" ? https : http;
+    const reqMethod = (method || "GET").toUpperCase();
 
     const headers = {
       "User-Agent": BROWSER_UA,
@@ -230,7 +281,7 @@ function proxyFetch(targetUrl, reqHeaders) {
       hostname: targetParsed.hostname,
       port: targetParsed.port || (targetParsed.protocol === "https:" ? 443 : 80),
       path: targetParsed.pathname + targetParsed.search,
-      method: "GET",
+      method: reqMethod,
       headers,
       rejectUnauthorized: false, // permissive SSL like Python
       timeout: 15000,
@@ -240,7 +291,7 @@ function proxyFetch(targetUrl, reqHeaders) {
       // Follow redirects
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
         const redirectUrl = new URL(res.headers.location, targetUrl).href;
-        proxyFetch(redirectUrl, reqHeaders).then(resolve).catch(reject);
+        proxyFetch(redirectUrl, reqHeaders, reqMethod).then(resolve).catch(reject);
         return;
       }
 
@@ -265,10 +316,54 @@ function proxyFetch(targetUrl, reqHeaders) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────
+//  SERVICE WORKER — intercepts dynamic JS requests
+// ─────────────────────────────────────────────────────────────
+//  Registers on the proxy origin and routes any absolute-path
+//  request (e.g. JS import('/_next/static/chunks/file.js') or
+//  dynamically created <script src="/path">) through the proxy.
+//  Only needed when the iframe sandbox includes allow-same-origin.
+
+const SW_SCRIPT = [
+  "'use strict';",
+  "self.addEventListener('fetch',function(e){",
+  "var u=new URL(e.request.url);",
+  "if(u.pathname==='/sw.js'||u.pathname.indexOf('/p/')===0)return;",
+  "if(u.origin!==self.location.origin)return;",
+  "e.respondWith((async function(){",
+  "var ref=e.request.referrer||'';",
+  "var b64=null;",
+  "var i=ref.indexOf('/p/');",
+  "if(i>=0){",
+  "var j=ref.indexOf('/',i+3);",
+  "b64=j>0?ref.substring(i+3,j):ref.substring(i+3);",
+  "}",
+  "if(!b64){try{var c=await self.clients.get(e.clientId);if(c){",
+  "i=c.url.indexOf('/p/');",
+  "if(i>=0){j=c.url.indexOf('/',i+3);",
+  "b64=j>0?c.url.substring(i+3,j):c.url.substring(i+3);",
+  "}}}catch(ex){}}",
+  "if(!b64)return fetch(e.request);",
+  "var pp='/p/'+b64+u.pathname+u.search;",
+  "var opts={method:e.request.method,headers:e.request.headers};",
+  "if(e.request.method!=='GET'&&e.request.method!=='HEAD'){",
+  "try{opts.body=await e.request.clone().arrayBuffer();}catch(ex){}",
+  "}",
+  "return fetch(pp,opts);",
+  "})());",
+  "});",
+].join("");
+
 const proxyServer = http.createServer(async (req, res) => {
-  // CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  // Echo Origin for credentialed requests (CORS)
+  const reqOrigin = req.headers.origin;
+  if (reqOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", reqOrigin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader("Access-Control-Expose-Headers", "*");
 
@@ -280,38 +375,37 @@ const proxyServer = http.createServer(async (req, res) => {
 
   const parsed = url.parse(req.url, true);
 
+  // ── Service Worker script ──
+  if (parsed.pathname === "/sw.js") {
+    res.writeHead(200, {
+      "Content-Type": "application/javascript",
+      "Cache-Control": "no-cache",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(SW_SCRIPT);
+    return;
+  }
+
   // ── Resolve target URL ──
   let target;
-  if (parsed.pathname.startsWith("/proxy")) {
-    target = parsed.query.url;
-    if (!target) {
-      res.writeHead(400);
-      res.end("Missing ?url=");
-      return;
-    }
-    target = decodeURIComponent(target);
-  } else {
-    // Asset request — resolve via Referer
-    const referer = req.headers.referer || "";
-    target = null;
-    if (referer && referer.includes("/proxy?url=")) {
-      try {
-        const refParsed = url.parse(referer, true);
-        const orig = refParsed.query.url;
-        if (orig) {
-          target = new URL(parsed.pathname, decodeURIComponent(orig)).href;
-        }
-      } catch {}
-    }
-    if (!target) {
-      res.writeHead(404);
-      res.end();
-      return;
-    }
+
+  // 1) Path-based: /p/<base64url-origin>/<path>
+  target = resolveProxyPath(parsed.pathname, parsed.search || "");
+
+  // 2) Legacy: /proxy?url=<URL>  — fallback
+  if (!target && parsed.pathname.startsWith("/proxy")) {
+    const q = parsed.query.url;
+    if (q) target = decodeURIComponent(q);
+  }
+
+  if (!target) {
+    res.writeHead(404);
+    res.end("Not found");
+    return;
   }
 
   try {
-    const result = await proxyFetch(target, req.headers);
+    const result = await proxyFetch(target, req.headers, req.method);
     let { status, headers: respHeaders, body } = result;
 
     const contentType = respHeaders["content-type"] || "application/octet-stream";
@@ -321,16 +415,17 @@ const proxyServer = http.createServer(async (req, res) => {
       charset = contentType.split("charset=")[1].trim().split(";")[0].trim();
     }
 
-    // Rewrite HTML/CSS
+    // Only rewrite HTML — inject/replace <base> for relative URL resolution
     if (ctBase === "text/html" || ctBase === "application/xhtml+xml") {
       try {
-        let text = body.toString(charset === "utf-8" ? "utf-8" : "latin1");
+        let text = body.toString(/utf-?8/i.test(charset) ? "utf-8" : "latin1");
         text = rewriteHtml(text, target);
         body = Buffer.from(text, "utf-8");
       } catch {}
     } else if (ctBase === "text/css") {
+      // Rewrite absolute-path url() references in external CSS
       try {
-        let text = body.toString(charset === "utf-8" ? "utf-8" : "latin1");
+        let text = body.toString(/utf-?8/i.test(charset) ? "utf-8" : "latin1");
         text = rewriteCss(text, target);
         body = Buffer.from(text, "utf-8");
       } catch {}
