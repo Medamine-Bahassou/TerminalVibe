@@ -206,6 +206,7 @@
   let currentLineHeight = 1.4;
   let currentCursorStyle = 'block';
   let currentCursorBlink = true;
+  let statusBarVisible = true;
   let currentScrollback = 10000;
 
   let workspaces = [];       // [{id, label, activeTermId, layout: (Node)}]
@@ -669,6 +670,7 @@
       lineHeight: currentLineHeight,
       cursorStyle: currentCursorStyle,
       cursorBlink: currentCursorBlink,
+      statusBarVisible,
       scrollback: currentScrollback,
       sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
  sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
@@ -700,6 +702,7 @@
       if (state.lineHeight) currentLineHeight = state.lineHeight;
       if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
+      if (state.statusBarVisible !== undefined) statusBarVisible = state.statusBarVisible;
       if (state.scrollback) currentScrollback = state.scrollback;
       if (state.shortcuts) {
         for (const [k, v] of Object.entries(state.shortcuts)) {
@@ -751,9 +754,13 @@
   }
 
   function activateWorkspace(id, skipRender) {
+    if (id === activeWsId) return;
     activeWsId = id;
     if (!skipRender) {
-      renderSidebar();
+      // Update active class in-place to avoid flicker from full sidebar rebuild
+      document.querySelectorAll('.ws-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.wsid === id);
+      });
       switchWorkspacePane();
       updateStatusBar();
     }
@@ -1020,6 +1027,12 @@
             });
           }
         }
+        // Sync group color from active tab's color
+        if (groupEl) {
+          const act = groupEl.querySelector('.tg-tab.active');
+          if (act && act.dataset.color) groupEl.style.setProperty('--group-tab-color', act.dataset.color);
+          else groupEl.style.removeProperty('--group-tab-color');
+        }
       } else {
         renderPaneArea();
         activateTerminal(wsp.id, id);
@@ -1115,6 +1128,12 @@
             focusedSlotId = slot.id; updateFocusedGroup();
           }
         }
+        // Sync group color from active tab's color
+        if (groupEl) {
+          const act = groupEl.querySelector('.tg-tab.active');
+          if (act && act.dataset.color) groupEl.style.setProperty('--group-tab-color', act.dataset.color);
+          else groupEl.style.removeProperty('--group-tab-color');
+        }
       } else {
         renderPaneArea();
         activateTerminal(wsp.id, id);
@@ -1163,6 +1182,13 @@
           groupEl.querySelectorAll('.tg-tab').forEach(tab => {
             tab.classList.toggle('active', tab.dataset.termid === termId);
           });
+          // Sync group color from active tab
+          const activeTab = groupEl.querySelector('.tg-tab.active');
+          if (activeTab && activeTab.dataset.color) {
+            groupEl.style.setProperty('--group-tab-color', activeTab.dataset.color);
+          } else {
+            groupEl.style.removeProperty('--group-tab-color');
+          }
           // Toggle slot visibility + suspend/resume browser tabs
           group.terminals.forEach(t => {
             const slot = document.getElementById('slot-' + t.id);
@@ -1340,6 +1366,14 @@
       if (tabWrap) {
         tabWrap.title = t.label;
         applyTabColor(tabWrap, t.color);
+        // Sync group color if this is the active tab
+        if (tabWrap.classList.contains('active')) {
+          const group = tabWrap.closest('.term-group');
+          if (group) {
+            if (t.color) group.style.setProperty('--group-tab-color', t.color);
+            else group.style.removeProperty('--group-tab-color');
+          }
+        }
       }
       renderSidebar();
       updateStatusBar();
@@ -1626,6 +1660,12 @@
 
         tabsContainer.appendChild(tab);
       });
+
+      // Sync group color from active tab
+      const activeTabEl = tabsContainer.querySelector('.tg-tab.active');
+      if (activeTabEl && activeTabEl.dataset.color) {
+        groupEl.style.setProperty('--group-tab-color', activeTabEl.dataset.color);
+      }
 
       // Double-click empty area of tab bar to add a new terminal
       tabsContainer.addEventListener('dblclick', e => {
@@ -2245,6 +2285,7 @@
       const btn = document.createElement('div');
       const isActive = wsp.id === activeWsId;
       btn.className = 'ws-btn' + (isActive ? ' active' : '');
+      btn.draggable = true;
       btn.dataset.wsid = wsp.id;
       const abbr = wsp.label.substring(0,3).toUpperCase();
       const tabCount = getWorkspaceTerminals(wsp).length;
@@ -2256,10 +2297,63 @@
       }
       btn.addEventListener('click', (e) => {
         if (e.target.closest('.ws-action')) return;
+        if (window._wsDragged) { window._wsDragged = false; return; }
         activateWorkspace(wsp.id);
       });
       btn.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); _suppressPasteUntil = Date.now() + 200; removeWorkspace(wsp.id); } });
       btn.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'workspace', wsp.id); });
+
+      // Drag & drop reorder
+      btn.addEventListener('dragstart', e => {
+        e.dataTransfer.setData('text/plain', wsp.id);
+        e.dataTransfer.effectAllowed = 'move';
+        btn.classList.add('dragging');
+        window.draggedWsId = wsp.id;
+        startResizing();
+      });
+      btn.addEventListener('dragend', () => {
+        btn.classList.remove('dragging');
+        window.draggedWsId = null;
+        sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+        stopResizing();
+      });
+      btn.addEventListener('dragover', e => {
+        if (!window.draggedWsId || window.draggedWsId === wsp.id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const rect = btn.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+        btn.classList.add(e.clientY < midY ? 'drop-above' : 'drop-below');
+      });
+      btn.addEventListener('dragleave', () => {
+        btn.classList.remove('drop-above', 'drop-below');
+      });
+      btn.addEventListener('drop', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const draggedId = window.draggedWsId;
+        if (!draggedId || draggedId === wsp.id) return;
+        const rect = btn.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const insertBefore = e.clientY < midY;
+
+        const fromIdx = workspaces.findIndex(w => w.id === draggedId);
+        const toIdx = workspaces.findIndex(w => w.id === wsp.id);
+        if (fromIdx === -1 || toIdx === -1) return;
+
+        const [moved] = workspaces.splice(fromIdx, 1);
+        const targetIdx = workspaces.findIndex(w => w.id === wsp.id);
+        workspaces.splice(insertBefore ? targetIdx : targetIdx + 1, 0, moved);
+
+        sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+        window.draggedWsId = null;
+        window._wsDragged = true;
+        setTimeout(() => { window._wsDragged = false; }, 0);
+        renderSidebar();
+        saveState();
+      });
+
       btn.querySelector('.ws-rename').addEventListener('click', (e) => {
         e.stopPropagation();
         renameWorkspace(wsp.id);
@@ -2276,6 +2370,27 @@
     addBtn.title = 'New workspace';
     addBtn.innerHTML = '+<span class="ws-add-text">New workspace</span>';
     addBtn.addEventListener('click', () => createWorkspace());
+    // Drop on ws-add = move to end
+    addBtn.addEventListener('dragover', e => {
+      if (!window.draggedWsId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+    addBtn.addEventListener('drop', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const draggedId = window.draggedWsId;
+      if (!draggedId) return;
+      const fromIdx = workspaces.findIndex(w => w.id === draggedId);
+      if (fromIdx === -1 || fromIdx === workspaces.length - 1) { window.draggedWsId = null; return; }
+      const [moved] = workspaces.splice(fromIdx, 1);
+      workspaces.push(moved);
+      window.draggedWsId = null;
+      window._wsDragged = true;
+      setTimeout(() => { window._wsDragged = false; }, 0);
+      renderSidebar();
+      saveState();
+    });
     sb.insertBefore(addBtn, actionsEl);
   }
 
@@ -2634,6 +2749,10 @@
         const blinkToggle = document.getElementById('set-cursorblink');
         blinkToggle.classList.toggle('on', currentCursorBlink);
 
+        // Status bar
+        const sbToggle = document.getElementById('set-statusbar');
+        sbToggle.classList.toggle('on', statusBarVisible);
+
         // Scrollback
         document.getElementById('set-scrollback').value = currentScrollback;
         document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
@@ -2852,6 +2971,14 @@
         applySettings();
       });
 
+      // Status bar toggle
+      document.getElementById('set-statusbar').addEventListener('click', () => {
+        statusBarVisible = !statusBarVisible;
+        document.getElementById('set-statusbar').classList.toggle('on', statusBarVisible);
+        document.getElementById('statusbar').style.display = statusBarVisible ? '' : 'none';
+        saveState();
+      });
+
       // Scrollback
       document.getElementById('set-scrollback').addEventListener('input', e => {
         currentScrollback = parseInt(e.target.value);
@@ -2861,6 +2988,7 @@
 
       // Prevent sidebar and statusbar from stealing terminal focus
       document.getElementById('sidebar').addEventListener('mousedown', e => {
+        if (e.target.closest('[draggable="true"]')) return;
         if (!e.target.closest('input, textarea, select, [contenteditable]')) e.preventDefault();
       });
         document.getElementById('statusbar').addEventListener('mousedown', e => e.preventDefault());
@@ -3316,6 +3444,9 @@
          ═══════════════════════════════════════════════════════════════ */
         const restored = restoreState();
         applyTheme(currentThemeName);
+
+        // Apply initial status bar visibility
+        document.getElementById('statusbar').style.display = statusBarVisible ? '' : 'none';
 
         if (restored) {
           renderSidebar();

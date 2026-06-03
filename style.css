@@ -163,6 +163,9 @@ gap: 8px;
   box-shadow: inset 2px 0 0 var(--ws-active-strip);
   border-color: var(--accent);
 }
+.ws-btn.dragging { opacity: 0.4; }
+.ws-btn.drop-above { box-shadow: inset 0 2px 0 var(--accent) !important; }
+.ws-btn.drop-below { box-shadow: inset 0 -2px 0 var(--accent) !important; }
 .ws-btn .ws-strip {
   position: absolute;
   left: 0; top: 50%;
@@ -535,6 +538,16 @@ background: var(--bg);
 .term-wrap .xterm { height: 100%; font-variant-ligatures: none; font-feature-settings: "liga" 0; }
 .term-wrap .xterm-rows > div { overflow: visible !important; }
 .term-wrap canvas { overflow: visible !important; }
+
+/* Tab color border on terminal body — overrides focused accent */
+.term-group[style*="--group-tab-color"] .term-slot:not([style*="display: none"])::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--group-tab-color);
+  pointer-events: none;
+  z-index: 10;
+}
 
 /* Empty state */
 .empty-state {
