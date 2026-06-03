@@ -1494,16 +1494,70 @@
     const wsp = findWs(wsId);
     if (!wsp) return;
 
+    const container = _wsDomCache[wsp.id];
+    if (!container) {
+      // No cached DOM — fallback to old render path (edge case)
+      if (wsp._maximizedGroupId) {
+        wsp._maximizedGroupId = null;
+      } else {
+        const group = findGroupContainingTerm(wsp.layout, termId);
+        if (!group) return;
+        wsp._maximizedGroupId = group.id;
+      }
+      renderPaneArea();
+      return;
+    }
+
     if (wsp._maximizedGroupId) {
       // Unmaximize
       wsp._maximizedGroupId = null;
+      container.querySelectorAll('.term-group').forEach(el => {
+        el.style.position = '';
+        el.style.inset = '';
+        el.style.zIndex = '';
+        el.style.display = '';
+        el.classList.remove('maximized');
+      });
+      container.querySelectorAll('.sash').forEach(el => {
+        el.style.display = '';
+      });
     } else {
       const group = findGroupContainingTerm(wsp.layout, termId);
       if (!group) return;
       wsp._maximizedGroupId = group.id;
+
+      const groupId = 'group-' + group.id;
+      container.querySelectorAll('.term-group').forEach(el => {
+        if (el.id === groupId) {
+          el.style.position = 'absolute';
+          el.style.inset = '0';
+          el.style.zIndex = '10';
+          el.classList.add('maximized');
+        } else {
+          el.style.display = 'none';
+        }
+      });
+      container.querySelectorAll('.sash').forEach(el => {
+        el.style.display = 'none';
+      });
     }
 
-    renderPaneArea();
+    // Update focus
+    document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+    focusedSlotId = null;
+    const all = getWorkspaceTerminals(wsp);
+    const active = all.find(x => x.id === wsp.activeTermId);
+    if (active && active.el) {
+      focusedSlotId = active.el.id;
+      active.el.classList.add('focused');
+      if (active.type !== 'browser') active.term.focus();
+    }
+    updateFocusedGroup();
+
+    // Fit terminals after layout settles
+    setTimeout(() => {
+      all.forEach(t => fitTerm(t));
+    }, 0);
   }
 
   /* ═══════════════════════════════════════════════════════════════
