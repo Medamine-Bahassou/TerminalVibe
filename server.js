@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Terminus WebSocket PTY server + HTTP browser-proxy server.
+ * TerminalVibe WebSocket PTY server + HTTP browser-proxy server.
  *
  * WebSocket server  ws://127.0.0.1:7681   — PTY multiplexer
  * HTTP proxy server http://127.0.0.1:7682 — transparent page fetcher for the browser tab
@@ -233,7 +233,7 @@ function rewriteHtml(html, pageUrl) {
   // is a </body> tag (real HTML pages, not error pages or fragments).
   if (/<\/body>/i.test(html)) {
     const navScript =
-      "<script>(function(){var u=location.href;setInterval(function(){if(location.href!==u){u=location.href;parent.postMessage({terminusNav:u},\"*\")}},200)})()<\/script>";
+      "<script>(function(){var u=location.href;setInterval(function(){if(location.href!==u){u=location.href;parent.postMessage({terminalVibeNav:u},\"*\")}},200)})()<\/script>";
     html = html.replace(/<\/body>/i, swReg + navScript + "</body>");
   }
 
@@ -647,7 +647,7 @@ wss.on("connection", (ws) => {
 // ─────────────────────────────────────────────────────────────
 
 proxyServer.listen(PROXY_PORT, HOST, () => {
-  console.log(`Terminus proxy server listening on http://${HOST}:${PROXY_PORT}`);
+  console.log(`TerminalVibe proxy server listening on http://${HOST}:${PROXY_PORT}`);
 });
 
 // Skip static app server in Tauri mode (Tauri serves assets via its own protocol)
@@ -655,9 +655,9 @@ const isTauriMode = process.env.TAURI === "1" || process.env.TAURI_ENV === "1";
 
 if (!isTauriMode) {
   appServer.listen(APP_PORT, HOST, () => {
-    console.log(`Terminus app server listening on http://${HOST}:${APP_PORT}`);
+    console.log(`TerminalVibe app server listening on http://${HOST}:${APP_PORT}`);
   });
   console.log(`Open http://${HOST}:${APP_PORT} in your browser`);
 }
 
-console.log(`Terminus PTY server listening on ws://${HOST}:${PORT}`);
+console.log(`TerminalVibe PTY server listening on ws://${HOST}:${PORT}`);

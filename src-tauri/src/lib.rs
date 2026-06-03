@@ -38,25 +38,42 @@ pub fn run() {
         ])
         .setup(|app| {
             // Start the Node.js backend server (WS PTY + HTTP proxy)
-            // In dev mode, cargo runs from src-tauri/ — walk up to project root
-            let mut project_root = std::env::current_dir().unwrap_or_default();
-            if !project_root.join("server.js").exists() {
-                // Try parent (src-tauri/ -> project root)
-                if let Some(parent) = project_root.parent() {
-                    if parent.join("server.js").exists() {
-                        project_root = parent.to_path_buf();
+            // Try resource dir (AppImage), then fall back to current_dir (dev)
+            let (server_path, work_dir) = resolve_server_path(app);
+
+            fn resolve_server_path(app: &tauri::App) -> (std::path::PathBuf, std::path::PathBuf) {
+                if let Ok(dir) = app.path().resource_dir() {
+                    // Check with server-dist prefix (Tauri preserves relative resource paths)
+                    let sd = dir.join("server-dist");
+                    let sp = sd.join("server.js");
+                    if sp.exists() {
+                        return (sp, sd);
+                    }
+                    // Check without prefix in case Tauri flattens
+                    let sp = dir.join("server.js");
+                    if sp.exists() {
+                        return (sp, dir);
                     }
                 }
+                // Dev mode fallback
+                let mut project_root = std::env::current_dir().unwrap_or_default();
+                if !project_root.join("server.js").exists() {
+                    if let Some(parent) = project_root.parent() {
+                        if parent.join("server.js").exists() {
+                            project_root = parent.to_path_buf();
+                        }
+                    }
+                }
+                (project_root.join("server.js"), project_root)
             }
 
-            let server_path = project_root.join("server.js");
             eprintln!("[tauri] Starting server from: {:?}", server_path);
-            eprintln!("[tauri] Project root: {:?}", project_root);
+            eprintln!("[tauri] Work dir: {:?}", work_dir);
             eprintln!("[tauri] server.js exists: {}", server_path.exists());
 
             let child = std::process::Command::new("node")
                 .arg(&server_path)
-                .current_dir(&project_root)
+                .current_dir(&work_dir)
                 .env("TAURI", "1")
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::inherit())

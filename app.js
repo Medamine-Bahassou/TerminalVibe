@@ -864,7 +864,7 @@
     const idx = workspaces.findIndex(w => w.id === id);
     workspaces.splice(idx, 1);
     if (activeWsId === id) {
-      if (workspaces.length) activateWorkspace(workspaces[Math.max(0, idx-1)].id);
+      if (workspaces.length) { activateWorkspace(workspaces[Math.max(0, idx-1)].id); renderSidebar(); }
       else { activeWsId = null; renderSidebar(); renderPaneArea(); updateStatusBar(); }
     } else {
       renderSidebar();
@@ -3470,12 +3470,32 @@
 
         // Suppress ResizeObserver during window maximize/minimize animation
         let _winResizeTimer = null;
+        let _savedBrowserBg = null;
         window.addEventListener('resize', () => {
           _suppressResize = true;
+          startResizing();
           if (_winResizeTimer) clearTimeout(_winResizeTimer);
+          // Hide browser iframes & their white background to prevent flicker
+          if (!_savedBrowserBg) {
+            const bcs = document.querySelectorAll('.browser-content');
+            _savedBrowserBg = [];
+            bcs.forEach(el => {
+              _savedBrowserBg.push(el.style.background);
+              el.style.background = 'transparent';
+            });
+          }
+          document.querySelectorAll('.browser-fallback').forEach(f => f.style.visibility = 'hidden');
           _winResizeTimer = setTimeout(() => {
             _winResizeTimer = null;
             _suppressResize = false;
+            stopResizing();
+            // Restore browser iframes
+            document.querySelectorAll('.browser-fallback').forEach(f => f.style.visibility = '');
+            if (_savedBrowserBg) {
+              const bcs = document.querySelectorAll('.browser-content');
+              bcs.forEach((el, i) => { el.style.background = _savedBrowserBg[i] || ''; });
+              _savedBrowserBg = null;
+            }
             // Trigger a single batched fit after the transition settles
             const wsp = activeWs();
             if (wsp) {
@@ -3535,10 +3555,10 @@
 
         // Listen for navigation messages from browser tab iframes
         window.addEventListener('message', function(e) {
-          if (e.data && e.data.terminusNav) {
+          if (e.data && e.data.terminalVibeNav) {
             const active = activeTerminal();
             if (active && active.type === 'browser' && active._loadUrl) {
-              var navUrl = e.data.terminusNav;
+              var navUrl = e.data.terminalVibeNav;
               // If the URL is a proxy URL (/p/<b64>/…), decode it back
               if (navUrl.indexOf('/p/') !== -1) {
                 try {
