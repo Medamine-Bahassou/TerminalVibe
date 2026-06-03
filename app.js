@@ -1863,8 +1863,13 @@
 
       const PROXY_PORT = 7682;
       function proxyUrl(url) {
-        if (!url || !isTauri()) return url;
-        return `http://127.0.0.1:${PROXY_PORT}/proxy?url=${encodeURIComponent(url)}`;
+        if (!url) return url;
+        // Path-based proxy: /p/<base64url-origin>/<path>
+        const u = new URL(url);
+        const origin = u.origin;
+        const path = url.substring(origin.length) || '/';
+        const b64 = btoa(origin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        return `http://127.0.0.1:${PROXY_PORT}/p/${b64}${path}`;
       }
 
       async function loadUrl(rawUrl) {
@@ -3330,7 +3335,18 @@
           if (e.data && e.data.terminusNav) {
             const active = activeTerminal();
             if (active && active.type === 'browser' && active._loadUrl) {
-              active._loadUrl(e.data.terminusNav);
+              var navUrl = e.data.terminusNav;
+              // If the URL is a proxy URL (/p/<b64>/…), decode it back
+              if (navUrl.indexOf('/p/') !== -1) {
+                try {
+                  var m = navUrl.match(/\/p\/([A-Za-z0-9\-_=]+)(\/.*)?$/);
+                  if (m) {
+                    var origin = atob(m[1].replace(/-/g,'+').replace(/_/g,'/'));
+                    navUrl = origin + (m[2] || '/');
+                  }
+                } catch (_) {}
+              }
+              if (navUrl !== active.url) active._loadUrl(navUrl);
             }
           }
         });
