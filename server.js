@@ -12,6 +12,7 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const url = require("url");
+const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const pty = require("node-pty");
 
@@ -50,7 +51,6 @@ const SKIP_RESPONSE_HEADERS = new Set([
   "cross-origin-embedder-policy",
   "cross-origin-opener-policy",
   "cross-origin-resource-policy",
-  // CORS — we set our own so target's values don't leak
   "access-control-allow-origin",
   "access-control-allow-credentials",
   "access-control-expose-headers",
@@ -61,12 +61,97 @@ const BROWSER_UA =
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 // ─────────────────────────────────────────────────────────────
+//  LAST-USED TARGET — fallback for requests missing /p/<b64>/
+// ─────────────────────────────────────────────────────────────
+const _lastTargets = new Map(); // sessionId -> origin
+
+// ─────────────────────────────────────────────────────────────
+//  DISK LRU CACHE
+// ─────────────────────────────────────────────────────────────
+
+const CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, "cache");
+const CACHE_SIZE_MB = parseInt(process.env.CACHE_SIZE_MB || "512", 10);
+const CACHE_SIZE_LIMIT = CACHE_SIZE_MB * 1024 * 1024;
+
+fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+class DiskCache {
+  constructor(dir, sizeLimit) {
+    this.dir = dir;
+    this.sizeLimit = sizeLimit;
+    this.indexPath = path.join(dir, "_index.json");
+    this.index = {};
+    this.currentSize = 0;
+    this._load();
+  }
+
+  _load() {
+    try {
+      this.index = JSON.parse(fs.readFileSync(this.indexPath, "utf8"));
+      this.currentSize = Object.values(this.index).reduce((s, e) => s + (e.size || 0), 0);
+    } catch {
+      this.index = {};
+      this.currentSize = 0;
+    }
+  }
+
+  _save() {
+    fs.writeFileSync(this.indexPath, JSON.stringify(this.index));
+  }
+
+  get(key) {
+    const entry = this.index[key];
+    if (!entry) return null;
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(this.dir, entry.file), "utf8"));
+      entry.ts = Date.now();
+      this._save();
+      return data;
+    } catch {
+      this.currentSize -= entry.size || 0;
+      delete this.index[key];
+      this._save();
+      return null;
+    }
+  }
+
+  set(key, value) {
+    const raw = JSON.stringify(value);
+    const size = Buffer.byteLength(raw);
+    const file = `${key}.json`;
+
+    while (this.currentSize + size > this.sizeLimit && Object.keys(this.index).length > 0) {
+      this._evict();
+    }
+
+    try { fs.writeFileSync(path.join(this.dir, file), raw); } catch { return; }
+    this.index[key] = { file, size, ts: Date.now() };
+    this.currentSize += size;
+    this._save();
+  }
+
+  _evict() {
+    let oldest = null;
+    for (const [k, v] of Object.entries(this.index)) {
+      if (!oldest || v.ts < oldest.ts) oldest = { key: k, ...v };
+    }
+    if (oldest) {
+      try { fs.unlinkSync(path.join(this.dir, oldest.file)); } catch {}
+      this.currentSize -= oldest.size || 0;
+      delete this.index[oldest.key];
+    }
+  }
+}
+
+const diskCache = new DiskCache(CACHE_DIR, CACHE_SIZE_LIMIT);
+
+function cacheKey(targetUrl) {
+  return crypto.createHash("sha256").update(targetUrl).digest("hex");
+}
+
+// ─────────────────────────────────────────────────────────────
 //  PATH-BASED PROXY URL
 // ─────────────────────────────────────────────────────────────
-//  Format:  /p/<base64url-origin>/<path-and-query>
-//  Example: /p/aHR0cHM6Ly9leGFtcGxlLmNvbQ==/css/style.css
-//  The <base> tag points to this path so all relative URLs
-//  (including JS-created ones) resolve through the proxy.
 
 function toB64url(str) {
   return Buffer.from(str, "utf-8")
@@ -83,70 +168,58 @@ function fromB64url(str) {
   ).toString("utf-8");
 }
 
-/** Build the proxy base URL for a given full target URL (origin + path). */
 function proxyPathUrl(fullUrl) {
   const u = new URL(fullUrl);
   const origin = u.origin;
-  const path = fullUrl.substring(origin.length) || "/";
-  return `http://${HOST}:${PROXY_PORT}/p/${toB64url(origin)}${path}`;
+  const p = fullUrl.substring(origin.length) || "/";
+  return `http://${HOST}:${PROXY_PORT}/p/${toB64url(origin)}${p}`;
 }
 
-/**
- * Parse a /p/<b64>/<path> request into the full target URL.
- * Returns null if the path doesn't match.
- */
 function resolveProxyPath(pathname, search) {
   const m = pathname.match(/^\/p\/([A-Za-z0-9\-_=]+)(\/.*)?$/);
   if (!m) return null;
   const origin = fromB64url(m[1]);
   if (!origin.startsWith("http://") && !origin.startsWith("https://")) return null;
   const rest = (m[2] || "/") + search;
-  // Avoid double-slash when origin has a trailing slash
   return origin.replace(/\/+$/, "") + rest;
 }
 
-/**
- * Convert an absolute CSS path (`/…`) to a proxy path.
- */
-function proxyAbsPath(path, baseUrl) {
-  if (!path.startsWith("/")) return null;
+function proxyAbsPath(absPath, baseUrl) {
+  if (!absPath.startsWith("/")) return null;
   try {
-    const abs = new URL(path, baseUrl).href;
+    const abs = new URL(absPath, baseUrl).href;
     const u = new URL(abs);
     const rest = abs.substring(u.origin.length) || "/";
     return `/p/${toB64url(u.origin)}${rest}`;
   } catch { return null; }
 }
 
-/**
- * Rewrite HTML for safe iframe embedding.
- *
- * Strategy:
- *  1. Replace/inject <base href> pointing to our path-based proxy so the
- *     browser resolves all *relative* URLs (including JS-created ones)
- *     through the proxy.
- *  2. Rewrite absolute paths (`/…`) in resource attributes — <base> doesn't
- *     affect these; they'd resolve against the proxy server root instead.
- *  3. Rewrite url() with absolute paths inside <style> / style="…".
- *
- * Absolute URLs (e.g. <img src="https://cdn.example.com/…">) load directly
- * from the original source — no proxying needed.
- */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ─────────────────────────────────────────────────────────────
+//  HTML / CSS / JS REWRITING
+// ─────────────────────────────────────────────────────────────
+
 function rewriteHtml(html, pageUrl) {
-  // Detect existing <base href> — use it as the resolution base
+  // Strip framing/CSP meta tags
+  html = html.replace(
+    /<meta\b[^>]*\bhttp-equiv\s*=\s*["'](?:x-frame-options|content-security-policy|content-security-policy-report-only)["'][^>]*>\s*/gi,
+    ""
+  );
+
+  // Detect existing <base href>
   let baseHref = pageUrl;
   const existing = html.match(/<base\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
   if (existing) {
-    try {
-      baseHref = new URL(existing[1], pageUrl).href;
-    } catch {}
+    try { baseHref = new URL(existing[1], pageUrl).href; } catch {}
   }
 
-  // Directory of the base URL — relative URLs resolve against this
   const baseDirUrl = new URL(".", baseHref).href;
   const pb = proxyPathUrl(baseDirUrl);
 
-  // Replace existing <base> href or inject a new one
+  // Replace or inject <base>
   if (existing) {
     html = html.replace(
       /(<base\b[^>]*?\bhref\s*=\s*["'])([^"']+)(["'])/gi,
@@ -161,16 +234,14 @@ function rewriteHtml(html, pageUrl) {
     }
   }
 
-  // ── Resource attributes with absolute paths ──
-  // Absolute paths (e.g. <script src="/app.js">) don't follow <base>;
-  // they'd resolve against the proxy server root. Rewrite them.
+  // Rewrite absolute-path resource attributes
   const RESOURCE_ATTRS = /((?:src|href|poster|data)\s*=\s*["'])\/([^"']+)(["'])/gi;
-  html = html.replace(RESOURCE_ATTRS, (m, pre, path, post) => {
-    const proxied = proxyAbsPath("/" + path, pageUrl);
+  html = html.replace(RESOURCE_ATTRS, (m, pre, p, post) => {
+    const proxied = proxyAbsPath("/" + p, pageUrl);
     return proxied ? pre + proxied + post : m;
   });
 
-  // srcset — comma-separated list of "/path descriptor" pairs
+  // srcset
   html = html.replace(
     /(\bsrcset\s*=\s*["'])([^"']+)(["'])/gi,
     (m, pre, value, post) => {
@@ -190,143 +261,229 @@ function rewriteHtml(html, pageUrl) {
     }
   );
 
-  // ── CSS url() with absolute paths ──
-  rewriteStyleUrl: {
-    // <style> blocks
-    html = html.replace(
-      /(<style\b[^>]*>)(.*?)(<\/style>)/gis,
-      (m, open, body, close) => {
-        const rewritten = body.replace(
-          /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
-          (m2, q, path) => {
-            const proxied = proxyAbsPath(path, pageUrl);
-            return proxied ? `url(${q}${proxied}${q})` : m2;
-          }
-        );
-        return open + rewritten + close;
-      }
-    );
+  // CSS url() in <style> blocks
+  html = html.replace(
+    /(<style\b[^>]*>)(.*?)(<\/style>)/gis,
+    (m, open, body, close) => {
+      const rewritten = body.replace(
+        /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
+        (m2, q, p) => {
+          const proxied = proxyAbsPath(p, pageUrl);
+          return proxied ? `url(${q}${proxied}${q})` : m2;
+        }
+      );
+      return open + rewritten + close;
+    }
+  );
 
-    // Inline style="…"
-    html = html.replace(
-      /(\bstyle\s*=\s*["'])(.*?)(["'])/gi,
-      (m, pre, body, post) => {
-        const rewritten = body.replace(
-          /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
-          (m2, q, path) => {
-            const proxied = proxyAbsPath(path, pageUrl);
-            return proxied ? `url(${q}${proxied}${q})` : m2;
-          }
-        );
-        return pre + rewritten + post;
-      }
-    );
-  }
+  // CSS url() in inline style=""
+  html = html.replace(
+    /(\bstyle\s*=\s*["'])(.*?)(["'])/gi,
+    (m, pre, body, post) => {
+      const rewritten = body.replace(
+        /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
+        (m2, q, p) => {
+          const proxied = proxyAbsPath(p, pageUrl);
+          return proxied ? `url(${q}${proxied}${q})` : m2;
+        }
+      );
+      return pre + rewritten + post;
+    }
+  );
 
-  // ── Service Worker registration ──
-  // Catches absolute-path requests from dynamic JS (import(), fetch(),
-  // createElement('script/src="/path"')) that bypass <base>.
-  const swReg = `<script>try{navigator.serviceWorker.register('/sw.js')}catch(e){}</script>`;
-
-  // ── Navigation tracker — polls location.href so the parent can sync ──
-  // the URL bar, back/fwd buttons, and save-state. Only inject when there
-  // is a </body> tag (real HTML pages, not error pages or fragments).
+  // Anti-frame-detection shim + nav tracker + SW registration
   if (/<\/body>/i.test(html)) {
-    const navScript =
-      "<script>(function(){var u=location.href;setInterval(function(){if(location.href!==u){u=location.href;parent.postMessage({terminalVibeNav:u},\"*\")}},200)})()<\/script>";
-    html = html.replace(/<\/body>/i, swReg + navScript + "</body>");
+    const injected = `<script>
+(function(){
+  try {
+    var _self = window;
+    Object.defineProperty(window, 'top',         { get: function(){ return _self; }, configurable: true });
+    Object.defineProperty(window, 'parent',      { get: function(){ return _self; }, configurable: true });
+    Object.defineProperty(window, 'frameElement',{ get: function(){ return null;  }, configurable: true });
+  } catch(e) {}
+
+  var _startOrigin = location.origin;
+  var _lastHref = location.href;
+  setInterval(function() {
+    var cur = location.href;
+    if (cur === _lastHref) return;
+    _lastHref = cur;
+    if (location.origin !== _startOrigin) {
+      try { parent.postMessage({ terminalVibeNav: cur }, '*'); } catch(e) {}
+    }
+  }, 500);
+
+  try { navigator.serviceWorker.register('/sw.js', { scope: '/' }); } catch(e) {}
+})();
+<\/script>`;
+    html = html.replace(/<\/body>/i, injected + "</body>");
   }
 
   return html;
 }
 
-/**
- * Rewrite CSS for absolute-path url() references (e.g. /fonts/…).
- * Relative paths resolve correctly since the CSS file URL is a proxy path.
- */
 function rewriteCss(css, cssUrl) {
   return css.replace(
     /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
-    (m, q, path) => {
-      const proxied = proxyAbsPath(path, cssUrl);
+    (m, q, p) => {
+      const proxied = proxyAbsPath(p, cssUrl);
       return proxied ? `url(${q}${proxied}${q})` : m;
     }
   );
 }
 
+function rewriteJs(jsContent, targetUrl) {
+  let hostname;
+  try { hostname = new URL(targetUrl).hostname; } catch { return jsContent; }
+  const pattern = new RegExp(
+    `(["'])https?://${escapeRegex(hostname)}(/[^"']*?)(\\1)`,
+    "g"
+  );
+  const text = jsContent.toString("utf-8");
+  return Buffer.from(text.replace(pattern, "$1$2$3"), "utf-8");
+}
+
 // ─────────────────────────────────────────────────────────────
-//  HTTP PROXY SERVER
+//  DNS CACHE + UPSTREAM FETCH
 // ─────────────────────────────────────────────────────────────
 
-function proxyFetch(targetUrl, reqHeaders, method) {
-  return new Promise((resolve, reject) => {
-    const targetParsed = new URL(targetUrl);
+const _dnsCache = new Map();
+const DNS_TTL_MS = 30_000;
+const dns = require("dns").promises;
+
+async function resolveHost(hostname) {
+  const now = Date.now();
+  const cached = _dnsCache.get(hostname);
+  if (cached && cached.expires > now) return cached.addrs[0];
+
+  let addrs;
+  try {
+    addrs = await dns.resolve4(hostname);
+  } catch {
+    try {
+      const v6 = await dns.resolve6(hostname);
+      addrs = v6.map((a) => `[${a}]`);
+    } catch {
+      const result = await dns.lookup(hostname, { family: 0 });
+      addrs = [result.address];
+    }
+  }
+
+  if (!addrs || !addrs.length) throw new Error(`DNS resolution failed for ${hostname}`);
+  _dnsCache.set(hostname, { addrs, expires: now + DNS_TTL_MS });
+  return addrs[0];
+}
+
+function proxyFetch(targetUrl, reqHeaders, method, body, _redirectDepth) {
+  const depth = _redirectDepth || 0;
+  if (depth > 8) return Promise.reject(new Error("Too many redirects"));
+
+  return new Promise(async (resolve, reject) => {
+    let targetParsed;
+    try { targetParsed = new URL(targetUrl); }
+    catch (e) { return reject(new Error("Invalid URL: " + targetUrl)); }
+
     const transport = targetParsed.protocol === "https:" ? https : http;
     const reqMethod = (method || "GET").toUpperCase();
 
+    let resolvedIp;
+    try {
+      resolvedIp = await resolveHost(targetParsed.hostname);
+    } catch (e) {
+      return reject(new Error(`DNS error for ${targetParsed.hostname}: ${e.message}`));
+    }
+
+    const port = targetParsed.port
+      ? parseInt(targetParsed.port)
+      : targetParsed.protocol === "https:" ? 443 : 80;
+
     const headers = {
       "User-Agent": BROWSER_UA,
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
-      "Accept-Encoding": "identity",
-      Connection: "keep-alive",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Connection": "keep-alive",
       "Upgrade-Insecure-Requests": "1",
-      Referer: targetUrl,
+      "Host": targetParsed.port && targetParsed.port !== "80" && targetParsed.port !== "443"
+        ? `${targetParsed.hostname}:${targetParsed.port}`
+        : targetParsed.hostname,
     };
-    if (targetParsed.hostname) {
-      headers["Host"] =
-        targetParsed.port && targetParsed.port !== "80" && targetParsed.port !== "443"
-          ? `${targetParsed.hostname}:${targetParsed.port}`
-          : targetParsed.hostname;
+
+    const FORWARD_HEADERS = new Set([
+      "cookie", "authorization", "content-type", "content-length",
+      "x-requested-with", "x-csrf-token",
+    ]);
+    if (reqHeaders) {
+      for (const [k, v] of Object.entries(reqHeaders)) {
+        if (FORWARD_HEADERS.has(k.toLowerCase())) headers[k] = v;
+      }
     }
 
     const opts = {
-      hostname: targetParsed.hostname,
-      port: targetParsed.port || (targetParsed.protocol === "https:" ? 443 : 80),
-      path: targetParsed.pathname + targetParsed.search,
+      hostname: resolvedIp,
+      port,
+      path: (targetParsed.pathname || "/") + (targetParsed.search || ""),
       method: reqMethod,
       headers,
-      rejectUnauthorized: false, // permissive SSL like Python
-      timeout: 15000,
+      rejectUnauthorized: false,
+      timeout: 20000,
+      servername: targetParsed.hostname,
     };
 
     const req = transport.request(opts, (res) => {
-      // Follow redirects
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
         const redirectUrl = new URL(res.headers.location, targetUrl).href;
-        proxyFetch(redirectUrl, reqHeaders, reqMethod).then(resolve).catch(reject);
+        const nextMethod = [301, 302, 303].includes(res.statusCode) ? "GET" : reqMethod;
+        proxyFetch(redirectUrl, reqHeaders, nextMethod, nextMethod === "GET" ? null : body, depth + 1)
+          .then(resolve).catch(reject);
         return;
       }
 
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => {
-        resolve({
-          status: res.statusCode || 200,
-          headers: res.headers,
-          body: Buffer.concat(chunks),
+        const raw = Buffer.concat(chunks);
+        const encoding = (res.headers["content-encoding"] || "").toLowerCase();
+
+        function decompress(buf, enc, cb) {
+          const zlib = require("zlib");
+          if (enc === "gzip") return zlib.gunzip(buf, cb);
+          if (enc === "deflate") return zlib.inflate(buf, (e, d) => e ? zlib.inflateRaw(buf, cb) : cb(null, d));
+          if (enc === "br") return zlib.brotliDecompress(buf, cb);
+          cb(null, buf);
+        }
+
+        decompress(raw, encoding, (err, body) => {
+          if (err) body = raw;
+          const outHeaders = Object.assign({}, res.headers);
+          delete outHeaders["content-encoding"];
+          delete outHeaders["transfer-encoding"];
+          resolve({ status: res.statusCode || 200, headers: outHeaders, body: body || Buffer.alloc(0) });
         });
       });
       res.on("error", reject);
     });
 
-    req.on("error", reject);
+    req.on("error", (e) => {
+      _dnsCache.delete(targetParsed.hostname);
+      reject(e);
+    });
     req.on("timeout", () => {
       req.destroy();
+      _dnsCache.delete(targetParsed.hostname);
       reject(new Error("Request timed out"));
     });
+
+    if (body && !["GET", "HEAD"].includes(reqMethod)) {
+      req.write(body);
+    }
     req.end();
   });
 }
 
 // ─────────────────────────────────────────────────────────────
-//  SERVICE WORKER — intercepts dynamic JS requests
+//  SERVICE WORKER
 // ─────────────────────────────────────────────────────────────
-//  Registers on the proxy origin and routes any absolute-path
-//  request (e.g. JS import('/_next/static/chunks/file.js') or
-//  dynamically created <script src="/path">) through the proxy.
-//  Only needed when the iframe sandbox includes allow-same-origin.
 
 const SW_SCRIPT = [
   "'use strict';",
@@ -335,18 +492,19 @@ const SW_SCRIPT = [
   "var _tb64=function(s){return btoa(s).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'')};",
   "self.addEventListener('fetch',function(e){",
   "var u=new URL(e.request.url);",
+  // Skip SW itself, already-proxied /p/ requests, and same-origin proxy root requests
   "if(u.pathname==='/sw.js'||u.pathname.indexOf('/p/')===0)return;",
+  "if(u.origin===self.location.origin)return;",
   "e.respondWith((async function(){",
-  "var ref=e.request.referrer||'';",
+  // Get the target origin's b64 from the client URL or referrer
   "var pb64=null;",
-  "var i=ref.indexOf('/p/');",
-  "if(i>=0){var j=ref.indexOf('/',i+3);pb64=j>0?ref.substring(i+3,j):ref.substring(i+3);}",
-  "if(!pb64){try{var c=await self.clients.get(e.clientId);if(c){",
-  "i=c.url.indexOf('/p/');",
-  "if(i>=0){j=c.url.indexOf('/',i+3);pb64=j>0?c.url.substring(i+3,j):c.url.substring(i+3);",
-  "}}}catch(ex){}}",
-  // Same-origin: use page's b64. Cross-origin: encode the target's origin.
-  "var pp=pb64&&u.origin===self.location.origin?'/p/'+pb64+u.pathname+u.search:'/p/'+_tb64(u.origin)+u.pathname+u.search;",
+  "try{var c=await self.clients.get(e.clientId);if(c&&c.url.indexOf('/p/')>=0){",
+  "var m=c.url.match(/\\/p\\/([A-Za-z0-9\\-_=]+)/);if(m)pb64=m[1];",
+  "}}catch(ex){}",
+  "if(!pb64){var ref=e.request.referrer||'';",
+  "var m2=ref.match(/\\/p\\/([A-Za-z0-9\\-_=]+)/);if(m2)pb64=m2[1];}",
+  // Route through proxy using the target's b64, or encode the target's own origin
+  "var pp=pb64?'/p/'+pb64+u.pathname+u.search:'/p/'+_tb64(u.origin)+u.pathname+u.search;",
   "var opts={method:e.request.method,headers:e.request.headers};",
   "if(e.request.method!=='GET'&&e.request.method!=='HEAD'){",
   "try{opts.body=await e.request.clone().arrayBuffer();}catch(ex){}}",
@@ -355,8 +513,11 @@ const SW_SCRIPT = [
   "});",
 ].join("");
 
+// ─────────────────────────────────────────────────────────────
+//  PROXY SERVER
+// ─────────────────────────────────────────────────────────────
+
 const proxyServer = http.createServer(async (req, res) => {
-  // Echo Origin for credentialed requests (CORS)
   const reqOrigin = req.headers.origin;
   if (reqOrigin) {
     res.setHeader("Access-Control-Allow-Origin", reqOrigin);
@@ -376,27 +537,50 @@ const proxyServer = http.createServer(async (req, res) => {
 
   const parsed = url.parse(req.url, true);
 
-  // ── Service Worker script ──
+  // Service Worker
   if (parsed.pathname === "/sw.js") {
     res.writeHead(200, {
       "Content-Type": "application/javascript",
       "Cache-Control": "no-cache",
+      "Service-Worker-Allowed": "/",
       "Access-Control-Allow-Origin": "*",
     });
     res.end(SW_SCRIPT);
     return;
   }
 
-  // ── Resolve target URL ──
+  // Resolve target URL
   let target;
-
-  // 1) Path-based: /p/<base64url-origin>/<path>
   target = resolveProxyPath(parsed.pathname, parsed.search || "");
 
-  // 2) Legacy: /proxy?url=<URL>  — fallback
   if (!target && parsed.pathname.startsWith("/proxy")) {
     const q = parsed.query.url;
     if (q) target = decodeURIComponent(q);
+  }
+
+  // Fallback 1: extract target origin from Referer header
+  if (!target && req.headers.referer) {
+    try {
+      const refUrl = new URL(req.headers.referer);
+      const refTarget = resolveProxyPath(refUrl.pathname, refUrl.search || "");
+      if (refTarget) {
+        const refOrigin = new URL(refTarget).origin;
+        target = refOrigin + parsed.pathname + (parsed.search || "");
+      }
+    } catch {}
+  }
+
+  // Fallback 2: read target from cookie set by previous /p/<b64>/ request
+  if (!target && req.headers.cookie) {
+    const match = req.headers.cookie.match(/tv-proxy-target=([^;]+)/);
+    if (match) {
+      try {
+        const origin = decodeURIComponent(match[1]);
+        if (origin.startsWith("http://") || origin.startsWith("https://")) {
+          target = origin + parsed.pathname + (parsed.search || "");
+        }
+      } catch {}
+    }
   }
 
   if (!target) {
@@ -405,8 +589,34 @@ const proxyServer = http.createServer(async (req, res) => {
     return;
   }
 
+  // Disk cache check (GET only)
+  const useCache = req.method === "GET";
+  const cKey = useCache ? cacheKey(target) : null;
+
+  if (useCache && cKey) {
+    const cached = diskCache.get(cKey);
+    if (cached) {
+      const body = Buffer.from(cached.body, "base64");
+      const outHeaders = { ...cached.headers, "Content-Length": body.length };
+      res.writeHead(cached.status, outHeaders);
+      res.end(body);
+      return;
+    }
+  }
+
   try {
-    const result = await proxyFetch(target, req.headers, req.method);
+    // Collect request body for POST/PUT/PATCH
+    let reqBody = null;
+    if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      reqBody = await new Promise((resolve, reject) => {
+        const chunks = [];
+        req.on("data", (c) => chunks.push(c));
+        req.on("end", () => resolve(Buffer.concat(chunks)));
+        req.on("error", reject);
+      });
+    }
+
+    const result = await proxyFetch(target, req.headers, req.method, reqBody);
     let { status, headers: respHeaders, body } = result;
 
     const contentType = respHeaders["content-type"] || "application/octet-stream";
@@ -416,7 +626,7 @@ const proxyServer = http.createServer(async (req, res) => {
       charset = contentType.split("charset=")[1].trim().split(";")[0].trim();
     }
 
-    // Only rewrite HTML — inject/replace <base> for relative URL resolution
+    // Rewrite HTML
     if (ctBase === "text/html" || ctBase === "application/xhtml+xml") {
       try {
         let text = body.toString(/utf-?8/i.test(charset) ? "utf-8" : "latin1");
@@ -424,23 +634,46 @@ const proxyServer = http.createServer(async (req, res) => {
         body = Buffer.from(text, "utf-8");
       } catch {}
     } else if (ctBase === "text/css") {
-      // Rewrite absolute-path url() references in external CSS
       try {
         let text = body.toString(/utf-?8/i.test(charset) ? "utf-8" : "latin1");
         text = rewriteCss(text, target);
         body = Buffer.from(text, "utf-8");
       } catch {}
+    } else if (ctBase.includes("javascript") || ctBase === "text/js") {
+      try {
+        body = rewriteJs(body, target);
+      } catch {}
     }
 
-    // Forward safe response headers
+    // Build response headers
     const outHeaders = {
       "Content-Type": ctBase.startsWith("text/") ? `${ctBase}; charset=utf-8` : contentType,
       "Content-Length": body.length,
     };
     for (const [key, value] of Object.entries(respHeaders)) {
-      if (!SKIP_RESPONSE_HEADERS.has(key.toLowerCase())) {
+      const lk = key.toLowerCase();
+      if (lk === "content-length" || lk === "content-encoding" ||
+        lk === "transfer-encoding" || lk === "content-type") continue;
+      if (!SKIP_RESPONSE_HEADERS.has(lk)) {
         outHeaders[key] = value;
       }
+    }
+
+    // Set cookie so subsequent requests without /p/<b64>/ can find the target
+    if (parsed.pathname.startsWith("/p/")) {
+      try {
+        const targetOrigin = new URL(target).origin;
+        outHeaders["Set-Cookie"] = `tv-proxy-target=${encodeURIComponent(targetOrigin)}; Path=/; SameSite=Lax; Max-Age=3600`;
+      } catch {}
+    }
+
+    // Store in disk cache
+    if (useCache && status === 200 && cKey) {
+      diskCache.set(cKey, {
+        status,
+        headers: outHeaders,
+        body: body.toString("base64"),
+      });
     }
 
     res.writeHead(status, outHeaders);
@@ -461,7 +694,6 @@ const appServer = http.createServer((req, res) => {
 
   const fullPath = path.resolve(path.join(APP_DIR, filePath));
 
-  // security: stay inside APP_DIR
   if (!fullPath.startsWith(APP_DIR)) {
     res.writeHead(403);
     res.end();
@@ -648,9 +880,9 @@ wss.on("connection", (ws) => {
 
 proxyServer.listen(PROXY_PORT, HOST, () => {
   console.log(`TerminalVibe proxy server listening on http://${HOST}:${PROXY_PORT}`);
+  console.log(`Disk cache: ${path.resolve(CACHE_DIR)} (limit: ${CACHE_SIZE_MB} MB)`);
 });
 
-// Skip static app server in Tauri mode (Tauri serves assets via its own protocol)
 const isTauriMode = process.env.TAURI === "1" || process.env.TAURI_ENV === "1";
 
 if (!isTauriMode) {
