@@ -1164,11 +1164,17 @@ body.resizing .drag-shield {
 }
 
 /* Override term-slot layout for browser */
+.browser-slot-placeholder {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .browser-slot {
   flex-direction: column;
   overflow: hidden;
-  position: absolute;
-  inset: 0;
+  display: flex;
+  background: #fff;
 }
 
 .browser-btn {

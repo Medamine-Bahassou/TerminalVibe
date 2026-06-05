@@ -13,7 +13,8 @@ const fs = require("fs");
 const path = require("path");
 const url = require("url");
 const crypto = require("crypto");
-const { WebSocketServer } = require("ws");
+const zlib = require("zlib");
+const { WebSocketServer, WebSocket } = require("ws");
 const pty = require("node-pty");
 
 const HOST = "127.0.0.1";
@@ -42,6 +43,8 @@ const MIME_TYPES = {
 const SKIP_RESPONSE_HEADERS = new Set([
   "x-frame-options",
   "content-security-policy",
+  "content-security-policy-report-only",
+  "x-content-security-policy",
   "x-content-type-options",
   "transfer-encoding",
   "content-encoding",
@@ -235,10 +238,29 @@ function rewriteHtml(html, pageUrl) {
   }
 
   // Rewrite absolute-path resource attributes
-  const RESOURCE_ATTRS = /((?:src|href|poster|data)\s*=\s*["'])\/([^"']+)(["'])/gi;
+  const RESOURCE_ATTRS = /((?:src|href|poster|data|action)\s*=\s*["'])\/([^"']+)(["'])/gi;
   html = html.replace(RESOURCE_ATTRS, (m, pre, p, post) => {
     const proxied = proxyAbsPath("/" + p, pageUrl);
     return proxied ? pre + proxied + post : m;
+  });
+
+  // Rewrite cross-origin URLs: src="https://..."
+  const CROSS_ORIGIN_ATTRS = /((?:src|href|poster|data|action)\s*=\s*["'])(https?:\/\/[^"']+)(["'])/gi;
+  html = html.replace(CROSS_ORIGIN_ATTRS, (m, pre, attrUrl, post) => {
+    try {
+      const u = new URL(attrUrl);
+      if (u.host === `${HOST}:${PROXY_PORT}`) return m;
+      return pre + proxyPathUrl(attrUrl) + post;
+    } catch { return m; }
+  });
+
+  // Rewrite protocol-relative: src="//..."
+  const PROTO_REL_ATTRS = /((?:src|href|poster|data|action)\s*=\s*["'])(\/\/[^"']+)(["'])/gi;
+  html = html.replace(PROTO_REL_ATTRS, (m, pre, attrUrl, post) => {
+    try {
+      const abs = new URL(attrUrl, pageUrl).href;
+      return pre + proxyPathUrl(abs) + post;
+    } catch { return m; }
   });
 
   // srcset
@@ -253,6 +275,10 @@ function rewriteHtml(html, pageUrl) {
           const pieces = part.split(/\s+/);
           if (pieces[0].startsWith("/")) {
             pieces[0] = proxyAbsPath(pieces[0], pageUrl) || pieces[0];
+          } else if (pieces[0].startsWith("//")) {
+            try { pieces[0] = proxyPathUrl(new URL(pieces[0], pageUrl).href); } catch {}
+          } else if (/^https?:/.test(pieces[0])) {
+            pieces[0] = proxyPathUrl(pieces[0]);
           }
           return pieces.join(" ");
         })
@@ -264,56 +290,149 @@ function rewriteHtml(html, pageUrl) {
   // CSS url() in <style> blocks
   html = html.replace(
     /(<style\b[^>]*>)(.*?)(<\/style>)/gis,
-    (m, open, body, close) => {
-      const rewritten = body.replace(
-        /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
-        (m2, q, p) => {
-          const proxied = proxyAbsPath(p, pageUrl);
-          return proxied ? `url(${q}${proxied}${q})` : m2;
-        }
-      );
-      return open + rewritten + close;
-    }
+    (m, open, body, close) => open + rewriteCssUrls(body, pageUrl) + close
   );
 
   // CSS url() in inline style=""
   html = html.replace(
     /(\bstyle\s*=\s*["'])(.*?)(["'])/gi,
-    (m, pre, body, post) => {
-      const rewritten = body.replace(
-        /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
-        (m2, q, p) => {
-          const proxied = proxyAbsPath(p, pageUrl);
-          return proxied ? `url(${q}${proxied}${q})` : m2;
-        }
-      );
-      return pre + rewritten + post;
-    }
+    (m, pre, body, post) => pre + rewriteCssUrls(body, pageUrl) + post
   );
 
-  // Anti-frame-detection shim + nav tracker + SW registration
+  // Anti-frame-detection shim + runtime interceptors + nav tracker
   if (/<\/body>/i.test(html)) {
     const injected = `<script>
 (function(){
+  // ──── Anti-frame-busting ────
   try {
-    var _self = window;
-    Object.defineProperty(window, 'top',         { get: function(){ return _self; }, configurable: true });
-    Object.defineProperty(window, 'parent',      { get: function(){ return _self; }, configurable: true });
-    Object.defineProperty(window, 'frameElement',{ get: function(){ return null;  }, configurable: true });
+    var _s = window;
+    Object.defineProperty(window, 'top',         { get: function(){ return _s; }, configurable: true });
+    Object.defineProperty(window, 'parent',      { get: function(){ return _s; }, configurable: true });
+    Object.defineProperty(window, 'frameElement',{ get: function(){ return null; }, configurable: true });
+    window.close = function(){};
   } catch(e) {}
 
-  var _startOrigin = location.origin;
+  // ──── Proxy URL builder ────
+  var _po = location.origin;
+  var _b64 = function(s){ return btoa(s).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,''); };
+
+  function _pu(url) {
+    if (!url || typeof url !== 'string') return url;
+    if (url.startsWith('data:') || url.startsWith('blob:') ||
+        url.startsWith('javascript:') || url.startsWith('about:') ||
+        url.startsWith('mailto:') || url.startsWith('tel:')) return url;
+    if (url.startsWith(_po + '/p/')) return url;
+    if (url.startsWith('/p/')) return _po + url;
+    if (!url.startsWith('http') && !url.startsWith('//')) return url;
+    if (url.startsWith('//')) url = location.protocol + url;
+    try {
+      var u = new URL(url, location.href);
+      return _po + '/p/' + _b64(u.origin) + u.pathname + u.search;
+    } catch(ex) { return url; }
+  }
+
+  // ──── Override fetch ────
+  var _fetch = window.fetch;
+  window.fetch = function(input, init) {
+    try {
+      if (typeof input === 'string') {
+        input = _pu(input);
+      } else if (input instanceof Request) {
+        var nu = _pu(input.url);
+        if (nu !== input.url) input = new Request(nu, input);
+      }
+    } catch(e) {}
+    return _fetch.apply(this, arguments);
+  };
+
+  // ──── Override XMLHttpRequest ────
+  var _xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    try {
+      if (typeof url === 'string') arguments[1] = _pu(url);
+    } catch(e) {}
+    return _xo.apply(this, arguments);
+  };
+
+  // ──── Override WebSocket ────
+  var _ws = window.WebSocket;
+  window.WebSocket = function(url, protocols) {
+    try {
+      if (typeof url === 'string' && /^wss?:\\/\\//.test(url)) {
+        var hu = url.replace(/^ws/, 'http');
+        var u = new URL(hu);
+        url = 'ws://' + location.host + '/ws/' + _b64(u.origin) + u.pathname + u.search;
+      }
+    } catch(e) {}
+    if (protocols) return new _ws(url, protocols);
+    return new _ws(url);
+  };
+  window.WebSocket.prototype = _ws.prototype;
+  window.WebSocket.CONNECTING = _ws.CONNECTING;
+  window.WebSocket.OPEN = _ws.OPEN;
+  window.WebSocket.CLOSING = _ws.CLOSING;
+  window.WebSocket.CLOSED = _ws.CLOSED;
+
+  // ──── Override EventSource ────
+  var _es = window.EventSource;
+  if (_es) {
+    window.EventSource = function(url, opts) {
+      try { if (typeof url === 'string') url = _pu(url); } catch(e) {}
+      return new _es(url, opts);
+    };
+  }
+
+  // ──── Override navigator.sendBeacon ────
+  var _sb = navigator.sendBeacon.bind(navigator);
+  navigator.sendBeacon = function(url, data) {
+    try { url = _pu(url); } catch(e) {}
+    return _sb(url, data);
+  };
+
+  // ──── Override History API ────
+  var _ps = history.pushState;
+  var _rs = history.replaceState;
+  history.pushState = function(st, title, url) {
+    try { if (url) url = _pu(url); } catch(e) {}
+    return _ps.call(this, st, title, url);
+  };
+  history.replaceState = function(st, title, url) {
+    try { if (url) url = _pu(url); } catch(e) {}
+    return _rs.call(this, st, title, url);
+  };
+
+  // ──── Override <a> and <area> click to proxy navigation ────
+  document.addEventListener('click', function(e) {
+    var a = e.target.closest('a, area');
+    if (!a) return;
+    try {
+      var href = a.getAttribute('href');
+      if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
+        var proxied = _pu(href);
+        if (proxied !== href) a.href = proxied;
+      }
+    } catch(ex) {}
+  }, true);
+
+  // ──── Override window.open ────
+  var _wo = window.open;
+  window.open = function(url) {
+    try { if (url) arguments[0] = _pu(url); } catch(e) {}
+    return _wo.apply(this, arguments);
+  };
+
+  // ──── Navigation tracking for parent ────
   var _lastHref = location.href;
   setInterval(function() {
     var cur = location.href;
     if (cur === _lastHref) return;
     _lastHref = cur;
-    if (location.origin !== _startOrigin) {
-      try { parent.postMessage({ terminalVibeNav: cur }, '*'); } catch(e) {}
-    }
+    try { parent.postMessage({ terminalVibeNav: cur }, '*'); } catch(e) {}
   }, 500);
 
-  try { navigator.serviceWorker.register('/sw.js', { scope: '/' }); } catch(e) {}
+  // ──── Block script-based frame-busting ────
+  window.onbeforeunload = null;
+  document.addEventListener('beforeunload', function(e) { e.stopImmediatePropagation(); }, true);
 })();
 <\/script>`;
     html = html.replace(/<\/body>/i, injected + "</body>");
@@ -322,14 +441,29 @@ function rewriteHtml(html, pageUrl) {
   return html;
 }
 
-function rewriteCss(css, cssUrl) {
+function rewriteCssUrls(css, pageUrl) {
   return css.replace(
-    /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
-    (m, q, p) => {
-      const proxied = proxyAbsPath(p, cssUrl);
-      return proxied ? `url(${q}${proxied}${q})` : m;
+    /url\(\s*(['"]?)\s*([^)'"]+)\1\s*\)/gi,
+    (m, q, inner) => {
+      inner = inner.trim();
+      try {
+        if (inner.startsWith("/")) {
+          const abs = new URL(inner, pageUrl).href;
+          return `url(${q}${proxyPathUrl(abs)}${q})`;
+        } else if (inner.startsWith("//")) {
+          const abs = new URL(inner, pageUrl).href;
+          return `url(${q}${proxyPathUrl(abs)}${q})`;
+        } else if (/^https?:/.test(inner)) {
+          return `url(${q}${proxyPathUrl(inner)}${q})`;
+        }
+      } catch {}
+      return m;
     }
   );
+}
+
+function rewriteCss(css, cssUrl) {
+  return rewriteCssUrls(css, cssUrl);
 }
 
 function rewriteJs(jsContent, targetUrl) {
@@ -616,72 +750,244 @@ const proxyServer = http.createServer(async (req, res) => {
       });
     }
 
-    const result = await proxyFetch(target, req.headers, req.method, reqBody);
-    let { status, headers: respHeaders, body } = result;
+    // Build upstream request
+    let targetParsed;
+    try { targetParsed = new URL(target); } catch { res.writeHead(400); res.end("Bad URL"); return; }
 
-    const contentType = respHeaders["content-type"] || "application/octet-stream";
-    const ctBase = contentType.split(";")[0].trim().toLowerCase();
-    let charset = "utf-8";
-    if (contentType.includes("charset=")) {
-      charset = contentType.split("charset=")[1].trim().split(";")[0].trim();
-    }
+    const transport = targetParsed.protocol === "https:" ? https : http;
+    const resolvedIp = await resolveHost(targetParsed.hostname);
+    const port = targetParsed.port
+      ? parseInt(targetParsed.port)
+      : targetParsed.protocol === "https:" ? 443 : 80;
 
-    // Rewrite HTML
-    if (ctBase === "text/html" || ctBase === "application/xhtml+xml") {
-      try {
-        let text = body.toString(/utf-?8/i.test(charset) ? "utf-8" : "latin1");
-        text = rewriteHtml(text, target);
-        body = Buffer.from(text, "utf-8");
-      } catch {}
-    } else if (ctBase === "text/css") {
-      try {
-        let text = body.toString(/utf-?8/i.test(charset) ? "utf-8" : "latin1");
-        text = rewriteCss(text, target);
-        body = Buffer.from(text, "utf-8");
-      } catch {}
-    } else if (ctBase.includes("javascript") || ctBase === "text/js") {
-      try {
-        body = rewriteJs(body, target);
-      } catch {}
-    }
-
-    // Build response headers
-    const outHeaders = {
-      "Content-Type": ctBase.startsWith("text/") ? `${ctBase}; charset=utf-8` : contentType,
-      "Content-Length": body.length,
+    const upstreamHeaders = {
+      "User-Agent": BROWSER_UA,
+      "Accept": req.headers.accept || "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": req.headers["accept-language"] || "en-US,en;q=0.9",
+      "Accept-Encoding": "identity",
+      "Host": targetParsed.hostname + (port !== 80 && port !== 443 ? `:${port}` : ""),
     };
-    for (const [key, value] of Object.entries(respHeaders)) {
-      const lk = key.toLowerCase();
-      if (lk === "content-length" || lk === "content-encoding" ||
-        lk === "transfer-encoding" || lk === "content-type") continue;
-      if (!SKIP_RESPONSE_HEADERS.has(lk)) {
-        outHeaders[key] = value;
+
+    const FORWARD_REQ_HEADERS = new Set([
+      "cookie", "authorization", "content-type", "content-length",
+      "x-requested-with", "x-csrf-token", "range", "if-range",
+      "if-none-match", "if-modified-since", "accept", "accept-language",
+      "origin", "referer",
+    ]);
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (FORWARD_REQ_HEADERS.has(k.toLowerCase())) upstreamHeaders[k] = v;
+    }
+
+    const upstreamPath = (targetParsed.pathname || "/") + (targetParsed.search || "");
+
+    const proxyReq = transport.request({
+      hostname: resolvedIp,
+      port,
+      path: upstreamPath,
+      method: req.method,
+      headers: { ...upstreamHeaders, ...(reqBody ? { "Content-Length": reqBody.length } : {}) },
+      rejectUnauthorized: false,
+      servername: targetParsed.hostname,
+      timeout: 30000,
+    }, (proxyRes) => {
+      // Handle redirects
+      if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
+        let redirectUrl;
+        try { redirectUrl = new URL(proxyRes.headers.location, target).href; }
+        catch { redirectUrl = proxyRes.headers.location; }
+        const proxiedRedirect = proxyPathUrl(redirectUrl);
+        res.writeHead(proxyRes.statusCode, { "Location": proxiedRedirect });
+        res.end();
+        proxyRes.resume();
+        return;
       }
-    }
 
-    // Set cookie so subsequent requests without /p/<b64>/ can find the target
-    if (parsed.pathname.startsWith("/p/")) {
-      try {
-        const targetOrigin = new URL(target).origin;
-        outHeaders["Set-Cookie"] = `tv-proxy-target=${encodeURIComponent(targetOrigin)}; Path=/; SameSite=Lax; Max-Age=3600`;
-      } catch {}
-    }
+      const contentType = proxyRes.headers["content-type"] || "application/octet-stream";
+      const ct = contentType.toLowerCase();
+      const needsRewriting = ct.includes("text/html") || ct.includes("text/css") ||
+                             ct.includes("javascript") || ct.includes("text/js");
 
-    // Store in disk cache
-    if (useCache && status === 200 && cKey) {
-      diskCache.set(cKey, {
-        status,
-        headers: outHeaders,
-        body: body.toString("base64"),
-      });
-    }
+      // Build outbound headers
+      const outHeaders = {};
+      for (const [name, value] of Object.entries(proxyRes.headers)) {
+        const lk = name.toLowerCase();
+        if (SKIP_RESPONSE_HEADERS.has(lk)) continue;
+        if (lk === "content-length" && needsRewriting) continue;
+        if (lk === "content-encoding") continue;
+        outHeaders[name] = value;
+      }
+      outHeaders["access-control-allow-origin"] = reqOrigin || "*";
+      outHeaders["access-control-allow-credentials"] = "true";
 
-    res.writeHead(status, outHeaders);
-    res.end(body);
+      // Set cookie for fallback target resolution
+      if (parsed.pathname.startsWith("/p/")) {
+        try {
+          const targetOrigin = new URL(target).origin;
+          outHeaders["Set-Cookie"] =
+            `tv-proxy-target=${encodeURIComponent(targetOrigin)}; Path=/; SameSite=Lax; Max-Age=3600`;
+        } catch {}
+      }
+
+      if (needsRewriting) {
+        // Buffer → Decompress → Rewrite → Send
+        const chunks = [];
+        proxyRes.on("data", c => chunks.push(c));
+        proxyRes.on("end", () => {
+          let body = Buffer.concat(chunks);
+
+          const encoding = (proxyRes.headers["content-encoding"] || "").toLowerCase();
+          if (encoding === "gzip") {
+            try { body = zlib.gunzipSync(body); } catch {}
+          } else if (encoding === "br") {
+            try { body = zlib.brotliDecompressSync(body); } catch {}
+          } else if (encoding === "deflate") {
+            try { body = zlib.inflateSync(body); } catch { try { body = zlib.inflateRawSync(body); } catch {} }
+          }
+
+          const charset = /charset=([^\s;]+)/i.test(contentType)
+            ? RegExp.$1.trim() : "utf-8";
+          const enc = /utf-?8/i.test(charset) ? "utf-8" : "latin1";
+          let text = body.toString(enc);
+
+          if (ct.includes("text/html")) {
+            text = rewriteHtml(text, target);
+          } else if (ct.includes("text/css")) {
+            text = rewriteCss(text, target);
+          }
+
+          const outBody = Buffer.from(text, "utf-8");
+          outHeaders["Content-Length"] = outBody.length;
+
+          // Cache text responses
+          if (req.method === "GET" && proxyRes.statusCode === 200 && cKey) {
+            diskCache.set(cKey, {
+              status: proxyRes.statusCode,
+              headers: outHeaders,
+              body: outBody.toString("base64"),
+            });
+          }
+
+          res.writeHead(proxyRes.statusCode, outHeaders);
+          res.end(outBody);
+        });
+      } else {
+        // STREAM binary content directly (video, images, fonts, etc.)
+        res.writeHead(proxyRes.statusCode, outHeaders);
+        proxyRes.pipe(res);
+      }
+    });
+
+    proxyReq.on("error", (e) => {
+      _dnsCache.delete(targetParsed.hostname);
+      if (!res.headersSent) res.writeHead(502);
+      res.end(`Proxy error: ${e.message}`);
+    });
+
+    proxyReq.on("timeout", () => {
+      proxyReq.destroy();
+      _dnsCache.delete(targetParsed.hostname);
+      if (!res.headersSent) res.writeHead(504);
+      res.end("Gateway timeout");
+    });
+
+    if (reqBody) proxyReq.write(reqBody);
+    proxyReq.end();
+
   } catch (err) {
-    res.writeHead(502);
+    if (!res.headersSent) res.writeHead(502);
     res.end(`Proxy error: ${err.message}`);
   }
+});
+
+// ─────────────────────────────────────────────────────────────
+//  WEBSOCKET PROXY (on proxy server port)
+// ─────────────────────────────────────────────────────────────
+
+const wsProxy = new WebSocketServer({ noServer: true });
+
+proxyServer.on("upgrade", (req, socket, head) => {
+  const parsed = url.parse(req.url, true);
+  const pathname = parsed.pathname;
+
+  // WebSocket proxy: /ws/<b64-origin>/path
+  if (pathname.startsWith("/ws/")) {
+    const rest = pathname.slice(4);
+    const m = rest.match(/^([A-Za-z0-9\-_=]+)(\/.*)?$/);
+    if (!m) { socket.destroy(); return; }
+
+    const origin = fromB64url(m[1]);
+    if (!/^https?:\/\//.test(origin)) { socket.destroy(); return; }
+
+    const wsOrigin = origin.replace(/^http/, "ws");
+    const wsPath = (m[2] || "/") + (parsed.search || "");
+    const wsTarget = wsOrigin + wsPath;
+
+    wsProxy.handleUpgrade(req, socket, head, (clientWs) => {
+      let upstreamWs;
+      try {
+        upstreamWs = new WebSocket(wsTarget, {
+          headers: { "User-Agent": BROWSER_UA, "Origin": origin },
+          rejectUnauthorized: false,
+        });
+      } catch {
+        clientWs.close(1011, "Upstream connection failed");
+        return;
+      }
+
+      upstreamWs.on("open", () => {
+        clientWs.on("message", (data) => {
+          if (upstreamWs.readyState === WebSocket.OPEN) upstreamWs.send(data);
+        });
+        upstreamWs.on("message", (data) => {
+          if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
+        });
+      });
+
+      clientWs.on("close", (code, reason) => upstreamWs.close(code, reason));
+      upstreamWs.on("close", (code, reason) => clientWs.close(code, reason));
+      clientWs.on("error", () => upstreamWs.close());
+      upstreamWs.on("error", () => clientWs.close());
+    });
+    return;
+  }
+
+  // Also handle /p/<b64>/ WebSocket upgrades (some sites use same path)
+  if (pathname.startsWith("/p/")) {
+    const target = resolveProxyPath(pathname, parsed.search || "");
+    if (!target) { socket.destroy(); return; }
+
+    const wsTarget = target.replace(/^http/, "ws");
+
+    wsProxy.handleUpgrade(req, socket, head, (clientWs) => {
+      let upstreamWs;
+      try {
+        upstreamWs = new WebSocket(wsTarget, {
+          headers: { "User-Agent": BROWSER_UA, "Origin": new URL(target).origin },
+          rejectUnauthorized: false,
+        });
+      } catch {
+        clientWs.close(1011, "Upstream connection failed");
+        return;
+      }
+
+      upstreamWs.on("open", () => {
+        clientWs.on("message", (data) => {
+          if (upstreamWs.readyState === WebSocket.OPEN) upstreamWs.send(data);
+        });
+        upstreamWs.on("message", (data) => {
+          if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
+        });
+      });
+
+      clientWs.on("close", (code, reason) => upstreamWs.close(code, reason));
+      upstreamWs.on("close", (code, reason) => clientWs.close(code, reason));
+      clientWs.on("error", () => upstreamWs.close());
+      upstreamWs.on("error", () => clientWs.close());
+    });
+    return;
+  }
+
+  socket.destroy();
 });
 
 // ─────────────────────────────────────────────────────────────

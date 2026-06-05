@@ -225,6 +225,33 @@
   let tauriPtyReady = false; // Tauri native PTY backend ready
   let _ptyListeners = {};    // termId -> unlisten function for Tauri PTY events
 
+  const browserSlotRo = new ResizeObserver(() => syncBrowserSlots());
+
+  function syncBrowserSlots() {
+    const paneArea = document.getElementById('pane-area');
+    if (!paneArea) return;
+    const paneRect = paneArea.getBoundingClientRect();
+
+    for (const ws of workspaces) {
+      const isActiveWs = (ws.id === activeWsId);
+      for (const t of getWorkspaceTerminals(ws)) {
+        if (t.type === 'browser' && t.browserContainer) {
+          // Hide if workspace inactive, element disconnected, or manually hidden
+          if (!isActiveWs || !t.el || !t.el.isConnected || t.el.style.display === 'none' || t.el.offsetWidth === 0) {
+            t.browserContainer.style.display = 'none';
+          } else {
+            t.browserContainer.style.display = 'flex';
+            const slotRect = t.el.getBoundingClientRect();
+            t.browserContainer.style.left = (slotRect.left - paneRect.left) + 'px';
+            t.browserContainer.style.top = (slotRect.top - paneRect.top) + 'px';
+            t.browserContainer.style.width = slotRect.width + 'px';
+            t.browserContainer.style.height = slotRect.height + 'px';
+          }
+        }
+      }
+    }
+  }
+
   /* ═══════════════════════════════════════════════════════════════
    B R*OWSER TAB IFRAME (sandboxed, suspend/resume)
    ═══════════════════════════════════════════════════════════════ */
@@ -249,37 +276,11 @@
   }
 
   function suspendBrowserTab(entry) {
-    if (entry.type !== 'browser' || !entry._iframe) return;
-    if (entry._suspendTimer) clearTimeout(entry._suspendTimer);
-    entry._suspendTimer = setTimeout(() => {
-      if (!entry._iframe) return;
-      // Save URL so we can restore later
-      entry._suspendedUrl = entry.url;
-      entry._iframe.src = 'about:blank';
-      entry._suspended = true;
-      const pageView = entry.el?.querySelector('.browser-page-view');
-      if (pageView) {
-        pageView.style.display = '';
-        pageView.innerHTML = `
-        <div class="browser-start-page">
-        <p style="color:var(--dim-text);font-size:12px;">Tab suspended to save memory</p>
-        <button class="browser-error-btn" id="resume-btn" style="margin-top:8px;">Reload</button>
-        </div>`;
-        pageView.querySelector('#resume-btn')?.addEventListener('click', () => {
-          entry._suspended = false;
-          if (entry._suspendedUrl && entry._loadUrl) entry._loadUrl(entry._suspendedUrl);
-        });
-      }
-    }, BROWSER_SUSPEND_MS);
+    // Disabled to persist iframe state while backgrounded
   }
 
   function resumeBrowserTab(entry) {
-    if (entry.type !== 'browser') return;
-    if (entry._suspendTimer) { clearTimeout(entry._suspendTimer); entry._suspendTimer = null; }
-    if (entry._suspended && entry._suspendedUrl) {
-      entry._suspended = false;
-      loadUrl(entry._suspendedUrl);
-    }
+    // Disabled to persist iframe state while backgrounded
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -847,6 +848,7 @@
       }
       updateFocusedGroup();
       updateStatusBar();
+      syncBrowserSlots();
     }, 30);
   }
 
@@ -1214,7 +1216,7 @@
             const slot = document.getElementById('slot-' + t.id);
             if (!slot) return;
             const isActive = t.id === termId;
-            const showAs = t.type === 'browser' ? 'flex' : 'block';
+            const showAs = 'block'; // Placeholders can safely be block
             slot.style.display = isActive ? showAs : 'none';
             if (t.type === 'browser') {
               if (isActive) resumeBrowserTab(t);
@@ -1236,6 +1238,7 @@
         }
       }
     }
+    syncBrowserSlots();
     clearTimeout(activateTerminal._saveTimer);
     activateTerminal._saveTimer = setTimeout(saveState, 500);
   }
@@ -1275,6 +1278,7 @@
       if (entry._msgCleanup) entry._msgCleanup();
       if (entry._resizeObs) { entry._resizeObs.disconnect(); entry._resizeObs = null; }
       if (entry._suspendTimer) { clearTimeout(entry._suspendTimer); entry._suspendTimer = null; }
+      if (entry.browserContainer) { entry.browserContainer.remove(); entry.browserContainer = null; }
     }
     if (entry.el) entry.el.remove();
 
@@ -1593,6 +1597,7 @@
     // Fit terminals after layout settles
     setTimeout(() => {
       all.forEach(t => fitTerm(t));
+      syncBrowserSlots();
     }, 0);
   }
 
@@ -1832,7 +1837,7 @@
       node.terminals.forEach(t => {
         const isAct = t.id === node.activeTermId;
         const slot = getOrCreateSlot(t, wsp, body);
-        const showAs = t.type === 'browser' ? 'flex' : 'block';
+        const showAs = 'block';
         slot.style.display = isAct ? showAs : 'none';
         if (isAct && slot.id === focusedSlotId) slot.classList.add('focused');
         else slot.classList.remove('focused');
@@ -1879,376 +1884,362 @@
     slot.id = 'slot-' + entry.id;
 
     if (entry.type === 'browser') {
-      slot.classList.add('browser-slot');
+      slot.classList.add('browser-slot-placeholder');
+      browserSlotRo.observe(slot);
 
-      // ── History stack for back/forward ──
-      if (!entry._history) { entry._history = []; entry._historyIdx = -1; }
+      if (!entry.browserContainer) {
+        const bc = document.createElement('div');
+        bc.className = 'browser-slot';
+        bc.style.position = 'absolute';
+        bc.style.zIndex = '50';
+        bc.style.display = 'none';
 
-      // ── Toolbar ──
-      const toolbar = document.createElement('div');
-      toolbar.className = 'browser-toolbar';
+        // ── History stack for back/forward ──
+        if (!entry._history) { entry._history = []; entry._historyIdx = -1; }
 
-      const btnBack = document.createElement('button');
-      btnBack.className = 'browser-btn';
-      btnBack.title = 'Back';
-      btnBack.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>';
+        // ── Toolbar ──
+        const toolbar = document.createElement('div');
+        toolbar.className = 'browser-toolbar';
 
-      const btnFwd = document.createElement('button');
-      btnFwd.className = 'browser-btn';
-      btnFwd.title = 'Forward';
-      btnFwd.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
+        const btnBack = document.createElement('button');
+        btnBack.className = 'browser-btn';
+        btnBack.title = 'Back';
+        btnBack.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>';
 
-      const btnReload = document.createElement('button');
-      btnReload.className = 'browser-btn';
-      btnReload.title = 'Reload';
-      btnReload.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>';
+        const btnFwd = document.createElement('button');
+        btnFwd.className = 'browser-btn';
+        btnFwd.title = 'Forward';
+        btnFwd.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
 
-      const btnOpenExt = document.createElement('button');
-      btnOpenExt.className = 'browser-btn';
-      btnOpenExt.title = 'Open in new tab';
-      btnOpenExt.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+        const btnReload = document.createElement('button');
+        btnReload.className = 'browser-btn';
+        btnReload.title = 'Reload';
+        btnReload.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>';
 
-      const urlInput = document.createElement('input');
-      urlInput.className = 'browser-url';
-      urlInput.type = 'text';
-      urlInput.value = entry.url && entry.url !== 'about:blank' ? entry.url : '';
-      urlInput.spellcheck = false;
-      urlInput.autocomplete = 'off';
-      urlInput.placeholder = 'Search or enter URL…';
+        const btnOpenExt = document.createElement('button');
+        btnOpenExt.className = 'browser-btn';
+        btnOpenExt.title = 'Open in new tab';
+        btnOpenExt.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
 
-      const loadingBar = document.createElement('div');
-      loadingBar.className = 'browser-loading-bar';
+        const urlInput = document.createElement('input');
+        urlInput.className = 'browser-url';
+        urlInput.type = 'text';
+        urlInput.value = entry.url && entry.url !== 'about:blank' ? entry.url : '';
+        urlInput.spellcheck = false;
+        urlInput.autocomplete = 'off';
+        urlInput.placeholder = 'Search or enter URL…';
 
-      toolbar.appendChild(btnBack);
-      toolbar.appendChild(btnFwd);
-      toolbar.appendChild(btnReload);
-      toolbar.appendChild(urlInput);
-      toolbar.appendChild(btnOpenExt);
+        const loadingBar = document.createElement('div');
+        loadingBar.className = 'browser-loading-bar';
 
-      // ── Content area ──
-      const contentWrap = document.createElement('div');
-      contentWrap.className = 'browser-content';
+        toolbar.appendChild(btnBack);
+        toolbar.appendChild(btnFwd);
+        toolbar.appendChild(btnReload);
+        toolbar.appendChild(urlInput);
+        toolbar.appendChild(btnOpenExt);
 
-      // Loading bar sits above the content
-      contentWrap.appendChild(loadingBar);
+        // ── Content area ──
+        const contentWrap = document.createElement('div');
+        contentWrap.className = 'browser-content';
 
-      // Scrollable div for start/error pages
-      const pageView = document.createElement('div');
-      pageView.className = 'browser-page-view';
-      contentWrap.appendChild(pageView);
+        contentWrap.appendChild(loadingBar);
 
-      slot.appendChild(toolbar);
-      slot.appendChild(contentWrap);
-      entry.el = slot;
-      entry._pageView = pageView;
-      entry._browserZoom = 1;
-      entry.opened = true;
+        const pageView = document.createElement('div');
+        pageView.className = 'browser-page-view';
+        contentWrap.appendChild(pageView);
 
-      let loading = false;
+        bc.appendChild(toolbar);
+        bc.appendChild(contentWrap);
 
-      function showLoading(on) {
-        loading = on;
-        loadingBar.classList.toggle('active', on);
-        btnReload.classList.toggle('spin', on);
-      }
-
-      function showError(url, msg) {
-        contentWrap.style.background = '#fff';
-        pageView.style.display = '';
-        var friendlyMsg = msg;
-        if (msg.includes('connect') || msg.includes('ECONNREFUSED') || msg.includes('timed out')) {
-          friendlyMsg = 'Cannot connect to the site. The proxy server may be down or the site is unreachable.';
-        } else if (msg.includes('CORS') || msg.includes('Access-Control')) {
-          friendlyMsg = 'The site blocked the request due to CORS policy. Try reloading or opening in an external browser.';
-        } else if (msg.includes('404')) {
-          friendlyMsg = 'Page not found on the remote server.';
-        }
-        pageView.innerHTML = `
-        <div class="browser-error-page">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
-        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
-        <circle cx="12" cy="16" r="0.5" fill="currentColor" stroke-width="2"/>
-        </svg>
-        <h2>Can't reach this page</h2>
-        <p class="browser-error-url">${escHtml(url)}</p>
-        <p class="browser-error-msg">${escHtml(friendlyMsg)}</p>
-        <div class="browser-error-actions">
-        <button class="browser-error-btn" id="err-retry">Try again</button>
-        <button class="browser-error-btn browser-error-btn-ext" id="err-ext">Open in browser ↗</button>
-        </div>
-        </div>`;
-        pageView.querySelector('#err-retry')?.addEventListener('click', () => loadUrl(entry.url));
-        pageView.querySelector('#err-ext')?.addEventListener('click', () => openExternalUrl(entry.url));
-      }
-
-      function showStartPage() {
-        contentWrap.style.background = '#fff';
-        pageView.style.display = '';
-        pageView.innerHTML = `
-        <div class="browser-start-page">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
-        <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-        <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
-        </svg>
-        <p>Enter a URL or search term above</p>
-        <p class="browser-start-hint">${isTauri() ? 'Native webview — sites load directly without proxy.' : 'Proxied browser — sites load via local proxy to strip frame restrictions.'}</p>
-        </div>`;
-      }
-
-      function showImageViewer(url) {
-        pageView.style.display = 'none';
-        let wrap = contentWrap.querySelector('.browser-img-wrap');
-        if (!wrap) {
-          wrap = document.createElement('div');
-          wrap.className = 'browser-img-wrap';
-          contentWrap.appendChild(wrap);
-        }
-        wrap.innerHTML = '<img class="browser-img" alt="">';
-        wrap.style.display = 'flex';
-        const img = wrap.querySelector('img');
-        img.src = proxyUrl(url);
-        entry._imgEl = img;
+        document.getElementById('pane-area').appendChild(bc);
+        entry.browserContainer = bc;
+        entry._pageView = pageView;
         entry._browserZoom = 1;
-      }
 
-      function showPdfViewer(url) {
-        pageView.style.display = 'none';
-        let wrap = contentWrap.querySelector('.browser-pdf-wrap');
-        if (!wrap) {
-          wrap = document.createElement('div');
-          wrap.className = 'browser-pdf-wrap';
-          contentWrap.appendChild(wrap);
+        let loading = false;
+        function showLoading(on) {
+          loading = on;
+          loadingBar.classList.toggle('active', on);
+          btnReload.classList.toggle('spin', on);
         }
-        wrap.innerHTML = '';
-        wrap.style.display = 'block';
-        const container = document.createElement('div');
-        container.style.height = '100%';
-        wrap.appendChild(container);
-        import('https://cdn.jsdelivr.net/npm/@embedpdf/snippet@2/dist/embedpdf.js').then(({ default: EmbedPDF }) => {
-          EmbedPDF.init({
-            type: 'container',
-            target: container,
-            src: proxyUrl(url)
-          });
-        });
-        entry._browserZoom = 1;
-      }
 
-      function normalizeUrl(raw) {
-        if (!raw || raw === 'about:blank') return null;
-        let url = raw.trim();
-
-        // Local file paths → asset:// URLs via Tauri (bypass proxy)
-        // Unix: /path/to/file  Windows: C:\path\to\file  or  C:/path/to/file
-        const localMatch = url.match(/^(\/[^\s]+)|^([a-zA-Z]:[/\\][^\s]+)$/);
-        if (localMatch) {
-          const p = localMatch[1] || localMatch[2];
-          if (isTauri() && window.__TAURI__ && window.__TAURI__.core) {
-            return window.__TAURI__.core.convertFileSrc(p);
+        function showError(url, msg) {
+          contentWrap.style.background = '#fff';
+          pageView.style.display = '';
+          var friendlyMsg = msg;
+          if (msg.includes('connect') || msg.includes('ECONNREFUSED') || msg.includes('timed out')) {
+            friendlyMsg = 'Cannot connect to the site. The proxy server may be down or the site is unreachable.';
+          } else if (msg.includes('CORS') || msg.includes('Access-Control')) {
+            friendlyMsg = 'The site blocked the request due to CORS policy. Try reloading or opening in an external browser.';
+          } else if (msg.includes('404')) {
+            friendlyMsg = 'Page not found on the remote server.';
           }
-          return 'file://' + p.replace(/\\/g, '/');
+          pageView.innerHTML = `
+          <div class="browser-error-page">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+          <circle cx="12" cy="16" r="0.5" fill="currentColor" stroke-width="2"/>
+          </svg>
+          <h2>Can't reach this page</h2>
+          <p class="browser-error-url">${escHtml(url)}</p>
+          <p class="browser-error-msg">${escHtml(friendlyMsg)}</p>
+          <div class="browser-error-actions">
+          <button class="browser-error-btn" id="err-retry">Try again</button>
+          <button class="browser-error-btn browser-error-btn-ext" id="err-ext">Open in browser ↗</button>
+          </div>
+          </div>`;
+          pageView.querySelector('#err-retry')?.addEventListener('click', () => loadUrl(entry.url));
+          pageView.querySelector('#err-ext')?.addEventListener('click', () => openExternalUrl(entry.url));
         }
 
-        // Convert stored file:// URLs to asset:// in Tauri
-        if (url.startsWith('file://') && isTauri() && window.__TAURI__ && window.__TAURI__.core) {
-          return window.__TAURI__.core.convertFileSrc(url.slice(7)); // strip "file://"
+        function showStartPage() {
+          contentWrap.style.background = '#fff';
+          pageView.style.display = '';
+          pageView.innerHTML = `
+          <div class="browser-start-page">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+          <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+          <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
+          </svg>
+          <p>Enter a URL or search term above</p>
+          <p class="browser-start-hint">${isTauri() ? 'Native webview — sites load directly without proxy.' : 'Proxied browser — sites load via local proxy to strip frame restrictions.'}</p>
+          </div>`;
         }
 
-        if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) return url;
-        if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i.test(url)) return 'http://' + url;
-        if (!url.includes('.') || url.includes(' ')) return 'https://www.google.com/search?igu=1&q=' + encodeURIComponent(url);
-        return 'https://' + url;
-      }
-
-      const PROXY_PORT = 7682;
-      function proxyUrl(url) {
-        if (!url) return url;
-        // Bypass proxy for local files
-        if (url.startsWith('file://') || url.startsWith('asset:')) return url;
-        // Bypass proxy for Google
-        try {
-          const u = new URL(url);
-          if (/\.google\.(com|co\.\w+|com\.\w+|fr|de|uk|it|es|jp|br|ca|au|in)$/i.test(u.hostname)) return url;
-        } catch(e) {}
-        // Path-based proxy: /p/<base64url-origin>/<path>
-        const u2 = new URL(url);
-        const origin = u2.origin;
-        const path = url.substring(origin.length) || '/';
-        const b64 = btoa(origin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        return `http://127.0.0.1:${PROXY_PORT}/p/${b64}${path}`;
-      }
-
-      async function loadUrl(rawUrl) {
-        const url = normalizeUrl(rawUrl);
-        if (!url) { showStartPage(); return; }
-
-        // Clear suspended state so reload works after suspend
-        if (entry._suspended) {
-          entry._suspended = false;
-          entry._suspendedUrl = null;
-        }
-        if (entry._suspendTimer) { clearTimeout(entry._suspendTimer); entry._suspendTimer = null; }
-
-        showLoading(true);
-        urlInput.value = url;
-        entry.url = url;
-
-        // Push history
-        if (entry._history[entry._historyIdx] !== url) {
-          entry._history = entry._history.slice(0, entry._historyIdx + 1);
-          entry._history.push(url);
-          entry._historyIdx = entry._history.length - 1;
-        }
-        updateNavButtons();
-        entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
-        renderSidebar();
-        updateStatusBar();
-
-        // Reset zoom on new navigation
-        entry._browserZoom = 1;
-        // Clean up image viewer from previous load
-        const prevImg = contentWrap.querySelector('.browser-img-wrap');
-        if (prevImg) prevImg.style.display = 'none';
-        entry._imgEl = null;
-        // Clean up PDF viewer from previous load
-        const prevPdf = contentWrap.querySelector('.browser-pdf-wrap');
-        if (prevPdf) prevPdf.style.display = 'none';
-
-        // Direct image URLs render as <img> instead of iframe
-        if (IMAGE_EXT_RE.test(url)) {
-          showImageViewer(url);
-          showLoading(false);
-          return;
-        }
-
-        // Direct PDF URLs render with EmbedPDF viewer
-        if (PDF_EXT_RE.test(url)) {
-          showPdfViewer(url);
-          showLoading(false);
-          return;
-        }
-
-        // Load URL in sandboxed iframe (works in both Tauri and browser)
-        try {
-          let iframe = contentWrap.querySelector('iframe.browser-fallback');
-          if (!iframe) {
-            iframe = document.createElement('iframe');
-            iframe.className = 'browser-fallback';
-            iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;';
-            iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads';
-            iframe.referrerPolicy = 'no-referrer';
-            iframe.allow = 'clipboard-read; clipboard-write; fullscreen';
-            var loadTimer = setTimeout(function() {
-              if (loading) {
-                showLoading(false);
-                showError(url, 'Page load timed out. The proxy may not be able to reach this site, or the site may require authentication.');
-              }
-            }, 20000);
-            iframe.onload = function() {
-              clearTimeout(loadTimer);
-              showLoading(false);
-              resumeBrowserTab(entry);
-            };
-            contentWrap.insertBefore(iframe, pageView);
-          }
+        function showImageViewer(url) {
           pageView.style.display = 'none';
-          iframe.style.display = 'block';
+          let wrap = contentWrap.querySelector('.browser-img-wrap');
+          if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.className = 'browser-img-wrap';
+            contentWrap.appendChild(wrap);
+          }
+          wrap.innerHTML = '<img class="browser-img" alt="">';
+          wrap.style.display = 'flex';
+          const img = wrap.querySelector('img');
+          img.src = proxyUrl(url);
+          entry._imgEl = img;
+          entry._browserZoom = 1;
+        }
 
-          // Clean up any zoom wrap (remnant from previous versions) and restore direct child
-          var _oldWrap = contentWrap.querySelector('.browser-zoom-wrap');
-          if (_oldWrap) {
-            if (_oldWrap.contains(iframe)) contentWrap.appendChild(iframe);
-            _oldWrap.remove();
-            iframe.style.position = '';
-            iframe.style.left = '';
-            iframe.style.top = '';
-            iframe.style.transform = '';
+        function showPdfViewer(url) {
+          pageView.style.display = 'none';
+          let wrap = contentWrap.querySelector('.browser-pdf-wrap');
+          if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.className = 'browser-pdf-wrap';
+            contentWrap.appendChild(wrap);
           }
-          iframe.style.width = '100%';
-          iframe.style.height = '100%';
-          entry._iframe = iframe;
-          // Local files need no sandbox; remote sites need sandbox for security
-          if (url.startsWith('file://') || url.startsWith('asset:')) {
-            iframe.removeAttribute('sandbox');
-          } else {
-            iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads';
+          wrap.innerHTML = '';
+          wrap.style.display = 'block';
+          const container = document.createElement('div');
+          container.style.height = '100%';
+          wrap.appendChild(container);
+          import('https://cdn.jsdelivr.net/npm/@embedpdf/snippet@2/dist/embedpdf.js').then(({ default: EmbedPDF }) => {
+            EmbedPDF.init({
+              type: 'container',
+              target: container,
+              src: proxyUrl(url)
+            });
+          });
+          entry._browserZoom = 1;
+        }
+
+        function normalizeUrl(raw) {
+          if (!raw || raw === 'about:blank') return null;
+          let url = raw.trim();
+
+          const localMatch = url.match(/^(\/[^\s]+)|^([a-zA-Z]:[/\\][^\s]+)$/);
+          if (localMatch) {
+            const p = localMatch[1] || localMatch[2];
+            if (isTauri() && window.__TAURI__ && window.__TAURI__.core) {
+              return window.__TAURI__.core.convertFileSrc(p);
+            }
+            return 'file://' + p.replace(/\\/g, '/');
           }
-          iframe.src = proxyUrl(url);
-          // Local files load instantly, hide loading immediately
-          if (url.startsWith('file://') || url.startsWith('asset:')) {
-            showLoading(false);
+
+          if (url.startsWith('file://') && isTauri() && window.__TAURI__ && window.__TAURI__.core) {
+            return window.__TAURI__.core.convertFileSrc(url.slice(7));
           }
+
+          if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) return url;
+          if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i.test(url)) return 'http://' + url;
+          if (!url.includes('.') || url.includes(' ')) return 'https://www.google.com/search?igu=1&q=' + encodeURIComponent(url);
+          return 'https://' + url;
+        }
+
+        const PROXY_PORT = 7682;
+        function proxyUrl(url) {
+          if (!url) return url;
+          if (url.startsWith('file://') || url.startsWith('asset:')) return url;
+          const u2 = new URL(url);
+          const origin = u2.origin;
+          const path = url.substring(origin.length) || '/';
+          const b64 = btoa(origin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+          return `http://127.0.0.1:${PROXY_PORT}/p/${b64}${path}`;
+        }
+
+        async function loadUrl(rawUrl) {
+          const url = normalizeUrl(rawUrl);
+          if (!url) { showStartPage(); return; }
+
+          if (entry._suspended) {
+            entry._suspended = false;
+            entry._suspendedUrl = null;
+          }
+          if (entry._suspendTimer) { clearTimeout(entry._suspendTimer); entry._suspendTimer = null; }
+
+          showLoading(true);
+          urlInput.value = url;
           entry.url = url;
-        } catch (e) {
-          showLoading(false);
-          showError(url, 'Failed to load page: ' + e.message);
+
+          if (entry._history[entry._historyIdx] !== url) {
+            entry._history = entry._history.slice(0, entry._historyIdx + 1);
+            entry._history.push(url);
+            entry._historyIdx = entry._history.length - 1;
+          }
+          updateNavButtons();
+          entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
+          renderSidebar();
+          updateStatusBar();
+
+          entry._browserZoom = 1;
+          const prevImg = contentWrap.querySelector('.browser-img-wrap');
+          if (prevImg) prevImg.style.display = 'none';
+          entry._imgEl = null;
+          const prevPdf = contentWrap.querySelector('.browser-pdf-wrap');
+          if (prevPdf) prevPdf.style.display = 'none';
+
+          if (IMAGE_EXT_RE.test(url)) {
+            showImageViewer(url);
+            showLoading(false);
+            return;
+          }
+
+          if (PDF_EXT_RE.test(url)) {
+            showPdfViewer(url);
+            showLoading(false);
+            return;
+          }
+
+          try {
+            let iframe = contentWrap.querySelector('iframe.browser-fallback');
+            if (!iframe) {
+              iframe = document.createElement('iframe');
+              iframe.className = 'browser-fallback';
+              iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;';
+              iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-presentation allow-modals';
+              iframe.referrerPolicy = 'no-referrer';
+              iframe.allow = 'clipboard-read; clipboard-write; fullscreen';
+              var loadTimer = setTimeout(function() {
+                if (loading) {
+                  showLoading(false);
+                  showError(url, 'Page load timed out. The proxy may not be able to reach this site, or the site may require authentication.');
+                }
+              }, 20000);
+              iframe.onload = function() {
+                clearTimeout(loadTimer);
+                showLoading(false);
+                resumeBrowserTab(entry);
+              };
+              contentWrap.insertBefore(iframe, pageView);
+            }
+            pageView.style.display = 'none';
+            iframe.style.display = 'block';
+
+            var _oldWrap = contentWrap.querySelector('.browser-zoom-wrap');
+            if (_oldWrap) {
+              if (_oldWrap.contains(iframe)) contentWrap.appendChild(iframe);
+              _oldWrap.remove();
+              iframe.style.position = '';
+              iframe.style.left = '';
+              iframe.style.top = '';
+              iframe.style.transform = '';
+            }
+            iframe.style.width = '100%';
+            iframe.style.height = '100%';
+            entry._iframe = iframe;
+            if (url.startsWith('file://') || url.startsWith('asset:')) {
+              iframe.removeAttribute('sandbox');
+            } else {
+              iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-presentation allow-modals';
+            }
+            iframe.src = proxyUrl(url);
+            if (url.startsWith('file://') || url.startsWith('asset:')) {
+              showLoading(false);
+            }
+            entry.url = url;
+          } catch (e) {
+            showLoading(false);
+            showError(url, 'Failed to load page: ' + e.message);
+          }
+        }
+
+        entry._loadUrl = loadUrl;
+
+        function updateNavButtons() {
+          btnBack.disabled = entry._historyIdx <= 0;
+          btnFwd.disabled = entry._historyIdx >= entry._history.length - 1;
+          btnBack.style.opacity = btnBack.disabled ? '0.35' : '';
+          btnFwd.style.opacity = btnFwd.disabled ? '0.35' : '';
+        }
+
+        const navigate = () => {
+          const raw = urlInput.value.trim();
+          if (raw) loadUrl(raw);
+        };
+
+        urlInput.addEventListener('keydown', e => {
+          if (e.key === 'Enter') { e.preventDefault(); navigate(); }
+          e.stopPropagation();
+        });
+        urlInput.addEventListener('focus', () => urlInput.select());
+
+        btnBack.addEventListener('click', () => {
+          if (entry._historyIdx > 0) {
+            entry._historyIdx--;
+            const url = entry._history[entry._historyIdx];
+            urlInput.value = url;
+            loadUrl(url);
+          }
+        });
+        btnFwd.addEventListener('click', () => {
+          if (entry._historyIdx < entry._history.length - 1) {
+            entry._historyIdx++;
+            const url = entry._history[entry._historyIdx];
+            urlInput.value = url;
+            loadUrl(url);
+          }
+        });
+        btnReload.addEventListener('click', () => {
+          if (loading && !entry._suspended) return;
+          loadUrl(entry.url);
+        });
+        btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') openExternalUrl(entry.url); });
+
+        bc.addEventListener('mousedown', () => {
+          document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+          slot.classList.add('focused');
+          focusedSlotId = slot.id;
+          updateFocusedGroup();
+          wsp.activeTermId = entry.id;
+          const group = findGroupContainingTerm(wsp.layout, entry.id);
+          if (group) group.activeTermId = entry.id;
+          updateStatusBar();
+        });
+
+        updateNavButtons();
+
+        if (entry.url && entry.url !== 'about:blank') {
+          loadUrl(entry.url);
+        } else {
+          showStartPage();
         }
       }
 
-      entry._loadUrl = loadUrl;
-
-      function updateNavButtons() {
-        btnBack.disabled = entry._historyIdx <= 0;
-        btnFwd.disabled = entry._historyIdx >= entry._history.length - 1;
-        btnBack.style.opacity = btnBack.disabled ? '0.35' : '';
-        btnFwd.style.opacity = btnFwd.disabled ? '0.35' : '';
-      }
-
-      // ── Navigation ──
-      const navigate = () => {
-        const raw = urlInput.value.trim();
-        if (raw) loadUrl(raw);
-      };
-
-      urlInput.addEventListener('keydown', e => {
-        if (e.key === 'Enter') { e.preventDefault(); navigate(); }
-        e.stopPropagation();
-      });
-      urlInput.addEventListener('focus', () => urlInput.select());
-
-      btnBack.addEventListener('click', () => {
-        if (entry._historyIdx > 0) {
-          entry._historyIdx--;
-          const url = entry._history[entry._historyIdx];
-          urlInput.value = url;
-          loadUrl(url);
-        }
-      });
-      btnFwd.addEventListener('click', () => {
-        if (entry._historyIdx < entry._history.length - 1) {
-          entry._historyIdx++;
-          const url = entry._history[entry._historyIdx];
-          urlInput.value = url;
-          loadUrl(url);
-        }
-      });
-      btnReload.addEventListener('click', () => {
-        if (loading && !entry._suspended) return;
-        loadUrl(entry.url);
-      });
-      btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') openExternalUrl(entry.url); });
-
-      slot.addEventListener('mousedown', () => {
-        document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
-        slot.classList.add('focused');
-        focusedSlotId = slot.id;
-        updateFocusedGroup();
-        wsp.activeTermId = entry.id;
-        const group = findGroupContainingTerm(wsp.layout, entry.id);
-        if (group) group.activeTermId = entry.id;
-        updateStatusBar();
-      });
-
-      updateNavButtons();
-
-      // Initial load
-      if (entry.url && entry.url !== 'about:blank') {
-        loadUrl(entry.url);
-      } else {
-        showStartPage();
-      }
-
-        return slot;
+      entry.el = slot;
+      entry.opened = true;
+      return slot;
     }
 
     const wrap = document.createElement('div');
