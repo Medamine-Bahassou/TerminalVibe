@@ -233,6 +233,12 @@
   // to free memory (dev-server pages can hold hundreds of MB).
   const BROWSER_SUSPEND_MS = 30_000;
 
+  const IMAGE_EXT_RE = /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)([?#].*)?$/i;
+  const PDF_EXT_RE = /\.pdf([?#].*)?$/i;
+  const ZOOM_MIN = 0.25;
+  const ZOOM_MAX = 5;
+  const ZOOM_STEP = 0.1;
+
   function isLocalUrl(url) {
     try {
       const u = new URL(url);
@@ -261,7 +267,7 @@
         </div>`;
         pageView.querySelector('#resume-btn')?.addEventListener('click', () => {
           entry._suspended = false;
-          if (entry._suspendedUrl) loadUrl(entry._suspendedUrl);
+          if (entry._suspendedUrl && entry._loadUrl) entry._loadUrl(entry._suspendedUrl);
         });
       }
     }, BROWSER_SUSPEND_MS);
@@ -522,11 +528,25 @@
   function removeEmptyGroups(node) {
     if (!node) return null;
     if (node.type === 'split') {
-      node.children = node.children.map(c => removeEmptyGroups(c)).filter(Boolean);
-      node.children = node.children.filter(c => {
-        if (c.type === 'group' && c.terminals.length === 0) return false;
-        return true;
+      const origLen = node.children.length;
+      // Build list of (original index, cleaned child) for non-null children
+      const pairs = [];
+      node.children.forEach((c, i) => {
+        const cleaned = removeEmptyGroups(c);
+        if (cleaned) pairs.push({ i, c: cleaned });
       });
+      // Filter out empty terminal groups
+      const survivors = pairs.filter(p =>
+        !(p.c.type === 'group' && p.c.terminals.length === 0)
+      );
+      node.children = survivors.map(p => p.c);
+
+      // Keep sizes in sync with survivors
+      if (survivors.length !== origLen) {
+        node.sizes = survivors.map(p => node.sizes[p.i] ?? (100 / survivors.length));
+        const total = node.sizes.reduce((a, b) => a + b, 0);
+        if (total > 0) node.sizes = node.sizes.map(s => (s / total) * 100);
+      }
 
       if (node.children.length === 0) return null;
       if (node.children.length === 1) return node.children[0];
@@ -1413,35 +1433,51 @@
   /* ═══════════════════════════════════════════════════════════════
    S P*LIT MANAGEMENT (VS Code recursive logic)
 ═══════════════════════════════════════════════════════════════ */
+
   function splitGroupDirectly(wsId, groupId, direction) {
     const wsp = findWs(wsId);
-    if (!wsp) return;
+    if (!wsp || !wsp.layout) return;
+    const targetGroup = findGroupById(wsp.layout, groupId);
+    if (!targetGroup) return;
 
-    const group = findGroupById(wsp.layout, groupId);
-    if (!group) return;
-
-    const newId = uuid();
-    const termsCount = getWorkspaceTerminals(wsp).length;
-    const entry = _createTermEntry(wsp, newId, `bash ${termsCount + 1}`);
+    // Create a new terminal for the new split pane
+    const allTerms = getWorkspaceTerminals(wsp);
+    const id = uuid();
+    const label = `bash ${allTerms.length + 1}`;
+    const newEntry = _createTermEntry(wsp, id, label);
 
     const newGroup = {
       type: 'group',
       id: 'group-' + uuid(),
- terminals: [entry],
- activeTermId: newId
+      terminals: [newEntry],
+      activeTermId: id
     };
 
-    wsp.layout = splitGroupNodeInTree(wsp.layout, groupId, newGroup, direction, false);
+    // Update layout tree: split the target group
+    if (wsp.layout.id === groupId) {
+      // Target is the root — replace root with a split node
+      const isFirst = true;
+      wsp.layout = {
+        type: 'split',
+        id: 'split-' + uuid(),
+        direction,
+        children: isFirst ? [newGroup, wsp.layout] : [wsp.layout, newGroup],
+        sizes: [50, 50]
+      };
+    } else {
+      splitGroupNodeInTree(wsp.layout, groupId, newGroup, direction, false);
+    }
 
-    activateTerminal(wsp.id, newId);
+    wsp.activeTermId = id;
     renderPaneArea();
+    activateTerminal(wsp.id, id);
+    saveState();
 
     setTimeout(() => {
-      const slot = getSlotDimensions(entry);
-      sendControl({ type: 'create', id: newId, cols: slot.cols, rows: slot.rows });
-      requestAnimationFrame(() => fitTerm(entry));
+      const slot = getSlotDimensions(newEntry);
+      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows });
+      requestAnimationFrame(() => fitTerm(newEntry));
     }, 80);
-    saveState();
   }
 
   function splitGroupNodeInTree(root, destGroupId, newGroup, direction, isFirst) {
@@ -1789,6 +1825,10 @@
       overlay.className = 'drag-indicator-overlay';
       body.appendChild(overlay);
 
+      const dragShield = document.createElement('div');
+      dragShield.className = 'drag-shield';
+      body.appendChild(dragShield);
+
       node.terminals.forEach(t => {
         const isAct = t.id === node.activeTermId;
         const slot = getOrCreateSlot(t, wsp, body);
@@ -1901,6 +1941,7 @@
       slot.appendChild(contentWrap);
       entry.el = slot;
       entry._pageView = pageView;
+      entry._browserZoom = 1;
       entry.opened = true;
 
       let loading = false;
@@ -1954,21 +1995,84 @@
         </div>`;
       }
 
+      function showImageViewer(url) {
+        pageView.style.display = 'none';
+        let wrap = contentWrap.querySelector('.browser-img-wrap');
+        if (!wrap) {
+          wrap = document.createElement('div');
+          wrap.className = 'browser-img-wrap';
+          contentWrap.appendChild(wrap);
+        }
+        wrap.innerHTML = '<img class="browser-img" alt="">';
+        wrap.style.display = 'flex';
+        const img = wrap.querySelector('img');
+        img.src = proxyUrl(url);
+        entry._imgEl = img;
+        entry._browserZoom = 1;
+      }
+
+      function showPdfViewer(url) {
+        pageView.style.display = 'none';
+        let wrap = contentWrap.querySelector('.browser-pdf-wrap');
+        if (!wrap) {
+          wrap = document.createElement('div');
+          wrap.className = 'browser-pdf-wrap';
+          contentWrap.appendChild(wrap);
+        }
+        wrap.innerHTML = '';
+        wrap.style.display = 'block';
+        const container = document.createElement('div');
+        container.style.height = '100%';
+        wrap.appendChild(container);
+        import('https://cdn.jsdelivr.net/npm/@embedpdf/snippet@2/dist/embedpdf.js').then(({ default: EmbedPDF }) => {
+          EmbedPDF.init({
+            type: 'container',
+            target: container,
+            src: proxyUrl(url)
+          });
+        });
+        entry._browserZoom = 1;
+      }
+
       function normalizeUrl(raw) {
         if (!raw || raw === 'about:blank') return null;
         let url = raw.trim();
+
+        // Local file paths → asset:// URLs via Tauri (bypass proxy)
+        // Unix: /path/to/file  Windows: C:\path\to\file  or  C:/path/to/file
+        const localMatch = url.match(/^(\/[^\s]+)|^([a-zA-Z]:[/\\][^\s]+)$/);
+        if (localMatch) {
+          const p = localMatch[1] || localMatch[2];
+          if (isTauri() && window.__TAURI__ && window.__TAURI__.core) {
+            return window.__TAURI__.core.convertFileSrc(p);
+          }
+          return 'file://' + p.replace(/\\/g, '/');
+        }
+
+        // Convert stored file:// URLs to asset:// in Tauri
+        if (url.startsWith('file://') && isTauri() && window.__TAURI__ && window.__TAURI__.core) {
+          return window.__TAURI__.core.convertFileSrc(url.slice(7)); // strip "file://"
+        }
+
         if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) return url;
         if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i.test(url)) return 'http://' + url;
-        if (!url.includes('.') || url.includes(' ')) return 'https://www.google.com/search?q=' + encodeURIComponent(url);
+        if (!url.includes('.') || url.includes(' ')) return 'https://www.google.com/search?igu=1&q=' + encodeURIComponent(url);
         return 'https://' + url;
       }
 
       const PROXY_PORT = 7682;
       function proxyUrl(url) {
         if (!url) return url;
+        // Bypass proxy for local files
+        if (url.startsWith('file://') || url.startsWith('asset:')) return url;
+        // Bypass proxy for Google
+        try {
+          const u = new URL(url);
+          if (/\.google\.(com|co\.\w+|com\.\w+|fr|de|uk|it|es|jp|br|ca|au|in)$/i.test(u.hostname)) return url;
+        } catch(e) {}
         // Path-based proxy: /p/<base64url-origin>/<path>
-        const u = new URL(url);
-        const origin = u.origin;
+        const u2 = new URL(url);
+        const origin = u2.origin;
         const path = url.substring(origin.length) || '/';
         const b64 = btoa(origin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         return `http://127.0.0.1:${PROXY_PORT}/p/${b64}${path}`;
@@ -2000,6 +2104,30 @@
         renderSidebar();
         updateStatusBar();
 
+        // Reset zoom on new navigation
+        entry._browserZoom = 1;
+        // Clean up image viewer from previous load
+        const prevImg = contentWrap.querySelector('.browser-img-wrap');
+        if (prevImg) prevImg.style.display = 'none';
+        entry._imgEl = null;
+        // Clean up PDF viewer from previous load
+        const prevPdf = contentWrap.querySelector('.browser-pdf-wrap');
+        if (prevPdf) prevPdf.style.display = 'none';
+
+        // Direct image URLs render as <img> instead of iframe
+        if (IMAGE_EXT_RE.test(url)) {
+          showImageViewer(url);
+          showLoading(false);
+          return;
+        }
+
+        // Direct PDF URLs render with EmbedPDF viewer
+        if (PDF_EXT_RE.test(url)) {
+          showPdfViewer(url);
+          showLoading(false);
+          return;
+        }
+
         // Load URL in sandboxed iframe (works in both Tauri and browser)
         try {
           let iframe = contentWrap.querySelector('iframe.browser-fallback');
@@ -2025,8 +2153,31 @@
           }
           pageView.style.display = 'none';
           iframe.style.display = 'block';
+
+          // Clean up any zoom wrap (remnant from previous versions) and restore direct child
+          var _oldWrap = contentWrap.querySelector('.browser-zoom-wrap');
+          if (_oldWrap) {
+            if (_oldWrap.contains(iframe)) contentWrap.appendChild(iframe);
+            _oldWrap.remove();
+            iframe.style.position = '';
+            iframe.style.left = '';
+            iframe.style.top = '';
+            iframe.style.transform = '';
+          }
+          iframe.style.width = '100%';
+          iframe.style.height = '100%';
           entry._iframe = iframe;
+          // Local files need no sandbox; remote sites need sandbox for security
+          if (url.startsWith('file://') || url.startsWith('asset:')) {
+            iframe.removeAttribute('sandbox');
+          } else {
+            iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads';
+          }
           iframe.src = proxyUrl(url);
+          // Local files load instantly, hide loading immediately
+          if (url.startsWith('file://') || url.startsWith('asset:')) {
+            showLoading(false);
+          }
           entry.url = url;
         } catch (e) {
           showLoading(false);
@@ -2615,13 +2766,44 @@
   }
 
   /* ═══════════════════════════════════════════════════════════════
-   F O*NT SIZE (Ctrl+Scroll)
+   F O*NT SIZE (Ctrl+Scroll) + Browser zoom
 ═══════════════════════════════════════════════════════════════ */
   const FONT_MIN = 8;
   const FONT_MAX = 32;
 
+  /* ── Zoom badge ── */
+  const zoomBadge = (function() {
+    const el = document.createElement('div');
+    el.id = 'zoom-badge';
+    document.body.appendChild(el);
+    var timer = null;
+    return function showZoomBadge(text) {
+      el.textContent = text;
+      el.classList.add('visible');
+      clearTimeout(timer);
+      timer = setTimeout(function() { el.classList.remove('visible'); }, 800);
+    };
+  })();
+
   document.getElementById('pane-area').addEventListener('wheel', (e) => {
     if (!e.ctrlKey) return;
+    const active = activeTerminal();
+
+    // Browser image zoom (PDF/iframe use native zoom, not intercepted)
+    if (active && active.type === 'browser' && active._imgEl) {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -1 : 1;
+      const cur = active._browserZoom || 1;
+      const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, cur + delta * ZOOM_STEP));
+      if (newZoom === cur) return;
+      active._browserZoom = newZoom;
+      active._imgEl.style.transform = 'scale(' + newZoom + ')';
+      zoomBadge(Math.round(newZoom * 100) + '%');
+      return;
+    }
+
+    // Terminal font size (not browser tabs — let PDF/iframe handle natively)
+    if (active && active.type === 'browser') return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -1 : 1;
     const newSize = Math.max(FONT_MIN, Math.min(FONT_MAX, currentFontSize + delta));
