@@ -6,7 +6,6 @@
   function tauriWindow() { return window.__TAURI__ && window.__TAURI__.window; }
   function loadTauriApi() { /* no-op: API available via window.__TAURI__ at runtime */ }
 
-  // EmbedPDF loaded via <script type="module"> in index.html
 
   /* ═══════════════════════════════════════════════════════════════
    K E*YBOARD SHORTCUTS
@@ -296,7 +295,7 @@
   const BROWSER_SUSPEND_MS = 30_000;
 
   const IMAGE_EXT_RE = /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)([?#].*)?$/i;
-  const PDF_EXT_RE = /\.pdf([?#].*)?$/i;
+
   const ZOOM_MIN = 0.25;
   const ZOOM_MAX = 5;
   const ZOOM_STEP = 0.1;
@@ -2061,28 +2060,6 @@
           entry._browserZoom = 1;
         }
 
-        function showPdfViewer(url) {
-          pageView.style.display = 'none';
-          const iframe = contentWrap.querySelector('iframe.browser-fallback');
-          if (iframe) iframe.style.display = 'none';
-          let wrap = contentWrap.querySelector('.browser-pdf-wrap');
-          if (!wrap) {
-            wrap = document.createElement('div');
-            wrap.className = 'browser-pdf-wrap';
-            wrap.innerHTML = '<div></div>';
-            contentWrap.appendChild(wrap);
-          }
-          wrap.style.display = 'block';
-          entry._pdfWrap = wrap;
-          const target = wrap.querySelector('div');
-          target.innerHTML = '';
-          const srcUrl = proxyUrl(url);
-          console.log('[EmbedPDF] src:', srcUrl, '(original:', url, ')');
-          if (!window.EmbedPDF) { wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; return; }
-          try {
-            window.EmbedPDF.init({ type: 'container', target, src: srcUrl, worker: false, tabBar: 'never' });
-          } catch (err) { console.error('[EmbedPDF] init failed:', err); wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; }
-        }
 
         function normalizeAssetUrl(url) {
           if (url && url.startsWith('asset:')) {
@@ -2100,7 +2077,7 @@
           if (!raw || raw === 'about:blank') return null;
           let url = raw.trim();
 
-          const localMatch = url.match(/^(\/[^\s]+)|^([a-zA-Z]:[/\\][^\s]+)$/);
+          const localMatch = url.match(/^(\/.+)|^([a-zA-Z]:[/\\].+)$/);
           if (localMatch) {
             const p = localMatch[1] || localMatch[2];
             if (isTauri() && window.__TAURI__ && window.__TAURI__.core) {
@@ -2165,17 +2142,9 @@
           const prevImg = contentWrap.querySelector('.browser-img-wrap');
           if (prevImg) prevImg.style.display = 'none';
           entry._imgEl = null;
-          const prevPdf = contentWrap.querySelector('.browser-pdf-wrap');
-          if (prevPdf) prevPdf.style.display = 'none';
 
           if (IMAGE_EXT_RE.test(url)) {
             showImageViewer(url);
-            showLoading(false);
-            return;
-          }
-
-          if (PDF_EXT_RE.test(url)) {
-            showPdfViewer(url);
             showLoading(false);
             return;
           }
@@ -2854,7 +2823,7 @@
     if (!e.ctrlKey) return;
     const active = activeTerminal();
 
-    // Browser image zoom (PDF/iframe use native zoom, not intercepted)
+    // Browser image zoom (iframe use native zoom, not intercepted)
     if (active && active.type === 'browser' && active._imgEl) {
       e.preventDefault();
       const delta = e.deltaY > 0 ? -1 : 1;
@@ -2867,7 +2836,7 @@
       return;
     }
 
-    // Terminal font size (not browser tabs — let PDF/iframe handle natively)
+    // Terminal font size (not browser tabs — let iframe handle natively)
     if (!active || active.type === 'browser') return;
 
     // Stop the wheel scroll from bubbling and zooming the actual browser window
