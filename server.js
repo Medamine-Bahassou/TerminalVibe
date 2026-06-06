@@ -393,6 +393,13 @@ function rewriteHtml(html, pageUrl) {
     } catch(ex) {}
   }, true);
 
+  // ──── Focus tracking for parent tab ────
+  ['mousedown', 'keydown', 'touchstart', 'focusin'].forEach(function(ev) {
+    document.addEventListener(ev, function() {
+      try { parent.postMessage({ terminalVibeFocus: true }, '*'); } catch(e) {}
+    }, true);
+  });
+
   // ──── Navigation tracking for parent ────
   var _lastHref = location.href;
   function _decodeProxyUrl(url) {
