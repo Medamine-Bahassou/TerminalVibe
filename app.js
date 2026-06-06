@@ -3297,176 +3297,196 @@
         return '#000000';
       }
 
-      function setThemeColor(key, val) {
-        if (!editingTheme) return;
-        if (key === 'bg') editingTheme.bg = val;
-        else if (key === 'fg') editingTheme.fg = val;
-        else if (key === 'cursor') editingTheme.cursor = val;
-        else if (key === 'selection') editingTheme.selection = val;
-        else if (key === 'accent') editingTheme.ui.accent = val;
-        else if (key === 'border') editingTheme.ui.border = val || undefined;
-        else if (key === 'tabActiveBg') editingTheme.ui.tabActiveBg = val || undefined;
-        else if (key === 'tabHoverBg') editingTheme.ui.tabHoverBg = val || undefined;
-        else if (key === 'dimText') editingTheme.ui.dimText = val || undefined;
-        else if (key === 'mutedText') editingTheme.ui.mutedText = val || undefined;
-        else if (key.startsWith('p')) editingTheme.palette[parseInt(key.slice(1))] = val;
-        editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
-      }
+function setThemeColor(key, val) {
+         if (!editingTheme) return;
+         if (key === 'bg') editingTheme.bg = val;
+         else if (key === 'fg') editingTheme.fg = val;
+         else if (key === 'cursor') editingTheme.cursor = val;
+         else if (key === 'selection') editingTheme.selection = val;
+         else if (key === 'accent') editingTheme.ui.accent = val;
+         else if (key === 'border') editingTheme.ui.border = val || undefined;
+         else if (key === 'tabActiveBg') editingTheme.ui.tabActiveBg = val || undefined;
+         else if (key === 'tabHoverBg') editingTheme.ui.tabHoverBg = val || undefined;
+         else if (key === 'dimText') editingTheme.ui.dimText = val || undefined;
+         else if (key === 'mutedText') editingTheme.ui.mutedText = val || undefined;
+         else if (key.startsWith('p')) editingTheme.palette[parseInt(key.slice(1))] = val;
+         editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
+}
 
-      function previewTheme() {
-        if (!editingTheme) return;
-        const r = document.documentElement.style;
-        r.setProperty('--bg', editingTheme.bg);
-        r.setProperty('--fg', editingTheme.fg);
-        r.setProperty('--cursor', editingTheme.cursor);
-        r.setProperty('--selection', editingTheme.selection);
-        const accent = editingTheme.ui.accent || editingTheme.palette[4] || editingTheme.fg;
-        r.setProperty('--accent', accent);
-        r.setProperty('--ws-active-strip', accent);
-        r.setProperty('--accent-dim', hexToRgba(accent, 0.15));
-        // UI overrides — set or reset to CSS defaults
-        const uiMap = { border:'--border', tabActiveBg:'--tab-active-bg', tabHoverBg:'--tab-hover-bg', dimText:'--dim-text', mutedText:'--muted-text' };
-        for (const [prop, cssVar] of Object.entries(uiMap)) {
-          r.setProperty(cssVar, editingTheme.ui[prop] || UI_DEFAULTS[prop]);
-        }
-      }
+       function openColorisForSwatch(swatchEl, currentColor, themeKey) {
+         const tempInput = document.createElement('input');
+         tempInput.type = 'text';
+         tempInput.value = currentColor || '#000000';
+         tempInput.style.position = 'fixed';
+         tempInput.style.opacity = '0';
+         tempInput.style.pointerEvents = 'none';
+         tempInput.setAttribute('data-coloris', '');
+         document.body.appendChild(tempInput);
 
-      function renderThemeEditor() {
-        const container = document.getElementById('theme-editor-groups');
-        if (!container) return;
-        container.innerHTML = '';
+         const onChange = (color) => {
+           setThemeColor(themeKey, color);
+           swatchEl.style.background = color;
+           previewTheme();
+         };
 
-        function buildColorItem(key, label) {
-          const item = document.createElement('div');
-          item.className = 'theme-color-item';
-          const val = getThemeColor(key);
+         const onClose = () => {
+           document.body.removeChild(tempInput);
+           Coloris.off('change', onChange);
+           Coloris.off('close', onClose);
+         };
 
-          const lbl = document.createElement('span');
-          lbl.className = 'theme-color-label';
-          lbl.textContent = label;
+         Coloris.on('change', onChange);
+         Coloris.on('close', onClose);
+         Coloris.open(false, tempInput);
+         tempInput.focus();
+       }
 
-          const swatch = document.createElement('span');
-          swatch.className = 'inline-block w-4 h-4 rounded border border-white/20 shrink-0';
-          swatch.style.background = val;
+       function previewTheme() {
+         if (!editingTheme) return;
+         const r = document.documentElement.style;
+         r.setProperty('--bg', editingTheme.bg);
+         r.setProperty('--fg', editingTheme.fg);
+         r.setProperty('--cursor', editingTheme.cursor);
+         r.setProperty('--selection', editingTheme.selection);
+         const accent = editingTheme.ui.accent || editingTheme.palette[4] || editingTheme.fg;
+         r.setProperty('--accent', accent);
+         r.setProperty('--ws-active-strip', accent);
+         r.setProperty('--accent-dim', hexToRgba(accent, 0.15));
+         const uiMap = { border:'--border', tabActiveBg:'--tab-active-bg', tabHoverBg:'--tab-hover-bg', dimText:'--dim-text', mutedText:'--muted-text' };
+         for (const [prop, cssVar] of Object.entries(uiMap)) {
+           r.setProperty(cssVar, editingTheme.ui[prop] || UI_DEFAULTS[prop]);
+         }
+       }
 
-          const inp = document.createElement('input');
-          inp.type = 'text';
-          inp.className = 'theme-color-hex';
-          inp.setAttribute('data-coloris', '');
-          inp.value = val;
-          inp.spellcheck = false;
-          inp.maxLength = 9;
-          inp.addEventListener('input', () => {
-            let v = inp.value.trim();
-            if (/^#?[0-9a-fA-F]{3,8}$/.test(v)) {
-              if (!v.startsWith('#')) v = '#' + v;
-              setThemeColor(key, v);
-              swatch.style.background = v;
+function renderThemeEditor() {
+         const container = document.getElementById('theme-editor-groups');
+         if (!container) return;
+         container.innerHTML = '';
+
+function buildColorItem(key, label) {
+           const item = document.createElement('div');
+           item.className = 'theme-color-item';
+           const val = getThemeColor(key);
+
+           const lbl = document.createElement('span');
+           lbl.className = 'theme-color-label';
+           lbl.textContent = label;
+
+           const inp = document.createElement('input');
+           inp.type = 'text';
+           inp.className = 'theme-color-input';
+           inp.setAttribute('data-coloris', '');
+           inp.value = val;
+           inp.spellcheck = false;
+
+           const swatch = document.createElement('span');
+           swatch.className = 'theme-color-swatch';
+           swatch.style.background = val;
+           swatch.title = label;
+
+           inp.addEventListener('input', () => {
+             let v = inp.value.trim();
+             if (/^#?[0-9a-fA-F]{3,8}$/.test(v)) {
+               if (!v.startsWith('#')) v = '#' + v;
+               setThemeColor(key, v);
+               swatch.style.background = v;
+               previewTheme();
+             }
+           });
+
+           item.appendChild(lbl);
+           item.appendChild(inp);
+           item.appendChild(swatch);
+           return item;
+         }
+
+         // Colors title
+         const colorsTitle = document.createElement('div');
+         colorsTitle.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
+         colorsTitle.textContent = 'Colors';
+         container.appendChild(colorsTitle);
+
+         // Core + UI Colors in one card
+         const colorsCard = document.createElement('div');
+         colorsCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
+         for (const [groupName, fields] of Object.entries(THEME_COLOR_GROUPS)) {
+           if (groupName === 'Terminal Palette') continue;
+           const title = document.createElement('div');
+           title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
+           title.textContent = groupName;
+           colorsCard.appendChild(title);
+           const grid = document.createElement('div');
+           grid.className = 'theme-color-grid';
+           for (const [key, label] of Object.entries(fields)) {
+             grid.appendChild(buildColorItem(key, label));
+           }
+colorsCard.appendChild(grid);
+          }
+          container.appendChild(colorsCard);
+
+          // Terminal Palette — its own card
+          const paletteCard = document.createElement('div');
+          paletteCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
+
+          // Title row inside card (with toggle)
+          const title = document.createElement('div');
+          title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] flex justify-between items-center mb-2 ml-1';
+          const titleText = document.createElement('span');
+          titleText.textContent = 'Terminal Palette';
+          title.appendChild(titleText);
+
+          const toggleLabel = document.createElement('label');
+          toggleLabel.className = 'inline-flex items-center cursor-pointer shrink-0';
+          const toggleInput = document.createElement('input');
+          toggleInput.type = 'checkbox';
+          toggleInput.className = 'sr-only peer';
+          const toggleTrack = document.createElement('div');
+          toggleTrack.className = 'relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[""] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]';
+          toggleLabel.appendChild(toggleInput);
+          toggleLabel.appendChild(toggleTrack);
+          title.appendChild(toggleLabel);
+          paletteCard.appendChild(title);
+
+          const paletteGrid = document.createElement('div');
+          paletteGrid.className = 'theme-color-grid';
+          paletteGrid.style.display = 'none';
+
+          for (const [key, label] of Object.entries(THEME_COLOR_GROUPS['Terminal Palette'])) {
+            paletteGrid.appendChild(buildColorItem(key, label));
+          }
+
+          // Reset palette link
+          const resetBtn = document.createElement('div');
+          resetBtn.className = 'text-[11px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline text-right pt-2 border-t border-[var(--border)] mt-1';
+          resetBtn.textContent = 'Reset palette';
+          resetBtn.addEventListener('click', () => {
+            DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
+            editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
+            paletteGrid.querySelectorAll('.theme-color-item').forEach((item, i) => {
+              if (i < 16) {
+                const v = editingTheme.palette[i];
+                const s = item.querySelector('span:nth-child(2)');
+                if (s) s.style.background = v;
+              }
+            });
+            previewTheme();
+          });
+          paletteGrid.appendChild(resetBtn);
+          paletteCard.appendChild(paletteGrid);
+
+          // Toggle handler
+          toggleInput.addEventListener('change', () => {
+            const isOn = toggleInput.checked;
+            paletteGrid.style.display = isOn ? '' : 'none';
+            if (!isOn) {
+              DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
+              editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
               previewTheme();
             }
           });
 
-          item.appendChild(lbl);
-          item.appendChild(swatch);
-          item.appendChild(inp);
-          return item;
+          container.appendChild(paletteCard);
         }
-
-        // Colors title
-        const colorsTitle = document.createElement('div');
-        colorsTitle.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
-        colorsTitle.textContent = 'Colors';
-        container.appendChild(colorsTitle);
-
-        // Core + UI Colors in one card
-        const colorsCard = document.createElement('div');
-        colorsCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
-        for (const [groupName, fields] of Object.entries(THEME_COLOR_GROUPS)) {
-          if (groupName === 'Terminal Palette') continue;
-          const title = document.createElement('div');
-          title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
-          title.textContent = groupName;
-          colorsCard.appendChild(title);
-          const grid = document.createElement('div');
-          grid.className = 'theme-color-grid';
-          for (const [key, label] of Object.entries(fields)) {
-            grid.appendChild(buildColorItem(key, label));
-          }
-          colorsCard.appendChild(grid);
-        }
-        container.appendChild(colorsCard);
-
-        // Terminal Palette — its own card
-        const paletteCard = document.createElement('div');
-        paletteCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col';
-
-        // Title row inside card (with toggle)
-        const title = document.createElement('div');
-        title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] flex justify-between items-center mb-2 ml-1';
-        const titleText = document.createElement('span');
-        titleText.textContent = 'Terminal Palette';
-        title.appendChild(titleText);
-
-        const sw = document.createElement('div');
-        sw.className = 'toggle-switch w-[28px] h-4 bg-white/10 rounded-full relative cursor-pointer shrink-0 transition-colors duration-200';
-        const knob = document.createElement('div');
-        knob.className = 'toggle-knob absolute top-[1px] left-[2px] w-3 h-3 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.4)] transition-transform duration-200 pointer-events-none';
-        sw.appendChild(knob);
-        title.appendChild(sw);
-        paletteCard.appendChild(title);
-
-        const paletteGrid = document.createElement('div');
-        paletteGrid.className = 'theme-color-grid';
-        paletteGrid.style.display = 'none';
-
-        for (const [key, label] of Object.entries(THEME_COLOR_GROUPS['Terminal Palette'])) {
-          paletteGrid.appendChild(buildColorItem(key, label));
-        }
-
-        // Reset palette link
-        const resetBtn = document.createElement('div');
-        resetBtn.className = 'text-[11px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline text-right pt-2 border-t border-[var(--border)] mt-1';
-        resetBtn.textContent = 'Reset palette';
-        resetBtn.addEventListener('click', () => {
-          DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
-          editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
-          paletteGrid.querySelectorAll('.theme-color-item').forEach((item, i) => {
-            if (i < 16) {
-              const v = editingTheme.palette[i];
-              const s = item.querySelector('span:nth-child(2)');
-              if (s) s.style.background = v;
-              const inp = item.querySelector('input');
-              if (inp) inp.value = v;
-            }
-          });
-          previewTheme();
-        });
-        paletteGrid.appendChild(resetBtn);
-        paletteCard.appendChild(paletteGrid);
-
-        // Toggle handler
-        sw.addEventListener('click', (e) => {
-          e.stopPropagation();
-          sw.classList.toggle('on');
-          const isOn = sw.classList.contains('on');
-          paletteGrid.style.display = isOn ? '' : 'none';
-          if (!isOn) {
-            DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
-            editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
-            previewTheme();
-          } else {
-            paletteGrid.querySelectorAll('.theme-color-item').forEach((item, i) => {
-              if (i < 16) {
-                const v = editingTheme.palette[i];
-                const inp = item.querySelector('input');
-                if (inp) inp.value = v;
-              }
-            });
-          }
-        });
-
-        container.appendChild(paletteCard);
-      }
 
       /* ═══════════════════════════════════════════════════════════════
        S E*TTINGS MODAL
@@ -3505,11 +3525,11 @@
 
         // Cursor blink
         const blinkToggle = document.getElementById('set-cursorblink');
-        blinkToggle.classList.toggle('on', currentCursorBlink);
+        blinkToggle.checked = currentCursorBlink;
 
         // Status bar
         const sbToggle = document.getElementById('set-statusbar');
-        sbToggle.classList.toggle('on', statusBarVisible);
+        sbToggle.checked = statusBarVisible;
 
         // Scrollback
         document.getElementById('set-scrollback').value = currentScrollback;
@@ -3538,6 +3558,7 @@
       }
 
       function closeSettings() {
+        applyTheme(currentThemeName);
         settingsOverlay.classList.remove('open');
       }
 
@@ -3780,16 +3801,14 @@
       });
 
       // Cursor blink toggle
-      document.getElementById('set-cursorblink').addEventListener('click', () => {
-        currentCursorBlink = !currentCursorBlink;
-        document.getElementById('set-cursorblink').classList.toggle('on', currentCursorBlink);
+      document.getElementById('set-cursorblink').addEventListener('change', () => {
+        currentCursorBlink = document.getElementById('set-cursorblink').checked;
         applySettings();
       });
 
       // Status bar toggle
-      document.getElementById('set-statusbar').addEventListener('click', () => {
-        statusBarVisible = !statusBarVisible;
-        document.getElementById('set-statusbar').classList.toggle('on', statusBarVisible);
+      document.getElementById('set-statusbar').addEventListener('change', () => {
+        statusBarVisible = document.getElementById('set-statusbar').checked;
         document.getElementById('statusbar').style.display = statusBarVisible ? '' : 'none';
         saveState();
       });
