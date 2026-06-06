@@ -1486,6 +1486,17 @@
     const targetGroup = findGroupById(wsp.layout, groupId);
     if (!targetGroup) return;
 
+    // Prevent split if there isn't enough space
+    const groupEl = document.getElementById('group-' + groupId);
+    if (groupEl) {
+      const currentSize = direction === 'row' ? groupEl.offsetWidth : groupEl.offsetHeight;
+      const MIN_REQUIRED = SPLIT_MIN_PX * 2;
+      if (currentSize < MIN_REQUIRED) {
+        if (typeof zoomBadge === 'function') zoomBadge("Not enough space");
+        return;
+      }
+    }
+
     // Create a new terminal for the new split pane
     const allTerms = getWorkspaceTerminals(wsp);
     const id = uuid();
@@ -2554,6 +2565,20 @@
 
     const targetGroup = findGroupById(wsp.layout, targetGroupId);
     if (!targetGroup) return;
+
+    // Prevent split on drag/drop if there isn't enough space
+    if (zone !== 'center') {
+      const groupEl = document.getElementById('group-' + targetGroupId);
+      if (groupEl) {
+        const dir = (zone === 'left' || zone === 'right') ? 'row' : 'column';
+        const currentSize = dir === 'row' ? groupEl.offsetWidth : groupEl.offsetHeight;
+        const MIN_REQUIRED = SPLIT_MIN_PX * 2;
+        if (currentSize < MIN_REQUIRED) {
+          if (typeof zoomBadge === 'function') zoomBadge("Not enough space");
+          zone = 'center';
+        }
+      }
+    }
 
     if (zone === 'center') {
       targetGroup.terminals.push(draggedTerm);
