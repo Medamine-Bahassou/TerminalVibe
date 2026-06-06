@@ -1483,6 +1483,13 @@
   function splitGroupDirectly(wsId, groupId, direction) {
     const wsp = findWs(wsId);
     if (!wsp || !wsp.layout) return;
+
+    // Prevent split if the workspace is maximized
+    if (wsp._maximizedGroupId) {
+      if (typeof zoomBadge === 'function') zoomBadge("Cannot split while maximized");
+      return;
+    }
+
     const targetGroup = findGroupById(wsp.layout, groupId);
     if (!targetGroup) return;
 
@@ -2566,16 +2573,21 @@
     const targetGroup = findGroupById(wsp.layout, targetGroupId);
     if (!targetGroup) return;
 
-    // Prevent split on drag/drop if there isn't enough space
+    // Prevent split on drag/drop if maximized or not enough space
     if (zone !== 'center') {
-      const groupEl = document.getElementById('group-' + targetGroupId);
-      if (groupEl) {
-        const dir = (zone === 'left' || zone === 'right') ? 'row' : 'column';
-        const currentSize = dir === 'row' ? groupEl.offsetWidth : groupEl.offsetHeight;
-        const MIN_REQUIRED = SPLIT_MIN_PX * 2;
-        if (currentSize < MIN_REQUIRED) {
-          if (typeof zoomBadge === 'function') zoomBadge("Not enough space");
-          zone = 'center';
+      if (wsp._maximizedGroupId) {
+        if (typeof zoomBadge === 'function') zoomBadge("Cannot split while maximized");
+        zone = 'center';
+      } else {
+        const groupEl = document.getElementById('group-' + targetGroupId);
+        if (groupEl) {
+          const dir = (zone === 'left' || zone === 'right') ? 'row' : 'column';
+          const currentSize = dir === 'row' ? groupEl.offsetWidth : groupEl.offsetHeight;
+          const MIN_REQUIRED = SPLIT_MIN_PX * 2;
+          if (currentSize < MIN_REQUIRED) {
+            if (typeof zoomBadge === 'function') zoomBadge("Not enough space");
+            zone = 'center';
+          }
         }
       }
     }
