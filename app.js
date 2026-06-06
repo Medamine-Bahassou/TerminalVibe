@@ -3864,19 +3864,31 @@
           });
         }
 
-        // Listen for navigation messages from browser tab iframes
+        // Listen for navigation and focus messages from browser tab iframes
         window.addEventListener('message', function(e) {
+          // Handle iframe focus/click
+          if (e.data && e.data.terminalVibeFocus) {
+            const iframes = document.querySelectorAll('iframe.browser-fallback');
+            for (let i = 0; i < iframes.length; i++) {
+              if (iframes[i].contentWindow === e.source) {
+                const slot = iframes[i].closest('.term-slot');
+                if (slot && !slot.classList.contains('focused')) {
+                  slot.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                }
+                break;
+              }
+            }
+          }
+          // Handle navigation URL sync
           if (e.data && e.data.terminalVibeNav) {
             const active = activeTerminal();
             if (active && active.type === 'browser' && active._syncUrl) {
               var navUrl = e.data.terminalVibeNav;
-              // If URL points to proxy host instead of target site, resolve from last known origin
               try {
                 var u = new URL(navUrl);
-                var proxyHost = location.hostname;  // 127.0.0.1 or tauri.localhost
-                var proxyPort = String(PROXY_PORT);  // 7682
+                var proxyHost = location.hostname;
+                var proxyPort = String(PROXY_PORT);
                 if (u.hostname === proxyHost || u.port === proxyPort) {
-                  // Proxy URL — use _syncUrl which already decodes /p/<b64>
                   var lastOrigin = new URL(active.url || 'about:blank').origin;
                   navUrl = lastOrigin + u.pathname + u.search + u.hash;
                 }
@@ -3910,21 +3922,32 @@
           } catch {}
         }
 
-        // Highlight and focus the browser container when clicking inside fallback iframes or Tauri native child webviews
+        // Robust Cross-Origin & Local Asset Iframe Focus Tracker
+        let _lastActiveIframe = null;
+        setInterval(() => {
+          if (document.activeElement && document.activeElement.tagName === 'IFRAME') {
+            const activeIframe = document.activeElement;
+            if (activeIframe !== _lastActiveIframe) {
+              _lastActiveIframe = activeIframe;
+              const bc = activeIframe.closest('.browser-slot');
+              if (bc) bc.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            }
+          } else {
+            _lastActiveIframe = null;
+          }
+        }, 100);
+
+        // Keep blur for instant reaction and Tauri native child webviews
         window.addEventListener('blur', () => {
           setTimeout(() => {
-            // 1. Handle non-Tauri browser fallback iframes
-            if (document.activeElement && document.activeElement.classList.contains('browser-fallback')) {
-              const slot = document.activeElement.closest('.term-slot');
-              if (slot) {
-                slot.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-              }
-            }
-
-            // 2. Handle Tauri child webviews (parent window blurs when child OS webview gets focused)
-            const active = activeTerminal();
-            if (active && active.type === 'browser' && active.el) {
-              active.el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            if (document.activeElement && document.activeElement.tagName === 'IFRAME') {
+               const bc = document.activeElement.closest('.browser-slot');
+               if (bc) bc.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            } else {
+               const active = activeTerminal();
+               if (active && active.type === 'browser' && active.browserContainer) {
+                   active.browserContainer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+               }
             }
           }, 50);
         });

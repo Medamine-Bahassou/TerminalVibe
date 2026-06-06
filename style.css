@@ -605,7 +605,7 @@ background: var(--bg);
   inset: 0;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   pointer-events: none;
-  z-index: 10;
+  z-index: 60;
 }
 
 .term-wrap {
