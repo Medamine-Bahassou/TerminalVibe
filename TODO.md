@@ -8,9 +8,11 @@
 - [x] scroll bar in tab btns must be x-small
 
 ## must add 
-- [ ] define the min width split can have 
+- [x] define the min width split can have 
+- [ ] the pdf changes via embedPDF must be persist (comments + ..)
 
 ## *features :
+- [ ] custom themes 
 - [ ] multiple select one command 
-- [ ] persist the state of commands (but must be toggle in setting enable/disable)
+<!-- - [ ] persist the state of commands (but must be toggle in setting enable/disable) -->
 
