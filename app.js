@@ -6,6 +6,8 @@
   function tauriWindow() { return window.__TAURI__ && window.__TAURI__.window; }
   function loadTauriApi() { /* no-op: API available via window.__TAURI__ at runtime */ }
 
+  // EmbedPDF loaded via <script type="module"> in index.html
+
   /* ═══════════════════════════════════════════════════════════════
    K E*YBOARD SHORTCUTS
    ═══════════════════════════════════════════════════════════════ */
@@ -225,30 +227,63 @@
   let tauriPtyReady = false; // Tauri native PTY backend ready
   let _ptyListeners = {};    // termId -> unlisten function for Tauri PTY events
 
-  const browserSlotRo = new ResizeObserver(() => syncBrowserSlots());
+  let _browserSyncRaf = null;
+  const browserSlotRo = new ResizeObserver(() => {
+    if (_browserSyncRaf) return;
+    _browserSyncRaf = requestAnimationFrame(() => {
+      _browserSyncRaf = null;
+      syncBrowserSlots();
+    });
+  });
 
   function syncBrowserSlots() {
     const paneArea = document.getElementById('pane-area');
     if (!paneArea) return;
-    const paneRect = paneArea.getBoundingClientRect();
 
-    for (const ws of workspaces) {
-      const isActiveWs = (ws.id === activeWsId);
+    // PHASE 1: Batch READ (Prevents Layout Thrashing)
+    const paneRect = paneArea.getBoundingClientRect();
+    const updates = [];
+
+    // OPTIMIZATION: Only process the active workspace. Ignore hidden ones completely.
+    const ws = activeWs();
+    if (ws) {
       for (const t of getWorkspaceTerminals(ws)) {
         if (t.type === 'browser' && t.browserContainer) {
-          // Hide if workspace inactive, element disconnected, or manually hidden
-          if (!isActiveWs || !t.el || !t.el.isConnected || t.el.style.display === 'none' || t.el.offsetWidth === 0) {
-            t.browserContainer.style.display = 'none';
+          if (!t.el || !t.el.isConnected || t.el.style.display === 'none' || t.el.offsetWidth === 0) {
+            // OPTIMIZATION: Offscreen positioning instead of display:none prevents iframe reloads
+            updates.push({ container: t.browserContainer, x: -9999, y: -9999, w: 0, h: 0 });
           } else {
-            t.browserContainer.style.display = 'flex';
             const slotRect = t.el.getBoundingClientRect();
-            t.browserContainer.style.left = (slotRect.left - paneRect.left) + 'px';
-            t.browserContainer.style.top = (slotRect.top - paneRect.top) + 'px';
-            t.browserContainer.style.width = slotRect.width + 'px';
-            t.browserContainer.style.height = slotRect.height + 'px';
+            updates.push({
+              container: t.browserContainer,
+              x: slotRect.left - paneRect.left,
+              y: slotRect.top - paneRect.top,
+              w: slotRect.width,
+              h: slotRect.height
+            });
           }
         }
       }
+    }
+
+    // Hide all inactive workspaces' browser containers by pushing them offscreen
+    for (const otherWs of workspaces) {
+      if (otherWs.id === activeWsId) continue;
+      for (const t of getWorkspaceTerminals(otherWs)) {
+        if (t.type === 'browser' && t.browserContainer) {
+          updates.push({ container: t.browserContainer, x: -9999, y: -9999, w: 0, h: 0 });
+        }
+      }
+    }
+
+    // PHASE 2: Batch WRITE (Hardware Accelerated)
+    for (const u of updates) {
+      const bc = u.container;
+      if (bc.style.display !== 'flex') bc.style.display = 'flex'; // Always keep flex to avoid unload
+      bc.style.visibility = u.w === 0 ? 'hidden' : 'visible';
+      bc.style.transform = `translate3d(${u.x}px, ${u.y}px, 0)`;
+      bc.style.width = `${u.w}px`;
+      bc.style.height = `${u.h}px`;
     }
   }
 
@@ -1425,11 +1460,18 @@
   function fitTerm(entry) {
     if (!entry || !entry.el || entry.type === 'browser') return;
     try {
+      // Frontend fits instantly for snappy visual feedback
       entry.fit.fit();
       const dims = entry.term.rows && entry.term.cols
       ? { cols: entry.term.cols, rows: entry.term.rows }
       : { cols: 80, rows: 24 };
-      sendControl({ type: 'resize', id: entry.id, cols: dims.cols, rows: dims.rows });
+
+      // Debounce the backend PTY resize to prevent freezing the socket/app during continuous resizes
+      if (entry._resizeTimeout) clearTimeout(entry._resizeTimeout);
+      entry._resizeTimeout = setTimeout(() => {
+        sendControl({ type: 'resize', id: entry.id, cols: dims.cols, rows: dims.rows });
+      }, 80);
+
       updateStatusBar();
     } catch {}
   }
@@ -1891,8 +1933,12 @@
         const bc = document.createElement('div');
         bc.className = 'browser-slot';
         bc.style.position = 'absolute';
+        bc.style.top = '0';
+        bc.style.left = '0';
         bc.style.zIndex = '50';
         bc.style.display = 'none';
+        bc.style.willChange = 'transform, width, height';
+        bc.style.transformOrigin = 'top left';
 
         // ── History stack for back/forward ──
         if (!entry._history) { entry._history = []; entry._historyIdx = -1; }
@@ -2024,25 +2070,37 @@
 
         function showPdfViewer(url) {
           pageView.style.display = 'none';
+          const iframe = contentWrap.querySelector('iframe.browser-fallback');
+          if (iframe) iframe.style.display = 'none';
           let wrap = contentWrap.querySelector('.browser-pdf-wrap');
           if (!wrap) {
             wrap = document.createElement('div');
             wrap.className = 'browser-pdf-wrap';
+            wrap.innerHTML = '<div></div>';
             contentWrap.appendChild(wrap);
           }
-          wrap.innerHTML = '';
           wrap.style.display = 'block';
-          const container = document.createElement('div');
-          container.style.height = '100%';
-          wrap.appendChild(container);
-          import('https://cdn.jsdelivr.net/npm/@embedpdf/snippet@2/dist/embedpdf.js').then(({ default: EmbedPDF }) => {
-            EmbedPDF.init({
-              type: 'container',
-              target: container,
-              src: proxyUrl(url)
-            });
-          });
-          entry._browserZoom = 1;
+          entry._pdfWrap = wrap;
+          const target = wrap.querySelector('div');
+          target.innerHTML = '';
+          const srcUrl = proxyUrl(url);
+          console.log('[EmbedPDF] src:', srcUrl, '(original:', url, ')');
+          if (!window.EmbedPDF) { wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; return; }
+          try {
+            window.EmbedPDF.init({ type: 'container', target, src: srcUrl, worker: false, tabBar: 'never' });
+          } catch (err) { console.error('[EmbedPDF] init failed:', err); wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; }
+        }
+
+        function normalizeAssetUrl(url) {
+          if (url && url.startsWith('asset:')) {
+            try {
+              const prefix = url.match(/^asset:\/\/[^\/]*\//)?.[0] || 'asset://localhost/';
+              let pathDecoded = decodeURIComponent(url.substring(prefix.length));
+              if (pathDecoded.startsWith('/')) pathDecoded = pathDecoded.substring(1);
+              return prefix + pathDecoded;
+            } catch (e) { return url; }
+          }
+          return url;
         }
 
         function normalizeUrl(raw) {
@@ -2053,13 +2111,13 @@
           if (localMatch) {
             const p = localMatch[1] || localMatch[2];
             if (isTauri() && window.__TAURI__ && window.__TAURI__.core) {
-              return window.__TAURI__.core.convertFileSrc(p);
+              return normalizeAssetUrl(window.__TAURI__.core.convertFileSrc(p));
             }
             return 'file://' + p.replace(/\\/g, '/');
           }
 
           if (url.startsWith('file://') && isTauri() && window.__TAURI__ && window.__TAURI__.core) {
-            return window.__TAURI__.core.convertFileSrc(url.slice(7));
+            return normalizeAssetUrl(window.__TAURI__.core.convertFileSrc(url.slice(7)));
           }
 
           if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) return url;
@@ -2071,7 +2129,14 @@
         const PROXY_PORT = 7682;
         function proxyUrl(url) {
           if (!url) return url;
-          if (url.startsWith('file://') || url.startsWith('asset:')) return url;
+          if (url.startsWith('asset://')) {
+            const filePath = decodeURIComponent(url.replace('asset://localhost/', '/'));
+            return `http://127.0.0.1:${PROXY_PORT}/local/` + encodeURIComponent(filePath);
+          }
+          if (url.startsWith('file://')) {
+            const filePath = url.slice(7);
+            return `http://127.0.0.1:${PROXY_PORT}/local/` + encodeURIComponent(filePath);
+          }
           const u2 = new URL(url);
           const origin = u2.origin;
           const path = url.substring(origin.length) || '/';
@@ -2127,8 +2192,8 @@
             if (!iframe) {
               iframe = document.createElement('iframe');
               iframe.className = 'browser-fallback';
-              iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;';
-              iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-presentation allow-modals';
+              iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;transform:translateZ(0);';
+              iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
               iframe.referrerPolicy = 'no-referrer';
               iframe.allow = 'clipboard-read; clipboard-write; fullscreen';
               var loadTimer = setTimeout(function() {
@@ -2162,7 +2227,7 @@
             if (url.startsWith('file://') || url.startsWith('asset:')) {
               iframe.removeAttribute('sandbox');
             } else {
-              iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-presentation allow-modals';
+              iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
             }
             iframe.src = proxyUrl(url);
             if (url.startsWith('file://') || url.startsWith('asset:')) {
@@ -2601,7 +2666,8 @@
     if (t?.term) {
       const cols = t.term.cols || 0;
       const rows = t.term.rows || 0;
-      document.getElementById('sb-size').textContent = cols && rows ? `${cols}×${rows} · ${currentFontSize}px` : '—';
+      const fSize = t._customFontSize || currentFontSize;
+      document.getElementById('sb-size').textContent = cols && rows ? `${cols}×${rows} · ${fSize}px` : '—';
     }
   }
 
@@ -2794,20 +2860,37 @@
     }
 
     // Terminal font size (not browser tabs — let PDF/iframe handle natively)
-    if (active && active.type === 'browser') return;
+    if (!active || active.type === 'browser') return;
+
+    // Stop the wheel scroll from bubbling and zooming the actual browser window
     e.preventDefault();
+    e.stopPropagation();
+
+    // Track zoom per terminal instance
+    if (!active._customFontSize) active._customFontSize = currentFontSize;
+
+    // Normalize trackpad/wheel deltas for predictable scrolling
     const delta = e.deltaY > 0 ? -1 : 1;
-    const newSize = Math.max(FONT_MIN, Math.min(FONT_MAX, currentFontSize + delta));
-    if (newSize === currentFontSize) return;
-    currentFontSize = newSize;
-    const wsp = activeWs();
-    if (!wsp) return;
-    const terms = getWorkspaceTerminals(wsp);
-    for (const t of terms) {
-      if (t.type !== 'browser') t.term.options.fontSize = currentFontSize;
-      fitTerm(t);
-    }
-    updateStatusBar();
+    const newSize = Math.max(FONT_MIN, Math.min(FONT_MAX, active._customFontSize + delta));
+
+    if (newSize === active._customFontSize) return;
+    active._customFontSize = newSize;
+
+    // Use requestAnimationFrame for visual update to avoid layout thrashing
+    if (active._zoomRaf) cancelAnimationFrame(active._zoomRaf);
+    active._zoomRaf = requestAnimationFrame(() => {
+      active.term.options.fontSize = active._customFontSize;
+      zoomBadge(active._customFontSize + 'px');
+      updateStatusBar();
+    });
+
+    // Debounce the heavy FitAddon grid recalculation and backend PTY resize communication
+    // Prevents sending 60 resize payloads per second which freezes the app
+    if (active._zoomFitTimeout) clearTimeout(active._zoomFitTimeout);
+    active._zoomFitTimeout = setTimeout(() => {
+      fitTerm(active);
+    }, 150);
+
   }, { passive: false });
 
   /* ═══════════════════════════════════════════════════════════════
@@ -3138,6 +3221,7 @@
         const terms = getWorkspaceTerminals(wsp);
         for (const t of terms) {
           if (t.type === 'browser') continue;
+          t._customFontSize = currentFontSize; // Reset temporary zoom on global change
           t.term.options.fontSize = currentFontSize;
           t.term.options.fontFamily = currentFontFamily;
           t.term.options.lineHeight = currentLineHeight;

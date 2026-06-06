@@ -38,6 +38,8 @@ const MIME_TYPES = {
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
   ".woff": "font/woff",
+  ".wasm": "application/wasm",
+  ".pdf": "application/pdf",
 };
 
 const SKIP_RESPONSE_HEADERS = new Set([
@@ -72,11 +74,17 @@ const _lastTargets = new Map(); // sessionId -> origin
 //  DISK LRU CACHE
 // ─────────────────────────────────────────────────────────────
 
-const CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, "cache");
+let CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, "cache");
 const CACHE_SIZE_MB = parseInt(process.env.CACHE_SIZE_MB || "512", 10);
 const CACHE_SIZE_LIMIT = CACHE_SIZE_MB * 1024 * 1024;
 
-fs.mkdirSync(CACHE_DIR, { recursive: true });
+try { fs.mkdirSync(CACHE_DIR, { recursive: true }); }
+catch (err) {
+  if (process.env.TAURI === "1" || process.env.TAURI_ENV === "1") {
+    CACHE_DIR = path.join(process.env.HOME || "/root", ".cache", "TerminalVibe", "cache");
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+  } else throw err;
+}
 
 class DiskCache {
   constructor(dir, sizeLimit) {
@@ -98,27 +106,32 @@ class DiskCache {
     }
   }
 
-  _save() {
-    fs.writeFileSync(this.indexPath, JSON.stringify(this.index));
+  _saveAsync() {
+    if (this._saveTimeout) return;
+    this._saveTimeout = setTimeout(() => {
+      this._saveTimeout = null;
+      fs.promises.writeFile(this.indexPath, JSON.stringify(this.index)).catch(()=>{});
+    }, 1000);
   }
 
-  get(key) {
+  async get(key) {
     const entry = this.index[key];
     if (!entry) return null;
     try {
-      const data = JSON.parse(fs.readFileSync(path.join(this.dir, entry.file), "utf8"));
+      const raw = await fs.promises.readFile(path.join(this.dir, entry.file), "utf8");
+      const data = JSON.parse(raw);
       entry.ts = Date.now();
-      this._save();
+      this._saveAsync();
       return data;
     } catch {
       this.currentSize -= entry.size || 0;
       delete this.index[key];
-      this._save();
+      this._saveAsync();
       return null;
     }
   }
 
-  set(key, value) {
+  async set(key, value) {
     const raw = JSON.stringify(value);
     const size = Buffer.byteLength(raw);
     const file = `${key}.json`;
@@ -127,10 +140,10 @@ class DiskCache {
       this._evict();
     }
 
-    try { fs.writeFileSync(path.join(this.dir, file), raw); } catch { return; }
+    try { await fs.promises.writeFile(path.join(this.dir, file), raw); } catch { return; }
     this.index[key] = { file, size, ts: Date.now() };
     this.currentSize += size;
-    this._save();
+    this._saveAsync();
   }
 
   _evict() {
@@ -139,7 +152,7 @@ class DiskCache {
       if (!oldest || v.ts < oldest.ts) oldest = { key: k, ...v };
     }
     if (oldest) {
-      try { fs.unlinkSync(path.join(this.dir, oldest.file)); } catch {}
+      fs.promises.unlink(path.join(this.dir, oldest.file)).catch(()=>{});
       this.currentSize -= oldest.size || 0;
       delete this.index[oldest.key];
     }
@@ -287,22 +300,23 @@ function rewriteHtml(html, pageUrl) {
     }
   );
 
-  // CSS url() in <style> blocks
-  html = html.replace(
-    /(<style\b[^>]*>)(.*?)(<\/style>)/gis,
-    (m, open, body, close) => open + rewriteCssUrls(body, pageUrl) + close
-  );
+  // Disabled CSS regex parsing in HTML (caused severe CPU freezing and catastrophic backtracking).
+  // The <base> tag handles relative and absolute CSS URLs natively and instantly.
 
-  // CSS url() in inline style=""
-  html = html.replace(
-    /(\bstyle\s*=\s*["'])(.*?)(["'])/gi,
-    (m, pre, body, post) => pre + rewriteCssUrls(body, pageUrl) + post
-  );
+  // STRIP PRECONNECT and PRELOAD to fix fatal WebKitGTK crashes on Tauri Linux
+  html = html.replace(/<link\b[^>]*\brel\s*=\s*["']?(?:preconnect|preload|dns-prefetch|modulepreload)["']?[^>]*>/gi, "");
 
   // Anti-frame-detection shim + runtime interceptors + nav tracker
   if (/<\/body>/i.test(html)) {
     const injected = `<script>
 (function(){
+  // Kill old Service Workers that cause fetch duplication
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      for (let r of regs) r.unregister();
+    });
+  }
+
   // ──── Anti-frame-busting ────
   try {
     var _s = window;
@@ -327,17 +341,17 @@ function rewriteHtml(html, pageUrl) {
     if (url.startsWith('//')) url = location.protocol + url;
     try {
       var u = new URL(url, location.href);
+      if (u.origin === _po) return url; // Already proxied
       return _po + '/p/' + _b64(u.origin) + u.pathname + u.search;
     } catch(ex) { return url; }
   }
 
-  // ──── Override fetch ────
+  // ──── Override fetch (Required for YouTube video streams) ────
   var _fetch = window.fetch;
   window.fetch = function(input, init) {
     try {
-      if (typeof input === 'string') {
-        input = _pu(input);
-      } else if (input instanceof Request) {
+      if (typeof input === 'string') input = _pu(input);
+      else if (input instanceof Request) {
         var nu = _pu(input.url);
         if (nu !== input.url) input = new Request(nu, input);
       }
@@ -345,48 +359,11 @@ function rewriteHtml(html, pageUrl) {
     return _fetch.apply(this, arguments);
   };
 
-  // ──── Override XMLHttpRequest ────
+  // ──── Override XMLHttpRequest (Required for old API requests) ────
   var _xo = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url) {
-    try {
-      if (typeof url === 'string') arguments[1] = _pu(url);
-    } catch(e) {}
+    try { if (typeof url === 'string') arguments[1] = _pu(url); } catch(e) {}
     return _xo.apply(this, arguments);
-  };
-
-  // ──── Override WebSocket ────
-  var _ws = window.WebSocket;
-  window.WebSocket = function(url, protocols) {
-    try {
-      if (typeof url === 'string' && /^wss?:\\/\\//.test(url)) {
-        var hu = url.replace(/^ws/, 'http');
-        var u = new URL(hu);
-        url = 'ws://' + location.host + '/ws/' + _b64(u.origin) + u.pathname + u.search;
-      }
-    } catch(e) {}
-    if (protocols) return new _ws(url, protocols);
-    return new _ws(url);
-  };
-  window.WebSocket.prototype = _ws.prototype;
-  window.WebSocket.CONNECTING = _ws.CONNECTING;
-  window.WebSocket.OPEN = _ws.OPEN;
-  window.WebSocket.CLOSING = _ws.CLOSING;
-  window.WebSocket.CLOSED = _ws.CLOSED;
-
-  // ──── Override EventSource ────
-  var _es = window.EventSource;
-  if (_es) {
-    window.EventSource = function(url, opts) {
-      try { if (typeof url === 'string') url = _pu(url); } catch(e) {}
-      return new _es(url, opts);
-    };
-  }
-
-  // ──── Override navigator.sendBeacon ────
-  var _sb = navigator.sendBeacon.bind(navigator);
-  navigator.sendBeacon = function(url, data) {
-    try { url = _pu(url); } catch(e) {}
-    return _sb(url, data);
   };
 
   // ──── Override History API ────
@@ -413,13 +390,6 @@ function rewriteHtml(html, pageUrl) {
       }
     } catch(ex) {}
   }, true);
-
-  // ──── Override window.open ────
-  var _wo = window.open;
-  window.open = function(url) {
-    try { if (url) arguments[0] = _pu(url); } catch(e) {}
-    return _wo.apply(this, arguments);
-  };
 
   // ──── Navigation tracking for parent ────
   var _lastHref = location.href;
@@ -616,38 +586,6 @@ function proxyFetch(targetUrl, reqHeaders, method, body, _redirectDepth) {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  SERVICE WORKER
-// ─────────────────────────────────────────────────────────────
-
-const SW_SCRIPT = [
-  "'use strict';",
-  "self.addEventListener('install',function(e){e.waitUntil(self.skipWaiting())});",
-  "self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});",
-  "var _tb64=function(s){return btoa(s).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'')};",
-  "self.addEventListener('fetch',function(e){",
-  "var u=new URL(e.request.url);",
-  // Skip SW itself, already-proxied /p/ requests, and same-origin proxy root requests
-  "if(u.pathname==='/sw.js'||u.pathname.indexOf('/p/')===0)return;",
-  "if(u.origin===self.location.origin)return;",
-  "e.respondWith((async function(){",
-  // Get the target origin's b64 from the client URL or referrer
-  "var pb64=null;",
-  "try{var c=await self.clients.get(e.clientId);if(c&&c.url.indexOf('/p/')>=0){",
-  "var m=c.url.match(/\\/p\\/([A-Za-z0-9\\-_=]+)/);if(m)pb64=m[1];",
-  "}}catch(ex){}",
-  "if(!pb64){var ref=e.request.referrer||'';",
-  "var m2=ref.match(/\\/p\\/([A-Za-z0-9\\-_=]+)/);if(m2)pb64=m2[1];}",
-  // Route through proxy using the target's b64, or encode the target's own origin
-  "var pp=pb64?'/p/'+pb64+u.pathname+u.search:'/p/'+_tb64(u.origin)+u.pathname+u.search;",
-  "var opts={method:e.request.method,headers:e.request.headers};",
-  "if(e.request.method!=='GET'&&e.request.method!=='HEAD'){",
-  "try{opts.body=await e.request.clone().arrayBuffer();}catch(ex){}}",
-  "return fetch(pp,opts);",
-  "})());",
-  "});",
-].join("");
-
-// ─────────────────────────────────────────────────────────────
 //  PROXY SERVER
 // ─────────────────────────────────────────────────────────────
 
@@ -660,7 +598,7 @@ const proxyServer = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
   }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Goog-Visitor-Id, X-YouTube-Client-Name, X-YouTube-Client-Version, Range");
   res.setHeader("Access-Control-Expose-Headers", "*");
 
   if (req.method === "OPTIONS") {
@@ -671,15 +609,19 @@ const proxyServer = http.createServer(async (req, res) => {
 
   const parsed = url.parse(req.url, true);
 
-  // Service Worker
-  if (parsed.pathname === "/sw.js") {
+  // Local file serving: /local/<encoded-path>
+  if (parsed.pathname.startsWith("/local/")) {
+    const filePath = decodeURIComponent(parsed.pathname.slice(7));
+    if (!fs.existsSync(filePath)) { res.writeHead(404); res.end("Not found"); return; }
+    const ext = path.extname(filePath).toLowerCase();
+    const mime = MIME_TYPES[ext] || "application/octet-stream";
+    const stat = fs.statSync(filePath);
     res.writeHead(200, {
-      "Content-Type": "application/javascript",
-      "Cache-Control": "no-cache",
-      "Service-Worker-Allowed": "/",
-      "Access-Control-Allow-Origin": "*",
+      "Content-Type": mime,
+      "Content-Length": stat.size,
+      "Access-Control-Allow-Origin": reqOrigin || "*",
     });
-    res.end(SW_SCRIPT);
+    fs.createReadStream(filePath).pipe(res);
     return;
   }
 
@@ -723,12 +665,12 @@ const proxyServer = http.createServer(async (req, res) => {
     return;
   }
 
-  // Disk cache check (GET only)
-  const useCache = req.method === "GET";
+  // Disk cache check (GET only, ignore streaming Range requests)
+  const useCache = req.method === "GET" && !req.headers.range;
   const cKey = useCache ? cacheKey(target) : null;
 
   if (useCache && cKey) {
-    const cached = diskCache.get(cKey);
+    const cached = await diskCache.get(cKey);
     if (cached) {
       const body = Buffer.from(cached.body, "base64");
       const outHeaders = { ...cached.headers, "Content-Length": body.length };
@@ -804,8 +746,9 @@ const proxyServer = http.createServer(async (req, res) => {
 
       const contentType = proxyRes.headers["content-type"] || "application/octet-stream";
       const ct = contentType.toLowerCase();
-      const needsRewriting = ct.includes("text/html") || ct.includes("text/css") ||
-                             ct.includes("javascript") || ct.includes("text/js");
+      // Optimization: Drop JS & CSS regex rewriting. SW intercepts dynamic fetches.
+      // Native browser handles CSS perfectly. Massively reduces CPU and memory load.
+      const needsRewriting = ct.includes("text/html");
 
       // Build outbound headers
       const outHeaders = {};
@@ -813,62 +756,56 @@ const proxyServer = http.createServer(async (req, res) => {
         const lk = name.toLowerCase();
         if (SKIP_RESPONSE_HEADERS.has(lk)) continue;
         if (lk === "content-length" && needsRewriting) continue;
-        if (lk === "content-encoding") continue;
+        if (lk === "content-encoding" && needsRewriting) continue;
         outHeaders[name] = value;
       }
       outHeaders["access-control-allow-origin"] = reqOrigin || "*";
-      outHeaders["access-control-allow-credentials"] = "true";
+      if (reqOrigin) {
+        outHeaders["access-control-allow-credentials"] = "true";
+      }
 
-      // Set cookie for fallback target resolution
       if (parsed.pathname.startsWith("/p/")) {
         try {
           const targetOrigin = new URL(target).origin;
-          outHeaders["Set-Cookie"] =
-            `tv-proxy-target=${encodeURIComponent(targetOrigin)}; Path=/; SameSite=Lax; Max-Age=3600`;
+          outHeaders["Set-Cookie"] = `tv-proxy-target=${encodeURIComponent(targetOrigin)}; Path=/; SameSite=Lax; Max-Age=3600`;
         } catch {}
       }
 
       if (needsRewriting) {
-        // Buffer → Decompress → Rewrite → Send
         const chunks = [];
         proxyRes.on("data", c => chunks.push(c));
         proxyRes.on("end", () => {
           let body = Buffer.concat(chunks);
-
           const encoding = (proxyRes.headers["content-encoding"] || "").toLowerCase();
-          if (encoding === "gzip") {
-            try { body = zlib.gunzipSync(body); } catch {}
-          } else if (encoding === "br") {
-            try { body = zlib.brotliDecompressSync(body); } catch {}
-          } else if (encoding === "deflate") {
-            try { body = zlib.inflateSync(body); } catch { try { body = zlib.inflateRawSync(body); } catch {} }
-          }
 
-          const charset = /charset=([^\s;]+)/i.test(contentType)
-            ? RegExp.$1.trim() : "utf-8";
-          const enc = /utf-?8/i.test(charset) ? "utf-8" : "latin1";
-          let text = body.toString(enc);
+          const decompress = (buf, enc) => new Promise(resolve => {
+            if (enc === "gzip") zlib.gunzip(buf, (err, d) => resolve(err ? buf : d));
+            else if (enc === "br") zlib.brotliDecompress(buf, (err, d) => resolve(err ? buf : d));
+            else if (enc === "deflate") zlib.inflate(buf, (err, d) => err ? zlib.inflateRaw(buf, (err2, d2) => resolve(err2 ? buf : d2)) : resolve(d));
+            else resolve(buf);
+          });
 
-          if (ct.includes("text/html")) {
-            text = rewriteHtml(text, target);
-          } else if (ct.includes("text/css")) {
-            text = rewriteCss(text, target);
-          }
+          decompress(body, encoding).then(unzippedBody => {
+            const charset = /charset=([^\s;]+)/i.test(contentType) ? RegExp.$1.trim() : "utf-8";
+            const enc = /utf-?8/i.test(charset) ? "utf-8" : "latin1";
+            let text = unzippedBody.toString(enc);
 
-          const outBody = Buffer.from(text, "utf-8");
-          outHeaders["Content-Length"] = outBody.length;
+            if (ct.includes("text/html")) text = rewriteHtml(text, target);
 
-          // Cache text responses
-          if (req.method === "GET" && proxyRes.statusCode === 200 && cKey) {
-            diskCache.set(cKey, {
-              status: proxyRes.statusCode,
-              headers: outHeaders,
-              body: outBody.toString("base64"),
-            });
-          }
+            const outBody = Buffer.from(text, "utf-8");
+            outHeaders["Content-Length"] = outBody.length;
 
-          res.writeHead(proxyRes.statusCode, outHeaders);
-          res.end(outBody);
+            if (req.method === "GET" && proxyRes.statusCode === 200 && cKey) {
+              diskCache.set(cKey, {
+                status: proxyRes.statusCode,
+                headers: outHeaders,
+                body: outBody.toString("base64"),
+              });
+            }
+
+            res.writeHead(proxyRes.statusCode, outHeaders);
+            res.end(outBody);
+          });
         });
       } else {
         // STREAM binary content directly (video, images, fonts, etc.)
