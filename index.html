@@ -207,9 +207,10 @@
                 <span class="text-[11.5px] text-[var(--muted-text)] leading-tight max-w-[280px]">Display connection and workspace info</span>
               </div>
               <div class="flex-1 flex items-center justify-end gap-3">
-                <div class="toggle-switch w-[38px] h-[22px] bg-white/10 rounded-full relative cursor-pointer shrink-0 transition-colors duration-200" id="set-statusbar">
-                  <div class="toggle-knob absolute top-[2px] left-[3px] w-4 h-4 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.4)] transition-transform duration-200 pointer-events-none"></div>
-                </div>
+                <label class="inline-flex items-center cursor-pointer">
+                  <input type="checkbox" class="sr-only peer" id="set-statusbar">
+                  <div class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]"></div>
+                </label>
               </div>
             </div>
           </div>
@@ -236,9 +237,10 @@
                 <span class="text-[13px] font-medium text-[var(--fg)]">Cursor blink</span>
               </div>
               <div class="flex-1 flex items-center justify-end gap-3">
-                <div class="toggle-switch w-[38px] h-[22px] bg-white/10 rounded-full relative cursor-pointer shrink-0 transition-colors duration-200" id="set-cursorblink">
-                  <div class="toggle-knob absolute top-[2px] left-[3px] w-4 h-4 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.4)] transition-transform duration-200 pointer-events-none"></div>
-                </div>
+                <label class="inline-flex items-center cursor-pointer">
+                  <input type="checkbox" class="sr-only peer" id="set-cursorblink">
+                  <div class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]"></div>
+                </label>
               </div>
             </div>
           </div>
