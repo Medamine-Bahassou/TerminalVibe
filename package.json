@@ -11,6 +11,7 @@
     "build": "GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 npm run tauri build"
   },
   "dependencies": {
+    "@embedpdf/snippet": "^2.14.3",
     "node-pty": "^1.0.0",
     "puppeteer-core": "^24.43.1",
     "ws": "^8.18.0",

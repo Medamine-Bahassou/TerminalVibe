@@ -23,6 +23,38 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 body { display: flex; flex-direction: column; height: 100vh; }
 
+/* Global Modern Workspace Scrollbars */
+* {
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;
+}
+*::-webkit-scrollbar {
+  width: 10px !important;
+  height: 10px !important;
+}
+*::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  border-radius: 5px !important;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Slightly thinner specifically for the terminal area */
+.xterm-viewport::-webkit-scrollbar {
+  width: 8px !important;
+}
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  border-radius: 4px !important;
+}
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3) !important;
+}
+
 /* ──────────────────────────────────────────
  *   TITLEBAR (Tauri custom)
  * ────────────────────────────────────────── */
@@ -534,7 +566,7 @@ background: var(--bg);
 .term-wrap {
   position: absolute;
   inset: 0;
-  padding: 6px 8px;
+  padding: 6px 0 6px 8px;
 }
 .term-wrap .xterm { height: 100%; font-variant-ligatures: none; font-feature-settings: "liga" 0; }
 .term-wrap .xterm-rows > div { overflow: visible !important; }
@@ -696,15 +728,7 @@ width: 200px;
 }
 
 /* xterm overrides */
-.xterm-viewport { border-radius: 0 !important; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.12) transparent; }
-.xterm-viewport::-webkit-scrollbar { width: 6px; }
-.xterm-viewport::-webkit-scrollbar-track { background: transparent; }
-.xterm-viewport::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.12);
-  border-radius: 3px;
-  transition: background 0.15s;
-}
-.xterm-viewport::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+.xterm-viewport { border-radius: 0 !important; padding: 0 !important; }
 .xterm-rows { letter-spacing: 0; word-spacing: 0; }
 
 /* ──────────────────────────────────────────
@@ -880,12 +904,7 @@ box-shadow: 0 16px 48px rgba(0,0,0,0.6);
   flex: 1;
   padding: 14px 20px 20px;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.12) transparent;
 }
-.settings-body::-webkit-scrollbar { width: 6px; }
-.settings-body::-webkit-scrollbar-track { background: transparent; }
-.settings-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
 
 .settings-section { display: none; }
 .settings-section.active { display: block; }
@@ -1215,22 +1234,24 @@ body.resizing .drag-shield {
 /* Loading progress bar */
 .browser-loading-bar {
   position: absolute;
-  top: 0; left: 0; right: 100%;
+  top: 0; left: 0; width: 100%;
   height: 2px;
   background: var(--accent);
   border-radius: 0 2px 2px 0;
   opacity: 0;
   transition: opacity 0.2s;
   z-index: 5;
+  transform-origin: left center;
+  transform: scaleX(0);
 }
 .browser-loading-bar.active {
   opacity: 1;
   animation: browser-progress 1.6s ease-in-out infinite;
 }
 @keyframes browser-progress {
-  0%   { left: 0; right: 100%; }
-  50%  { left: 20%; right: 0%; }
-  100% { left: 100%; right: 0%; }
+  0%   { transform: translateX(0%) scaleX(0); }
+  50%  { transform: translateX(0%) scaleX(0.7); }
+  100% { transform: translateX(100%) scaleX(0); }
 }
 
 /* Content wrapper */
@@ -1250,11 +1271,7 @@ body.resizing .drag-shield {
   inset: 0;
   overflow-y: auto;
   overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(0,0,0,0.2) transparent;
 }
-.browser-page-view::-webkit-scrollbar { width: 6px; }
-.browser-page-view::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); border-radius: 3px; }
 
 /* Scoped page content */
 .browser-page-scoped {
@@ -1313,7 +1330,6 @@ body.resizing .drag-shield {
   justify-content: center;
   overflow: auto;
   background: #1a1a1a;
-  scrollbar-width: thin;
 }
 .browser-pdf-wrap {
   position: absolute;
