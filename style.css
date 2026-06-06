@@ -26,33 +26,34 @@ body { display: flex; flex-direction: column; height: 100vh; }
 /* Global Modern Workspace Scrollbars */
 * {
   scrollbar-width: thin !important;
-  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent !important;
 }
 *::-webkit-scrollbar {
-  width: 10px !important;
-  height: 10px !important;
+  width: 6px !important;
+  height: 6px !important;
 }
 *::-webkit-scrollbar-track {
   background: transparent !important;
 }
 *::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.15) !important;
-  border-radius: 5px !important;
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  border-radius: 10px !important;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(255, 255, 255, 0.3) !important;
+  background-color: rgba(255, 255, 255, 0.25) !important;
 }
 
-/* Slightly thinner specifically for the terminal area */
+/* Thinner scrollbars specifically for the terminal area */
 .xterm-viewport::-webkit-scrollbar {
-  width: 8px !important;
+  width: 6px !important;
+  height: 6px !important;
 }
 .xterm-viewport::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.15) !important;
-  border-radius: 4px !important;
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  border-radius: 10px !important;
 }
 .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(255, 255, 255, 0.3) !important;
+  background-color: rgba(255, 255, 255, 0.25) !important;
 }
 
 /* ──────────────────────────────────────────
@@ -410,10 +411,17 @@ background: var(--bg);
   height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none;
+  /* Hide scrollbar on Firefox */
+  scrollbar-width: none !important;
   flex: 1;
 }
-.term-group-tabs::-webkit-scrollbar { display: none; }
+
+/* Hide scrollbar on WebKit browsers (Chrome, Safari, Tauri) */
+.term-group-tabs::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
 
 .tg-tab {
   display: flex;

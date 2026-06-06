@@ -1591,18 +1591,11 @@
     }
 
     if (wsp._maximizedGroupId) {
-      // Unmaximize
+      // Unmaximize: remove cached DOM and rebuild full layout
       wsp._maximizedGroupId = null;
-      container.querySelectorAll('.term-group').forEach(el => {
-        el.style.position = '';
-        el.style.inset = '';
-        el.style.zIndex = '';
-        el.style.display = '';
-        el.classList.remove('maximized');
-      });
-      container.querySelectorAll('.sash').forEach(el => {
-        el.style.display = '';
-      });
+      const oldContainer = _wsDomCache[wsp.id];
+      if (oldContainer) { oldContainer.remove(); delete _wsDomCache[wsp.id]; }
+      switchWorkspacePane();
     } else {
       const group = findGroupContainingTerm(wsp.layout, termId);
       if (!group) return;
@@ -2241,6 +2234,21 @@
         }
 
         entry._loadUrl = loadUrl;
+
+        function syncUrl(url) {
+          entry.url = url;
+          urlInput.value = url;
+          entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
+          if (entry._history[entry._historyIdx] !== url) {
+            entry._history = entry._history.slice(0, entry._historyIdx + 1);
+            entry._history.push(url);
+            entry._historyIdx = entry._history.length - 1;
+          }
+          updateNavButtons();
+          renderSidebar();
+          updateStatusBar();
+        }
+        entry._syncUrl = syncUrl;
 
         function updateNavButtons() {
           btnBack.disabled = entry._historyIdx <= 0;
@@ -3814,19 +3822,20 @@
         window.addEventListener('message', function(e) {
           if (e.data && e.data.terminalVibeNav) {
             const active = activeTerminal();
-            if (active && active.type === 'browser' && active._loadUrl) {
+            if (active && active.type === 'browser' && active._syncUrl) {
               var navUrl = e.data.terminalVibeNav;
-              // If the URL is a proxy URL (/p/<b64>/…), decode it back
-              if (navUrl.indexOf('/p/') !== -1) {
-                try {
-                  var m = navUrl.match(/\/p\/([A-Za-z0-9\-_=]+)(\/.*)?$/);
-                  if (m) {
-                    var origin = atob(m[1].replace(/-/g,'+').replace(/_/g,'/'));
-                    navUrl = origin + (m[2] || '/');
-                  }
-                } catch (_) {}
-              }
-              if (navUrl !== active.url) active._loadUrl(navUrl);
+              // If URL points to proxy host instead of target site, resolve from last known origin
+              try {
+                var u = new URL(navUrl);
+                var proxyHost = location.hostname;  // 127.0.0.1 or tauri.localhost
+                var proxyPort = String(PROXY_PORT);  // 7682
+                if (u.hostname === proxyHost || u.port === proxyPort) {
+                  // Proxy URL — use _syncUrl which already decodes /p/<b64>
+                  var lastOrigin = new URL(active.url || 'about:blank').origin;
+                  navUrl = lastOrigin + u.pathname + u.search + u.hash;
+                }
+              } catch(_) {}
+              if (navUrl !== active.url) active._syncUrl(navUrl);
             }
           }
         });
