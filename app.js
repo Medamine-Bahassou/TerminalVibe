@@ -1,6 +1,16 @@
 (function() {
   'use strict';
 
+  // Configure Coloris — hex color picker
+  Coloris({
+    parent: '#settings-modal',
+    themeMode: 'dark',
+    theme: 'default',
+    format: 'hex',
+    alpha: true,
+    wrap: true,
+  });
+
   // Tauri Webview API (from window.__TAURI__ global, injected by Tauri runtime)
   function tauriWebview() { return window.__TAURI__ && window.__TAURI__.webview; }
   function tauriWindow() { return window.__TAURI__ && window.__TAURI__.window; }
@@ -153,7 +163,59 @@
         '#839496','#6c71c4','#93a1a1','#fdf6e3',
       ],
     },
+    'monochrome': {
+      label: 'Monochrome',
+      bg: '#000000', fg: '#ffffff', cursor: '#ffffff', selection: '#333333',
+      swatches: ['#000000','#ffffff','#888888'],
+      palette: [
+        '#000000','#808080','#a0a0a0','#c0c0c0',
+        '#d0d0d0','#e0e0e0','#f0f0f0','#ffffff',
+        '#404040','#606060','#909090','#b0b0b0',
+        '#c8c8c8','#d8d8d8','#e8e8e8','#f8f8f8',
+      ],
+    },
   };
+
+  /* ═══════════════════════════════════════════════════════════════
+   C U S T O M   T H E M E S
+   ═══════════════════════════════════════════════════════════════ */
+  const CUSTOM_THEMES_KEY = 'ghostterm-custom-themes';
+  const BUILTIN_THEME_KEYS = new Set(Object.keys(THEMES));
+
+  function loadCustomThemes() {
+    try {
+      const raw = localStorage.getItem(CUSTOM_THEMES_KEY);
+      if (!raw) return;
+      const customs = JSON.parse(raw);
+      for (const [name, theme] of Object.entries(customs)) {
+        if (!BUILTIN_THEME_KEYS.has(name)) THEMES[name] = theme;
+      }
+    } catch {}
+  }
+
+  function saveCustomThemes(customs) {
+    try { localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(customs)); } catch {}
+    for (const [name, theme] of Object.entries(customs)) {
+      if (!BUILTIN_THEME_KEYS.has(name)) THEMES[name] = theme;
+    }
+  }
+
+  function getCustomThemes() {
+    try {
+      const raw = localStorage.getItem(CUSTOM_THEMES_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  }
+
+  function deleteCustomTheme(name) {
+    const customs = getCustomThemes();
+    delete customs[name];
+    saveCustomThemes(customs);
+    delete THEMES[name];
+    if (currentThemeName === name) {
+      applyTheme('catppuccin-mocha');
+    }
+  }
 
   const WS_PORT = 7681;
   const PROXY_PORT = 7682;
@@ -295,6 +357,7 @@
   const BROWSER_SUSPEND_MS = 30_000;
 
   const IMAGE_EXT_RE = /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)([?#].*)?$/i;
+  const PDF_EXT_RE = /\.pdf([?#].*)?$/i;
 
   const SPLIT_MIN_PX = 200;
   const ZOOM_MIN = 0.25;
@@ -613,10 +676,22 @@
     r.setProperty('--fg', theme.fg);
     r.setProperty('--cursor', theme.cursor);
     r.setProperty('--selection', theme.selection);
-    const accent = theme.palette[4] || theme.palette[12] || theme.fg;
+    const accent = (theme.ui && theme.ui.accent) || theme.palette[4] || theme.palette[12] || theme.fg;
     r.setProperty('--accent', accent);
     r.setProperty('--ws-active-strip', accent);
     r.setProperty('--accent-dim', hexToRgba(accent, 0.15));
+
+    // UI overrides from custom theme
+    const uiProps = ['border', 'tabActiveBg', 'tabHoverBg', 'dimText', 'mutedText'];
+    const uiCss = { border: '--border', tabActiveBg: '--tab-active-bg', tabHoverBg: '--tab-hover-bg', dimText: '--dim-text', mutedText: '--muted-text' };
+    if (theme.ui) {
+      for (const prop of uiProps) {
+        if (theme.ui[prop]) r.setProperty(uiCss[prop], theme.ui[prop]);
+        else r.removeProperty(uiCss[prop]);
+      }
+    } else {
+      for (const prop of uiProps) r.removeProperty(uiCss[prop]);
+    }
 
     for (const wsp of workspaces) {
       const terms = getWorkspaceTerminals(wsp);
@@ -853,9 +928,8 @@
           if (groupDom) {
             groupDom.style.position = 'absolute';
             groupDom.style.inset = '0';
+            groupDom.classList.add('maximized');
             container.appendChild(groupDom);
-            const groupEl = document.getElementById('group-' + group.id);
-            if (groupEl) groupEl.classList.add('maximized');
           }
         } else {
           wsp._maximizedGroupId = null;
@@ -1346,6 +1420,16 @@
     wsp.layout = removeEmptyGroups(wsp.layout);
     const structureChanged = countGroups(wsp.layout) !== groupCountBefore;
 
+    // Fallback: if the split was destroyed, pass focus to the next available terminal
+    const remainingTerms = getWorkspaceTerminals(wsp);
+    if (remainingTerms.length > 0 && !remainingTerms.some(t => t.id === wsp.activeTermId)) {
+      wsp.activeTermId = remainingTerms[0].id;
+      const fallbackGroup = findGroupContainingTerm(wsp.layout, wsp.activeTermId);
+      if (fallbackGroup && !fallbackGroup.activeTermId) {
+        fallbackGroup.activeTermId = wsp.activeTermId;
+      }
+    }
+
     if (!skipRender && activeWsId === wsId) {
       if (structureChanged) {
         // Layout structure changed (split collapsed) — full rebuild needed
@@ -1376,16 +1460,19 @@
         }
       }
       // Focus the new active tab
-      const newActiveId = wsp.activeTermId || group.activeTermId;
+      const newActiveId = wsp.activeTermId || (group ? group.activeTermId : null);
       if (newActiveId) {
         const newEntry = getWorkspaceTerminals(wsp).find(x => x.id === newActiveId);
         if (newEntry && newEntry.el) {
-          focusedSlotId = newEntry.el.id; updateFocusedGroup();
+          focusedSlotId = newEntry.el.id;
+          updateFocusedGroup();
           newEntry.el.classList.add('focused');
-          if (newEntry.type === 'browser') {
-            // Don't auto-focus URL input
-          } else if (newEntry.term) {
-            setTimeout(() => { newEntry.term.focus(); fitTerm(newEntry); }, 20);
+
+          if (newEntry.type !== 'browser' && newEntry.term) {
+            setTimeout(() => {
+              newEntry.term.focus();
+              fitTerm(newEntry);
+            }, 60);
           }
         }
       }
@@ -2153,6 +2240,28 @@
           entry._browserZoom = 1;
         }
 
+        function showPdfViewer(url) {
+          pageView.style.display = 'none';
+          const iframe = contentWrap.querySelector('iframe.browser-fallback');
+          if (iframe) iframe.style.display = 'none';
+          let wrap = contentWrap.querySelector('.browser-pdf-wrap');
+          if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.className = 'browser-pdf-wrap';
+            wrap.innerHTML = '<div></div>';
+            contentWrap.appendChild(wrap);
+          }
+          wrap.style.display = 'block';
+          entry._pdfWrap = wrap;
+          const target = wrap.querySelector('div');
+          target.innerHTML = '';
+          const srcUrl = proxyUrl(url);
+          console.log('[EmbedPDF] src:', srcUrl, '(original:', url, ')');
+          if (!window.EmbedPDF) { wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; return; }
+          try {
+            window.EmbedPDF.init({ type: 'container', target, src: srcUrl, worker: false, tabBar: 'never' });
+          } catch (err) { console.error('[EmbedPDF] init failed:', err); wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; }
+        }
 
         function normalizeAssetUrl(url) {
           if (url && url.startsWith('asset:')) {
@@ -2235,6 +2344,14 @@
           const prevImg = contentWrap.querySelector('.browser-img-wrap');
           if (prevImg) prevImg.style.display = 'none';
           entry._imgEl = null;
+          const prevPdfWrap = contentWrap.querySelector('.browser-pdf-wrap');
+          if (prevPdfWrap) prevPdfWrap.style.display = 'none';
+
+          if (PDF_EXT_RE.test(url)) {
+            showPdfViewer(url);
+            showLoading(false);
+            return;
+          }
 
           if (IMAGE_EXT_RE.test(url)) {
             showImageViewer(url);
@@ -3112,6 +3229,246 @@
       document.querySelectorAll('.custom-dropdown').forEach(initCustomDropdown);
 
       /* ═══════════════════════════════════════════════════════════════
+       T H E M E   E D I T O R
+       ═══════════════════════════════════════════════════════════════ */
+      const THEME_COLOR_GROUPS = {
+        'Core': {
+          bg: 'Background', fg: 'Foreground', cursor: 'Cursor', selection: 'Selection',
+        },
+        'UI Colors': {
+          accent: 'Accent', border: 'Border',
+          tabActiveBg: 'Tab Active BG', tabHoverBg: 'Tab Hover BG',
+          dimText: 'Dim Text', mutedText: 'Muted Text',
+        },
+        'Terminal Palette': {
+          p0: 'Black', p1: 'Red', p2: 'Green', p3: 'Yellow',
+          p4: 'Blue', p5: 'Magenta', p6: 'Cyan', p7: 'White',
+          p8: 'Bright Black', p9: 'Bright Red', p10: 'Bright Green', p11: 'Bright Yellow',
+          p12: 'Bright Blue', p13: 'Bright Magenta', p14: 'Bright Cyan', p15: 'Bright White',
+        },
+      };
+
+      const DEFAULT_PALETTE = ['#1e1e2e','#f38ba8','#a6e3a1','#f9e2af','#89b4fa','#f5c2e7','#94e2d5','#cdd6f4','#585b70','#eba0ac','#a6e3a1','#f9e2af','#89b4fa','#f5c2e7','#94e2d5','#bac2de'];
+
+      let editingTheme = null;
+
+      function initEditingTheme(name) {
+        const src = THEMES[name];
+        if (src) {
+          editingTheme = {
+            label: src.label || name,
+            bg: src.bg, fg: src.fg, cursor: src.cursor, selection: src.selection,
+            swatches: src.swatches ? [...src.swatches] : [src.bg, src.fg, src.palette ? src.palette[4] : src.fg],
+            palette: src.palette ? [...src.palette] : [],
+            ui: src.ui ? { ...src.ui } : {},
+          };
+        } else {
+          editingTheme = {
+            label: '', bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#585b70',
+            swatches: ['#1e1e2e', '#cdd6f4', '#89b4fa'],
+            palette: [
+              '#1e1e2e','#f38ba8','#a6e3a1','#f9e2af',
+              '#89b4fa','#f5c2e7','#94e2d5','#cdd6f4',
+              '#585b70','#eba0ac','#a6e3a1','#f9e2af',
+              '#89b4fa','#f5c2e7','#94e2d5','#bac2de',
+            ],
+            ui: {},
+          };
+        }
+      }
+
+      const UI_DEFAULTS = {
+        border: '#ffffff14',
+        tabActiveBg: '#ffffff12',
+        tabHoverBg: '#ffffff0a',
+        dimText: '#ffffff4d',
+        mutedText: '#ffffff80',
+      };
+
+      function getThemeColor(key) {
+        if (!editingTheme) return '#000000';
+        if (key === 'bg') return editingTheme.bg;
+        if (key === 'fg') return editingTheme.fg;
+        if (key === 'cursor') return editingTheme.cursor;
+        if (key === 'selection') return editingTheme.selection;
+        if (key === 'accent') return editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa';
+        if (UI_DEFAULTS[key]) return editingTheme.ui[key] || UI_DEFAULTS[key];
+        if (key.startsWith('p')) return editingTheme.palette[parseInt(key.slice(1))] || '#000000';
+        return '#000000';
+      }
+
+      function setThemeColor(key, val) {
+        if (!editingTheme) return;
+        if (key === 'bg') editingTheme.bg = val;
+        else if (key === 'fg') editingTheme.fg = val;
+        else if (key === 'cursor') editingTheme.cursor = val;
+        else if (key === 'selection') editingTheme.selection = val;
+        else if (key === 'accent') editingTheme.ui.accent = val;
+        else if (key === 'border') editingTheme.ui.border = val || undefined;
+        else if (key === 'tabActiveBg') editingTheme.ui.tabActiveBg = val || undefined;
+        else if (key === 'tabHoverBg') editingTheme.ui.tabHoverBg = val || undefined;
+        else if (key === 'dimText') editingTheme.ui.dimText = val || undefined;
+        else if (key === 'mutedText') editingTheme.ui.mutedText = val || undefined;
+        else if (key.startsWith('p')) editingTheme.palette[parseInt(key.slice(1))] = val;
+        editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
+      }
+
+      function previewTheme() {
+        if (!editingTheme) return;
+        const r = document.documentElement.style;
+        r.setProperty('--bg', editingTheme.bg);
+        r.setProperty('--fg', editingTheme.fg);
+        r.setProperty('--cursor', editingTheme.cursor);
+        r.setProperty('--selection', editingTheme.selection);
+        const accent = editingTheme.ui.accent || editingTheme.palette[4] || editingTheme.fg;
+        r.setProperty('--accent', accent);
+        r.setProperty('--ws-active-strip', accent);
+        r.setProperty('--accent-dim', hexToRgba(accent, 0.15));
+        // UI overrides — set or reset to CSS defaults
+        const uiMap = { border:'--border', tabActiveBg:'--tab-active-bg', tabHoverBg:'--tab-hover-bg', dimText:'--dim-text', mutedText:'--muted-text' };
+        for (const [prop, cssVar] of Object.entries(uiMap)) {
+          r.setProperty(cssVar, editingTheme.ui[prop] || UI_DEFAULTS[prop]);
+        }
+      }
+
+      function renderThemeEditor() {
+        const container = document.getElementById('theme-editor-groups');
+        if (!container) return;
+        container.innerHTML = '';
+
+        function buildColorItem(key, label) {
+          const item = document.createElement('div');
+          item.className = 'theme-color-item';
+          const val = getThemeColor(key);
+
+          const lbl = document.createElement('span');
+          lbl.className = 'theme-color-label';
+          lbl.textContent = label;
+
+          const swatch = document.createElement('span');
+          swatch.className = 'inline-block w-4 h-4 rounded border border-white/20 shrink-0';
+          swatch.style.background = val;
+
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          inp.className = 'theme-color-hex';
+          inp.setAttribute('data-coloris', '');
+          inp.value = val;
+          inp.spellcheck = false;
+          inp.maxLength = 9;
+          inp.addEventListener('input', () => {
+            let v = inp.value.trim();
+            if (/^#?[0-9a-fA-F]{3,8}$/.test(v)) {
+              if (!v.startsWith('#')) v = '#' + v;
+              setThemeColor(key, v);
+              swatch.style.background = v;
+              previewTheme();
+            }
+          });
+
+          item.appendChild(lbl);
+          item.appendChild(swatch);
+          item.appendChild(inp);
+          return item;
+        }
+
+        // Colors title
+        const colorsTitle = document.createElement('div');
+        colorsTitle.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
+        colorsTitle.textContent = 'Colors';
+        container.appendChild(colorsTitle);
+
+        // Core + UI Colors in one card
+        const colorsCard = document.createElement('div');
+        colorsCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
+        for (const [groupName, fields] of Object.entries(THEME_COLOR_GROUPS)) {
+          if (groupName === 'Terminal Palette') continue;
+          const title = document.createElement('div');
+          title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
+          title.textContent = groupName;
+          colorsCard.appendChild(title);
+          const grid = document.createElement('div');
+          grid.className = 'theme-color-grid';
+          for (const [key, label] of Object.entries(fields)) {
+            grid.appendChild(buildColorItem(key, label));
+          }
+          colorsCard.appendChild(grid);
+        }
+        container.appendChild(colorsCard);
+
+        // Terminal Palette — its own card
+        const paletteCard = document.createElement('div');
+        paletteCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col';
+
+        // Title row inside card (with toggle)
+        const title = document.createElement('div');
+        title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] flex justify-between items-center mb-2 ml-1';
+        const titleText = document.createElement('span');
+        titleText.textContent = 'Terminal Palette';
+        title.appendChild(titleText);
+
+        const sw = document.createElement('div');
+        sw.className = 'toggle-switch w-[28px] h-4 bg-white/10 rounded-full relative cursor-pointer shrink-0 transition-colors duration-200';
+        const knob = document.createElement('div');
+        knob.className = 'toggle-knob absolute top-[1px] left-[2px] w-3 h-3 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.4)] transition-transform duration-200 pointer-events-none';
+        sw.appendChild(knob);
+        title.appendChild(sw);
+        paletteCard.appendChild(title);
+
+        const paletteGrid = document.createElement('div');
+        paletteGrid.className = 'theme-color-grid';
+        paletteGrid.style.display = 'none';
+
+        for (const [key, label] of Object.entries(THEME_COLOR_GROUPS['Terminal Palette'])) {
+          paletteGrid.appendChild(buildColorItem(key, label));
+        }
+
+        // Reset palette link
+        const resetBtn = document.createElement('div');
+        resetBtn.className = 'text-[11px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline text-right pt-2 border-t border-[var(--border)] mt-1';
+        resetBtn.textContent = 'Reset palette';
+        resetBtn.addEventListener('click', () => {
+          DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
+          editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
+          paletteGrid.querySelectorAll('.theme-color-item').forEach((item, i) => {
+            if (i < 16) {
+              const v = editingTheme.palette[i];
+              const s = item.querySelector('span:nth-child(2)');
+              if (s) s.style.background = v;
+              const inp = item.querySelector('input');
+              if (inp) inp.value = v;
+            }
+          });
+          previewTheme();
+        });
+        paletteGrid.appendChild(resetBtn);
+        paletteCard.appendChild(paletteGrid);
+
+        // Toggle handler
+        sw.addEventListener('click', (e) => {
+          e.stopPropagation();
+          sw.classList.toggle('on');
+          const isOn = sw.classList.contains('on');
+          paletteGrid.style.display = isOn ? '' : 'none';
+          if (!isOn) {
+            DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
+            editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
+            previewTheme();
+          } else {
+            paletteGrid.querySelectorAll('.theme-color-item').forEach((item, i) => {
+              if (i < 16) {
+                const v = editingTheme.palette[i];
+                const inp = item.querySelector('input');
+                if (inp) inp.value = v;
+              }
+            });
+          }
+        });
+
+        container.appendChild(paletteCard);
+      }
+
+      /* ═══════════════════════════════════════════════════════════════
        S E*TTINGS MODAL
        ═══════════════════════════════════════════════════════════════ */
       const settingsOverlay = document.getElementById('settings-overlay');
@@ -3165,6 +3522,18 @@
         switchSettingsCat('appearance');
         settingsOverlay.classList.add('open');
         document.activeElement?.blur();
+
+        // Init theme editor in "New Theme" mode
+        document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === 'new'));
+        document.querySelector('.theme-name-row')?.classList.remove('hidden');
+        document.querySelector('.theme-name-row')?.classList.add('flex');
+        document.querySelector('.theme-edit-row')?.classList.add('hidden');
+        document.querySelector('.theme-edit-row')?.classList.remove('flex');
+        initEditingTheme(currentThemeName);
+        editingTheme.label = '';
+        document.getElementById('set-theme-name').value = '';
+        renderThemeEditor();
+        refreshThemeCustomSelect();
         settingsOverlay.focus({ preventScroll: true });
       }
 
@@ -3297,13 +3666,57 @@
       });
 
       function switchSettingsCat(cat) {
+        const prevCat = document.querySelector('.settings-cat-btn.active')?.dataset.cat;
         document.querySelectorAll('.settings-cat-btn').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
         document.querySelectorAll('.settings-section[data-cat]').forEach(s => s.classList.toggle('active', s.dataset.cat === cat));
+        // Leaving theme editor → revert live preview to applied theme
+        if (prevCat === 'theme-editor' && cat !== 'theme-editor') {
+          applyTheme(currentThemeName);
+        }
+      }
+
+      // Track theme editor mode so it persists across category switches
+      let themeEditorMode = 'new';
+      let themeEditorEditKey = '';
+
+      function restoreThemeEditorState() {
+        // Re-init editing theme (we reverted preview on exit)
+        if (themeEditorMode === 'new') {
+          initEditingTheme(currentThemeName);
+        } else if (themeEditorEditKey) {
+          initEditingTheme(themeEditorEditKey);
+        } else {
+          initEditingTheme(currentThemeName);
+        }
+        previewTheme();
+        // Restore mode toggle
+        document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === themeEditorMode));
+        const nameRow = document.querySelector('.theme-name-row');
+        const editRow = document.querySelector('.theme-edit-row');
+        if (themeEditorMode === 'new') {
+          nameRow?.classList.remove('hidden'); nameRow?.classList.add('flex');
+          editRow?.classList.add('hidden'); editRow?.classList.remove('flex');
+        } else {
+          nameRow?.classList.add('hidden'); nameRow?.classList.remove('flex');
+          editRow?.classList.remove('hidden'); editRow?.classList.add('flex');
+          refreshThemeCustomSelect();
+          // Restore dropdown selection
+          const sel = document.getElementById('set-theme-custom-select');
+          if (sel && themeEditorEditKey) { sel.value = themeEditorEditKey; }
+          const dd = document.querySelector('.custom-dropdown[data-for="set-theme-custom-select"]');
+          if (dd) initCustomDropdown(dd);
+        }
+        // Restore name input
+        document.getElementById('set-theme-name').value = editingTheme?.label || '';
+        renderThemeEditor();
       }
 
       // Category button click handlers
       document.querySelectorAll('.settings-cat-btn').forEach(btn => {
-        btn.addEventListener('click', () => switchSettingsCat(btn.dataset.cat));
+        btn.addEventListener('click', () => {
+          switchSettingsCat(btn.dataset.cat);
+          if (btn.dataset.cat === 'theme-editor') restoreThemeEditorState();
+        });
       });
 
       function applySettings() {
@@ -3387,6 +3800,170 @@
         document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
         applySettings();
       });
+
+      // Theme editor — Save
+      document.getElementById('theme-btn-save').addEventListener('click', () => {
+        const nameInput = document.getElementById('set-theme-name');
+        const name = nameInput.value.trim();
+        if (!name) { nameInput.focus(); return; }
+        if (BUILTIN_THEME_KEYS.has(name)) { alert('Cannot overwrite a built-in theme.'); return; }
+        editingTheme.label = name;
+        const customs = getCustomThemes();
+        customs[name] = { ...editingTheme, _custom: true };
+        saveCustomThemes(customs);
+        applyTheme(name);
+        saveState();
+        refreshThemeDropdown();
+      });
+
+      // Theme editor — Delete
+      document.getElementById('theme-btn-delete').addEventListener('click', () => {
+        const nameInput = document.getElementById('set-theme-name');
+        const name = nameInput.value.trim();
+        if (!name || BUILTIN_THEME_KEYS.has(name)) return;
+        if (!getCustomThemes()[name]) return;
+        deleteCustomTheme(name);
+        initEditingTheme(currentThemeName);
+        nameInput.value = editingTheme.label || '';
+        renderThemeEditor();
+        saveState();
+        refreshThemeDropdown();
+      });
+
+      // Theme editor — Reset
+      document.getElementById('theme-btn-import').addEventListener('click', () => {
+        document.getElementById('theme-import-input').click();
+      });
+      document.getElementById('theme-import-input').addEventListener('change', e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const data = JSON.parse(reader.result);
+            if (!data.bg || !data.fg || !data.palette || !Array.isArray(data.palette) || data.palette.length < 16) {
+              alert('Invalid theme JSON: missing bg, fg, or palette[16].');
+              return;
+            }
+            const name = data.name || file.name.replace(/\.json$/i, '') || 'Imported Theme';
+            editingTheme = {
+              label: name,
+              bg: data.bg, fg: data.fg, cursor: data.cursor || data.fg, selection: data.selection || data.bg,
+              swatches: data.swatches || [data.bg, data.fg, data.palette[4] || data.fg],
+              palette: [...data.palette],
+              ui: data.ui ? { ...data.ui } : {},
+            };
+            document.getElementById('set-theme-name').value = name;
+            renderThemeEditor();
+            previewTheme();
+          } catch { alert('Failed to parse JSON.'); }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+      });
+
+      // Theme editor — Export
+      document.getElementById('theme-btn-export').addEventListener('click', () => {
+        if (!editingTheme) return;
+        const json = JSON.stringify({
+          name: editingTheme.label || 'Custom Theme',
+          bg: editingTheme.bg, fg: editingTheme.fg, cursor: editingTheme.cursor, selection: editingTheme.selection,
+          palette: editingTheme.palette,
+          ui: editingTheme.ui,
+        }, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (editingTheme.label || 'custom-theme').replace(/[^a-z0-9_-]/gi, '_') + '.json';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
+
+      // Theme editor — name input sync
+      document.getElementById('set-theme-name').addEventListener('input', e => {
+        if (editingTheme) editingTheme.label = e.target.value.trim();
+      });
+
+      // Theme editor — Clone Current
+      document.getElementById('theme-btn-clone').addEventListener('click', () => {
+        initEditingTheme(currentThemeName);
+        editingTheme.label = THEMES[currentThemeName]?.label + ' Copy' || 'Copy';
+        document.getElementById('set-theme-name').value = editingTheme.label;
+        renderThemeEditor();
+        previewTheme();
+      });
+
+      // Theme editor — Load existing dropdown
+      function refreshThemeCustomSelect() {
+        const sel = document.getElementById('set-theme-custom-select');
+        if (!sel) return;
+        sel.innerHTML = '';
+        for (const [key, t] of Object.entries(THEMES)) {
+          if (BUILTIN_THEME_KEYS.has(key)) continue;
+          const opt = document.createElement('option');
+          opt.value = key;
+          opt.textContent = t.label || key;
+          sel.appendChild(opt);
+        }
+        const dd = document.querySelector('.custom-dropdown[data-for="set-theme-custom-select"]');
+        if (dd) initCustomDropdown(dd);
+      }
+
+      // Theme mode toggle (New / Edit Existing)
+      document.querySelectorAll('.theme-mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const mode = btn.dataset.mode;
+          themeEditorMode = mode;
+          document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+          const nameRow = document.querySelector('.theme-name-row');
+          const editRow = document.querySelector('.theme-edit-row');
+          if (mode === 'new') {
+            nameRow?.classList.remove('hidden');
+            nameRow?.classList.add('flex');
+            editRow?.classList.add('hidden');
+            editRow?.classList.remove('flex');
+            initEditingTheme(currentThemeName);
+            document.getElementById('set-theme-name').value = '';
+            renderThemeEditor();
+            previewTheme();
+          } else {
+            nameRow?.classList.add('hidden');
+            nameRow?.classList.remove('flex');
+            editRow?.classList.remove('hidden');
+            editRow?.classList.add('flex');
+            refreshThemeCustomSelect();
+            const sel = document.getElementById('set-theme-custom-select');
+            if (sel && sel.value) {
+              themeEditorEditKey = sel.value;
+              initEditingTheme(sel.value);
+              renderThemeEditor();
+              previewTheme();
+            }
+          }
+        });
+      });
+      document.getElementById('set-theme-custom-select')?.addEventListener('change', e => {
+        themeEditorEditKey = e.target.value;
+        initEditingTheme(e.target.value);
+        document.getElementById('set-theme-name').value = editingTheme.label || '';
+        renderThemeEditor();
+        previewTheme();
+      });
+
+      function refreshThemeDropdown() {
+        const themeSelect = document.getElementById('set-theme');
+        themeSelect.innerHTML = '';
+        for (const [key, t] of Object.entries(THEMES)) {
+          const opt = document.createElement('option');
+          opt.value = key; opt.textContent = t.label;
+          opt.dataset.swatches = t.swatches.join(',');
+          if (key === currentThemeName) opt.selected = true;
+          themeSelect.appendChild(opt);
+        }
+        const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
+        if (themeDD) initCustomDropdown(themeDD);
+        refreshThemeCustomSelect();
+      }
 
       // Prevent sidebar and statusbar from stealing terminal focus
       document.getElementById('sidebar').addEventListener('mousedown', e => {
@@ -3864,6 +4441,7 @@
         /* ═══════════════════════════════════════════════════════════════
          B O*OT
          ═══════════════════════════════════════════════════════════════ */
+        loadCustomThemes();
         const restored = restoreState();
         applyTheme(currentThemeName);
 
