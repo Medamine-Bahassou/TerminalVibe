@@ -296,6 +296,7 @@
 
   const IMAGE_EXT_RE = /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)([?#].*)?$/i;
 
+  const SPLIT_MIN_PX = 200;
   const ZOOM_MIN = 0.25;
   const ZOOM_MAX = 5;
   const ZOOM_STEP = 0.1;
@@ -1638,6 +1639,28 @@
   /* ═══════════════════════════════════════════════════════════════
    P A*NE AREA RENDERING (Recursive execution tree)
 ═══════════════════════════════════════════════════════════════ */
+  function getMinSizes(node) {
+    if (!node) return { minW: 0, minH: 0 };
+    if (node.type === 'group') return { minW: SPLIT_MIN_PX, minH: SPLIT_MIN_PX };
+    if (node.type === 'split') {
+      let minW = 0, minH = 0;
+      node.children.forEach((c, idx) => {
+        const s = getMinSizes(c);
+        if (node.direction === 'row') {
+          minW += s.minW;
+          if (idx > 0) minW += 4;
+          minH = Math.max(minH, s.minH);
+        } else {
+          minH += s.minH;
+          if (idx > 0) minH += 4;
+          minW = Math.max(minW, s.minW);
+        }
+      });
+      return { minW, minH };
+    }
+    return { minW: 0, minH: 0 };
+  }
+
   function renderPaneArea() {
     const wsp = activeWs();
     // Invalidate cache for current workspace so switchWorkspacePane rebuilds it
@@ -1655,6 +1678,10 @@
       const container = document.createElement('div');
       container.className = `split-container ${node.direction}`;
       container.id = 'split-' + node.id;
+
+      const mins = getMinSizes(node);
+      container.style.minWidth = mins.minW + 'px';
+      container.style.minHeight = mins.minH + 'px';
 
       node.children.forEach((child, idx) => {
         if (idx > 0) {
@@ -1850,10 +1877,52 @@
       maxBtn.onclick = () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); };
 
       actions.appendChild(addTabBtn);
+
+      // Collapsible buttons (hidden in compact mode via CSS)
+      addBrowserBtn.classList.add('tg-btn-collapse');
+      splitH.classList.add('tg-btn-collapse');
+      splitV.classList.add('tg-btn-collapse');
+      maxBtn.classList.add('tg-btn-collapse');
       actions.appendChild(addBrowserBtn);
       actions.appendChild(splitH);
       actions.appendChild(splitV);
       actions.appendChild(maxBtn);
+
+      // Dropdown menu for compact mode
+      const dropdownWrap = document.createElement('div');
+      dropdownWrap.className = 'tg-dropdown-wrap';
+
+      const dropdownBtn = document.createElement('div');
+      dropdownBtn.className = 'tg-btn tg-dropdown-trigger';
+      dropdownBtn.title = 'More actions';
+      dropdownBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>';
+
+      const dropdown = document.createElement('div');
+      dropdown.className = 'tg-dropdown';
+
+      function makeDropdownItem(label, icon, onClick) {
+        const item = document.createElement('div');
+        item.className = 'tg-dropdown-item';
+        item.innerHTML = `<span class="tg-dropdown-icon">${icon}</span><span>${label}</span>`;
+        item.addEventListener('click', (e) => { e.stopPropagation(); dropdown.classList.remove('open'); onClick(); });
+        return item;
+      }
+      dropdown.appendChild(makeDropdownItem('Browser tab', addBrowserBtn.innerHTML, () => addBrowserTab(wsp.id, node.id)));
+      dropdown.appendChild(makeDropdownItem('Split horizontal', splitH.innerHTML, () => splitGroupDirectly(wsp.id, node.id, 'row')));
+      dropdown.appendChild(makeDropdownItem('Split vertical', splitV.innerHTML, () => splitGroupDirectly(wsp.id, node.id, 'column')));
+      dropdown.appendChild(makeDropdownItem(isMax ? 'Restore' : 'Maximize', maxBtn.innerHTML, () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); }));
+
+      dropdownBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wasOpen = dropdown.classList.contains('open');
+        document.querySelectorAll('.tg-dropdown.open').forEach(d => d.classList.remove('open'));
+        if (!wasOpen) dropdown.classList.add('open');
+      });
+      document.addEventListener('click', () => dropdown.classList.remove('open'));
+
+      dropdownWrap.appendChild(dropdownBtn);
+      dropdownWrap.appendChild(dropdown);
+      actions.appendChild(dropdownWrap);
       header.appendChild(actions);
       groupEl.appendChild(header);
 
@@ -1903,6 +1972,12 @@
       });
 
       groupEl.appendChild(body);
+
+      // Hide split/browser/maximize buttons when group is too narrow
+      new ResizeObserver(() => {
+        header.classList.toggle('compact', groupEl.clientWidth < 300);
+      }).observe(groupEl);
+
       return groupEl;
     }
   }
@@ -2336,14 +2411,16 @@
         const nextPane = panes[nextIdx];
         if (!prevPane || !nextPane) return;
 
+        const minPrev = parseInt(prevPane.style[isRow ? 'minWidth' : 'minHeight']) || SPLIT_MIN_PX;
+        const minNext = parseInt(nextPane.style[isRow ? 'minWidth' : 'minHeight']) || SPLIT_MIN_PX;
+
         const totalSize = startSizes[prevIdx] + startSizes[nextIdx];
-        const newPrev = Math.max(80, startSizes[prevIdx] + delta);
-        const newNext = Math.max(80, totalSize - newPrev);
-        const actualPrev = totalSize - newNext;
+        const newPrev = Math.max(minPrev, Math.min(startSizes[prevIdx] + delta, totalSize - minNext));
+        const newNext = totalSize - newPrev;
 
         prevPane.style.flex = 'none';
         nextPane.style.flex = 'none';
-        prevPane.style[dim] = actualPrev + 'px';
+        prevPane.style[dim] = newPrev + 'px';
         nextPane.style[dim] = newNext + 'px';
       };
 
