@@ -308,8 +308,10 @@ function rewriteHtml(html, pageUrl) {
 
   // Anti-frame-detection shim + runtime interceptors + nav tracker
   if (/<\/body>/i.test(html)) {
+    const _OO = new URL(pageUrl).origin;
     const injected = `<script>
 (function(){
+  var _OO = ${JSON.stringify(_OO)};
   // Kill old Service Workers that cause fetch duplication
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.getRegistrations().then(regs => {
@@ -393,11 +395,31 @@ function rewriteHtml(html, pageUrl) {
 
   // ──── Navigation tracking for parent ────
   var _lastHref = location.href;
+  function _decodeProxyUrl(url) {
+    // Standard /p/<b64>/... format
+    if (url.indexOf(_po + '/p/') !== -1) {
+      try {
+        var m = url.match(/\/p\/([A-Za-z0-9\-_=]+)(.*)?$/);
+        if (m) {
+          var origin = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
+          return origin + (m[2] || '');
+        }
+      } catch(e) {}
+    }
+    // Relative URL resolved against proxy host — use injected origin
+    if (url.indexOf(_po) === 0) {
+      var path = url.substring(_po.length);
+      if (_OO) return _OO + path;
+    }
+    return url;
+  }
+  // Immediately notify parent of current URL on page load
+  try { parent.postMessage({ terminalVibeNav: _decodeProxyUrl(location.href) }, '*'); } catch(e) {}
   setInterval(function() {
     var cur = location.href;
     if (cur === _lastHref) return;
     _lastHref = cur;
-    try { parent.postMessage({ terminalVibeNav: cur }, '*'); } catch(e) {}
+    try { parent.postMessage({ terminalVibeNav: _decodeProxyUrl(cur) }, '*'); } catch(e) {}
   }, 500);
 
   // ──── Block script-based frame-busting ────
@@ -795,7 +817,7 @@ const proxyServer = http.createServer(async (req, res) => {
             const outBody = Buffer.from(text, "utf-8");
             outHeaders["Content-Length"] = outBody.length;
 
-            if (req.method === "GET" && proxyRes.statusCode === 200 && cKey) {
+            if (req.method === "GET" && proxyRes.statusCode === 200 && cKey && !needsRewriting) {
               diskCache.set(cKey, {
                 status: proxyRes.statusCode,
                 headers: outHeaders,
