@@ -609,6 +609,20 @@ background: var(--bg);
   z-index: 60;
 }
 
+.term-slot.multi-selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px dashed var(--multi-select, #f9e2af);
+  pointer-events: none;
+  z-index: 61;
+}
+
+#sb-multi {
+  color: var(--multi-select, #f9e2af);
+  font-weight: 600;
+}
+
 .term-wrap {
   position: absolute;
   inset: 0;
@@ -857,6 +871,10 @@ outline: none;
  * ────────────────────────────────────────── */
 /* overlay open state — toggled by JS */
 #titlebar.tauri-active ~ #settings-overlay { top: 32px; }
+#settings-modal { user-select: none !important; }
+#settings-modal * { user-select: none !important; }
+.settings-section.active { user-select: none !important; }
+.settings-section.active * { user-select: none !important; }
 #settings-overlay.open { display: flex; opacity: 1; }
 #settings-overlay.open #settings-modal { transform: scale(1) translateY(0); }
 #settings-modal { transform: scale(0.97) translateY(10px); }

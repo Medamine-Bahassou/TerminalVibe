@@ -12,7 +12,7 @@
 - [ ] the pdf changes via embedPDF must be persist (comments + ..)
 
 ## *features :
-- [ ] custom themes 
+- [x] custom themes 
 - [ ] multiple select one command 
 <!-- - [ ] persist the state of commands (but must be toggle in setting enable/disable) -->
 

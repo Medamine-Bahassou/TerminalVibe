@@ -37,6 +37,7 @@
     focusRight:     { alt: true, key: 'l', label: 'Alt+L' },
     nextWorkspace:  { ctrl: true, shift: true, key: 'PageDown', label: 'Ctrl+Shift+PageDown' },
     prevWorkspace:  { ctrl: true, shift: true, key: 'PageUp', label: 'Ctrl+Shift+PageUp' },
+    multiSelect:    { ctrl: true, alt: true, key: 'Click', label: 'Ctrl+Alt+Click' },
   };
 
   const SHORTCUT_LABELS = {
@@ -59,6 +60,16 @@
     ? e.key.toLowerCase() === s.key.toLowerCase()
     : e.key === s.key || e.code === s.key;
     return keyMatch
+    && !!e.ctrlKey === !!s.ctrl
+    && !!e.shiftKey === !!s.shift
+    && !!e.altKey === !!s.alt
+    && !!e.metaKey === !!s.meta;
+  }
+
+  function matchShortcutMouse(e, action) {
+    const s = customShortcuts[action];
+    if (!s) return false;
+    return s.key === 'Click' && e.button === 0
     && !!e.ctrlKey === !!s.ctrl
     && !!e.shiftKey === !!s.shift
     && !!e.altKey === !!s.alt
@@ -276,6 +287,35 @@
   let activeWsId = null;
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
   let focusedSlotId = null;  // DOM id of focused .term-slot
+  let _multiSelected = new Set(); // terminal IDs selected via Ctrl+Alt+RightClick
+  function isInMultiMode() { return _multiSelected.size > 0; }
+  function clearMultiSelect() {
+    _multiSelected.clear();
+    document.querySelectorAll('.term-slot.multi-selected').forEach(s => s.classList.remove('multi-selected'));
+    updateMultiStatusBar();
+  }
+  function toggleMultiSelect(termId) {
+    const slot = document.getElementById('slot-' + termId);
+    if (!slot) return;
+    if (_multiSelected.has(termId)) {
+      _multiSelected.delete(termId);
+      slot.classList.remove('multi-selected');
+    } else {
+      _multiSelected.add(termId);
+      slot.classList.add('multi-selected');
+    }
+    updateMultiStatusBar();
+  }
+  function updateMultiStatusBar() {
+    const el = document.getElementById('sb-multi');
+    if (!el) return;
+    if (_multiSelected.size > 0) {
+      el.textContent = 'Multi: ' + _multiSelected.size;
+      el.style.display = '';
+    } else {
+      el.style.display = 'none';
+    }
+  }
   function updateFocusedGroup() {
     document.querySelectorAll('.term-group.focused-group').forEach(g => g.classList.remove('focused-group'));
     if (!focusedSlotId) return;
@@ -454,7 +494,7 @@
       ws.send(JSON.stringify(obj));
   }
 
-  function sendStdin(sid, data) {
+  function _sendStdinRaw(sid, data) {
     if (isTauri() && tauriPtyReady) {
       window.__TAURI_INTERNALS__.invoke('write_terminal', { id: sid, data: Array.from(data) }).catch(() => {});
       return;
@@ -468,6 +508,15 @@
     buf.set(sidBytes);
     buf.set(data, ID_LEN);
     ws.send(buf.buffer);
+  }
+
+  function sendStdin(sid, data) {
+    _sendStdinRaw(sid, data);
+    if (_multiSelected.size > 1) {
+      for (const otherId of _multiSelected) {
+        if (otherId !== sid) _sendStdinRaw(otherId, data);
+      }
+    }
   }
 
   function updateConnStatus(connected, connecting) {
@@ -680,6 +729,8 @@
     r.setProperty('--accent', accent);
     r.setProperty('--ws-active-strip', accent);
     r.setProperty('--accent-dim', hexToRgba(accent, 0.15));
+    const multiColor = (theme.ui && theme.ui.multiSelect) || theme.palette[3] || '#f9e2af';
+    r.setProperty('--multi-select', multiColor);
 
     // UI overrides from custom theme
     const uiProps = ['border', 'tabActiveBg', 'tabHoverBg', 'dimText', 'mutedText'];
@@ -886,6 +937,7 @@
 
   function activateWorkspace(id, skipRender) {
     if (id === activeWsId) return;
+    clearMultiSelect();
     activeWsId = id;
     if (!skipRender) {
       // Update active class in-place to avoid flicker from full sidebar rebuild
@@ -1355,6 +1407,7 @@
   function removeTerminal(wsId, termId, skipRender) {
     const wsp = findWs(wsId);
     if (!wsp || !wsp.layout) return;
+    if (_multiSelected.has(termId)) { _multiSelected.delete(termId); document.getElementById('slot-' + termId)?.classList.remove('multi-selected'); updateMultiStatusBar(); }
 
     // Last tab in workspace — remove the workspace with confirmation
     if (!skipRender && getWorkspaceTerminals(wsp).length <= 1) {
@@ -2056,6 +2109,15 @@
 
       // Click on group body focuses the active terminal
       body.addEventListener('mousedown', (e) => {
+        // Configurable multi-select shortcut
+        if (matchShortcutMouse(e, 'multiSelect')) {
+          const activeEntry = node.terminals.find(t => t.id === node.activeTermId);
+          if (activeEntry && activeEntry.type !== 'browser') {
+            e.preventDefault(); e.stopPropagation();
+            toggleMultiSelect(node.activeTermId);
+          }
+          return;
+        }
         // Don't steal focus when clicking inside an iframe
         if (e.target.tagName === 'IFRAME') return;
         document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
@@ -2469,7 +2531,7 @@
         });
         btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') openExternalUrl(entry.url); });
 
-        bc.addEventListener('mousedown', () => {
+        bc.addEventListener('mousedown', (e) => {
           document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
           slot.classList.add('focused');
           focusedSlotId = slot.id;
@@ -2502,7 +2564,13 @@
     entry.term.open(wrap);
     entry.opened = true;
 
-    slot.addEventListener('mousedown', () => {
+    slot.addEventListener('mousedown', (e) => {
+      // Ctrl+Alt+LeftClick toggles multi-select (skip browser tabs)
+      if (e.button === 0 && e.ctrlKey && e.altKey && entry.type !== 'browser') {
+        e.preventDefault(); e.stopPropagation();
+        toggleMultiSelect(entry.id);
+        return;
+      }
       document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
       slot.classList.add('focused');
       focusedSlotId = slot.id;
@@ -3236,7 +3304,7 @@
           bg: 'Background', fg: 'Foreground', cursor: 'Cursor', selection: 'Selection',
         },
         'UI Colors': {
-          accent: 'Accent', border: 'Border',
+          accent: 'Accent', border: 'Border', multiSelect: 'Multi-select',
           tabActiveBg: 'Tab Active BG', tabHoverBg: 'Tab Hover BG',
           dimText: 'Dim Text', mutedText: 'Muted Text',
         },
@@ -3292,6 +3360,7 @@
         if (key === 'cursor') return editingTheme.cursor;
         if (key === 'selection') return editingTheme.selection;
         if (key === 'accent') return editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa';
+        if (key === 'multiSelect') return editingTheme.ui.multiSelect || editingTheme.palette[3] || '#f9e2af';
         if (UI_DEFAULTS[key]) return editingTheme.ui[key] || UI_DEFAULTS[key];
         if (key.startsWith('p')) return editingTheme.palette[parseInt(key.slice(1))] || '#000000';
         return '#000000';
@@ -3309,6 +3378,7 @@ function setThemeColor(key, val) {
          else if (key === 'tabHoverBg') editingTheme.ui.tabHoverBg = val || undefined;
          else if (key === 'dimText') editingTheme.ui.dimText = val || undefined;
          else if (key === 'mutedText') editingTheme.ui.mutedText = val || undefined;
+         else if (key === 'multiSelect') editingTheme.ui.multiSelect = val || undefined;
          else if (key.startsWith('p')) editingTheme.palette[parseInt(key.slice(1))] = val;
          editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
 }
@@ -3587,6 +3657,7 @@ colorsCard.appendChild(grid);
         keyEl.classList.add('recording');
         keyEl.textContent = 'Press a key...';
 
+        const isClickAction = customShortcuts[action]?.key === 'Click' || DEFAULT_SHORTCUTS[action]?.key === 'Click';
         let pressed = {};      // track held keys by code
         let mainKey = null;     // the non-modifier key
         let modState = { ctrl: false, shift: false, alt: false, meta: false };
@@ -3651,7 +3722,11 @@ colorsCard.appendChild(grid);
           if (!isMod) mainKey = e.key;
 
           // Show live preview
-          if (mainKey) keyEl.textContent = formatKeyCombo({ ...modState, key: mainKey });
+          if (isClickAction && !mainKey && (modState.ctrl || modState.alt || modState.meta)) {
+            keyEl.textContent = formatKeyCombo({ ...modState, key: 'Click' });
+          } else if (mainKey) {
+            keyEl.textContent = formatKeyCombo({ ...modState, key: mainKey });
+          }
         }
 
         function onUp(e) {
@@ -3667,9 +3742,13 @@ colorsCard.appendChild(grid);
           if (Object.keys(pressed).length === 0 && mainKey) {
             apply({ ...modState, key: mainKey });
           } else if (Object.keys(pressed).length === 0 && !mainKey) {
-            // Only modifiers released without a main key — reset display
-            keyEl.textContent = 'Press a key...';
-            modState = { ctrl: false, shift: false, alt: false, meta: false };
+            // For click shortcuts: finalize with modifier-only combo
+            if (isClickAction && (modState.ctrl || modState.alt || modState.meta)) {
+              apply({ ...modState, key: 'Click' });
+            } else {
+              keyEl.textContent = 'Press a key...';
+              modState = { ctrl: false, shift: false, alt: false, meta: false };
+            }
           }
         }
 
@@ -4185,6 +4264,12 @@ colorsCard.appendChild(grid);
          ═══════════════════════════════════════════════════════════════ */
         // Capture-phase — intercepts before xterm.js
         document.addEventListener('keydown', e => {
+          // Escape clears multi-select mode (skip when settings is open)
+          if (e.key === 'Escape' && isInMultiMode() && !settingsOverlay.classList.contains('open')) {
+            e.preventDefault(); e.stopPropagation();
+            clearMultiSelect();
+            return;
+          }
           // Focus adjacent pane
           for (const dir of ['Left', 'Down', 'Up', 'Right']) {
             const action = 'focus' + dir.charAt(0).toUpperCase() + dir.slice(1).toLowerCase();
