@@ -6,6 +6,10 @@
 
 <p align="center">A terminal multiplexer and desktop workspace app with integrated browser, built on Tauri 2.x.</p>
 
+<p align="center">
+  <img src="screenshots/main.png" alt="TerminalVibe — Main Interface" width="800">
+</p>
+
 ## Features
 
 - **Multi-workspace** — switch between independent workspace contexts via sidebar
@@ -17,6 +21,10 @@
 - **Per-terminal font zoom** — Ctrl+Scroll to scale individual terminals
 - **Persistent state** — layout, themes, and settings persist across sessions
 - **Frameless window** — custom titlebar with logo and workspace toggle
+
+<p align="center">
+  <img src="screenshots/settings.png" alt="TerminalVibe — Settings" width="800">
+</p>
 
 ## Tech Stack
 
