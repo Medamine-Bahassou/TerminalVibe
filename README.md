@@ -65,6 +65,3 @@ npm run build
 
 Outputs the frontend bundle to `dist/` and produces a Linux AppImage via Tauri CLI.
 
-## License
-
-See LICENSE file if present.
