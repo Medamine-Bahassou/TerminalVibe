@@ -816,6 +816,10 @@ box-shadow: 0 16px 48px rgba(0,0,0,0.6);
 color: var(--fg);
 font-size: 13px;
 margin-bottom: 12px;
+user-select: none;
+}
+#prompt-colors {
+margin-top: 12px;
 }
 #prompt-input {
 width: 100%;

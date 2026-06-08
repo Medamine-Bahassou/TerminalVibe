@@ -228,8 +228,8 @@
     }
   }
 
-  const WS_PORT = 7681;
-  const PROXY_PORT = 7682;
+  let WS_PORT = 7681;
+  let PROXY_PORT = 7682;
 
   function isTauri() {
     return !!window.__TAURI_INTERNALS__ ||
@@ -459,11 +459,17 @@
         const data = arr.slice(ID_LEN);
         const sid = new TextDecoder().decode(sidBytes).trimEnd();
         const result = findTermById(sid);
-        if (result) result.term.term.write(data);
+        if (result) {
+          const oscCwd = _extractOSC7Cwd(data);
+          if (oscCwd) result.term.cwd = oscCwd;
+          result.term.term.write(data);
+        }
       } else {
         try {
           const msg = JSON.parse(e.data);
-          if (msg.type === 'exit') handleExit(msg.id, msg.code);
+          if (msg.type === 'ready') {
+            if (msg.port) { WS_PORT = msg.port; PROXY_PORT = msg.port + 1; }
+          } else if (msg.type === 'exit') handleExit(msg.id, msg.code);
           else if (msg.type === 'error') handleError(msg.id, msg.msg);
           else if (msg.type === 'pong') {}
         } catch {}
@@ -479,10 +485,33 @@
     ws.onerror = () => { ws.close(); };
   }
 
+  function _extractOSC7Cwd(uint8Data) {
+    // OSC 7: \x1b]7;file:///path\x07  or  \x1b]7;file:///path\x1b\\
+    const str = new TextDecoder().decode(uint8Data);
+    const match = str.match(/\x1b\]7;file:\/\/\/([^\x07\x1b]+)/);
+    if (match) {
+      try { return decodeURIComponent(match[1]); } catch {}
+    }
+    return null;
+  }
+
+  function _getFocusedCwd() {
+    const t = activeTerminal();
+    if (t && t.cwd) return t.cwd;
+    // Fallback: find any terminal in the active workspace with a known cwd
+    const wsp = activeWs();
+    if (wsp) {
+      for (const term of getWorkspaceTerminals(wsp)) {
+        if (term.cwd) return term.cwd;
+      }
+    }
+    return null;
+  }
+
   function sendControl(obj) {
     if (isTauri() && tauriPtyReady) {
       if (obj.type === 'create') {
-        window.__TAURI_INTERNALS__.invoke('create_terminal', { id: obj.id, cols: obj.cols, rows: obj.rows }).catch(() => {});
+        window.__TAURI_INTERNALS__.invoke('create_terminal', { id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null }).catch(() => {});
       } else if (obj.type === 'resize') {
         window.__TAURI_INTERNALS__.invoke('resize_terminal', { id: obj.id, cols: obj.cols, rows: obj.rows }).catch(() => {});
       } else if (obj.type === 'close') {
@@ -558,7 +587,12 @@
     tauriListen('pty://output', (e) => {
       const { id, data } = e.payload;
       const result = findTermById(id);
-      if (result) result.term.term.write(new Uint8Array(data));
+      if (result) {
+        const u8 = new Uint8Array(data);
+        const oscCwd = _extractOSC7Cwd(u8);
+        if (oscCwd) result.term.cwd = oscCwd;
+        result.term.term.write(u8);
+      }
     });
 
       tauriListen('pty://exit', (e) => {
@@ -1127,10 +1161,12 @@
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
 
+    const cwd = _getFocusedCwd();
     const id = uuid();
     const allTerms = getWorkspaceTerminals(wsp);
     const label = `bash ${allTerms.length + 1}`;
     const entry = _createTermEntry(wsp, id, label);
+    entry.cwd = cwd;
 
     if (!wsp.layout) {
       wsp.layout = {
@@ -1226,7 +1262,7 @@
 
     setTimeout(() => {
       const slot = getSlotDimensions(entry);
-      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows });
+      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd });
       // Fit again after PTY is connected
       requestAnimationFrame(() => fitTerm(entry));
     }, 80);
@@ -1624,6 +1660,8 @@
     const wsp = findWs(wsId);
     if (!wsp || !wsp.layout) return;
 
+    const cwd = _getFocusedCwd();
+
     // Prevent split if the workspace is maximized
     if (wsp._maximizedGroupId) {
       if (typeof zoomBadge === 'function') zoomBadge("Cannot split while maximized");
@@ -1679,7 +1717,7 @@
 
     setTimeout(() => {
       const slot = getSlotDimensions(newEntry);
-      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows });
+      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd });
       requestAnimationFrame(() => fitTerm(newEntry));
     }, 80);
   }
@@ -2360,7 +2398,6 @@
           return 'https://' + url;
         }
 
-        const PROXY_PORT = 7682;
         function proxyUrl(url) {
           if (!url) return url;
           if (url.startsWith('asset://')) {
@@ -3481,6 +3518,11 @@ function buildColorItem(key, label) {
          colorsCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
          for (const [groupName, fields] of Object.entries(THEME_COLOR_GROUPS)) {
            if (groupName === 'Terminal Palette') continue;
+           if (groupName === 'UI Colors') {
+             const sep = document.createElement('div');
+             sep.className = 'border-t border-[var(--border)] my-3';
+             colorsCard.appendChild(sep);
+           }
            const title = document.createElement('div');
            title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
            title.textContent = groupName;
@@ -3490,8 +3532,8 @@ function buildColorItem(key, label) {
            for (const [key, label] of Object.entries(fields)) {
              grid.appendChild(buildColorItem(key, label));
            }
-colorsCard.appendChild(grid);
-          }
+           colorsCard.appendChild(grid);
+         }
           container.appendChild(colorsCard);
 
           // Terminal Palette — its own card

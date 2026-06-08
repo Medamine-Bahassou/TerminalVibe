@@ -48,6 +48,7 @@ impl PtyManager {
         id: String,
         cols: u16,
         rows: u16,
+        cwd: Option<String>,
     ) -> Result<String, String> {
         // Don't create duplicate sessions
         if self.sessions.lock().contains_key(&id) {
@@ -70,6 +71,19 @@ impl PtyManager {
         cmd.arg("-l");
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+
+        if let Some(ref cwd_path) = cwd {
+            let expanded = if cwd_path.starts_with('~') {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                format!("{}{}", home, &cwd_path[1..])
+            } else {
+                cwd_path.clone()
+            };
+            let p = std::path::PathBuf::from(&expanded);
+            if p.is_dir() {
+                cmd.cwd(&expanded);
+            }
+        }
 
         let child = pair
             .slave
@@ -162,5 +176,18 @@ impl PtyManager {
             let _ = session.child.kill();
         }
         Ok(())
+    }
+
+    pub fn close_all(&self) {
+        let mut sessions = self.sessions.lock();
+        for (_, mut session) in sessions.drain() {
+            let _ = session.child.kill();
+        }
+    }
+}
+
+impl Drop for PtyManager {
+    fn drop(&mut self) {
+        self.close_all();
     }
 }
