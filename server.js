@@ -18,9 +18,9 @@ const { WebSocketServer, WebSocket } = require("ws");
 const pty = require("node-pty");
 
 const HOST = "127.0.0.1";
-const PORT = 7681; // WebSocket PTY
-const PROXY_PORT = 7682; // HTTP proxy for browser tab
-const APP_PORT = 6969; // HTTP app server
+const PORT = parseInt(process.env.WS_PORT || "7681", 10); // WebSocket PTY
+const PROXY_PORT = parseInt(process.env.PROXY_PORT || "7682", 10); // HTTP proxy for browser tab
+const APP_PORT = parseInt(process.env.APP_PORT || "6969", 10); // HTTP app server
 
 const SESSIONS = {};
 const ID_LEN = 36;
@@ -74,17 +74,22 @@ const _lastTargets = new Map(); // sessionId -> origin
 //  DISK LRU CACHE
 // ─────────────────────────────────────────────────────────────
 
-let CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, "cache");
+function getConfigDir() {
+  if (process.platform === "win32") {
+    return path.join(process.env.USERPROFILE || path.join(process.env.HOMEDRIVE, process.env.HOMEPATH), ".terminalvibe");
+  }
+  if (process.platform === "darwin") {
+    return path.join(process.env.HOME, ".terminalvibe");
+  }
+  return path.join(process.env.HOME || "/root", ".terminalvibe");
+}
+const CONFIG_DIR = getConfigDir();
+let CACHE_DIR = process.env.CACHE_DIR || path.join(CONFIG_DIR, "cache");
 const CACHE_SIZE_MB = parseInt(process.env.CACHE_SIZE_MB || "512", 10);
 const CACHE_SIZE_LIMIT = CACHE_SIZE_MB * 1024 * 1024;
 
 try { fs.mkdirSync(CACHE_DIR, { recursive: true }); }
-catch (err) {
-  if (process.env.TAURI === "1" || process.env.TAURI_ENV === "1") {
-    CACHE_DIR = path.join(process.env.HOME || "/root", ".cache", "TerminalVibe", "cache");
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-  } else throw err;
-}
+catch (err) { console.error("Failed to create cache dir:", err.message); }
 
 class DiskCache {
   constructor(dir, sizeLimit) {
@@ -300,138 +305,63 @@ function rewriteHtml(html, pageUrl) {
     }
   );
 
-  // Disabled CSS regex parsing in HTML (caused severe CPU freezing and catastrophic backtracking).
-  // The <base> tag handles relative and absolute CSS URLs natively and instantly.
+  // CSS url() in <style> blocks
+  html = html.replace(
+    /(<style\b[^>]*>)(.*?)(<\/style>)/gis,
+    (m, open, body, close) => {
+      const rewritten = body.replace(
+        /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
+        (m2, q, p) => {
+          const proxied = proxyAbsPath(p, pageUrl);
+          return proxied ? `url(${q}${proxied}${q})` : m2;
+        }
+      );
+      return open + rewritten + close;
+    }
+  );
+
+  // CSS url() in inline style=""
+  html = html.replace(
+    /(\bstyle\s*=\s*["'])(.*?)(["'])/gi,
+    (m, pre, body, post) => {
+      const rewritten = body.replace(
+        /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
+        (m2, q, p) => {
+          const proxied = proxyAbsPath(p, pageUrl);
+          return proxied ? `url(${q}${proxied}${q})` : m2;
+        }
+      );
+      return pre + rewritten + post;
+    }
+  );
+
+
 
   // STRIP PRECONNECT and PRELOAD to fix fatal WebKitGTK crashes on Tauri Linux
   html = html.replace(/<link\b[^>]*\brel\s*=\s*["']?(?:preconnect|preload|dns-prefetch|modulepreload)["']?[^>]*>/gi, "");
 
-  // Anti-frame-detection shim + runtime interceptors + nav tracker
+  // Anti-frame-detection shim + nav tracker
   if (/<\/body>/i.test(html)) {
-    const _OO = new URL(pageUrl).origin;
     const injected = `<script>
 (function(){
-  var _OO = ${JSON.stringify(_OO)};
-  // Kill old Service Workers that cause fetch duplication
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then(regs => {
-      for (let r of regs) r.unregister();
-    });
-  }
-
-  // ──── Anti-frame-busting ────
   try {
-    var _s = window;
-    Object.defineProperty(window, 'top',         { get: function(){ return _s; }, configurable: true });
-    Object.defineProperty(window, 'parent',      { get: function(){ return _s; }, configurable: true });
-    Object.defineProperty(window, 'frameElement',{ get: function(){ return null; }, configurable: true });
-    window.close = function(){};
+    var _self = window;
+    Object.defineProperty(window, 'top',         { get: function(){ return _self; }, configurable: true });
+    Object.defineProperty(window, 'parent',      { get: function(){ return _self; }, configurable: true });
+    Object.defineProperty(window, 'frameElement',{ get: function(){ return null;  }, configurable: true });
   } catch(e) {}
 
-  // ──── Proxy URL builder ────
-  var _po = location.origin;
-  var _b64 = function(s){ return btoa(s).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,''); };
-
-  function _pu(url) {
-    if (!url || typeof url !== 'string') return url;
-    if (url.startsWith('data:') || url.startsWith('blob:') ||
-        url.startsWith('javascript:') || url.startsWith('about:') ||
-        url.startsWith('mailto:') || url.startsWith('tel:')) return url;
-    if (url.startsWith(_po + '/p/')) return url;
-    if (url.startsWith('/p/')) return _po + url;
-    if (!url.startsWith('http') && !url.startsWith('//')) return url;
-    if (url.startsWith('//')) url = location.protocol + url;
-    try {
-      var u = new URL(url, location.href);
-      if (u.origin === _po) return url; // Already proxied
-      return _po + '/p/' + _b64(u.origin) + u.pathname + u.search;
-    } catch(ex) { return url; }
-  }
-
-  // ──── Override fetch (Required for YouTube video streams) ────
-  var _fetch = window.fetch;
-  window.fetch = function(input, init) {
-    try {
-      if (typeof input === 'string') input = _pu(input);
-      else if (input instanceof Request) {
-        var nu = _pu(input.url);
-        if (nu !== input.url) input = new Request(nu, input);
-      }
-    } catch(e) {}
-    return _fetch.apply(this, arguments);
-  };
-
-  // ──── Override XMLHttpRequest (Required for old API requests) ────
-  var _xo = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url) {
-    try { if (typeof url === 'string') arguments[1] = _pu(url); } catch(e) {}
-    return _xo.apply(this, arguments);
-  };
-
-  // ──── Override History API ────
-  var _ps = history.pushState;
-  var _rs = history.replaceState;
-  history.pushState = function(st, title, url) {
-    try { if (url) url = _pu(url); } catch(e) {}
-    return _ps.call(this, st, title, url);
-  };
-  history.replaceState = function(st, title, url) {
-    try { if (url) url = _pu(url); } catch(e) {}
-    return _rs.call(this, st, title, url);
-  };
-
-  // ──── Override <a> and <area> click to proxy navigation ────
-  document.addEventListener('click', function(e) {
-    var a = e.target.closest('a, area');
-    if (!a) return;
-    try {
-      var href = a.getAttribute('href');
-      if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
-        var proxied = _pu(href);
-        if (proxied !== href) a.href = proxied;
-      }
-    } catch(ex) {}
-  }, true);
-
-  // ──── Focus tracking for parent tab ────
-  ['mousedown', 'keydown', 'touchstart', 'focusin'].forEach(function(ev) {
-    document.addEventListener(ev, function() {
-      try { parent.postMessage({ terminalVibeFocus: true }, '*'); } catch(e) {}
-    }, true);
-  });
-
-  // ──── Navigation tracking for parent ────
+  var _startOrigin = location.origin;
   var _lastHref = location.href;
-  function _decodeProxyUrl(url) {
-    // Standard /p/<b64>/... format
-    if (url.indexOf(_po + '/p/') !== -1) {
-      try {
-        var m = url.match(/\/p\/([A-Za-z0-9\-_=]+)(.*)?$/);
-        if (m) {
-          var origin = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
-          return origin + (m[2] || '');
-        }
-      } catch(e) {}
-    }
-    // Relative URL resolved against proxy host — use injected origin
-    if (url.indexOf(_po) === 0) {
-      var path = url.substring(_po.length);
-      if (_OO) return _OO + path;
-    }
-    return url;
-  }
-  // Immediately notify parent of current URL on page load
-  try { parent.postMessage({ terminalVibeNav: _decodeProxyUrl(location.href) }, '*'); } catch(e) {}
   setInterval(function() {
     var cur = location.href;
     if (cur === _lastHref) return;
     _lastHref = cur;
-    try { parent.postMessage({ terminalVibeNav: _decodeProxyUrl(cur) }, '*'); } catch(e) {}
+    if (location.origin !== _startOrigin) {
+      try { parent.postMessage({ terminalVibeNav: cur }, '*'); } catch(e) {}
+    }
   }, 500);
-
-  // ──── Block script-based frame-busting ────
-  window.onbeforeunload = null;
-  document.addEventListener('beforeunload', function(e) { e.stopImmediatePropagation(); }, true);
+  try { navigator.serviceWorker.register('/sw.js', { scope: '/' }); } catch(e) {}
 })();
 <\/script>`;
     html = html.replace(/<\/body>/i, injected + "</body>");
@@ -475,6 +405,35 @@ function rewriteJs(jsContent, targetUrl) {
   const text = jsContent.toString("utf-8");
   return Buffer.from(text.replace(pattern, "$1$2$3"), "utf-8");
 }
+
+// ─────────────────────────────────────────────────────────────
+//  SERVICE WORKER
+// ─────────────────────────────────────────────────────────────
+
+const SW_SCRIPT = [
+  "'use strict';",
+  "self.addEventListener('install',function(e){e.waitUntil(self.skipWaiting())});",
+  "self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});",
+  "var _tb64=function(s){return btoa(s).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'')};",
+  "self.addEventListener('fetch',function(e){",
+  "var u=new URL(e.request.url);",
+  "if(u.pathname==='/sw.js'||u.pathname.indexOf('/p/')===0)return;",
+  "if(u.origin===self.location.origin)return;",
+  "e.respondWith((async function(){",
+  "var pb64=null;",
+  "try{var c=await self.clients.get(e.clientId);if(c&&c.url.indexOf('/p/')>=0){",
+  "var m=c.url.match(/\\/p\\/([A-Za-z0-9\\-_=]+)/);if(m)pb64=m[1];",
+  "}}catch(ex){}",
+  "if(!pb64){var ref=e.request.referrer||'';",
+  "var m2=ref.match(/\\/p\\/([A-Za-z0-9\\-_=]+)/);if(m2)pb64=m2[1];}",
+  "var pp=pb64?'/p/'+pb64+u.pathname+u.search:'/p/'+_tb64(u.origin)+u.pathname+u.search;",
+  "var opts={method:e.request.method,headers:e.request.headers};",
+  "if(e.request.method!=='GET'&&e.request.method!=='HEAD'){",
+  "try{opts.body=await e.request.clone().arrayBuffer();}catch(ex){}}",
+  "return fetch(pp,opts);",
+  "})());",
+  "});",
+].join("");
 
 // ─────────────────────────────────────────────────────────────
 //  DNS CACHE + UPSTREAM FETCH
@@ -637,6 +596,18 @@ const proxyServer = http.createServer(async (req, res) => {
   }
 
   const parsed = url.parse(req.url, true);
+
+  // Service Worker
+  if (parsed.pathname === "/sw.js") {
+    res.writeHead(200, {
+      "Content-Type": "application/javascript",
+      "Cache-Control": "no-cache",
+      "Service-Worker-Allowed": "/",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(SW_SCRIPT);
+    return;
+  }
 
   // Local file serving: /local/<encoded-path>
   if (parsed.pathname.startsWith("/local/")) {
@@ -995,7 +966,7 @@ const appServer = http.createServer((req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 class PTYSession {
-  constructor(sessionId, cols, rows, sendCb) {
+  constructor(sessionId, cols, rows, sendCb, cwd) {
     this.id = sessionId;
     this.cols = cols;
     this.rows = rows;
@@ -1003,14 +974,24 @@ class PTYSession {
     this._proc = null;
     this._running = false;
     this.shell = process.env.SHELL || "/bin/bash";
+    this.cwd = cwd;
   }
 
   start() {
+    let spawnCwd = this.cwd;
+    if (!spawnCwd) {
+      spawnCwd = process.env.HOME || "/root";
+    } else if (spawnCwd.startsWith("~")) {
+      spawnCwd = path.join(process.env.HOME || "/root", spawnCwd.slice(1));
+    }
+    try {
+      if (!fs.existsSync(spawnCwd)) spawnCwd = process.env.HOME || "/root";
+    } catch {}
     this._proc = pty.spawn(this.shell, ["-l"], {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
-      cwd: process.env.HOME || "/root",
+      cwd: spawnCwd,
       env: {
         ...process.env,
         TERM: "xterm-256color",
@@ -1095,11 +1076,12 @@ wss.on("connection", (ws) => {
           const sid = msg.id || "";
           const cols = parseInt(msg.cols) || 80;
           const rows = parseInt(msg.rows) || 24;
+          const cwd = msg.cwd || null;
           if (sid && !SESSIONS[sid]) {
             try {
               const session = new PTYSession(sid, cols, rows, (data) => {
                 if (ws.readyState === ws.OPEN) ws.send(data);
-              });
+              }, cwd);
               session.start();
               SESSIONS[sid] = session;
               localSessions.push(sid);

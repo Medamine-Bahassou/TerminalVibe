@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 #[tauri::command]
-fn create_terminal(app: tauri::AppHandle, state: tauri::State<PtyManager>, id: String, cols: u16, rows: u16) -> Result<String, String> {
-    state.create_terminal(app, id, cols, rows)
+fn create_terminal(app: tauri::AppHandle, state: tauri::State<PtyManager>, id: String, cols: u16, rows: u16, cwd: Option<String>) -> Result<String, String> {
+    state.create_terminal(app, id, cols, rows, cwd)
 }
 
 #[tauri::command]
@@ -71,13 +71,21 @@ pub fn run() {
             eprintln!("[tauri] Work dir: {:?}", work_dir);
             eprintln!("[tauri] server.js exists: {}", server_path.exists());
 
-            let child = std::process::Command::new("node")
-                .arg(&server_path)
-                .current_dir(&work_dir)
-                .env("TAURI", "1")
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::inherit())
-                .spawn();
+            let child = {
+                let mut cmd = std::process::Command::new("node");
+                cmd.arg(&server_path)
+                    .current_dir(&work_dir)
+                    .env("TAURI", "1")
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::inherit());
+                // Dev mode: use different ports to avoid conflicts with prod
+                if cfg!(debug_assertions) {
+                    cmd.env("WS_PORT", "7781")
+                       .env("PROXY_PORT", "7782")
+                       .env("APP_PORT", "7769");
+                }
+                cmd.spawn()
+            };
 
             match child {
                 Ok(child) => {
@@ -94,6 +102,11 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
+                // Kill all PTY shell processes
+                let pty = window.state::<PtyManager>();
+                pty.close_all();
+
+                // Kill Node.js server
                 let state = window.state::<Mutex<Option<std::process::Child>>>();
                 let child = state.lock().unwrap().take();
                 if let Some(mut child) = child {
