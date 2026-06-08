@@ -1,6 +1,10 @@
-# TerminalVibe
+<p align="center">
+  <img src="logo-app.svg" alt="TerminalVibe" width="200">
+</p>
 
-A terminal multiplexer and desktop workspace app with integrated browser, built on Tauri 2.x.
+<h1 align="center">TerminalVibe</h1>
+
+<p align="center">A terminal multiplexer and desktop workspace app with integrated browser, built on Tauri 2.x.</p>
 
 ## Features
 
