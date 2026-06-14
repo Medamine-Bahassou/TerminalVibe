@@ -7,8 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "tauri": "tauri",
-    "dev": "GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 npm run tauri dev",
-    "build": "GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 npm run tauri build"
+    "dev": "LD_LIBRARY_PATH= GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_EXEC_PATH=/usr/lib/webkit2gtk-4.1 npm run tauri dev",
+    "build": "LD_LIBRARY_PATH= GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_EXEC_PATH=/usr/lib/webkit2gtk-4.1 npm run tauri build"
   },
   "dependencies": {
     "@embedpdf/snippet": "^2.14.3",
