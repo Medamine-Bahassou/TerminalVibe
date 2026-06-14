@@ -201,6 +201,47 @@
               </div>
             </div>
           </div>
+          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-6 mb-2.5 ml-1">Background</div>
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
+            <div class="flex items-center justify-between px-4 py-3.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+              <div class="flex flex-col gap-1">
+                <span class="text-[13px] font-medium text-[var(--fg)]">Background mode</span>
+                <span class="text-[11.5px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show image per tab or globally in the window</span>
+              </div>
+              <div class="flex-1 flex items-center justify-end gap-3">
+                <select id="set-bg-mode" class="native-select-hidden">
+                  <option value="none">Disabled</option>
+                  <option value="per-tab">Per Tab</option>
+                  <option value="global">Global Window</option>
+                </select>
+                <div class="custom-dropdown" data-for="set-bg-mode"></div>
+              </div>
+            </div>
+            <div id="bg-image-row" class="flex items-center justify-between px-4 py-3.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+              <div class="flex flex-col gap-1">
+                <span class="text-[13px] font-medium text-[var(--fg)]">Background image</span>
+              </div>
+              <div class="flex-1 flex items-center justify-end gap-3 max-w-[260px]">
+                <div id="set-bg-image-area" class="bg-upload-area w-full">
+                  <svg class="bg-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                  <span class="bg-upload-text">Click to select image</span>
+                  <img class="bg-upload-preview" alt="">
+                  <div class="bg-clear-btn" id="bg-image-clear" title="Remove image">✕</div>
+                  <input type="file" id="set-bg-image-input" accept="image/*" class="hidden">
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center justify-between px-4 py-3.5 gap-4 hover:bg-white/[0.01]">
+              <div class="flex flex-col gap-1">
+                <span class="text-[13px] font-medium text-[var(--fg)]">Opacity</span>
+                <span class="text-[11.5px] text-[var(--muted-text)] leading-tight max-w-[280px]">Terminal background transparency</span>
+              </div>
+              <div class="flex-1 flex items-center justify-end gap-3">
+                <input type="range" id="set-bg-opacity" min="0" max="100" step="1" value="85" class="appearance-none w-[140px] h-1 bg-white/10 rounded outline-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent)] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[var(--bg)] [&::-webkit-slider-thumb]:shadow-[0_2px_4px_rgba(0,0,0,0.5)] [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-[var(--accent)] [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-[var(--bg)] [&::-moz-range-thumb]:shadow-[0_2px_4px_rgba(0,0,0,0.5)]">
+                <span class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]" id="set-bg-opacity-val"></span>
+              </div>
+            </div>
+          </div>
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-6 mb-2.5 ml-1">Window & Layout</div>
           <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
             <div class="flex items-center justify-between px-4 py-3.5 gap-4 hover:bg-white/[0.01]">

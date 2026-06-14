@@ -282,6 +282,9 @@
   let currentCursorBlink = true;
   let statusBarVisible = true;
   let currentScrollback = 10000;
+  let backgroundMode = 'none';       // 'none' | 'per-tab' | 'global'
+  let globalBackgroundImage = '';    // data URL for global bg
+  let backgroundOpacity = 0.85;       // 0..1
 
   let workspaces = [];       // [{id, label, activeTermId, layout: (Node)}]
   let activeWsId = null;
@@ -799,6 +802,7 @@
     updateStatusBar();
     renderSidebar();
     renderPaneArea();
+    applyBackground();
   }
 
   function makeXtermTheme(theme) {
@@ -821,6 +825,87 @@
     const g = parseInt(hex.slice(3,5),16);
     const b = parseInt(hex.slice(5,7),16);
     return `rgba(${r},${g},${b},${a})`;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+   B A*CKGROUND IMAGE & OPACITY
+   ═══════════════════════════════════════════════════════════════ */
+  function applyBackground() {
+    const r = document.documentElement.style;
+    r.setProperty('--bg-opacity', String(backgroundOpacity));
+    r.setProperty('--bg-image-mode', backgroundMode);
+
+    const paneArea = document.getElementById('pane-area');
+    const sidebar = document.getElementById('sidebar');
+
+    // Remove all bg classes first
+    paneArea.classList.remove('has-global-bg');
+
+    if (backgroundMode === 'global' && globalBackgroundImage) {
+      paneArea.style.backgroundImage = 'url(' + globalBackgroundImage + ')';
+      paneArea.classList.add('has-global-bg');
+      r.setProperty('--bg-image', 'url(' + globalBackgroundImage + ')');
+    } else if (backgroundMode === 'none' || !globalBackgroundImage) {
+      paneArea.style.backgroundImage = 'none';
+      r.setProperty('--bg-image', 'none');
+    }
+
+    // Apply per-tab backgrounds
+    for (const wsp of workspaces) {
+      const terms = getWorkspaceTerminals(wsp);
+      for (const t of terms) {
+        applyTermBgImage(t);
+      }
+    }
+  }
+
+  function applyTermBgImage(entry) {
+    if (!entry || !entry.el) return;
+    const slot = entry.el;
+    const wrap = slot.querySelector('.term-wrap');
+    const bgColor = currentTheme.bg;
+    const hasGlobalBg = backgroundMode === 'global' && globalBackgroundImage;
+    const hasPerTabBg = backgroundMode === 'per-tab' && entry.bgImage;
+    const anyBgActive = hasGlobalBg || hasPerTabBg;
+
+    // Set slot background image (per-tab mode) or clear it
+    if (hasPerTabBg) {
+      slot.style.backgroundImage = 'url(' + entry.bgImage + ')';
+      slot.classList.add('has-bg-image');
+    } else {
+      slot.style.backgroundImage = 'none';
+      slot.classList.remove('has-bg-image');
+    }
+
+    // Apply overlay opacity via CSS custom properties on .term-wrap
+    // The ::before pseudo-element does the actual rendering
+    if (wrap) {
+      const alpha = anyBgActive ? Math.max(0, Math.min(1, backgroundOpacity)) : 1.0;
+      wrap.style.setProperty('--term-bg-color', bgColor);
+      wrap.style.setProperty('--term-bg-opacity', String(alpha));
+    }
+  }
+
+  function loadBgImageFromFile(file, callback) {
+    if (!file) { callback(''); return; }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      callback(e.target.result);
+    };
+    reader.onerror = () => { callback(''); };
+    reader.readAsDataURL(file);
+  }
+
+  function setGlobalBackgroundImage(dataUrl) {
+    globalBackgroundImage = dataUrl;
+    applyBackground();
+    saveState();
+  }
+
+  function setTermBackgroundImage(entry, dataUrl) {
+    entry.bgImage = dataUrl || '';
+    applyTermBgImage(entry);
+    saveState();
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -850,6 +935,7 @@
           if (t.color) o.color = t.color;
           if (t.type === 'browser') { o.type = 'browser'; o.url = t.url; }
           else if (t.cwd) o.cwd = t.cwd;
+          if (t.bgImage) o.bgImage = t.bgImage;
           return o;
         })
       };
@@ -885,6 +971,7 @@
         }
         if (tData.color) entry.color = tData.color;
         if (tData.cwd) entry.cwd = tData.cwd;
+        if (tData.bgImage) entry.bgImage = tData.bgImage;
         group.terminals.push(entry);
       }
       return group;
@@ -901,6 +988,9 @@
       cursorBlink: currentCursorBlink,
       statusBarVisible,
       scrollback: currentScrollback,
+      backgroundMode,
+      globalBackgroundImage,
+      backgroundOpacity,
       sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
  sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
  shortcuts: customShortcuts,
@@ -933,6 +1023,9 @@
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
       if (state.statusBarVisible !== undefined) statusBarVisible = state.statusBarVisible;
       if (state.scrollback) currentScrollback = state.scrollback;
+      if (state.backgroundMode) backgroundMode = state.backgroundMode;
+      if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
+      if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
       if (state.shortcuts) {
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
@@ -2613,6 +2706,7 @@
     entry.el = slot;
     entry.term.open(wrap);
     entry.opened = true;
+    applyTermBgImage(entry);
 
     slot.addEventListener('mousedown', (e) => {
       // Ctrl+Alt+LeftClick toggles multi-select (skip browser tabs)
@@ -2632,6 +2726,13 @@
 
       updateStatusBar();
       entry.term.focus();
+    });
+
+    // Right-click on terminal body area — includes copy/paste
+    slot.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id, _fromBody: true });
     });
 
     return slot;
@@ -3036,6 +3137,56 @@
       item(isMaximized ? '⧉' : '⛶', isMaximized ? 'Restore tab' : 'Maximize tab', '', () => toggleMaximizeTerminal(wsId, termId));
       item('⊞', 'New terminal', 'Ctrl+Shift+T', () => addTerminal(wsId));
       item('✎', 'Edit tab', '', () => renameTerminal(wsId, termId));
+      if (backgroundMode === 'per-tab') {
+        const termEntry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
+        if (termEntry && termEntry.bgImage) {
+          item('🖼', 'Clear background image', '', () => {
+            setTermBackgroundImage(termEntry, '');
+            applyBackground();
+          });
+        } else {
+          item('🖼', 'Set background image…', '', () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.onchange = (e) => {
+              const file = e.target.files[0];
+              if (!file) return;
+              loadBgImageFromFile(file, (dataUrl) => {
+                setTermBackgroundImage(termEntry, dataUrl);
+                applyBackground();
+              });
+            };
+            input.click();
+          });
+        }
+      }
+      // Copy & Paste — only when right-clicking on the terminal body
+      if (data._fromBody) {
+        item('📋', 'Copy', 'Ctrl+Shift+C', () => {
+          const t = findTermById(termId);
+          if (t && t.term.type !== 'browser' && t.term.term.hasSelection()) {
+            const text = t.term.term.getSelection();
+            if (isTauri() && window.__TAURI_INTERNALS__) {
+              window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
+            } else {
+              navigator.clipboard.writeText(text);
+            }
+          }
+        });
+        item('📋', 'Paste', 'Ctrl+Shift+V', () => {
+          const t = findTermById(termId);
+          if (t && t.term.type !== 'browser') {
+            if (isTauri() && window.__TAURI_INTERNALS__) {
+              window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
+              .then(text => { if (text) t.term.term.paste(text); }).catch(() => {});
+            } else {
+              navigator.clipboard.readText()
+              .then(text => { if (text) t.term.term.paste(text); }).catch(() => {});
+            }
+          }
+        });
+      }
       sep();
       item('✕', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
     }
@@ -3660,6 +3811,9 @@ function buildColorItem(key, label) {
         document.getElementById('set-scrollback').value = currentScrollback;
         document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
 
+        // Background
+        refreshBgSettingsUI();
+
         // Shortcuts
         renderShortcutsList();
 
@@ -3953,6 +4107,115 @@ function buildColorItem(key, label) {
         document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
         applySettings();
       });
+
+      // ── Background Image Settings ──
+      const bgModeSelect = document.getElementById('set-bg-mode');
+      const bgImageRow = document.getElementById('bg-image-row');
+      const bgOpacitySlider = document.getElementById('set-bg-opacity');
+      const bgOpacityVal = document.getElementById('set-bg-opacity-val');
+      const bgUploadArea = document.getElementById('set-bg-image-area');
+      const bgFileInput = document.getElementById('set-bg-image-input');
+      const bgPreview = bgUploadArea.querySelector('.bg-upload-preview');
+      const bgClearBtn = document.getElementById('bg-image-clear');
+
+      function updateBgImageRowHelpText() {
+        const textEl = bgUploadArea.querySelector('.bg-upload-text');
+        if (backgroundMode === 'global') {
+          textEl.textContent = 'Click to select global background image';
+        } else if (backgroundMode === 'per-tab') {
+          textEl.textContent = 'Click to set background for current tab';
+        } else {
+          textEl.textContent = 'Enable a background mode first';
+        }
+      }
+
+      function updateBgUploadPreview() {
+        let hasImage = false;
+        let src = '';
+        if (backgroundMode === 'global') {
+          hasImage = !!globalBackgroundImage;
+          src = globalBackgroundImage;
+        } else if (backgroundMode === 'per-tab') {
+          const active = activeTerminal();
+          hasImage = active && !!active.bgImage;
+          src = active ? (active.bgImage || '') : '';
+        }
+        bgUploadArea.classList.toggle('has-image', hasImage);
+        if (hasImage) {
+          bgPreview.src = src;
+        }
+      }
+
+      function refreshBgSettingsUI() {
+        bgModeSelect.value = backgroundMode;
+        const dd = document.querySelector('.custom-dropdown[data-for="set-bg-mode"]');
+        if (dd) initCustomDropdown(dd);
+
+        const isEnabled = backgroundMode !== 'none';
+        bgImageRow.style.display = isEnabled ? '' : 'none';
+        bgOpacitySlider.value = Math.round(backgroundOpacity * 100);
+        bgOpacityVal.textContent = Math.round(backgroundOpacity * 100) + '%';
+        updateBgImageRowHelpText();
+        updateBgUploadPreview();
+      }
+
+      // Background mode change
+      bgModeSelect.addEventListener('change', () => {
+        backgroundMode = bgModeSelect.value;
+        refreshBgSettingsUI();
+        applyBackground();
+        saveState();
+      });
+
+      // Opacity
+      bgOpacitySlider.addEventListener('input', () => {
+        backgroundOpacity = parseInt(bgOpacitySlider.value) / 100;
+        bgOpacityVal.textContent = Math.round(backgroundOpacity * 100) + '%';
+        applyBackground();
+        saveState();
+      });
+
+      // File upload
+      bgUploadArea.addEventListener('click', (e) => {
+        if (e.target.closest('.bg-clear-btn')) return;
+        if (backgroundMode === 'none') return;
+        bgFileInput.click();
+      });
+
+      bgFileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        loadBgImageFromFile(file, (dataUrl) => {
+          if (backgroundMode === 'global') {
+            setGlobalBackgroundImage(dataUrl);
+          } else if (backgroundMode === 'per-tab') {
+            const active = activeTerminal();
+            if (active) {
+              setTermBackgroundImage(active, dataUrl);
+              applyBackground();
+            }
+          }
+          refreshBgSettingsUI();
+        });
+        e.target.value = '';
+      });
+
+      bgClearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (backgroundMode === 'global') {
+          setGlobalBackgroundImage('');
+        } else if (backgroundMode === 'per-tab') {
+          const active = activeTerminal();
+          if (active) {
+            setTermBackgroundImage(active, '');
+            applyBackground();
+          }
+        }
+        refreshBgSettingsUI();
+      });
+
+      // Also add "Set background…" context menu option for per-tab
+      // We'll patch into the existing context menu
 
       // Theme editor — Save
       document.getElementById('theme-btn-save').addEventListener('click', () => {
@@ -4606,6 +4869,9 @@ function buildColorItem(key, label) {
 
         // Apply initial status bar visibility
         document.getElementById('statusbar').style.display = statusBarVisible ? '' : 'none';
+
+        // Apply initial background & opacity
+        applyBackground();
 
         if (restored) {
           renderSidebar();
