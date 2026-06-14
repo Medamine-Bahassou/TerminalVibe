@@ -81,7 +81,6 @@ pub fn run() {
                 // Dev mode: use different ports to avoid conflicts with prod
                 if cfg!(debug_assertions) {
                     cmd.env("WS_PORT", "7781")
-                       .env("PROXY_PORT", "7782")
                        .env("APP_PORT", "7769");
                 }
                 cmd.spawn()
