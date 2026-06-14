@@ -442,7 +442,7 @@
           for (const t of terms) {
             if (t.pending) {
               const slot = getSlotDimensions(t);
-              sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows });
+              sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null });
               t.pending = false;
             }
           }
@@ -486,11 +486,22 @@
   }
 
   function _extractOSC7Cwd(uint8Data) {
-    // OSC 7: \x1b]7;file:///path\x07  or  \x1b]7;file:///path\x1b\\
+    // OSC 7: \x1b]7;file://hostname/path\x07  or  \x1b]7;file:///path\x07
     const str = new TextDecoder().decode(uint8Data);
-    const match = str.match(/\x1b\]7;file:\/\/\/([^\x07\x1b]+)/);
+    // Match the entire OSC 7 file:// URI
+    const match = str.match(/\x1b\]7;(file:\/\/[^\x07\x1b]+)/);
     if (match) {
-      try { return decodeURIComponent(match[1]); } catch {}
+      try {
+        let uri = match[1];
+        let pathPart = uri.slice(7); // strip 'file://'
+        // If pathPart doesn't start with /, it's file://hostname/path → remove hostname
+        if (!pathPart.startsWith('/')) {
+          const slashIdx = pathPart.indexOf('/');
+          if (slashIdx !== -1) pathPart = pathPart.slice(slashIdx);
+          else pathPart = '/' + pathPart;
+        }
+        return decodeURIComponent(pathPart);
+      } catch {}
     }
     return null;
   }
@@ -607,7 +618,7 @@
           for (const t of terms) {
             if (t.pending) {
               const slot = getSlotDimensions(t);
-              sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows });
+              sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null });
               t.pending = false;
             }
           }
@@ -838,6 +849,7 @@
           const o = { id: t.id, label: t.label };
           if (t.color) o.color = t.color;
           if (t.type === 'browser') { o.type = 'browser'; o.url = t.url; }
+          else if (t.cwd) o.cwd = t.cwd;
           return o;
         })
       };
@@ -872,6 +884,7 @@
           entry.pending = true;
         }
         if (tData.color) entry.color = tData.color;
+        if (tData.cwd) entry.cwd = tData.cwd;
         group.terminals.push(entry);
       }
       return group;
