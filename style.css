@@ -17,6 +17,9 @@
   --border: rgba(255,255,255,0.08);
   --dim-text: rgba(255,255,255,0.3);
   --muted-text: rgba(255,255,255,0.5);
+  --bg-image: none;
+  --bg-image-mode: none;
+  --bg-opacity: 0.85;
 }
 
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; margin: 0; }
@@ -591,6 +594,9 @@ background: var(--bg);
   inset: 0;
   min-width: 0;
   min-height: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 /* Skip layout/paint for off-screen terminal panes */
 /*
@@ -627,9 +633,82 @@ background: var(--bg);
   position: absolute;
   inset: 0;
 }
-.term-wrap .xterm { height: 100%; padding: 6px 0 6px 8px !important; font-variant-ligatures: none; font-feature-settings: "liga" 0; }
+
+.term-wrap {
+  position: absolute;
+  inset: 0;
+}
+
+/* ── Terminal Background Overlay ──
+ * A ::before pseudo-element on .term-wrap layers the theme background color
+ * with variable opacity on top of the background image (set on .term-slot
+ * for per-tab or #pane-area for global).
+ * The xterm element and its children are made transparent so the overlay
+ * controls precisely how much of the image shows through.
+ * opacity = 1   → solid terminal, image hidden
+ * opacity = 0.5 → half see-through, image and terminal blend
+ * opacity = 0   → fully transparent terminal, image fully visible
+ */
+.term-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: var(--term-bg-color, #1e1e2e);
+  opacity: var(--term-bg-opacity, 1);
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.15s ease;
+}
+
+/* Stack xterm above the overlay pseudo-element */
+.term-wrap .xterm {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  padding: 6px 0 6px 8px !important;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0;
+  background: transparent !important;
+}
 .term-wrap .xterm-rows > div { overflow: visible !important; }
-.term-wrap canvas { overflow: visible !important; }
+.term-wrap .xterm-viewport {
+  background: transparent !important;
+}
+.term-wrap canvas {
+  overflow: visible !important;
+  background: transparent !important;
+}
+
+/* Background image on terminal slot (per-tab mode) */
+.term-slot.has-bg-image {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Background image on pane area (global mode) */
+#pane-area.has-global-bg {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* In global mode, make terminal containers transparent so the pane-area bg shows through.
+   The xterm .xterm element keeps its theme background with opacity from the slider. */
+#pane-area.has-global-bg .term-group,
+#pane-area.has-global-bg .term-group-body {
+  background: transparent;
+}
+#pane-area.has-global-bg .xterm-viewport {
+  background-color: transparent !important;
+}
+#pane-area.has-global-bg canvas {
+  background-color: transparent !important;
+}
+/* Keep the tab header opaque — only terminal content shows the bg image */
+#pane-area.has-global-bg .term-group-header {
+  background: color-mix(in srgb, var(--bg) 92%, #000 8%);
+}
 
 /* Tab color border on terminal body — overrides focused accent */
 .term-group[style*="--group-tab-color"] .term-slot:not([style*="display: none"])::after {
@@ -980,6 +1059,77 @@ outline: none;
   color: var(--accent); animation: pulse-recording 1s ease-in-out infinite;
 }
 @keyframes pulse-recording { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+/* ── Background Image Settings ── */
+.bg-upload-area {
+  position: relative;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  text-align: center;
+}
+.bg-upload-area:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.bg-upload-area.has-image {
+  border-style: solid;
+  background-size: cover;
+  background-position: center;
+}
+.bg-upload-area .bg-upload-icon {
+  opacity: 0.3;
+  width: 24px;
+  height: 24px;
+}
+.bg-upload-area .bg-upload-text {
+  font-size: 11.5px;
+  color: var(--muted-text);
+}
+.bg-upload-area .bg-upload-preview {
+  display: none;
+  max-width: 100%;
+  max-height: 80px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+.bg-upload-area.has-image .bg-upload-preview {
+  display: block;
+}
+.bg-upload-area.has-image .bg-upload-icon,
+.bg-upload-area.has-image .bg-upload-text {
+  display: none;
+}
+.bg-upload-area .bg-clear-btn {
+  display: none;
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.5);
+  color: #fff;
+  font-size: 12px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+.bg-upload-area.has-image .bg-clear-btn {
+  display: flex;
+}
+.bg-upload-area .bg-clear-btn:hover {
+  background: #f38ba8;
+}
 
 /* Theme editor */
 .theme-color-group { margin-bottom: 16px; }
