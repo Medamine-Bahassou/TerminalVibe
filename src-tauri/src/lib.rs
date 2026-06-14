@@ -3,6 +3,7 @@ mod pty;
 use pty::PtyManager;
 use std::sync::Mutex;
 use tauri::Manager;
+use std::os::unix::process::CommandExt;
 
 #[tauri::command]
 fn create_terminal(app: tauri::AppHandle, state: tauri::State<PtyManager>, id: String, cols: u16, rows: u16, cwd: Option<String>) -> Result<String, String> {
@@ -83,6 +84,15 @@ pub fn run() {
                     cmd.env("WS_PORT", "7781")
                        .env("APP_PORT", "7769");
                 }
+                // Arrange for the child to receive SIGTERM when the parent dies.
+                // This handles abrupt termination (SIGKILL, crash, system shutdown)
+                // even when Rust/Tauri cleanup code cannot run.
+                unsafe {
+                    cmd.pre_exec(|| {
+                        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                        Ok(())
+                    });
+                }
                 cmd.spawn()
             };
 
@@ -113,6 +123,19 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Kill Node.js server (if not already killed via Destroyed)
+                let child = app_handle
+                    .state::<Mutex<Option<std::process::Child>>>()
+                    .lock()
+                    .unwrap()
+                    .take();
+                if let Some(mut child) = child {
+                    let _ = child.kill();
+                }
+            }
+        });
 }

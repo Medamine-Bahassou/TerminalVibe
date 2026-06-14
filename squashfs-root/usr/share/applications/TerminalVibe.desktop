@@ -1,0 +1,8 @@
+[Desktop Entry]
+Categories=
+Exec=terminalvibe
+StartupWMClass=terminalvibe
+Icon=terminalvibe
+Name=TerminalVibe
+Terminal=false
+Type=Application

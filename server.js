@@ -596,6 +596,58 @@ wss.on("connection", (ws) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+//  GRACEFUL SHUTDOWN — close all servers, kill sessions
+// ─────────────────────────────────────────────────────────────
+
+function shutdownGracefully() {
+  console.log("[server] Shutting down gracefully...");
+
+  // Close all PTY sessions
+  for (const sid of Object.keys(SESSIONS)) {
+    const session = SESSIONS[sid];
+    if (session) {
+      delete SESSIONS[sid];
+      try { session.close(); } catch {}
+    }
+  }
+
+  // Close servers
+  let remaining = 0;
+  function closeServer(server, name) {
+    if (!server) return;
+    // WebSocketServer uses internal _server; check that for listening state
+    const isListening = server.listening || (server._server && server._server.listening);
+    if (!isListening) return;
+    remaining++;
+    server.close(() => {
+      console.log(`[server] ${name} closed`);
+      remaining--;
+      if (remaining === 0) process.exit(0);
+    });
+  }
+
+  closeServer(proxyServer, "proxy");
+  closeServer(appServer, "app");
+  closeServer(wss, "websocket");
+
+  // If nothing was listening, exit immediately
+  if (remaining === 0) {
+    process.exit(0);
+  }
+
+  // Safety timeout — force exit after 3 seconds
+  setTimeout(() => {
+    console.error("[server] Force exit after timeout");
+    process.exit(1);
+  }, 3000).unref();
+}
+
+process.on("SIGTERM", shutdownGracefully);
+process.on("SIGINT", shutdownGracefully);
+process.on("SIGQUIT", shutdownGracefully);
+process.on("SIGHUP", shutdownGracefully);
+
+// ─────────────────────────────────────────────────────────────
 //  BOOT
 // ─────────────────────────────────────────────────────────────
 
