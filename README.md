@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo-app.svg" alt="TerminalVibe" width="200">
+  <img src="logo.png" alt="TerminalVibe" width="200">
 </p>
 
 <h1 align="center">TerminalVibe</h1>
