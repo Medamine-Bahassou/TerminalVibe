@@ -38,6 +38,7 @@
     nextWorkspace:  { ctrl: true, shift: true, key: 'PageDown', label: 'Ctrl+Shift+PageDown' },
     prevWorkspace:  { ctrl: true, shift: true, key: 'PageUp', label: 'Ctrl+Shift+PageUp' },
     multiSelect:    { ctrl: true, alt: true, key: 'Click', label: 'Ctrl+Alt+Click' },
+    maximizeTab:    { ctrl: true, shift: true, key: 'M', label: 'Ctrl+Shift+M' },
   };
 
   const SHORTCUT_LABELS = {
@@ -49,6 +50,7 @@
     focusLeft: 'Focus left pane', focusDown: 'Focus down pane',
     focusUp: 'Focus up pane', focusRight: 'Focus right pane',
     nextWorkspace: 'Next workspace', prevWorkspace: 'Previous workspace',
+    maximizeTab: 'Maximize / restore tab',
   };
 
   let customShortcuts = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS));
@@ -4694,6 +4696,12 @@ function buildColorItem(key, label) {
               const activeGroup = active ? findGroupContainingTerm(wsp.layout, active.id) : findFirstGroup(wsp.layout);
               if (activeGroup) addBrowserTab(wsp.id, activeGroup.id);
             }
+            return;
+          }
+          if (matchShortcut(e, 'maximizeTab')) {
+            e.preventDefault(); e.stopPropagation();
+            const wsp = activeWs();
+            if (wsp && wsp.activeTermId) toggleMaximizeTerminal(wsp.id, wsp.activeTermId);
             return;
           }
           // Arrow key tab switching (legacy)
