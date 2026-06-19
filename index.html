@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="vendor/xterm/xterm.css">
 <link rel="stylesheet" href="vendor/coloris.min.css">
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="vendor/xterm/xterm.js"></script>
 <script src="vendor/xterm/xterm-addon-fit.js"></script>
@@ -122,35 +123,35 @@
 <!-- Settings -->
 <!-- Settings -->
 <div id="settings-overlay" tabindex="-1" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10000] hidden flex items-center justify-center opacity-0 transition-opacity duration-200">
-  <div id="settings-modal" class="bg-[color-mix(in_srgb,var(--bg)_95%,#111_5%)] border border-white/10 rounded-xl w-[85vw] max-w-[900px] h-[85vh] max-h-[700px] flex flex-col shadow-2xl shadow-black/60 transition-all duration-200 ease-out select-none">
-    <div class="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--bg)_80%,rgba(255,255,255,0.02))] rounded-t-xl shrink-0">
+  <div id="settings-modal" class="bg-[color-mix(in_srgb,var(--bg)_95%,#111_5%)] border border-white/10 w-[85vw] max-w-[900px] h-[85vh] max-h-[700px] flex flex-col shadow-2xl shadow-black/60 transition-all duration-200 ease-out select-none">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--bg)_80%,rgba(255,255,255,0.02))] shrink-0">
       <div class="flex items-baseline gap-3">
         <h2 class="text-[16px] font-semibold text-[var(--fg)] m-0">Settings</h2>
         <span class="text-[11px] text-[var(--dim-text)] font-mono">v0.5.10</span>
       </div>
-      <div id="settings-close" class="w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer text-[var(--muted-text)] transition-all duration-150 bg-white/5 hover:bg-[#f38ba8] hover:text-[#111]">
+      <div id="settings-close" class="w-8 h-8 flex items-center justify-center cursor-pointer text-[var(--muted-text)] transition-all duration-150 bg-white/5 hover:bg-[#f38ba8] hover:text-[#111]">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </div>
     </div>
-    <div class="flex flex-1 min-h-0 rounded-b-xl overflow-hidden">
+    <div class="flex flex-1 min-h-0 overflow-hidden">
       <div class="w-[200px] shrink-0 p-4 pr-3 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col gap-1">
-        <div class="settings-cat-btn active flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="appearance">
+        <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5 cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="appearance">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 010 20"/><circle cx="12" cy="12" r="3"/></svg>
           <span>Appearance</span>
         </div>
-        <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="terminal">
+        <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5  cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="terminal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
           <span>Terminal</span>
         </div>
-        <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="shortcuts">
+        <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5  cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="shortcuts">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="8" x2="6" y2="8.01"/><line x1="10" y1="8" x2="10" y2="8.01"/><line x1="14" y1="8" x2="14" y2="8.01"/><line x1="18" y1="8" x2="18" y2="8.01"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="6" y1="16" x2="6" y2="16.01"/><line x1="18" y1="16" x2="18" y2="16.01"/></svg>
           <span>Shortcuts</span>
         </div>
-        <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="theme-editor">
+        <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5  cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="theme-editor">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 010 20 2 2 0 01-2-2v-1a2 2 0 00-2-2 2 2 0 01-2-2v-1a2 2 0 00-2-2 2 2 0 01-2-2 2 2 0 012-2h1a2 2 0 002-2 2 2 0 012-2"/></svg>
           <span>Theme Editor</span>
         </div>
-        <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="advanced">
+        <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5  cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="advanced">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
           <span>Advanced</span>
         </div>
@@ -159,7 +160,7 @@
         <!-- Appearance -->
         <div class="settings-section active select-none" data-cat="appearance">
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-2.5 ml-1">Color Scheme</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-6 flex flex-col">
             <div class="flex items-center justify-between px-4 py-3.5 gap-4 hover:bg-white/[0.01]">
               <div class="flex flex-col gap-1">
                 <span class="text-[13px] font-medium text-[var(--fg)]">Theme</span>
@@ -172,14 +173,14 @@
             </div>
           </div>
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-6 mb-2.5 ml-1">Typography</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-6 flex flex-col">
             <div class="flex items-center justify-between px-4 py-3.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
               <div class="flex flex-col gap-1">
                 <span class="text-[13px] font-medium text-[var(--fg)]">Font family</span>
                 <span class="text-[11.5px] text-[var(--muted-text)] leading-tight max-w-[280px]">CSS font-family for the terminal</span>
               </div>
               <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="text" id="set-fontfamily" spellcheck="false" autocomplete="off" placeholder="'JetBrains Mono', monospace" class="bg-black/20 border border-[var(--border)] rounded-md text-[var(--fg)] px-3 py-2 text-[12.5px] w-[220px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                <input type="text" id="set-fontfamily" spellcheck="false" autocomplete="off" placeholder="'JetBrains Mono', monospace" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-3 py-2 text-[12.5px] w-[220px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
               </div>
             </div>
             <div class="flex items-center justify-between px-4 py-3.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
@@ -202,7 +203,7 @@
             </div>
           </div>
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-6 mb-2.5 ml-1">Background</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-6 flex flex-col">
             <div class="flex items-center justify-between px-4 py-3.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
               <div class="flex flex-col gap-1">
                 <span class="text-[13px] font-medium text-[var(--fg)]">Background mode</span>
@@ -243,7 +244,7 @@
             </div>
           </div>
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-6 mb-2.5 ml-1">Window & Layout</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-6 flex flex-col">
             <div class="flex items-center justify-between px-4 py-3.5 gap-4 hover:bg-white/[0.01]">
               <div class="flex flex-col gap-1">
                 <span class="text-[13px] font-medium text-[var(--fg)]">Show status bar</span>
@@ -261,7 +262,7 @@
         <!-- Terminal -->
         <div class="settings-section select-none" data-cat="terminal">
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-2.5 ml-1">Cursor</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-6 flex flex-col">
             <div class="flex items-center justify-between px-4 py-3.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
               <div class="flex flex-col gap-1">
                 <span class="text-[13px] font-medium text-[var(--fg)]">Cursor style</span>
@@ -288,7 +289,7 @@
             </div>
           </div>
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-6 mb-2.5 ml-1">Behavior</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-6 flex flex-col">
             <div class="flex items-center justify-between px-4 py-3.5 gap-4 hover:bg-white/[0.01]">
               <div class="flex flex-col gap-1">
                 <span class="text-[13px] font-medium text-[var(--fg)]">Scrollback lines</span>
@@ -304,7 +305,7 @@
         <!-- Shortcuts -->
         <div class="settings-section select-none" data-cat="shortcuts">
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-2.5 ml-1">Keyboard Shortcuts</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col px-4 py-2.5">
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-6 flex flex-col px-4 py-2.5">
             <div class="settings-shortcuts" id="shortcuts-list"></div>
             <div class="flex justify-end mt-2 pt-2 border-t border-[var(--border)]">
               <span class="shortcuts-reset text-[11.5px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline" id="shortcuts-reset">Reset to defaults</span>
@@ -314,13 +315,13 @@
         <!-- Theme Editor -->
         <div class="settings-section select-none" data-cat="theme-editor">
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-2.5 ml-1">Theme Profile</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-6 flex flex-col">
             <div class="flex items-center justify-between px-4 py-3.5 border-b border-[var(--border)] gap-4">
               <div class="flex flex-col gap-1">
                 <span class="text-[13px] font-medium text-[var(--fg)]">Mode</span>
               </div>
               <div class="flex-1 flex items-center justify-end gap-3">
-                <div class="inline-flex rounded-lg border border-[var(--border)] overflow-hidden">
+                <div class="inline-flex  border border-[var(--border)] overflow-hidden">
                   <button class="theme-mode-btn active px-3 py-1.5 text-[11px] font-medium cursor-pointer transition-colors" data-mode="new">New Theme</button>
                   <button class="theme-mode-btn px-3 py-1.5 text-[11px] font-medium cursor-pointer transition-colors border-l border-[var(--border)]" data-mode="edit">Edit Existing</button>
                 </div>
@@ -331,7 +332,7 @@
                 <span class="text-[13px] font-medium text-[var(--fg)]">Theme name</span>
               </div>
               <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="text" id="set-theme-name" spellcheck="false" autocomplete="off" placeholder="My Custom Theme" class="bg-black/20 border border-[var(--border)] rounded-md text-[var(--fg)] px-3 py-2 text-[12.5px] w-[220px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                <input type="text" id="set-theme-name" spellcheck="false" autocomplete="off" placeholder="My Custom Theme" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-3 py-2 text-[12.5px] w-[220px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
               </div>
             </div>
             <div class="theme-edit-row hidden items-center justify-between px-4 py-3.5 gap-4 hover:bg-white/[0.01]">
@@ -359,14 +360,14 @@
         <!-- Advanced -->
         <div class="settings-section select-none" data-cat="advanced">
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-2.5 ml-1">System</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col">
+          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-6 flex flex-col">
             <div class="flex items-center justify-between px-4 py-3.5 gap-4 hover:bg-white/[0.01]">
               <div class="flex flex-col gap-1">
                 <span class="text-[13px] font-medium text-[var(--fg)]">Default Shell</span>
                 <span class="text-[11.5px] text-[var(--muted-text)] leading-tight max-w-[280px]">Override system default (requires restart)</span>
               </div>
               <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="text" id="set-shell" spellcheck="false" autocomplete="off" placeholder="e.g. /bin/zsh" class="bg-black/20 border border-[var(--border)] rounded-md text-[var(--fg)] px-3 py-2 text-[12.5px] w-[220px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                <input type="text" id="set-shell" spellcheck="false" autocomplete="off" placeholder="e.g. /bin/zsh" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-3 py-2 text-[12.5px] w-[220px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
               </div>
             </div>
           </div>
