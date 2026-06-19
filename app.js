@@ -1921,6 +1921,19 @@
       });
     }
 
+    // Update maximize button icons in all groups
+    const MAXIMIZE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+    const RESTORE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
+    
+    container.querySelectorAll('.term-group').forEach(el => {
+      const maxBtn = el.querySelector('[data-action="maximize"]');
+      if (maxBtn) {
+        const isNowMax = wsp._maximizedGroupId && el.id === 'group-' + wsp._maximizedGroupId;
+        maxBtn.innerHTML = isNowMax ? RESTORE_ICON : MAXIMIZE_ICON;
+        maxBtn.title = isNowMax ? 'Restore' : 'Maximize';
+      }
+    });
+
     // Update focus
     document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
     focusedSlotId = null;
@@ -2174,6 +2187,7 @@
       const isMax = wsp._maximizedGroupId === node.id;
       const maxBtn = document.createElement('div');
       maxBtn.className = 'tg-btn';
+      maxBtn.dataset.action = 'maximize';
       maxBtn.title = isMax ? 'Restore' : 'Maximize';
       maxBtn.innerHTML = isMax
       ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>'
@@ -3127,18 +3141,18 @@
 
     if (type === 'workspace') {
       const wsId = data;
-      item('⊞', 'New terminal', 'Ctrl+Shift+T', () => { activateWorkspace(wsId); addTerminal(wsId); });
+      item('<i class="ph ph-plus"></i>', 'New terminal', 'Ctrl+Shift+T', () => { activateWorkspace(wsId); addTerminal(wsId); });
       sep();
-      item('✎', 'Edit workspace', '', () => renameWorkspace(wsId));
+      item('<i class="ph ph-pencil-simple"></i>', 'Edit workspace', '', () => renameWorkspace(wsId));
       sep();
-      item('✕', 'Close workspace', '', () => removeWorkspace(wsId), true);
+      item('<i class="ph ph-x"></i>', 'Close workspace', '', () => removeWorkspace(wsId), true);
     } else if (type === 'terminal') {
       const { wsId, termId } = data;
       const wsp = findWs(wsId);
       const isMaximized = wsp && wsp._maximizedGroupId && findGroupContainingTerm(wsp.layout, termId)?.id === wsp._maximizedGroupId;
-      item(isMaximized ? '⧉' : '⛶', isMaximized ? 'Restore tab' : 'Maximize tab', '', () => toggleMaximizeTerminal(wsId, termId));
-      item('⊞', 'New terminal', 'Ctrl+Shift+T', () => addTerminal(wsId));
-      item('✎', 'Edit tab', '', () => renameTerminal(wsId, termId));
+      item(isMaximized ? '<i class="ph ph-corners-in"></i>' : '<i class="ph ph-corners-out"></i>', isMaximized ? 'Restore tab' : 'Maximize tab', '', () => toggleMaximizeTerminal(wsId, termId));
+      item('<i class="ph ph-plus"></i>', 'New terminal', 'Ctrl+Shift+T', () => addTerminal(wsId));
+      item('<i class="ph ph-pencil-simple"></i>', 'Edit tab', '', () => renameTerminal(wsId, termId));
       if (backgroundMode === 'per-tab') {
         const termEntry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
         if (termEntry && termEntry.bgImage) {
@@ -3165,7 +3179,7 @@
       }
       // Copy & Paste — only when right-clicking on the terminal body
       if (data._fromBody) {
-        item('📋', 'Copy', 'Ctrl+Shift+C', () => {
+        item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+Shift+C', () => {
           const t = findTermById(termId);
           if (t && t.term.type !== 'browser' && t.term.term.hasSelection()) {
             const text = t.term.term.getSelection();
@@ -3176,7 +3190,7 @@
             }
           }
         });
-        item('📋', 'Paste', 'Ctrl+Shift+V', () => {
+        item('<i class="ph ph-clipboard-text"></i>', 'Paste', 'Ctrl+Shift+V', () => {
           const t = findTermById(termId);
           if (t && t.term.type !== 'browser') {
             if (isTauri() && window.__TAURI_INTERNALS__) {
@@ -3190,7 +3204,7 @@
         });
       }
       sep();
-      item('✕', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
+      item('<i class="ph ph-x"></i>', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
     }
 
     ctxEl.classList.add('open');
@@ -4904,12 +4918,37 @@ function buildColorItem(key, label) {
           document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
             window.__TAURI_INTERNALS__.invoke('plugin:window|minimize');
           });
+
+          // Update maximize button icon based on window state
+          const MAXIMIZE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>';
+          const RESTORE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="10" height="10" rx="2"/><rect x="9" y="9" width="10" height="10" rx="2"/></svg>';
+
+          function updateMaximizeIcon(maximized) {
+            const btn = document.getElementById('titlebar-maximize');
+            if (btn) {
+              btn.innerHTML = maximized ? RESTORE_SVG : MAXIMIZE_SVG;
+              btn.title = maximized ? 'Restore' : 'Maximize';
+            }
+          }
+
+          function checkWindowMaximized() {
+            window.__TAURI_INTERNALS__.invoke('plugin:window|is_maximized').then(updateMaximizeIcon);
+          }
+
           document.getElementById('titlebar-maximize')?.addEventListener('click', () => {
-            window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize');
+            window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize').then(() => {
+              setTimeout(checkWindowMaximized, 50);
+            });
           });
           document.getElementById('titlebar-close')?.addEventListener('click', () => {
             window.__TAURI_INTERNALS__.invoke('plugin:window|close');
           });
+
+          // Initialize icon state on load
+          checkWindowMaximized();
+
+          // Listen for window resize events to detect maximize/unmaximize
+          tauriListen('tauri://resize', () => { setTimeout(checkWindowMaximized, 50); });
         }
 
         // Listen for navigation and focus messages from browser tab iframes
