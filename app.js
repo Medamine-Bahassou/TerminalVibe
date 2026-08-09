@@ -342,6 +342,10 @@
   let _ptyListeners = {};    // termId -> unlisten function for Tauri PTY events
 
   let _browserSyncRaf = null;
+  const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
+  if (isDesktop() && window.electronAPI) {
+    window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
+  }
   const browserSlotRo = new ResizeObserver(() => {
     if (_browserSyncRaf) return;
     _browserSyncRaf = requestAnimationFrame(() => {
@@ -357,6 +361,7 @@
     // PHASE 1: Batch READ (Prevents Layout Thrashing)
     const paneRect = paneArea.getBoundingClientRect();
     const updates = [];
+    const viewUpdates = []; // native WebContentsView bounds (viewport coords = contentView coords)
 
     // OPTIMIZATION: Only process the active workspace. Ignore hidden ones completely.
     const ws = activeWs();
@@ -366,6 +371,7 @@
           if (!t.el || !t.el.isConnected || t.el.style.display === 'none' || t.el.offsetWidth === 0) {
             // OPTIMIZATION: Offscreen positioning instead of display:none prevents iframe reloads
             updates.push({ container: t.browserContainer, x: -9999, y: -9999, w: 0, h: 0 });
+            if (t._viewCreated) viewUpdates.push({ id: t.id, show: false });
           } else {
             const slotRect = t.el.getBoundingClientRect();
             updates.push({
@@ -375,6 +381,15 @@
               w: slotRect.width,
               h: slotRect.height
             });
+            // The native view overlays .browser-content (below the toolbar), tracked in
+            // viewport coords which map 1:1 to contentView bounds at zoom 1.
+            if (t._viewCreated) {
+              const cw = t.browserContainer.querySelector('.browser-content');
+              if (cw) {
+                const r = cw.getBoundingClientRect();
+                viewUpdates.push({ id: t.id, rect: { x: r.left, y: r.top, width: r.width, height: r.height }, show: true });
+              }
+            }
           }
         }
       }
@@ -386,6 +401,7 @@
       for (const t of getWorkspaceTerminals(otherWs)) {
         if (t.type === 'browser' && t.browserContainer) {
           updates.push({ container: t.browserContainer, x: -9999, y: -9999, w: 0, h: 0 });
+          if (t._viewCreated) viewUpdates.push({ id: t.id, show: false });
         }
       }
     }
@@ -398,6 +414,17 @@
       bc.style.transform = `translate3d(${u.x}px, ${u.y}px, 0)`;
       bc.style.width = `${u.w}px`;
       bc.style.height = `${u.h}px`;
+    }
+
+    if (window.electronAPI) {
+      for (const v of viewUpdates) {
+        if (v.show) {
+          window.electronAPI.browserResize(v.id, v.rect);
+          window.electronAPI.browserShow(v.id);
+        } else {
+          window.electronAPI.browserHide(v.id);
+        }
+      }
     }
   }
 
@@ -1657,6 +1684,7 @@
       if (entry._resizeObs) { entry._resizeObs.disconnect(); entry._resizeObs = null; }
       if (entry._suspendTimer) { clearTimeout(entry._suspendTimer); entry._suspendTimer = null; }
       if (entry.browserContainer) { entry.browserContainer.remove(); entry.browserContainer = null; }
+      if (entry._viewCreated && window.electronAPI) { window.electronAPI.browserDestroy(entry.id); browserEventHooks.delete(entry.id); }
     }
     if (entry.el) entry.el.remove();
 
@@ -2527,6 +2555,7 @@
         }
 
         function showError(url, msg) {
+          if (window.electronAPI) window.electronAPI.browserHide(entry.id);
           contentWrap.style.background = '#fff';
           pageView.style.display = '';
           var friendlyMsg = msg;
@@ -2556,6 +2585,7 @@
         }
 
         function showStartPage() {
+          if (window.electronAPI) window.electronAPI.browserHide(entry.id);
           contentWrap.style.background = '#fff';
           pageView.style.display = '';
           pageView.innerHTML = `
@@ -2565,11 +2595,12 @@
           <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
           </svg>
           <p>Enter a URL or search term above</p>
-          <p class="browser-start-hint">${isTauri() ? 'Native webview — sites load directly without proxy.' : 'Proxied browser — sites load via local proxy to strip frame restrictions.'}</p>
+          <p class="browser-start-hint">${isTauri() || isDesktop() ? 'Native webview — sites load directly without proxy.' : 'Proxied browser — sites load via local proxy to strip frame restrictions.'}</p>
           </div>`;
         }
 
         function showImageViewer(url) {
+          if (window.electronAPI) window.electronAPI.browserHide(entry.id);
           pageView.style.display = 'none';
           let wrap = contentWrap.querySelector('.browser-img-wrap');
           if (!wrap) {
@@ -2586,6 +2617,7 @@
         }
 
         function showPdfViewer(url) {
+          if (window.electronAPI) window.electronAPI.browserHide(entry.id);
           pageView.style.display = 'none';
           const iframe = contentWrap.querySelector('iframe.browser-fallback');
           if (iframe) iframe.style.display = 'none';
@@ -2731,119 +2763,46 @@
             return;
           }
 
-          try {
-            /* ponytail: Electron webview guest is hard-locked to its default 150px height in this
-               build (v42.3.0) — width syncs, height never leaves 150, regardless of CSS/inline px/
-               preset/resize/disableguestresize. Electron officially deprecates <webview>. The
-               iframe path renders full-height (verified). Isolation is preserved via the sandbox
-               attr below; upgrade to WebContentsView if true process isolation is required. */
-            const useWebview = false;
-            let container = contentWrap.querySelector(useWebview ? 'webview.browser-fallback' : 'iframe.browser-fallback');
-            if (!container) {
-              /* ponytail: guest attaches at Electron's default 150px when .browser-slot is still
-                 hidden/unsized and never re-syncs (element 564px, guest 150px). Defer creation
-                 until .browser-content has real size so the guest attaches at full height. */
-              if (useWebview && !contentWrap.clientWidth) {
-                if (!contentWrap._waitRo) {
-                  contentWrap._waitRo = new ResizeObserver(() => {
-                    if (!contentWrap.clientWidth) return;
-                    contentWrap._waitRo.disconnect();
-                    contentWrap._waitRo = null;
-                    loadUrl(url);
-                  });
-                  contentWrap._waitRo.observe(contentWrap);
-                }
-                return;
-              }
-              container = document.createElement(useWebview ? 'webview' : 'iframe');
-              container.className = 'browser-fallback';
-              container.style.cssText = 'border:none;background:#fff;transform:translateZ(0);';
-              var loadTimer = setTimeout(function() {
-                if (loading) {
-                  showLoading(false);
-                  showError(url, 'Page load timed out. The site may be unreachable or require authentication.');
-                }
-              }, 20000);
-              if (useWebview) {
-                container.setAttribute('webpreferences', 'contextIsolation=yes');
-                /* ponytail: guest view locks its size at attach (element 564px, guest stuck
-                   150px) and ignores CSS-only resizes. Pin the element to .browser-content's
-                   pixels persistently — a stable, sampleable change Electron's guest sync sees.
-                   Run after a double-rAF so the element has its real box (attach fires early). */
-                const pinGuest = () => {
-                  const w = contentWrap.clientWidth, h = contentWrap.clientHeight;
-                  if (!w || !h) return;
-                  container.style.width = w + 'px';
-                  container.style.height = h + 'px';
-                };
-                container.addEventListener('did-attach', () => {
-                  requestAnimationFrame(() => requestAnimationFrame(pinGuest));
-                });
-                if (!contentWrap._guestRo) {
-                  contentWrap._guestRo = new ResizeObserver(pinGuest);
-                  contentWrap._guestRo.observe(contentWrap);
-                }
-                container.addEventListener('did-start-loading', () => showLoading(true));
-                container.addEventListener('did-stop-loading', () => {
-                  clearTimeout(loadTimer);
-                  showLoading(false);
-                  pinGuest();
-                  resumeBrowserTab(entry);
-                });
-                container.addEventListener('did-navigate', (e) => syncUrl(e.url));
-                container.addEventListener('did-navigate-in-page', (e) => syncUrl(e.url));
-                container.addEventListener('did-fail-load', () => {
-                  clearTimeout(loadTimer);
-                  showLoading(false);
-                  showError(entry.url, 'Failed to load page.');
-                });
-                container.addEventListener('click', () => {
-                  const slot = container.closest('.term-slot');
-                  if (slot && !slot.classList.contains('focused')) slot.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                });
-              } else {
-                container.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
-                container.referrerPolicy = 'no-referrer';
-                container.allow = 'clipboard-read; clipboard-write; fullscreen';
-                container.onload = function() {
-                  clearTimeout(loadTimer);
-                  showLoading(false);
-                  resumeBrowserTab(entry);
-                };
-              }
-              contentWrap.insertBefore(container, pageView);
-            }
-            pageView.style.display = 'none';
-            container.style.display = 'block';
-            /* ponytail: webview sized by .browser-fallback (width/height:100%) inside the
-               .browser-content flex column; no inline px needed. */
-            var _oldWrap = contentWrap.querySelector('.browser-zoom-wrap');
-            if (_oldWrap) {
-              if (_oldWrap.contains(container)) contentWrap.appendChild(container);
-              _oldWrap.remove();
-              container.style.position = '';
-              container.style.left = '';
-              container.style.top = '';
-              container.style.transform = '';
-            }
-            /* ponytail: inset:0 from .browser-fallback handles sizing — height:100% collapses in flex for webview */
-            entry._iframe = container;
-            if (!useWebview) {
-              if (url.startsWith('file://') || url.startsWith('asset:')) {
-                container.removeAttribute('sandbox');
-              } else {
-                container.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
-              }
-            }
-            container.src = proxyUrl(url);
-            if (url.startsWith('file://') || url.startsWith('asset:')) {
+          /* Native WebContentsView: the <webview> guest was hard-locked at its default 150px
+             height (upstream Electron bug — width synced, height never left 150). A
+             WebContentsView is owned in main and placed over this .browser-content by the
+             syncBrowserSlots bounds bridge, so it renders full-size with real process isolation. */
+          pageView.style.display = 'none';
+          if (entry._loadTimer) clearTimeout(entry._loadTimer);
+          entry._loadTimer = setTimeout(() => {
+            if (loading) {
               showLoading(false);
+              showError(entry.url, 'Page load timed out. The site may be unreachable or require authentication.');
             }
-            entry.url = url;
-          } catch (e) {
-            showLoading(false);
-            showError(url, 'Failed to load page: ' + e.message);
+          }, 20000);
+
+          if (isDesktop() && window.electronAPI) {
+            if (!entry._viewCreated) {
+              entry._viewCreated = true;
+              browserEventHooks.set(entry.id, (d) => {
+                switch (d.evt) {
+                  case 'did-start-loading': showLoading(true); break;
+                  case 'did-stop-loading':
+                    clearTimeout(entry._loadTimer);
+                    showLoading(false);
+                    resumeBrowserTab(entry);
+                    break;
+                  case 'did-navigate':
+                  case 'did-navigate-in-page': syncUrl(d.url); break;
+                  case 'did-fail-load':
+                    clearTimeout(entry._loadTimer);
+                    showLoading(false);
+                    showError(entry.url, 'Failed to load page.');
+                    break;
+                }
+              });
+              window.electronAPI.browserCreate(entry.id, proxyUrl(url));
+            } else {
+              window.electronAPI.browserNavigate(entry.id, proxyUrl(url));
+            }
+            window.electronAPI.browserShow(entry.id);
           }
+          entry.url = url;
         }
 
         entry._loadUrl = loadUrl;

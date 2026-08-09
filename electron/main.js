@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
@@ -43,7 +43,16 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
-  mainWindow.on('closed', () => { mainWindow = null; });
+  // F12 / Ctrl+Shift+I → toggle DevTools (default menu is hidden by titleBarStyle)
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12' ||
+        input.type === 'keyDown' && input.control && input.shift && input.key.toLowerCase() === 'i') {
+      event.preventDefault();
+      mainWindow.webContents.toggleDevTools();
+    }
+  });
+
+  mainWindow.on('closed', () => { destroyAllBrowserViews(); mainWindow = null; });
 }
 
 // ── IPC: external links ──
@@ -108,6 +117,68 @@ ipcMain.on('terminal:close', (_e, id) => {
 ipcMain.on('terminal:kill-all', () => {
   for (const t of ptys.values()) { try { t.kill(); } catch {} }
   ptys.clear();
+});
+
+// ── IPC: native browser tab views (WebContentsView) ──
+// <webview> guests hard-lock at 150px height in this Electron build; a native
+// WebContentsView is owned here in main, placed by renderer-reported bounds.
+const bviews = new Map(); // id -> WebContentsView
+const bviewOwner = new WeakMap(); // guest webContents -> id
+
+function destroyAllBrowserViews() {
+  for (const [id, view] of bviews) {
+    try { mainWindow.contentView.removeChildView(view); } catch {}
+    try { view.webContents.close(); } catch {}
+    bviews.delete(id);
+  }
+}
+
+ipcMain.on('browser:create', (_e, id, url) => {
+  if (bviews.has(id)) return;
+  const view = new WebContentsView({ webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } });
+  view.setBackgroundColor('#ffffff');
+  bviews.set(id, view);
+  bviewOwner.set(view.webContents, id);
+  const gc = view.webContents;
+  const sendEvent = (evt, data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('browser:event', { id, evt, ...data });
+  };
+  gc.setWindowOpenHandler(({ url: u }) => { if (/^https?:\/\//i.test(u)) shell.openExternal(u); return { action: 'deny' }; });
+  gc.on('did-start-loading', () => sendEvent('did-start-loading'));
+  gc.on('did-stop-loading', () => sendEvent('did-stop-loading'));
+  gc.on('did-navigate', (_, u) => sendEvent('did-navigate', { url: u }));
+  gc.on('did-navigate-in-page', (_, u) => sendEvent('did-navigate-in-page', { url: u }));
+  gc.on('did-fail-load', (_e2, code, desc, u) => sendEvent('did-fail-load', { code, desc, url: u }));
+  gc.on('page-title-updated', (_e2, title) => sendEvent('page-title-updated', { title }));
+  if (url) gc.loadURL(url);
+});
+ipcMain.on('browser:resize', (_e, id, rect) => {
+  const view = bviews.get(id);
+  if (view && rect) view.setBounds({ x: rect.x || 0, y: rect.y || 0, width: rect.width || 0, height: rect.height || 0 });
+});
+ipcMain.on('browser:show', (_e, id) => {
+  const view = bviews.get(id);
+  if (view) { try { mainWindow.contentView.addChildView(view); } catch {} }
+});
+ipcMain.on('browser:hide', (_e, id) => {
+  const view = bviews.get(id);
+  if (view) { try { mainWindow.contentView.removeChildView(view); } catch {} }
+});
+ipcMain.on('browser:navigate', (_e, id, url) => {
+  const view = bviews.get(id);
+  if (view && url) view.webContents.loadURL(url);
+});
+ipcMain.on('browser:back', (_e, id) => { const v = bviews.get(id); if (v && v.webContents.canGoBack()) v.webContents.goBack(); });
+ipcMain.on('browser:forward', (_e, id) => { const v = bviews.get(id); if (v && v.webContents.canGoForward()) v.webContents.goForward(); });
+ipcMain.on('browser:reload', (_e, id) => { const v = bviews.get(id); if (v) v.webContents.reload(); });
+ipcMain.on('browser:zoom', (_e, id, level) => { const v = bviews.get(id); if (v) v.webContents.setZoomLevel(level); });
+ipcMain.on('browser:destroy', (_e, id) => {
+  const view = bviews.get(id);
+  if (view) {
+    try { mainWindow.contentView.removeChildView(view); } catch {}
+    try { view.webContents.close(); } catch {}
+    bviews.delete(id);
+  }
 });
 
 // ── App lifecycle ──
