@@ -294,6 +294,7 @@
   let backgroundMode = 'none';       // 'none' | 'per-tab' | 'global'
   let globalBackgroundImage = '';    // data URL for global bg
   let backgroundOpacity = 0.85;       // 0..1
+  let settingsCategory = 'appearance'; // last-opened settings category (deep-link via openSettings(cat))
 
   let workspaces = [];       // [{id, label, activeTermId, layout: (Node)}]
   let activeWsId = null;
@@ -1049,6 +1050,7 @@
       cursorBlink: currentCursorBlink,
       statusBarVisible,
       scrollback: currentScrollback,
+      settingsCategory,
       backgroundMode,
       globalBackgroundImage,
       backgroundOpacity,
@@ -1084,6 +1086,7 @@
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
       if (state.statusBarVisible !== undefined) statusBarVisible = state.statusBarVisible;
       if (state.scrollback) currentScrollback = state.scrollback;
+      if (state.settingsCategory) settingsCategory = state.settingsCategory;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -3938,7 +3941,7 @@ function buildColorItem(key, label) {
        ═══════════════════════════════════════════════════════════════ */
       const settingsOverlay = document.getElementById('settings-overlay');
 
-      function openSettings() {
+      function openSettings(cat) {
         // Populate theme select
         const themeSelect = document.getElementById('set-theme');
         themeSelect.innerHTML = '';
@@ -3986,8 +3989,8 @@ function buildColorItem(key, label) {
         // Shortcuts
         renderShortcutsList();
 
-        // Activate first category
-        switchSettingsCat('appearance');
+        // Activate last-used category (or explicit deep-link target)
+        switchSettingsCat(cat || settingsCategory);
         settingsOverlay.classList.add('open');
         document.activeElement?.blur();
 
@@ -4151,6 +4154,8 @@ function buildColorItem(key, label) {
         if (prevCat === 'theme-editor' && cat !== 'theme-editor') {
           applyTheme(currentThemeName);
         }
+        settingsCategory = cat;
+        saveState();
       }
 
       // Track theme editor mode so it persists across category switches
@@ -4224,6 +4229,9 @@ function buildColorItem(key, label) {
         if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) { closeSettings(); e.stopPropagation(); }
         if (e.ctrlKey && e.key === ',' && !e.metaKey && !e.altKey) { e.preventDefault(); openSettings(); }
       });
+      // Deep-link API: e.g. openSettings('appearance')
+      window.openSettings = openSettings;
+      window.closeSettings = closeSettings;
 
       // Theme change
       document.getElementById('set-theme').addEventListener('change', e => {

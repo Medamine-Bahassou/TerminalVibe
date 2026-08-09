@@ -941,8 +941,25 @@ outline: none;
 .settings-section.active { user-select: none !important; }
 .settings-section.active * { user-select: none !important; }
 #settings-overlay.open { display: flex; opacity: 1; }
-#settings-overlay.open #settings-modal { transform: scale(1) translateY(0); }
-#settings-modal { transform: scale(0.97) translateY(10px); }
+/* full-page settings view — top strip is the drag handle */
+.settings-header { -webkit-app-region: drag; }
+.settings-header .no-drag { -webkit-app-region: no-drag; }
+.settings-back-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 6px;
+  color: var(--muted-text); cursor: pointer; flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.settings-back-btn:hover { background: var(--tab-hover-bg); color: var(--fg); }
+.settings-back-btn:active { color: var(--muted-text); }
+
+/* active category — left accent bar */
+.settings-cat-btn { position: relative; }
+.settings-cat-btn.active::before {
+  content: ''; position: absolute; left: 0; top: 50%;
+  transform: translateY(-50%); width: 3px; height: 60%;
+  border-radius: 2px; background: var(--accent);
+}
 
 /* section toggle — JS toggles .active */
 .settings-section { display: none; animation: settingsFadeIn 0.25s ease forwards; }

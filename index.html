@@ -104,20 +104,17 @@
   </div>
 </div>
 <!-- Settings -->
-<!-- Settings -->
-<div id="settings-overlay" tabindex="-1" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10000] hidden flex items-center justify-center opacity-0 transition-opacity duration-200">
-  <div id="settings-modal" class="bg-[color-mix(in_srgb,var(--bg)_95%,#111_5%)] border border-white/10 w-[85vw] max-w-[900px] h-[85vh] max-h-[700px] flex flex-col shadow-2xl shadow-black/60 transition-all duration-200 ease-out select-none">
-    <div class="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--bg)_80%,rgba(255,255,255,0.02))] shrink-0">
-      <div class="flex items-baseline gap-3">
-        <h2 class="text-[16px] font-semibold text-[var(--fg)] m-0">Settings</h2>
-        <span class="text-[11px] text-[var(--dim-text)] font-mono">v0.5.10</span>
+<div id="settings-overlay" tabindex="-1" class="fixed inset-0 z-[10000] hidden flex flex-col opacity-0 transition-opacity duration-150">
+  <div id="settings-modal" class="w-full h-full flex flex-col select-none bg-[var(--bg)]">
+    <div class="settings-header flex items-center gap-1.5 pl-3 pr-2 h-8 shrink-0 border-b border-[var(--border)]">
+      <div id="settings-close" class="settings-back-btn no-drag" title="Close settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[16px] h-[16px]"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
       </div>
-      <div id="settings-close" class="w-8 h-8 flex items-center justify-center cursor-pointer text-[var(--muted-text)] transition-all duration-150 bg-white/5 hover:bg-[#f38ba8] hover:text-[#111]">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </div>
+      <h2 class="text-[12.5px] font-semibold text-[var(--fg)] m-0">Settings</h2>
+      <span class="text-[10.5px] text-[var(--dim-text)] font-mono">v0.5.10</span>
     </div>
     <div class="flex flex-1 min-h-0 overflow-hidden">
-      <div class="w-[200px] shrink-0 p-4 pr-3 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col gap-1">
+      <div class="w-[240px] shrink-0 p-3 pr-2 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col gap-0.5 overflow-y-auto">
         <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5 cursor-pointer text-[13px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="appearance">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 010 20"/><circle cx="12" cy="12" r="3"/></svg>
           <span>Appearance</span>
