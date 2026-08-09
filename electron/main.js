@@ -22,7 +22,7 @@ function createWindow() {
     fullscreenable: true,
     titleBarStyle: 'hidden', // native OS tweak buttons drawn by the OS via overlay
     titleBarOverlay: {
-      color: '#1e1e2e', // match app theme bg
+      color: '#00000000', // fully transparent so the app's own bg shows behind the buttons
       symbolColor: '#cdd6f4', // light icon color on dark bar
       height: 32,
     },

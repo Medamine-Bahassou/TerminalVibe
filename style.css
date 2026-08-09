@@ -380,6 +380,13 @@ background: var(--bg);
   justify-content: space-between;
   user-select: none;
 }
+.term-group-tabs-wrap {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
 .term-group-tabs {
   display: flex;
   align-items: stretch;
@@ -388,7 +395,8 @@ background: var(--bg);
   overflow-y: hidden;
   /* Hide scrollbar on Firefox */
   scrollbar-width: none !important;
-  flex: 1;
+  /* min-width:0 lets the container shrink (flex:1 no longer applies inside the wrap) */
+  min-width: 0;
 }
 
 /* Hide scrollbar on WebKit browsers (Chrome, Safari, Tauri) */
@@ -397,6 +405,31 @@ background: var(--bg);
   width: 0 !important;
   height: 0 !important;
 }
+
+/* Overflow chevrons (VSCode-style edge paging). Shown only when the bar
+   overflows, disabled per-side at the scroll edges. */
+.tg-chevron {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--muted-text);
+  background: color-mix(in srgb, var(--bg) 92%, #000 8%);
+  z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+}
+.tg-chevron svg { width: 10px; height: 10px; pointer-events: none; }
+.tg-chevron-left { left: 0; border-right: 1px solid var(--border); }
+.tg-chevron-right { right: 0; border-left: 1px solid var(--border); }
+.tg-chevron:hover { color: var(--fg); background: var(--tab-hover-bg); }
+.term-group-tabs-wrap.overflow .tg-chevron { opacity: 1; pointer-events: auto; }
+.term-group-tabs-wrap.at-start .tg-chevron-left,
+.term-group-tabs-wrap.at-end .tg-chevron-right { opacity: 0; pointer-events: none; }
 
 .tg-tab {
   display: flex;
@@ -459,6 +492,7 @@ background: var(--bg);
   border-radius: 3px;
   display: flex; align-items: center; justify-content: center;
   font-size: 10px;
+  line-height: 1;
   opacity: 0;
   color: var(--muted-text);
   transition: opacity 0.1s, background 0.1s, color 0.1s;
@@ -936,6 +970,9 @@ outline: none;
  *   SETTINGS MODAL — minimal retained CSS
  *   (layout now uses Tailwind utilities)
  * ────────────────────────────────────────── */
+/* kill default yellow focus ring; keep a theme ring for keyboard nav */
+#settings-overlay:focus { outline: none; }
+#settings-overlay :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #settings-modal { user-select: none !important; }
 #settings-modal * { user-select: none !important; }
 .settings-section.active { user-select: none !important; }
@@ -962,34 +999,32 @@ outline: none;
 }
 
 /* section toggle — JS toggles .active */
-.settings-section { display: none; animation: settingsFadeIn 0.25s ease forwards; }
+.settings-section { display: none; }
 .settings-section.active { display: block; }
-@keyframes settingsFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-
 /* cat-btn active state — rest handled by Tailwind */
 .settings-cat-btn.active,.settings-cat-btn:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .settings-cat-btn svg { opacity: 0.7; }
 .settings-cat-btn.active svg,.settings-cat-btn:hover svg { opacity: 1; }
 
 /* Range slider styling */
-.settings-control input[type="range"] {
+.slider {
   -webkit-appearance: none; appearance: none;
-  width: 140px; height: 4px; background: rgba(255,255,255,0.1);
-  border-radius: 2px; outline: none; cursor: pointer;
+  width: 110px; height: 4px; background: rgba(255,255,255,0.1);
+  border-radius: 0; outline: none; cursor: pointer;
 }
-.settings-control input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 0;
   background: var(--accent); cursor: pointer;
-  border: 2px solid var(--bg); box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+  border: 2px solid var(--bg);
 }
-.settings-control input[type="range"]::-moz-range-thumb {
-  width: 16px; height: 16px; border-radius: 50%;
+.slider::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 0;
   background: var(--accent); cursor: pointer;
-  border: 2px solid var(--bg); box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+  border: 2px solid var(--bg);
 }
 .settings-value {
-  background: rgba(0,0,0,0.2); padding: 4px 8px; border-radius: 4px;
-  font-size: 11px; min-width: 38px; text-align: center;
+  background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px;
+  font-size: 10.5px; min-width: 34px; text-align: center;
   font-variant-numeric: tabular-nums; color: var(--muted-text);
 }
 
@@ -1443,5 +1478,12 @@ body.resizing .drag-shield {
   opacity: 0;
   transition: opacity 0.15s;
   z-index: 9999;
+}
+
+/* ── rounded-none: single management class ──
+   Makes every element square. Remove this block to restore rounded corners. */
+.roundless, .roundless *,
+.roundless *::before, .roundless *::after {
+  border-radius: 0 !important;
 }
 #zoom-badge.visible { opacity: 1; }

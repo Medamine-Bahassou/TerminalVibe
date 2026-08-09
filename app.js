@@ -1086,7 +1086,7 @@
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
       if (state.statusBarVisible !== undefined) statusBarVisible = state.statusBarVisible;
       if (state.scrollback) currentScrollback = state.scrollback;
-      if (state.settingsCategory) settingsCategory = state.settingsCategory;
+      if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -1259,6 +1259,13 @@
     saveState();
   }
 
+  // Strip "user@host:" prefix and turn "/a/b/c" into "c" (~ stays "~")
+  function shortTitle(title) {
+    const path = title.includes('@') && title.includes(':') ? title.slice(title.indexOf(':') + 1) : title;
+    if (!path || path === '~') return path;
+    return path.split('/').filter(Boolean).pop() || path;
+  }
+
   function renameWorkspace(id) {
     const ws = findWs(id);
     if (!ws) return;
@@ -1313,7 +1320,7 @@
       const terms = getWorkspaceTerminals(wsp);
       const t = terms.find(x => x.id === id);
       if (t) {
-        t.label = title || t.label;
+        t.label = shortTitle(title) || t.label;
         // Lightweight update: just change the tab label in the DOM
         const tabEl = document.querySelector(`.tg-tab[data-termid="${id}"] .tg-tab-name`);
         if (tabEl) tabEl.textContent = t.label;
@@ -1334,7 +1341,7 @@
     const cwd = _getFocusedCwd();
     const id = uuid();
     const allTerms = getWorkspaceTerminals(wsp);
-    const label = `bash ${allTerms.length + 1}`;
+    const label = activeTerminal()?.label || `bash ${allTerms.length + 1}`;
     const entry = _createTermEntry(wsp, id, label);
     entry.cwd = cwd;
 
@@ -1399,6 +1406,8 @@
             tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
             tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
             tabsContainer.appendChild(tab);
+            updateTabBarOverflow(groupEl);
+            scrollTabIntoView(groupEl, entry.id);
             // Create and add the slot
             const slot = getOrCreateSlot(entry, wsp, body);
             document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
@@ -1507,6 +1516,8 @@
             tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
             tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
             tabsContainer.appendChild(tab);
+            updateTabBarOverflow(groupEl);
+            scrollTabIntoView(groupEl, entry.id);
             // Create slot
             const slot = getOrCreateSlot(entry, wsp, body);
             document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
@@ -1571,6 +1582,8 @@
           groupEl.querySelectorAll('.tg-tab').forEach(tab => {
             tab.classList.toggle('active', tab.dataset.termid === termId);
           });
+          updateTabBarOverflow(groupEl);
+          scrollTabIntoView(groupEl, termId);
           // Sync group color from active tab
           const activeTab = groupEl.querySelector('.tg-tab.active');
           if (activeTab && activeTab.dataset.color) {
@@ -1701,6 +1714,8 @@
           groupEl.querySelectorAll('.tg-tab').forEach(tab => {
             tab.classList.toggle('active', tab.dataset.termid === group.activeTermId);
           });
+          updateTabBarOverflow(groupEl);
+          if (group.activeTermId) scrollTabIntoView(groupEl, group.activeTermId);
           // Show/hide slots
           const body = groupEl.querySelector('.term-group-body');
           if (body) {
@@ -1853,7 +1868,7 @@
     // Create a new terminal for the new split pane
     const allTerms = getWorkspaceTerminals(wsp);
     const id = uuid();
-    const label = `bash ${allTerms.length + 1}`;
+    const label = activeTerminal()?.label || `bash ${allTerms.length + 1}`;
     const newEntry = _createTermEntry(wsp, id, label);
 
     const newGroup = {
@@ -2038,6 +2053,29 @@
     return { minW: 0, minH: 0 };
   }
 
+  // ── Tab bar: reveal active tab & refresh chevron overflow state ──
+  function scrollTabIntoView(groupEl, termId, behavior = 'smooth') {
+    const tabs = groupEl.querySelector('.term-group-tabs');
+    if (!tabs) return;
+    const tab = tabs.querySelector(`.tg-tab[data-termid="${termId}"]`);
+    if (!tab) return;
+    const contentLeft = tab.getBoundingClientRect().left - tabs.getBoundingClientRect().left + tabs.scrollLeft;
+    const contentRight = contentLeft + tab.offsetWidth;
+    const cur = tabs.scrollLeft;
+    if (contentLeft < cur) tabs.scrollTo({ left: contentLeft, behavior });
+    else if (contentRight > cur + tabs.clientWidth) tabs.scrollTo({ left: contentRight - tabs.clientWidth, behavior });
+  }
+
+  function updateTabBarOverflow(groupEl) {
+    const tabs = groupEl.querySelector('.term-group-tabs');
+    const wrap = groupEl.querySelector('.term-group-tabs-wrap');
+    if (!tabs || !wrap) return;
+    const over = tabs.scrollWidth > tabs.clientWidth + 1;
+    wrap.classList.toggle('overflow', over);
+    wrap.classList.toggle('at-start', tabs.scrollLeft <= 2);
+    wrap.classList.toggle('at-end', tabs.scrollLeft >= tabs.scrollWidth - tabs.clientWidth - 2);
+  }
+
   function renderPaneArea() {
     const wsp = activeWs();
     // Invalidate cache for current workspace so switchWorkspacePane rebuilds it
@@ -2091,6 +2129,25 @@
 
       const tabsContainer = document.createElement('div');
       tabsContainer.className = 'term-group-tabs';
+      tabsContainer.addEventListener('scroll', () => updateTabBarOverflow(groupEl));
+
+      // VSCode-style edge paging chevrons, shown only while the bar overflows
+      const tabsWrap = document.createElement('div');
+      tabsWrap.className = 'term-group-tabs-wrap';
+      const pageAmt = () => Math.max(80, Math.round(tabsContainer.clientWidth * 0.6));
+      const chevLeft = document.createElement('div');
+      chevLeft.className = 'tg-chevron tg-chevron-left';
+      chevLeft.title = 'Scroll tabs left';
+      chevLeft.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+      chevLeft.addEventListener('click', () => tabsContainer.scrollBy({ left: -pageAmt(), behavior: 'smooth' }));
+      const chevRight = document.createElement('div');
+      chevRight.className = 'tg-chevron tg-chevron-right';
+      chevRight.title = 'Scroll tabs right';
+      chevRight.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+      chevRight.addEventListener('click', () => tabsContainer.scrollBy({ left: pageAmt(), behavior: 'smooth' }));
+      tabsWrap.appendChild(tabsContainer);
+      tabsWrap.appendChild(chevLeft);
+      tabsWrap.appendChild(chevRight);
 
       node.terminals.forEach(t => {
         const tab = document.createElement('div');
@@ -2206,7 +2263,7 @@
         addTerminal(wsp.id, node.id);
       });
 
-      header.appendChild(tabsContainer);
+      header.appendChild(tabsWrap);
 
       const actions = document.createElement('div');
       actions.className = 'term-group-actions';
@@ -2303,6 +2360,12 @@
       actions.appendChild(dropdownWrap);
       header.appendChild(actions);
       groupEl.appendChild(header);
+
+      // Ensure the active tab is revealed (instant on full re-render)
+      requestAnimationFrame(() => {
+        updateTabBarOverflow(groupEl);
+        if (node.activeTermId) scrollTabIntoView(groupEl, node.activeTermId, 'auto');
+      });
 
       const body = document.createElement('div');
       body.className = 'term-group-body';
@@ -3990,7 +4053,7 @@ function buildColorItem(key, label) {
         renderShortcutsList();
 
         // Activate last-used category (or explicit deep-link target)
-        switchSettingsCat(cat || settingsCategory);
+        switchSettingsCat(typeof cat === 'string' ? cat : settingsCategory);
         settingsOverlay.classList.add('open');
         document.activeElement?.blur();
 
@@ -4154,6 +4217,8 @@ function buildColorItem(key, label) {
         if (prevCat === 'theme-editor' && cat !== 'theme-editor') {
           applyTheme(currentThemeName);
         }
+        // Reset scroll to top of the new section
+        document.querySelector('.settings-section')?.parentElement?.scrollTo({ top: 0 });
         settingsCategory = cat;
         saveState();
       }
@@ -4222,7 +4287,7 @@ function buildColorItem(key, label) {
       }
 
       // Open/close
-      document.getElementById('btn-settings').addEventListener('click', openSettings);
+      document.getElementById('btn-settings').addEventListener('click', () => openSettings());
       document.getElementById('settings-close').addEventListener('click', closeSettings);
       settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
       document.addEventListener('keydown', e => {
@@ -4885,19 +4950,30 @@ function buildColorItem(key, label) {
           }
         }
         document.addEventListener('mousedown', e => {
-          if (e.button === 1) { _handleTabMiddleClick(e); _handleWsMiddleClick(e); }
+          if (e.button === 1) {
+            _handleTabMiddleClick(e); _handleWsMiddleClick(e);
+            // Middle-click anywhere outside a terminal would paste into the focused one
+            if (!e.defaultPrevented && !e.target.closest('.term-slot')) {
+              e.preventDefault(); e.stopPropagation();
+              _suppressPasteUntil = Date.now() + 200;
+            }
+          }
         }, true);
         document.addEventListener('auxclick', e => {
           if (e.button === 1) { _handleTabMiddleClick(e); _handleWsMiddleClick(e); }
         }, true);
 
-        // Horizontal scroll on tab bar with mouse wheel
+        // Horizontal scroll on tab bar with mouse wheel.
+        // Only intercept when the bar actually overflows, otherwise let the
+        // page scroll vertically (prevents swallowing wheel over a short bar).
         document.addEventListener('wheel', e => {
           const tabs = e.target.closest('.term-group-tabs');
           if (!tabs) return;
+          if (tabs.scrollWidth <= tabs.clientWidth + 1) return;
           if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
             e.preventDefault();
             tabs.scrollLeft += e.deltaY;
+            updateTabBarOverflow(tabs.closest('.term-group'));
           }
         }, { passive: false });
 
@@ -4942,6 +5018,7 @@ function buildColorItem(key, label) {
             syncSplitSizes(wsp.layout);
             const terms = getWorkspaceTerminals(wsp);
             for (const t of terms) fitTerm(t);
+            document.querySelectorAll('.term-group').forEach(updateTabBarOverflow);
             updateStatusBar();
           });
         });
