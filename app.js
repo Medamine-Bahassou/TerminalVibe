@@ -11,10 +11,9 @@
     wrap: true,
   });
 
-  // Tauri Webview API (from window.__TAURI__ global, injected by Tauri runtime)
-  function tauriWebview() { return window.__TAURI__ && window.__TAURI__.webview; }
-  function tauriWindow() { return window.__TAURI__ && window.__TAURI__.window; }
-  function loadTauriApi() { /* no-op: API available via window.__TAURI__ at runtime */ }
+  // Desktop bridge (Electron preload, exposed as window.electronAPI)
+  function electronBridge() { return window.electronAPI || null; }
+  function isDesktop() { return !!window.electronAPI; }
 
 
   /* ═══════════════════════════════════════════════════════════════
@@ -231,16 +230,20 @@
   }
 
   let WS_PORT = 7681;
-  let PROXY_PORT = 7682;
+  // Electron passes the iframe proxy port via query (?proxy=) since the WS
+  // relay (which previously announced it in the 'ready' message) is not used there.
+  let PROXY_PORT = parseInt(new URLSearchParams(window.location.search).get('proxy') || '7682', 10) || 7682;
 
   function isTauri() {
-    return !!window.__TAURI_INTERNALS__ ||
+    return isDesktop() ||
     window.location.protocol === 'tauri:' ||
     window.location.hostname === 'tauri.localhost';
   }
 
   function openExternalUrl(url) {
-    if (isTauri() && window.__TAURI_INTERNALS__) {
+    if (isDesktop() && window.electronAPI) {
+      window.electronAPI.openExternal(url);
+    } else if (isTauri() && window.__TAURI_INTERNALS__) {
       window.__TAURI_INTERNALS__.invoke('plugin:opener|open_url', { url });
     } else {
       window.open(url, '_blank');
@@ -249,7 +252,11 @@
 
   function doPaste(entry) {
     if (!entry || !entry.term) return;
-    if (isTauri() && window.__TAURI_INTERNALS__) {
+    if (isDesktop() && window.electronAPI) {
+      window.electronAPI.clipboardRead().then(text => {
+        if (text) sendStdin(entry.id, new TextEncoder().encode(text));
+      }).catch(err => console.warn('Paste failed:', err));
+    } else if (isTauri() && window.__TAURI_INTERNALS__) {
       window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text').then(text => {
         if (text) sendStdin(entry.id, new TextEncoder().encode(text));
       }).catch(err => console.warn('Paste failed:', err));
@@ -511,6 +518,24 @@
     return null;
   }
 
+  function _extractOSC7CwdStr(str) {
+    // OSC 7: \x1b]7;file://hostname/path\x07  or  \x1b]7;file:///path\x07
+    const match = str.match(/\x1b\]7;(file:\/\/[^\x07\x1b]+)/);
+    if (match) {
+      try {
+        let pathPart = match[1].slice(7); // strip 'file://'
+        // If pathPart doesn't start with /, it's file://hostname/path → remove hostname
+        if (!pathPart.startsWith('/')) {
+          const slashIdx = pathPart.indexOf('/');
+          if (slashIdx !== -1) pathPart = pathPart.slice(slashIdx);
+          else pathPart = '/' + pathPart;
+        }
+        return decodeURIComponent(pathPart);
+      } catch {}
+    }
+    return null;
+  }
+
   function _getFocusedCwd() {
     const t = activeTerminal();
     if (t && t.cwd) return t.cwd;
@@ -526,12 +551,17 @@
 
   function sendControl(obj) {
     if (isTauri() && tauriPtyReady) {
-      if (obj.type === 'create') {
-        window.__TAURI_INTERNALS__.invoke('create_terminal', { id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null }).catch(() => {});
+      if (isDesktop() && window.electronAPI) {
+        const api = window.electronAPI;
+        if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null });
+        else if (obj.type === 'resize') api.terminalResize({ id: obj.id, cols: obj.cols, rows: obj.rows });
+        else if (obj.type === 'close') api.terminalClose(obj.id);
+      } else if (obj.type === 'create') {
+        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('create_terminal', /*tauri*/ { id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null }).catch(() => {});
       } else if (obj.type === 'resize') {
-        window.__TAURI_INTERNALS__.invoke('resize_terminal', { id: obj.id, cols: obj.cols, rows: obj.rows }).catch(() => {});
+        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('resize_terminal', /*tauri*/ { id: obj.id, cols: obj.cols, rows: obj.rows }).catch(() => {});
       } else if (obj.type === 'close') {
-        window.__TAURI_INTERNALS__.invoke('close_terminal', { id: obj.id }).catch(() => {});
+        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('close_terminal', /*tauri*/ { id: obj.id }).catch(() => {});
       }
       return;
     }
@@ -541,7 +571,11 @@
 
   function _sendStdinRaw(sid, data) {
     if (isTauri() && tauriPtyReady) {
-      window.__TAURI_INTERNALS__.invoke('write_terminal', { id: sid, data: Array.from(data) }).catch(() => {});
+      if (isDesktop() && window.electronAPI) {
+        window.electronAPI.terminalWrite({ id: sid, data });
+      } else {
+        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('write_terminal', /*tauri*/ { id: sid, data: Array.from(data) }).catch(() => {});
+      }
       return;
     }
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -580,6 +614,27 @@
    T A*URI NATIVE PTY
    ═══════════════════════════════════════════════════════════════ */
   function connectTauriPTY() {
+    // Electron: node-pty runs natively in the main process over IPC
+    if (isDesktop() && window.electronAPI) {
+      const api = window.electronAPI;
+      updateConnStatus(true);
+      wsReady = true;
+      tauriPtyReady = true;
+
+      api.onTerminalData(({ id, data }) => {
+        const result = findTermById(id);
+        if (result) {
+          const oscCwd = _extractOSC7CwdStr(data);
+          if (oscCwd) result.term.cwd = oscCwd;
+          result.term.term.write(data);
+        }
+      });
+      api.onTerminalExit(({ id, code }) => handleExit(id, code));
+
+      restoreOrCreateInitial();
+      return;
+    }
+
     updateConnStatus(true);
     wsReady = true;
     tauriPtyReady = true;
@@ -596,7 +651,7 @@
       // Fallback: use internal callback mechanism
       try {
         const cbId = window.__TAURI_INTERNALS__.transformCallback(handler, false);
-        window.__TAURI_INTERNALS__.invoke('plugin:event|listen', { event: eventName, target: { kind: 'Any' }, handler: cbId });
+        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('plugin:event|listen', /*tauri*/ { event: eventName, target: { kind: 'Any' }, handler: cbId });
       } catch (e) { console.error('tauriListen failed for', eventName, e); }
     }
 
@@ -616,21 +671,25 @@
         handleExit(id, code);
       });
 
-      // Create initial workspace or restore pending terminals
-      if (workspaces.length) {
-        for (const wsp of workspaces) {
-          const terms = getWorkspaceTerminals(wsp);
-          for (const t of terms) {
-            if (t.pending) {
-              const slot = getSlotDimensions(t);
-              sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null });
-              t.pending = false;
-            }
+      restoreOrCreateInitial();
+  }
+
+  // Create initial workspace or restore pending terminals after the PTY backend is ready
+  function restoreOrCreateInitial() {
+    if (workspaces.length) {
+      for (const wsp of workspaces) {
+        const terms = getWorkspaceTerminals(wsp);
+        for (const t of terms) {
+          if (t.pending) {
+            const slot = getSlotDimensions(t);
+            sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null });
+            t.pending = false;
           }
         }
-      } else {
-        try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); }
       }
+    } else {
+      try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); }
+    }
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -1341,7 +1400,7 @@
             const slot = getOrCreateSlot(entry, wsp, body);
             document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
             body.querySelectorAll('.term-slot').forEach(s => { s.style.display = 'none'; });
-            slot.style.display = 'block';
+            slot.style.display = entry.type === 'browser' ? 'flex' : 'block';
             slot.classList.add('focused');
             body.appendChild(slot);
             focusedSlotId = slot.id; updateFocusedGroup();
@@ -1521,7 +1580,7 @@
             const slot = document.getElementById('slot-' + t.id);
             if (!slot) return;
             const isActive = t.id === termId;
-            const showAs = 'block'; // Placeholders can safely be block
+            const showAs = t.type === 'browser' ? 'flex' : 'block';
             slot.style.display = isActive ? showAs : 'none';
             if (t.type === 'browser') {
               if (isActive) resumeBrowserTab(t);
@@ -1543,7 +1602,8 @@
         }
       }
     }
-    syncBrowserSlots();
+    // RAF ensures layout is recalculated after display toggle before reading rects
+    requestAnimationFrame(() => syncBrowserSlots());
     clearTimeout(activateTerminal._saveTimer);
     activateTerminal._saveTimer = setTimeout(saveState, 500);
   }
@@ -1573,11 +1633,7 @@
 
     const entry = group.terminals[idx];
     if (entry.type !== 'browser') {
-      if (isTauri() && tauriPtyReady) {
-        window.__TAURI_INTERNALS__.invoke('close_terminal', { id: termId }).catch(() => {});
-      } else {
-        sendControl({ type: 'close', id: termId });
-      }
+      sendControl({ type: 'close', id: termId });
       if (_ptyListeners[termId]) { _ptyListeners[termId](); delete _ptyListeners[termId]; }
       entry.term.dispose();
     } else {
@@ -1655,6 +1711,7 @@
             });
           }
         }
+        syncBrowserSlots();
       }
       // Focus the new active tab
       const newActiveId = wsp.activeTermId || (group ? group.activeTermId : null);
@@ -2258,7 +2315,7 @@
       node.terminals.forEach(t => {
         const isAct = t.id === node.activeTermId;
         const slot = getOrCreateSlot(t, wsp, body);
-        const showAs = 'block';
+        const showAs = t.type === 'browser' ? 'flex' : 'block';
         slot.style.display = isAct ? showAs : 'none';
         if (isAct && slot.id === focusedSlotId) slot.classList.add('focused');
         else slot.classList.remove('focused');
@@ -2494,6 +2551,17 @@
               return prefix + pathDecoded;
             } catch (e) { return url; }
           }
+          if (url && url.startsWith('file://') && isDesktop() && window.electronAPI) {
+            // Electron iframes can't load file:// with nodeIntegration disabled from a http(s) page;
+            // resolve to a local URL that is reachable. Falls back to the raw file URL.
+            try {
+              const p = url.slice(7);
+              const resolved = window.electronAPI.resolveLocalPath(p);
+              return (resolved && typeof resolved.then === 'function')
+                ? url
+                : ('asset://localhost/' + (resolved || p));
+            } catch (e) { return url; }
+          }
           return url;
         }
 
@@ -2504,10 +2572,17 @@
           const localMatch = url.match(/^(\/.+)|^([a-zA-Z]:[/\\].+)$/);
           if (localMatch) {
             const p = localMatch[1] || localMatch[2];
+            if (isDesktop() && window.electronAPI) {
+              return normalizeAssetUrl(window.electronAPI.resolveLocalPath(p).then ? 'asset://localhost/' + p : ('asset://localhost/' + p));
+            }
             if (isTauri() && window.__TAURI__ && window.__TAURI__.core) {
               return normalizeAssetUrl(window.__TAURI__.core.convertFileSrc(p));
             }
             return 'file://' + p.replace(/\\/g, '/');
+          }
+
+          if (url.startsWith('file://') && isDesktop() && window.electronAPI) {
+            return normalizeAssetUrl('asset://localhost/' + url.slice(7));
           }
 
           if (url.startsWith('file://') && isTauri() && window.__TAURI__ && window.__TAURI__.core) {
@@ -2522,6 +2597,16 @@
 
         function proxyUrl(url) {
           if (!url) return url;
+          if (isDesktop() && window.electronAPI) {
+            // Electron native <webview>: no proxy. file:///asset:// resolve to local paths.
+            if (url.startsWith('asset://')) {
+              let filePath = decodeURIComponent(url.replace(/^asset:\/\/localhost\//, ''));
+              if (!filePath.startsWith('/')) filePath = '/' + filePath;
+              return 'file://' + filePath;
+            }
+            if (url.startsWith('file://')) return url;
+            return url;
+          }
           if (url.startsWith('asset://')) {
             const filePath = decodeURIComponent(url.replace('asset://localhost/', '/'));
             return `http://127.0.0.1:${PROXY_PORT}/local/` + encodeURIComponent(filePath);
@@ -2581,48 +2666,110 @@
           }
 
           try {
-            let iframe = contentWrap.querySelector('iframe.browser-fallback');
-            if (!iframe) {
-              iframe = document.createElement('iframe');
-              iframe.className = 'browser-fallback';
-              iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;transform:translateZ(0);';
-              iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
-              iframe.referrerPolicy = 'no-referrer';
-              iframe.allow = 'clipboard-read; clipboard-write; fullscreen';
+            /* ponytail: Electron webview guest is hard-locked to its default 150px height in this
+               build (v42.3.0) — width syncs, height never leaves 150, regardless of CSS/inline px/
+               preset/resize/disableguestresize. Electron officially deprecates <webview>. The
+               iframe path renders full-height (verified). Isolation is preserved via the sandbox
+               attr below; upgrade to WebContentsView if true process isolation is required. */
+            const useWebview = false;
+            let container = contentWrap.querySelector(useWebview ? 'webview.browser-fallback' : 'iframe.browser-fallback');
+            if (!container) {
+              /* ponytail: guest attaches at Electron's default 150px when .browser-slot is still
+                 hidden/unsized and never re-syncs (element 564px, guest 150px). Defer creation
+                 until .browser-content has real size so the guest attaches at full height. */
+              if (useWebview && !contentWrap.clientWidth) {
+                if (!contentWrap._waitRo) {
+                  contentWrap._waitRo = new ResizeObserver(() => {
+                    if (!contentWrap.clientWidth) return;
+                    contentWrap._waitRo.disconnect();
+                    contentWrap._waitRo = null;
+                    loadUrl(url);
+                  });
+                  contentWrap._waitRo.observe(contentWrap);
+                }
+                return;
+              }
+              container = document.createElement(useWebview ? 'webview' : 'iframe');
+              container.className = 'browser-fallback';
+              container.style.cssText = 'border:none;background:#fff;transform:translateZ(0);';
               var loadTimer = setTimeout(function() {
                 if (loading) {
                   showLoading(false);
-                  showError(url, 'Page load timed out. The proxy may not be able to reach this site, or the site may require authentication.');
+                  showError(url, 'Page load timed out. The site may be unreachable or require authentication.');
                 }
               }, 20000);
-              iframe.onload = function() {
-                clearTimeout(loadTimer);
-                showLoading(false);
-                resumeBrowserTab(entry);
-              };
-              contentWrap.insertBefore(iframe, pageView);
+              if (useWebview) {
+                container.setAttribute('webpreferences', 'contextIsolation=yes');
+                /* ponytail: guest view locks its size at attach (element 564px, guest stuck
+                   150px) and ignores CSS-only resizes. Pin the element to .browser-content's
+                   pixels persistently — a stable, sampleable change Electron's guest sync sees.
+                   Run after a double-rAF so the element has its real box (attach fires early). */
+                const pinGuest = () => {
+                  const w = contentWrap.clientWidth, h = contentWrap.clientHeight;
+                  if (!w || !h) return;
+                  container.style.width = w + 'px';
+                  container.style.height = h + 'px';
+                };
+                container.addEventListener('did-attach', () => {
+                  requestAnimationFrame(() => requestAnimationFrame(pinGuest));
+                });
+                if (!contentWrap._guestRo) {
+                  contentWrap._guestRo = new ResizeObserver(pinGuest);
+                  contentWrap._guestRo.observe(contentWrap);
+                }
+                container.addEventListener('did-start-loading', () => showLoading(true));
+                container.addEventListener('did-stop-loading', () => {
+                  clearTimeout(loadTimer);
+                  showLoading(false);
+                  pinGuest();
+                  resumeBrowserTab(entry);
+                });
+                container.addEventListener('did-navigate', (e) => syncUrl(e.url));
+                container.addEventListener('did-navigate-in-page', (e) => syncUrl(e.url));
+                container.addEventListener('did-fail-load', () => {
+                  clearTimeout(loadTimer);
+                  showLoading(false);
+                  showError(entry.url, 'Failed to load page.');
+                });
+                container.addEventListener('click', () => {
+                  const slot = container.closest('.term-slot');
+                  if (slot && !slot.classList.contains('focused')) slot.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                });
+              } else {
+                container.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
+                container.referrerPolicy = 'no-referrer';
+                container.allow = 'clipboard-read; clipboard-write; fullscreen';
+                container.onload = function() {
+                  clearTimeout(loadTimer);
+                  showLoading(false);
+                  resumeBrowserTab(entry);
+                };
+              }
+              contentWrap.insertBefore(container, pageView);
             }
             pageView.style.display = 'none';
-            iframe.style.display = 'block';
-
+            container.style.display = 'block';
+            /* ponytail: webview sized by .browser-fallback (width/height:100%) inside the
+               .browser-content flex column; no inline px needed. */
             var _oldWrap = contentWrap.querySelector('.browser-zoom-wrap');
             if (_oldWrap) {
-              if (_oldWrap.contains(iframe)) contentWrap.appendChild(iframe);
+              if (_oldWrap.contains(container)) contentWrap.appendChild(container);
               _oldWrap.remove();
-              iframe.style.position = '';
-              iframe.style.left = '';
-              iframe.style.top = '';
-              iframe.style.transform = '';
+              container.style.position = '';
+              container.style.left = '';
+              container.style.top = '';
+              container.style.transform = '';
             }
-            iframe.style.width = '100%';
-            iframe.style.height = '100%';
-            entry._iframe = iframe;
-            if (url.startsWith('file://') || url.startsWith('asset:')) {
-              iframe.removeAttribute('sandbox');
-            } else {
-              iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
+            /* ponytail: inset:0 from .browser-fallback handles sizing — height:100% collapses in flex for webview */
+            entry._iframe = container;
+            if (!useWebview) {
+              if (url.startsWith('file://') || url.startsWith('asset:')) {
+                container.removeAttribute('sandbox');
+              } else {
+                container.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
+              }
             }
-            iframe.src = proxyUrl(url);
+            container.src = proxyUrl(url);
             if (url.startsWith('file://') || url.startsWith('asset:')) {
               showLoading(false);
             }
@@ -2698,6 +2845,7 @@
           wsp.activeTermId = entry.id;
           const group = findGroupContainingTerm(wsp.layout, entry.id);
           if (group) group.activeTermId = entry.id;
+          syncBrowserSlots();
           updateStatusBar();
         });
 
@@ -3183,7 +3331,9 @@
           const t = findTermById(termId);
           if (t && t.term.type !== 'browser' && t.term.term.hasSelection()) {
             const text = t.term.term.getSelection();
-            if (isTauri() && window.__TAURI_INTERNALS__) {
+            if (isDesktop() && window.electronAPI) {
+              window.electronAPI.clipboardWrite(text);
+            } else if (isTauri() && window.__TAURI_INTERNALS__) {
               window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
             } else {
               navigator.clipboard.writeText(text);
@@ -3193,7 +3343,10 @@
         item('<i class="ph ph-clipboard-text"></i>', 'Paste', 'Ctrl+Shift+V', () => {
           const t = findTermById(termId);
           if (t && t.term.type !== 'browser') {
-            if (isTauri() && window.__TAURI_INTERNALS__) {
+            if (isDesktop() && window.electronAPI) {
+              window.electronAPI.clipboardRead()
+              .then(text => { if (text) t.term.term.paste(text); }).catch(() => {});
+            } else if (isTauri() && window.__TAURI_INTERNALS__) {
               window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
               .then(text => { if (text) t.term.term.paste(text); }).catch(() => {});
             } else {
@@ -4465,74 +4618,23 @@ function buildColorItem(key, label) {
 
         initSidebarSplit();
 
-        // Sidebar toggle
-        function toggleSidebar() {
+        document.getElementById('btn-sidebar-toggle').addEventListener('click', () => {
           const sb = document.getElementById('sidebar');
-          const main = document.getElementById('main');
-          _suppressResize = true;
-          main.style.overflow = 'hidden';
-          startResizing();
-          const onDragEnd = (sizes) => {
-            _suppressResize = false;
-            main.style.overflow = '';
-            if (sb.classList.contains('expanded')) {
-              const containerW = document.getElementById('app').offsetWidth;
-              const sidebarPx = containerW * sizes[0] / 100;
-              if (sidebarPx < SB_EXPANDED_MIN) {
-                const pct = (SB_EXPANDED_MIN / containerW) * 100;
-                sidebarSplit.setSizes([pct, 100 - pct]);
-              }
-            }
-            requestAnimationFrame(() => {
-              const wsp = activeWs();
-              if (wsp) {
-                for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-              }
-            });
-            stopResizing();
-          };
-          if (sb.classList.contains('expanded')) {
-            savedSidebarWidth = sb.offsetWidth;
-            sb.classList.remove('expanded');
-            sidebarSplit.destroy(false, false);
-            sidebarSplit = Split([sb, main], {
-              ...SB_SPLIT_OPTS,
-              sizes: [0, 100],
-              minSize: [0, 200],
-              onDragStart() { _suppressResize = true; main.style.overflow = 'hidden'; startResizing(); },
-                                 onDragEnd,
-            });
+          const expanded = sb.classList.toggle('expanded');
+          const wsp = activeWs();
+          if (expanded) {
+            const px = savedSidebarWidth || Math.max(sb.offsetWidth || 0, SB_EXPANDED_MIN);
+            savedSidebarWidth = Math.max(px, SB_EXPANDED_MIN);
+            const pct = Math.max(5, (savedSidebarWidth / document.getElementById('app').offsetWidth) * 100);
+            sidebarSplit.setSizes([pct, 100 - pct]);
           } else {
-            sb.classList.add('expanded');
-            sidebarSplit.destroy(false, false);
-            const w = Math.max(savedSidebarWidth || SB_EXPANDED_MIN, SB_EXPANDED_MIN);
-            const containerW = document.getElementById('app').offsetWidth;
-            const pct = Math.max(5, (w / containerW) * 100);
-            sidebarSplit = Split([sb, main], {
-              ...SB_SPLIT_OPTS,
-              sizes: [pct, 100 - pct],
-              minSize: [SB_EXPANDED_MIN, 200],
-              onDragStart() { _suppressResize = true; main.style.overflow = 'hidden'; startResizing(); },
-                                 onDragEnd,
-            });
+            sidebarSplit.setSizes([0, 100]);
           }
-          renderSidebar();
-          requestAnimationFrame(() => {
-            main.style.overflow = '';
-            _suppressResize = false;
-            const wsp = activeWs();
-            if (wsp) {
-              for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-            }
-            stopResizing();
-          });
-        }
+          if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+          saveState();
+        });
 
-        // Titlebar sidebar toggle
-        document.getElementById('titlebar-sidebar-toggle').addEventListener('mousedown', e => e.preventDefault());
-        document.getElementById('titlebar-sidebar-toggle').addEventListener('click', toggleSidebar);
-
-        /* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
          D I*RECTIONAL PANE NAVIGATION (Alt + H/J/K/L)
 ═══════════════════════════════════════════════════════════════ */
         let _paneNavCooldown = false;
@@ -4901,54 +5003,17 @@ function buildColorItem(key, label) {
           updateStatusBar();
         }
 
-        // In Tauri, use native PTY via Rust backend; otherwise WebSocket
+        // In the desktop shell use the PTY backend; otherwise plain WebSocket
         if (isTauri()) {
-          loadTauriApi();
           setTimeout(() => { try { connectTauriPTY(); } catch (e) { console.error('connectTauriPTY failed:', e); } }, 100);
         } else {
           try { connectWS(); } catch (e) { console.error('connectWS failed:', e); }
         }
 
-        // ── Tauri: activate custom titlebar + window controls ──
+        // Desktop shell: show the native-overlay titlebar strip (drag region + label)
         if (isTauri()) {
           const tb = document.getElementById('titlebar');
-          if (tb) tb.classList.add('tauri-active');
-
-          // Tauri 2 window plugin invoke
-          document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
-            window.__TAURI_INTERNALS__.invoke('plugin:window|minimize');
-          });
-
-          // Update maximize button icon based on window state
-          const MAXIMIZE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>';
-          const RESTORE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="10" height="10" rx="2"/><rect x="9" y="9" width="10" height="10" rx="2"/></svg>';
-
-          function updateMaximizeIcon(maximized) {
-            const btn = document.getElementById('titlebar-maximize');
-            if (btn) {
-              btn.innerHTML = maximized ? RESTORE_SVG : MAXIMIZE_SVG;
-              btn.title = maximized ? 'Restore' : 'Maximize';
-            }
-          }
-
-          function checkWindowMaximized() {
-            window.__TAURI_INTERNALS__.invoke('plugin:window|is_maximized').then(updateMaximizeIcon);
-          }
-
-          document.getElementById('titlebar-maximize')?.addEventListener('click', () => {
-            window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize').then(() => {
-              setTimeout(checkWindowMaximized, 50);
-            });
-          });
-          document.getElementById('titlebar-close')?.addEventListener('click', () => {
-            window.__TAURI_INTERNALS__.invoke('plugin:window|close');
-          });
-
-          // Initialize icon state on load
-          checkWindowMaximized();
-
-          // Listen for window resize events to detect maximize/unmaximize
-          tauriListen('tauri://resize', () => { setTimeout(checkWindowMaximized, 50); });
+          if (tb) tb.classList.add('active');
         }
 
         // Listen for navigation and focus messages from browser tab iframes
@@ -4997,14 +5062,16 @@ function buildColorItem(key, label) {
           }
         });
 
-        // Tauri: save on window destroy
-        if (isTauri()) {
+        // Save on window destroy (Electron) / close-requested (Tauri)
+        if (isDesktop() && window.electronAPI) {
+          window.addEventListener('beforeunload', () => saveState());
+        } else if (isTauri()) {
           try {
             if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen) {
               window.__TAURI__.event.listen('tauri://close-requested', () => saveState());
             } else {
               const cbId = window.__TAURI_INTERNALS__.transformCallback(() => saveState(), false);
-              window.__TAURI_INTERNALS__.invoke('plugin:event|listen', { event: 'tauri://close-requested', target: { kind: 'Any' }, handler: cbId });
+              window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('plugin:event|listen', /*tauri*/ { event: 'tauri://close-requested', target: { kind: 'Any' }, handler: cbId });
             }
           } catch {}
         }

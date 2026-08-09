@@ -3,26 +3,71 @@
   "version": "0.1.0",
   "private": true,
   "description": "Terminal multiplexer with browser proxy",
-  "main": "server.js",
+  "main": "electron/main.js",
+  "author": "TerminalVibe",
   "scripts": {
     "start": "node server.js",
-    "tauri": "tauri",
-    "dev": "LD_LIBRARY_PATH= GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_EXEC_PATH=/usr/lib/webkit2gtk-4.1 npm run tauri dev",
-    "build": "LD_LIBRARY_PATH= GDK_BACKEND=x11 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_EXEC_PATH=/usr/lib/webkit2gtk-4.1 npm run tauri build"
+    "dev": "node electron/dev-server.js & node server.js & wait",
+    "electron": "electron .",
+    "electron:dev": "node electron/dev-server.js & electron .",
+    "build": "node scripts/build-dist.js && electron-builder --linux dir",
+    "build:appimage": "node scripts/build-dist.js && electron-builder --linux AppImage",
+    "dist": "node scripts/build-dist.js && electron-builder --linux dir",
+    "electron:install": "node node_modules/electron/install.js"
   },
   "dependencies": {
     "@embedpdf/snippet": "^2.14.3",
+    "@melloware/coloris": "^0.25.0",
     "node-pty": "^1.0.0",
     "puppeteer-core": "^24.43.1",
+    "split.js": "^1.6.5",
     "ws": "^8.18.0",
     "xterm": "^5.3.0",
     "xterm-addon-fit": "^0.8.0",
     "xterm-addon-image": "^0.5.0",
     "xterm-addon-search": "^0.13.0",
     "xterm-addon-unicode11": "^0.6.0",
-    "xterm-addon-web-links": "^0.9.0"
+    "xterm-addon-web-links": "^0.9.0",
+    "xterm-addon-webgl": "^0.16.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.terminalvibe.app",
+    "productName": "TerminalVibe",
+    "asar": true,
+    "files": [
+      "electron/**/*",
+      "index.html",
+      "app.js",
+      "style.css",
+      "logo.png",
+      "logo-app.svg",
+      "node_modules/node-pty/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "logo.png",
+        "to": "logo.png"
+      },
+      {
+        "from": "logo-app.svg",
+        "to": "logo-app.svg"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "dir"
+      ],
+      "category": "Utility",
+      "icon": "src-tauri/icons"
+    },
+    "directories": {
+      "output": "release"
+    }
   }
 }
