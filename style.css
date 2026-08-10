@@ -583,7 +583,7 @@ background: var(--bg);
 .drag-indicator-overlay {
   position: absolute;
   background: var(--accent-dim);
-  border: 2px dashed var(--accent);
+  border: 2px solid var(--accent);
   pointer-events: none;
   z-index: 1000;
   opacity: 0;

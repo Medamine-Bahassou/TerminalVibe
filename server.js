@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
- * TerminalVibe WebSocket PTY server + static file server + minimal iframe proxy.
+ * TerminalVibe WebSocket PTY server + static file server.
  *
  * WebSocket server  ws://127.0.0.1:7681   — PTY multiplexer
  * HTTP server       http://127.0.0.1:6969 — serves index.html + static files + local file serving
- * Minimal proxy     http://127.0.0.1:7682 — strips X-Frame-Options/CSP headers only
  */
 
 const http = require("http");
@@ -18,7 +17,6 @@ const pty = require("node-pty");
 
 const HOST = "127.0.0.1";
 const PORT = parseInt(process.env.WS_PORT || "7681", 10); // WebSocket PTY
-const PROXY_PORT = parseInt(process.env.PROXY_PORT || "7682", 10); // Minimal iframe proxy
 const APP_PORT = parseInt(process.env.APP_PORT || "6969", 10); // HTTP app server
 
 const SESSIONS = {};
@@ -40,287 +38,6 @@ const MIME_TYPES = {
   ".wasm": "application/wasm",
   ".pdf": "application/pdf",
 };
-
-// Headers to strip from upstream responses (framing/CORS blockers)
-const STRIP_HEADERS = new Set([
-  "x-frame-options",
-  "content-security-policy",
-  "content-security-policy-report-only",
-  "x-content-security-policy",
-  "cross-origin-embedder-policy",
-  "cross-origin-opener-policy",
-  "cross-origin-resource-policy",
-]);
-
-// Extra headers stripped ONLY for HTML responses (which are modified by the proxy)
-const STRIP_HTML_HEADERS = new Set([
-  "etag",
-  "last-modified",
-  "expires",
-  "age",
-]);
-
-// ─────────────────────────────────────────────────────────────
-//  BASE64 URL HELPERS
-// ─────────────────────────────────────────────────────────────
-
-function toB64url(str) {
-  return Buffer.from(str, "utf-8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
-function fromB64url(str) {
-  return Buffer.from(
-    str.replace(/-/g, "+").replace(/_/g, "/"),
-    "base64"
-  ).toString("utf-8");
-}
-
-function proxyAbsPath(absPath, pageUrl) {
-  // Convert an absolute path (starting with /) to its /p/<b64>/... proxy form.
-  // pageUrl must be the original page URL (e.g. https://site.com/page).
-  if (!absPath.startsWith("/")) return null;
-  try {
-    const abs = new URL(absPath, pageUrl).href;
-    const u = new URL(abs);
-    const rest = abs.substring(u.origin.length) || "/";
-    return `/p/${toB64url(u.origin)}${rest}`;
-  } catch { return null; }
-}
-
-// ─────────────────────────────────────────────────────────────
-//  HTML REWRITING / SW INJECTION
-// ─────────────────────────────────────────────────────────────
-
-const SW_SCRIPT = `'use strict';var _pageB64=null;var _tb64=function(s){return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')};self.addEventListener('install',function(e){e.waitUntil(self.skipWaiting())});self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});self.addEventListener('message',function(e){if(e.data&&e.data.type==='setB64')_pageB64=e.data.b64;});self.addEventListener('fetch',function(e){var u=new URL(e.request.url);if(u.pathname==='/sw.js'||u.pathname.indexOf('/p/')===0)return;e.respondWith((async function(){var pageB64=_pageB64;try{var c=await self.clients.get(e.clientId);if(c&&c.url.indexOf('/p/')>=0){var m=c.url.match(/\/p\/([A-Za-z0-9_=-]+)/);if(m)pageB64=m[1];}}catch(ex){}if(!pageB64){var ref=e.request.referrer||'';var m2=ref.match(/\/p\/([A-Za-z0-9_=-]+)/);if(m2)pageB64=m2[1];}var pp;if(u.origin===self.location.origin){if(!pageB64)return fetch(e.request);pp='/p/'+pageB64+u.pathname+u.search;}else{pp='/p/'+_tb64(u.origin)+u.pathname+u.search;}var opts={method:e.request.method,headers:e.request.headers};if(e.request.method!=='GET'&&e.request.method!=='HEAD'){try{opts.body=await e.request.clone().arrayBuffer();}catch(ex){}}return fetch(pp,opts);})());});`;
-
-function rewriteHtmlForProxy(html, pageUrl, b64) {
-  // 1. Strip framing / CSP meta tags
-  html = html.replace(
-    /<meta\b[^>]*\bhttp-equiv\s*=\s*["'](?:x-frame-options|content-security-policy|content-security-policy-report-only)["'][^>]*>\s*/gi,
-    ""
-  );
-
-  // 2. Replace or inject <base href> with the proxy base URL
-  const pb = `http://${HOST}:${PROXY_PORT}/p/${b64}/`;
-  const hasBase = /<base\b[^>]*>/i.test(html);
-  if (hasBase) {
-    html = html.replace(
-      /(<base\b[^>]*?\bhref\s*=\s*["'])([^"']+)(["'])/gi,
-      (m, pre, _href, post) => pre + pb + post
-    );
-  } else if (/<head[^>]*>/i.test(html)) {
-    html = html.replace(/(<head[^>]*>)/i, `$1<base href="${pb}">`);
-  } else if (/<html[^>]*>/i.test(html)) {
-    html = html.replace(/(<html[^>]*>)/i, `$1<base href="${pb}">`);
-  } else {
-    html = `<base href="${pb}">` + html;
-  }
-
-  // 3. SW registration script (placed right after <head> for earliest activation)
-  const swRegScript = `<script>try{navigator.serviceWorker.register('/sw.js',{scope:'/'}).then(function(r){if(r.active)r.active.postMessage({type:'setB64',b64:'${b64}'});var f=function(){if(r.active)r.active.postMessage({type:'setB64',b64:'${b64}'});};r.addEventListener('updatefound',function(){(r.installing||r.waiting)&&(r.installing||r.waiting).addEventListener('statechange',function(){if(this.state==='activated')r.active.postMessage({type:'setB64',b64:'${b64}'});});});})}catch(e){}</script>`;
-  if (/<head[^>]*>/i.test(html)) {
-    html = html.replace(/(<head[^>]*>)/i, `$1${swRegScript}`);
-  } else if (/<html[^>]*>/i.test(html)) {
-    html = html.replace(/(<html[^>]*>)/i, `$1${swRegScript}`);
-  } else {
-    html = swRegScript + html;
-  }
-
-  // 4. Rewrite absolute-path src/href/poster/data attributes through the proxy
-  html = html.replace(
-    /((?:src|href|poster|data)\s*=\s*["'])\/([^"']+)(["'])/gi,
-    (m, pre, p, post) => {
-      const proxied = proxyAbsPath("/" + p, pageUrl);
-      return proxied ? pre + proxied + post : m;
-    }
-  );
-
-  // 5. Rewrite srcset entries
-  html = html.replace(
-    /(\bsrcset\s*=\s*["'])([^"']+)(["'])/gi,
-    (m, pre, value, post) => {
-      const rewritten = value
-        .split(",")
-        .map((part) => {
-          part = part.trim();
-          if (!part) return "";
-          const pieces = part.split(/\s+/);
-          if (pieces[0].startsWith("/")) {
-            pieces[0] = proxyAbsPath(pieces[0], pageUrl) || pieces[0];
-          }
-          return pieces.join(" ");
-        })
-        .join(", ");
-      return pre + rewritten + post;
-    }
-  );
-
-  // 6. Rewrite url() references in <style> blocks
-  html = html.replace(
-    /(<style\b[^>]*>)(.*?)(<\/style>)/gis,
-    (m, open, body, close) => {
-      const rewritten = body.replace(
-        /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
-        (m2, q, p) => {
-          const proxied = proxyAbsPath(p, pageUrl);
-          return proxied ? `url(${q}${proxied}${q})` : m2;
-        }
-      );
-      return open + rewritten + close;
-    }
-  );
-
-  // 7. Rewrite url() references in inline style="" attributes
-  html = html.replace(
-    /(\bstyle\s*=\s*["'])(.*?)(["'])/gi,
-    (m, pre, body, post) => {
-      const rewritten = body.replace(
-        /url\(\s*(['"]?)\s*(\/[^)'"]+)\s*\1\s*\)/gi,
-        (m2, q, p) => {
-          const proxied = proxyAbsPath(p, pageUrl);
-          return proxied ? `url(${q}${proxied}${q})` : m2;
-        }
-      );
-      return pre + rewritten + post;
-    }
-  );
-
-  return html;
-}
-
-// ─────────────────────────────────────────────────────────────
-//  PROXY SERVER — strips headers + rewrites HTML URLs + SW
-// ─────────────────────────────────────────────────────────────
-
-const proxyServer = http.createServer((req, res) => {
-  // CORS for local requests
-  const reqOrigin = req.headers.origin;
-  if (reqOrigin) {
-    res.setHeader("Access-Control-Allow-Origin", reqOrigin);
-  }
-  if (req.method === "OPTIONS") {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  // Service Worker endpoint
-  const parsed = url.parse(req.url, true);
-  if (parsed.pathname === "/sw.js") {
-    res.writeHead(200, {
-      "Content-Type": "application/javascript",
-      "Cache-Control": "no-cache",
-      "Service-Worker-Allowed": "/",
-      "Access-Control-Allow-Origin": "*",
-    });
-    res.end(SW_SCRIPT);
-    return;
-  }
-
-  // Resolve target URL from /p/<b64origin>/<path> or /p/<b64origin>?query
-  const m = parsed.pathname.match(/^\/p\/([A-Za-z0-9\-_=]+)(\/.*)?$/);
-  if (!m) {
-    res.writeHead(404);
-    res.end("Not found");
-    return;
-  }
-
-  let origin;
-  try {
-    origin = fromB64url(m[1]);
-  } catch {
-    res.writeHead(400);
-    res.end("Bad origin");
-    return;
-  }
-  if (!origin.startsWith("http://") && !origin.startsWith("https://")) {
-    res.writeHead(400);
-    res.end("Bad origin");
-    return;
-  }
-
-  const rest = (m[2] || "/") + (parsed.search || "");
-  const target = origin.replace(/\/+$/, "") + rest;
-
-  let targetParsed;
-  try { targetParsed = new URL(target); } catch { res.writeHead(400); res.end("Bad URL"); return; }
-
-  const transport = targetParsed.protocol === "https:" ? https : http;
-  const port = targetParsed.port ? parseInt(targetParsed.port) : (targetParsed.protocol === "https:" ? 443 : 80);
-
-  const upstreamHeaders = {
-    "User-Agent": req.headers["user-agent"] || "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": req.headers.accept || "*/*",
-    "Accept-Language": req.headers["accept-language"] || "en-US,en;q=0.9",
-    "Host": targetParsed.hostname + (port !== 80 && port !== 443 ? `:${port}` : ""),
-  };
-  // Forward relevant incoming headers to upstream
-  const forwardedHeaders = ["referer", "cookie", "authorization", "origin", "content-type", "range"];
-  // Don't forward if-none-match/if-modified-since for HTML — proxy modifies content
-  const isHtmlReq = (req.headers.accept || "").includes("text/html");
-  if (!isHtmlReq) {
-    forwardedHeaders.push("if-none-match", "if-modified-since");
-  }
-  for (const h of forwardedHeaders) {
-    if (req.headers[h]) upstreamHeaders[h] = req.headers[h];
-  }
-
-  const proxyReq = transport.request({
-    hostname: targetParsed.hostname,
-    port,
-    path: targetParsed.pathname + targetParsed.search,
-    method: req.method,
-    headers: upstreamHeaders,
-    rejectUnauthorized: false,
-  }, (proxyRes) => {
-    const outHeaders = {};
-    for (const [name, value] of Object.entries(proxyRes.headers)) {
-      if (STRIP_HEADERS.has(name)) continue;
-      outHeaders[name] = value;
-    }
-
-    const contentType = (outHeaders["content-type"] || "").toLowerCase();
-    const isHtml = contentType.includes("text/html");
-
-    if (isHtml) {
-      // Strip caching headers — proxy modifies HTML, browser must always get fresh content
-      for (const h of STRIP_HTML_HEADERS) delete outHeaders[h];
-      // Override cache-control (delete all case variants, set no-store)
-      delete outHeaders["cache-control"];
-      delete outHeaders["Cache-Control"];
-      delete outHeaders["pragma"];
-      delete outHeaders["expires"];
-      outHeaders["cache-control"] = "no-store, must-revalidate";
-      
-      // Buffer HTML to rewrite URLs + inject SW
-      const chunks = [];
-      proxyRes.on("data", c => chunks.push(c));
-      proxyRes.on("end", () => {
-        let html = Buffer.concat(chunks).toString("utf-8");
-        html = rewriteHtmlForProxy(html, target, m[1]);
-        delete outHeaders["content-length"];
-        outHeaders["content-length"] = Buffer.byteLength(html);
-        res.writeHead(proxyRes.statusCode, outHeaders);
-        res.end(html);
-      });
-    } else {
-      res.writeHead(proxyRes.statusCode, outHeaders);
-      proxyRes.pipe(res);
-    }
-  });
-
-  proxyReq.on("error", () => {
-    if (!res.headersSent) {
-      res.writeHead(502);
-      res.end("Bad gateway");
-    }
-  });
-  req.pipe(proxyReq);
-});
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC APP SERVER (with local file serving)
@@ -626,7 +343,6 @@ function shutdownGracefully() {
     });
   }
 
-  closeServer(proxyServer, "proxy");
   closeServer(appServer, "app");
   closeServer(wss, "websocket");
 
@@ -653,9 +369,6 @@ process.on("SIGHUP", shutdownGracefully);
 
 const isTauriMode = process.env.TAURI === "1" || process.env.TAURI_ENV === "1";
 
-proxyServer.listen(PROXY_PORT, HOST, () => {
-  console.log(`TerminalVibe iframe proxy listening on http://${HOST}:${PROXY_PORT}`);
-});
 
 if (!isTauriMode) {
   appServer.listen(APP_PORT, HOST, () => {

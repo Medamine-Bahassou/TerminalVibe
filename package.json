@@ -2,7 +2,7 @@
   "name": "terminalvibe",
   "version": "0.1.0",
   "private": true,
-  "description": "Terminal multiplexer with browser proxy",
+  "description": "Terminal multiplexer with native browser tabs",
   "main": "electron/main.js",
   "author": "TerminalVibe",
   "scripts": {

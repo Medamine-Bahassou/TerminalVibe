@@ -230,9 +230,6 @@
   }
 
   let WS_PORT = 7681;
-  // Electron passes the iframe proxy port via query (?proxy=) since the WS
-  // relay (which previously announced it in the 'ready' message) is not used there.
-  let PROXY_PORT = parseInt(new URLSearchParams(window.location.search).get('proxy') || '7682', 10) || 7682;
 
   function isTauri() {
     return isDesktop() ||
@@ -417,6 +414,11 @@
     }
 
     if (window.electronAPI) {
+      // Settings page is a full DOM layer; native browser views render above it,
+      // so keep every WebContentsView hidden while the overlay is open.
+      if (document.getElementById('settings-overlay')?.classList.contains('open')) {
+        for (const v of viewUpdates) v.show = false;
+      }
       for (const v of viewUpdates) {
         if (v.show) {
           window.electronAPI.browserResize(v.id, v.rect);
@@ -508,7 +510,7 @@
         try {
           const msg = JSON.parse(e.data);
           if (msg.type === 'ready') {
-            if (msg.port) { WS_PORT = msg.port; PROXY_PORT = msg.port + 1; }
+            if (msg.port) { WS_PORT = msg.port; }
           } else if (msg.type === 'exit') handleExit(msg.id, msg.code);
           else if (msg.type === 'error') handleError(msg.id, msg.msg);
           else if (msg.type === 'pong') {}
@@ -1256,21 +1258,26 @@
     activateWorkspace(workspaces[(idx - 1 + workspaces.length) % workspaces.length].id);
   }
 
+  const _closingWs = new Set();
+
   function removeWorkspace(id) {
     const ws = findWs(id);
-    if (!ws) return;
+    if (!ws || _closingWs.has(id)) return;
+    _closingWs.add(id);
     const termCount = getWorkspaceTerminals(ws).length;
     const msg = termCount > 0
     ? `Close "${ws.label}" with ${termCount} terminal${termCount > 1 ? 's' : ''}?`
     : `Close "${ws.label}"?`;
-    showConfirm(msg, () => _removeWorkspace(id));
+    showConfirm(msg,
+      () => { try { _removeWorkspace(id); } finally { _closingWs.delete(id); } },
+      () => _closingWs.delete(id));
   }
 
   function _removeWorkspace(id) {
     const ws = findWs(id);
     if (!ws) return;
     const terms = getWorkspaceTerminals(ws);
-    terms.forEach(t => removeTerminal(ws.id, t.id, true));
+    terms.forEach(t => { try { removeTerminal(ws.id, t.id, true); } catch (e) { console.error('removeTerminal failed during workspace teardown', e); } });
 
     // Clean up cached DOM
     if (_wsDomCache[id]) { _wsDomCache[id].remove(); delete _wsDomCache[id]; }
@@ -1658,8 +1665,12 @@
 
     // Last tab in workspace — remove the workspace with confirmation
     if (!skipRender && getWorkspaceTerminals(wsp).length <= 1) {
+      if (_closingWs.has(wsId)) return;
+      _closingWs.add(wsId);
       const label = wsp.label;
-      showConfirm(`Close "${label}"?`, () => _removeWorkspace(wsId));
+      showConfirm(`Close "${label}"?`,
+        () => { try { _removeWorkspace(wsId); } finally { _closingWs.delete(wsId); } },
+        () => _closingWs.delete(wsId));
       return;
     }
 
@@ -1678,7 +1689,7 @@
     if (entry.type !== 'browser') {
       sendControl({ type: 'close', id: termId });
       if (_ptyListeners[termId]) { _ptyListeners[termId](); delete _ptyListeners[termId]; }
-      entry.term.dispose();
+      if (entry.term) entry.term.dispose();
     } else {
       if (entry._msgCleanup) entry._msgCleanup();
       if (entry._resizeObs) { entry._resizeObs.disconnect(); entry._resizeObs = null; }
@@ -2560,7 +2571,7 @@
           pageView.style.display = '';
           var friendlyMsg = msg;
           if (msg.includes('connect') || msg.includes('ECONNREFUSED') || msg.includes('timed out')) {
-            friendlyMsg = 'Cannot connect to the site. The proxy server may be down or the site is unreachable.';
+            friendlyMsg = 'Cannot connect to the site. It may be offline or unreachable.';
           } else if (msg.includes('CORS') || msg.includes('Access-Control')) {
             friendlyMsg = 'The site blocked the request due to CORS policy. Try reloading or opening in an external browser.';
           } else if (msg.includes('404')) {
@@ -2595,7 +2606,6 @@
           <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
           </svg>
           <p>Enter a URL or search term above</p>
-          <p class="browser-start-hint">${isTauri() || isDesktop() ? 'Native webview — sites load directly without proxy.' : 'Proxied browser — sites load via local proxy to strip frame restrictions.'}</p>
           </div>`;
         }
 
@@ -2611,7 +2621,7 @@
           wrap.innerHTML = '<img class="browser-img" alt="">';
           wrap.style.display = 'flex';
           const img = wrap.querySelector('img');
-          img.src = proxyUrl(url);
+          img.src = targetUrl(url);
           entry._imgEl = img;
           entry._browserZoom = 1;
         }
@@ -2632,7 +2642,7 @@
           entry._pdfWrap = wrap;
           const target = wrap.querySelector('div');
           target.innerHTML = '';
-          const srcUrl = proxyUrl(url);
+          const srcUrl = targetUrl(url);
           console.log('[EmbedPDF] src:', srcUrl, '(original:', url, ')');
           if (!window.EmbedPDF) { wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; return; }
           try {
@@ -2693,10 +2703,10 @@
           return 'https://' + url;
         }
 
-        function proxyUrl(url) {
+        function targetUrl(url) {
           if (!url) return url;
           if (isDesktop() && window.electronAPI) {
-            // Electron native <webview>: no proxy. file:///asset:// resolve to local paths.
+            // Electron native view: no proxy. asset:// / file:// resolve to local paths.
             if (url.startsWith('asset://')) {
               let filePath = decodeURIComponent(url.replace(/^asset:\/\/localhost\//, ''));
               if (!filePath.startsWith('/')) filePath = '/' + filePath;
@@ -2705,19 +2715,7 @@
             if (url.startsWith('file://')) return url;
             return url;
           }
-          if (url.startsWith('asset://')) {
-            const filePath = decodeURIComponent(url.replace('asset://localhost/', '/'));
-            return `http://127.0.0.1:${PROXY_PORT}/local/` + encodeURIComponent(filePath);
-          }
-          if (url.startsWith('file://')) {
-            const filePath = url.slice(7);
-            return `http://127.0.0.1:${PROXY_PORT}/local/` + encodeURIComponent(filePath);
-          }
-          const u2 = new URL(url);
-          const origin = u2.origin;
-          const path = url.substring(origin.length) || '/';
-          const b64 = btoa(origin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-          return `http://127.0.0.1:${PROXY_PORT}/p/${b64}${path}`;
+          return url;
         }
 
         async function loadUrl(rawUrl) {
@@ -2796,9 +2794,9 @@
                     break;
                 }
               });
-              window.electronAPI.browserCreate(entry.id, proxyUrl(url));
+              window.electronAPI.browserCreate(entry.id, targetUrl(url));
             } else {
-              window.electronAPI.browserNavigate(entry.id, proxyUrl(url));
+              window.electronAPI.browserNavigate(entry.id, targetUrl(url));
             }
             window.electronAPI.browserShow(entry.id);
           }
@@ -3461,7 +3459,8 @@
       promptOverlay.onclick = e => { if (e.target === promptOverlay) close(); };
   }
 
-  function showConfirm(message, callback) {
+  function showConfirm(message, callback, onCancel) {
+    onCancel = onCancel || (() => {});
     promptLabel.textContent = message;
     promptInput.style.display = 'none';
     promptColors.style.display = 'none';
@@ -3470,6 +3469,7 @@
     promptOk.focus();
 
     let onKey;
+    let cancelled = false;
     const close = () => {
       promptOverlay.classList.remove('open');
       promptInput.style.display = '';
@@ -3478,18 +3478,24 @@
       promptOverlay.onclick = null;
       document.removeEventListener('keydown', onKey, true);
     };
+    const cancel = () => {
+      if (cancelled) return;
+      cancelled = true;
+      onCancel();
+      close();
+    };
 
     const submit = () => { close(); callback(); };
 
     onKey = e => {
       e.stopPropagation();
       if (e.key === 'Enter') submit();
-      if (e.key === 'Escape') close();
+      if (e.key === 'Escape') cancel();
     };
 
       promptOk.onclick = submit;
-      promptCancel.onclick = close;
-      promptOverlay.onclick = e => { if (e.target === promptOverlay) close(); };
+      promptCancel.onclick = cancel;
+      promptOverlay.onclick = e => { if (e.target === promptOverlay) cancel(); };
       document.addEventListener('keydown', onKey, true);
   }
 
@@ -4028,11 +4034,13 @@ function buildColorItem(key, label) {
         renderThemeEditor();
         refreshThemeCustomSelect();
         settingsOverlay.focus({ preventScroll: true });
+        syncBrowserSlots();
       }
 
       function closeSettings() {
         applyTheme(currentThemeName);
         settingsOverlay.classList.remove('open');
+        syncBrowserSlots();
       }
 
       function renderShortcutsList() {
@@ -5080,15 +5088,6 @@ function buildColorItem(key, label) {
             const active = activeTerminal();
             if (active && active.type === 'browser' && active._syncUrl) {
               var navUrl = e.data.terminalVibeNav;
-              try {
-                var u = new URL(navUrl);
-                var proxyHost = location.hostname;
-                var proxyPort = String(PROXY_PORT);
-                if (u.hostname === proxyHost || u.port === proxyPort) {
-                  var lastOrigin = new URL(active.url || 'about:blank').origin;
-                  navUrl = lastOrigin + u.pathname + u.search + u.hash;
-                }
-              } catch(_) {}
               if (navUrl !== active.url) active._syncUrl(navUrl);
             }
           }
