@@ -3178,7 +3178,44 @@
     const sb = document.getElementById('sidebar');
     const actionsEl = sb.querySelector('.sidebar-actions');
     const expanded = sb.classList.contains('expanded');
-    sb.querySelectorAll('.ws-btn, .ws-add').forEach(e => e.remove());
+    sb.querySelectorAll('.ws-header, .ws-btn, .ws-add').forEach(e => e.remove());
+
+    // Header above the workspace list: "Workspaces" title, then a plus icon.
+    const header = document.createElement('div');
+    header.className = 'ws-header';
+    const headerTitle = document.createElement('span');
+    headerTitle.className = 'ws-header-title';
+    headerTitle.textContent = 'Workspaces';
+    header.appendChild(headerTitle);
+
+    const addBtn = document.createElement('div');
+    addBtn.className = 'ws-add';
+    addBtn.title = 'New workspace';
+    addBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+    addBtn.addEventListener('click', () => createWorkspace());
+    // Drop on ws-add = move to the front of the list
+    addBtn.addEventListener('dragover', e => {
+      if (!window.draggedWsId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+    addBtn.addEventListener('drop', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const draggedId = window.draggedWsId;
+      if (!draggedId) return;
+      const fromIdx = workspaces.findIndex(w => w.id === draggedId);
+      if (fromIdx <= 0) { window.draggedWsId = null; return; }
+      const [moved] = workspaces.splice(fromIdx, 1);
+      workspaces.unshift(moved);
+      window.draggedWsId = null;
+      window._wsDragged = true;
+      setTimeout(() => { window._wsDragged = false; }, 0);
+      renderSidebar();
+      saveState();
+    });
+    header.appendChild(addBtn);
+    sb.insertBefore(header, sb.firstChild);
 
     for (const wsp of workspaces) {
       const btn = document.createElement('div');
@@ -3263,34 +3300,6 @@
       });
       sb.insertBefore(btn, actionsEl);
     }
-
-    const addBtn = document.createElement('div');
-    addBtn.className = 'ws-add';
-    addBtn.title = 'New workspace';
-    addBtn.innerHTML = '+<span class="ws-add-text">New workspace</span>';
-    addBtn.addEventListener('click', () => createWorkspace());
-    // Drop on ws-add = move to end
-    addBtn.addEventListener('dragover', e => {
-      if (!window.draggedWsId) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-    });
-    addBtn.addEventListener('drop', e => {
-      e.preventDefault();
-      e.stopPropagation();
-      const draggedId = window.draggedWsId;
-      if (!draggedId) return;
-      const fromIdx = workspaces.findIndex(w => w.id === draggedId);
-      if (fromIdx === -1 || fromIdx === workspaces.length - 1) { window.draggedWsId = null; return; }
-      const [moved] = workspaces.splice(fromIdx, 1);
-      workspaces.push(moved);
-      window.draggedWsId = null;
-      window._wsDragged = true;
-      setTimeout(() => { window._wsDragged = false; }, 0);
-      renderSidebar();
-      saveState();
-    });
-    sb.insertBefore(addBtn, actionsEl);
   }
 
   /* ═══════════════════════════════════════════════════════════════

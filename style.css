@@ -246,31 +246,50 @@ gap: 8px;
 .ws-btn .ws-action:hover { color: var(--fg); background: rgba(255,255,255,0.1); }
 .ws-btn .ws-action.ws-remove:hover { color: #f38ba8; }
 
+/* Sidebar header: "Workspaces" title + new-workspace plus, above the list.
+   Collapsed the title is hidden and only the plus shows. */
+.ws-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-shrink: 0;
+  width: 36px;
+  margin-bottom: 8px;
+  align-self: center;
+}
+#sidebar.expanded .ws-header {
+  width: calc(100% - 12px);
+  justify-content: space-between;
+  padding-left: 8px;
+}
+
+.ws-header-title {
+  display: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--dim-text);
+  white-space: nowrap;
+  user-select: none;
+}
+#sidebar.expanded .ws-header-title { display: block; }
+
 .ws-add {
   width: 36px; height: 36px;
   border-radius: 0;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   color: var(--dim-text);
-  font-size: 18px; line-height: 1;
   border: 1px dashed var(--dim-text);
   transition: color 0.12s, border-color 0.12s, background 0.12s;
   flex-shrink: 0;
-  margin-top: 4px;
   user-select: none;
-  align-self: center;
 }
-#sidebar.expanded .ws-add {
-width: calc(100% - 12px);
-height: auto;
-min-height: 36px;
-padding: 6px 8px;
-font-size: 13px;
-gap: 6px;
-}
+#sidebar.expanded .ws-add { width: 26px; height: 26px; }
+.ws-add svg { width: 14px; height: 14px; pointer-events: none; }
 .ws-add:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
-.ws-add .ws-add-text { display: none; font-size: 11px; }
-#sidebar.expanded .ws-add .ws-add-text { display: inline; }
 
 /* ──────────────────────────────────────────
  *   MAIN
