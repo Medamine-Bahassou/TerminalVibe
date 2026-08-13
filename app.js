@@ -296,7 +296,8 @@
   let backgroundOpacity = 0.85;       // 0..1
   let settingsCategory = 'appearance'; // last-opened settings category (deep-link via openSettings(cat))
 
-  let workspaces = [];       // [{id, label, activeTermId, layout: (Node)}]
+  let workspaces = [];       // [{id, label, activeTermId, layout: (Node), folderId?}]
+  let folders = [];          // [{id, label, color?, collapsed?}]  — workspace folders/groups
   let activeWsId = null;
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
   let focusedSlotId = null;  // DOM id of focused .term-slot
@@ -1111,9 +1112,15 @@
  sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
  shortcuts: customShortcuts,
  activeWsId,
+ folders: folders.map(f => {
+   const o = { id: f.id, label: f.label, collapsed: f.collapsed };
+   if (f.color) o.color = f.color;
+   return o;
+ }),
  workspaces: workspaces.map(ws => {
    const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
    if (ws.color) o.color = ws.color;
+   if (ws.folderId) o.folderId = ws.folderId;
    return o;
  }),
     };
@@ -1158,6 +1165,14 @@
         }
       }
 
+      if (state.folders) {
+        for (const fData of state.folders) {
+          const f = { id: fData.id, label: fData.label || 'Folder', collapsed: !!fData.collapsed };
+          if (fData.color) f.color = fData.color;
+          folders.push(f);
+        }
+      }
+
       for (const wsData of state.workspaces) {
         const ws = {
           id: wsData.id,
@@ -1166,11 +1181,13 @@
           layout: null
         };
         if (wsData.color) ws.color = wsData.color;
+        if (wsData.folderId) ws.folderId = wsData.folderId;
 
         ws.layout = deserializeLayout(wsData.layout, ws);
         workspaces.push(ws);
         wsCount++;
       }
+      normalizeOrder();
 
       activeWsId = state.activeWsId || workspaces[0]?.id;
       return true;
@@ -1182,14 +1199,108 @@
    ═══════════════════════════════════════════════════════════════ */
   let wsCount = 0;
 
-  function createWorkspace(label) {
+  function createWorkspace(label, folderId) {
     wsCount++;
     const id = uuid();
-    const ws = { id, label: label || ('Workspace ' + (workspaces.length + 1)), layout: null, activeTermId: null };
+    const ws = { id, label: label || ('Workspace ' + (workspaces.length + 1)), layout: null, activeTermId: null, folderId: folderId || undefined };
     workspaces.push(ws);
     activateWorkspace(id);
     addTerminal(id);
     return ws;
+  }
+
+  /* ── Folder helpers ──
+     workspaces stay in a flat array; visual order = root (ungrouped) block first,
+     then one contiguous block per folder (in folders[] order). */
+  function getGroupList(folderKey) {
+    return workspaces.filter(w => (w.folderId || null) === (folderKey || null));
+  }
+
+  function normalizeOrder() {
+    const valid = new Set(folders.map(f => f.id));
+    const root = [];
+    const byFolder = new Map();
+    for (const ws of workspaces) {
+      if (!ws.folderId || !valid.has(ws.folderId)) {
+        ws.folderId = null;
+        root.push(ws);
+      } else {
+        if (!byFolder.has(ws.folderId)) byFolder.set(ws.folderId, []);
+        byFolder.get(ws.folderId).push(ws);
+      }
+    }
+    workspaces = root;
+    for (const f of folders) workspaces.push(...(byFolder.get(f.id) || []));
+  }
+
+  function rebuildWorkspaces() {
+    const out = [];
+    for (const folderKey of [null, ...folders.map(f => f.id)]) {
+      out.push(...getGroupList(folderKey));
+    }
+    workspaces = out;
+  }
+
+  function moveWsTo(wsId, folderKey, localIndex) {
+    const ws = findWs(wsId);
+    if (!ws) return;
+    const oldKey = ws.folderId || null;
+    const newKey = folderKey || null;
+    const oldList = getGroupList(oldKey);
+    const from = oldList.findIndex(w => w.id === wsId);
+    if (from !== -1) oldList.splice(from, 1);
+    ws.folderId = newKey;
+    const newList = getGroupList(newKey);
+    const idx = Math.max(0, Math.min(localIndex === undefined ? newList.length : localIndex, newList.length));
+    newList.splice(idx, 0, ws);
+    rebuildWorkspaces();
+    renderSidebar();
+    saveState();
+  }
+
+  function createFolder(label, color) {
+    const id = uuid();
+    const f = { id, label: label || ('Folder ' + (folders.length + 1)) };
+    if (color) f.color = color;
+    folders.push(f);
+    renderSidebar();
+    saveState();
+    return f;
+  }
+
+  function renameFolder(id) {
+    const f = folders.find(x => x.id === id);
+    if (!f) return;
+    showPrompt('Edit folder', f.label, { color: f.color || '' }, (value, color) => {
+      f.label = value.trim() || f.label;
+      f.color = color || undefined;
+      renderSidebar();
+      saveState();
+    });
+  }
+
+  function removeFolder(id) {
+    const f = folders.find(x => x.id === id);
+    if (!f) return;
+    const inFolder = getGroupList(id).length;
+    const msg = inFolder > 0
+    ? `Remove folder "${f.label}"? Its ${inFolder} workspace${inFolder > 1 ? 's' : ''} will move to the top level.`
+    : `Remove folder "${f.label}"?`;
+    showConfirm(msg, () => {
+      folders = folders.filter(x => x.id !== id);
+      for (const ws of workspaces) { if (ws.folderId === id) ws.folderId = null; }
+      normalizeOrder();
+      renderSidebar();
+      saveState();
+    });
+  }
+
+  function toggleFolderCollapsed(id) {
+    const f = folders.find(x => x.id === id);
+    if (!f) return;
+    f.collapsed = !f.collapsed;
+    renderSidebar();
+    saveState();
   }
 
   function activateWorkspace(id, skipRender) {
@@ -3177,10 +3288,14 @@
   function renderSidebar() {
     const sb = document.getElementById('sidebar');
     const actionsEl = sb.querySelector('.sidebar-actions');
-    const expanded = sb.classList.contains('expanded');
-    sb.querySelectorAll('.ws-header, .ws-btn, .ws-add').forEach(e => e.remove());
+    sb.querySelectorAll('.ws-header, .ws-folder-row, .ws-btn').forEach(e => e.remove());
 
-    // Header above the workspace list: "Workspaces" title, then a plus icon.
+    const clearDropMarks = () => {
+      sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+      sb.querySelectorAll('.ws-folder-row.drop-into').forEach(el => el.classList.remove('drop-into'));
+    };
+
+    // Header above the workspace list: "Workspaces" title + new workspace / new folder.
     const header = document.createElement('div');
     header.className = 'ws-header';
     const headerTitle = document.createElement('span');
@@ -3188,12 +3303,15 @@
     headerTitle.textContent = 'Workspaces';
     header.appendChild(headerTitle);
 
+    const headerActions = document.createElement('div');
+    headerActions.className = 'ws-header-actions';
+
     const addBtn = document.createElement('div');
     addBtn.className = 'ws-add';
     addBtn.title = 'New workspace';
-    addBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+    addBtn.innerHTML = '<i class="ph ph-plus"></i>';
     addBtn.addEventListener('click', () => createWorkspace());
-    // Drop on ws-add = move to the front of the list
+    // Drop on ws-add = move to the front of the top-level (ungrouped) list
     addBtn.addEventListener('dragover', e => {
       if (!window.draggedWsId) return;
       e.preventDefault();
@@ -3204,20 +3322,25 @@
       e.stopPropagation();
       const draggedId = window.draggedWsId;
       if (!draggedId) return;
-      const fromIdx = workspaces.findIndex(w => w.id === draggedId);
-      if (fromIdx <= 0) { window.draggedWsId = null; return; }
-      const [moved] = workspaces.splice(fromIdx, 1);
-      workspaces.unshift(moved);
       window.draggedWsId = null;
       window._wsDragged = true;
       setTimeout(() => { window._wsDragged = false; }, 0);
-      renderSidebar();
-      saveState();
+      moveWsTo(draggedId, null, 0);
     });
-    header.appendChild(addBtn);
+    headerActions.appendChild(addBtn);
+
+    const folderBtn = document.createElement('div');
+    folderBtn.className = 'ws-folder-add-btn';
+    folderBtn.title = 'New folder';
+    folderBtn.innerHTML = '<i class="ph ph-folder-plus"></i>';
+    folderBtn.addEventListener('click', () => showPrompt('New folder', '', { color: '' }, (value, color) => createFolder(value, color)));
+    headerActions.appendChild(folderBtn);
+
+    header.appendChild(headerActions);
     sb.insertBefore(header, sb.firstChild);
 
-    for (const wsp of workspaces) {
+    // ── Workspace button builder (shared by root list and folders) ──
+    const buildWsBtn = (wsp, folderKey) => {
       const btn = document.createElement('div');
       const isActive = wsp.id === activeWsId;
       btn.className = 'ws-btn' + (isActive ? ' active' : '');
@@ -3225,7 +3348,7 @@
       btn.dataset.wsid = wsp.id;
       const abbr = wsp.label.substring(0,3).toUpperCase();
       const tabCount = getWorkspaceTerminals(wsp).length;
-      btn.innerHTML = `<span class="ws-strip"></span><span class="ws-label">${abbr}</span><span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions"><span class="ws-action ws-rename" title="Rename">✎</span><span class="ws-action ws-remove" title="Close">✕</span></span><span class="ws-count">${tabCount}</span>`;
+      btn.innerHTML = `<span class="ws-strip"></span><span class="ws-label">${abbr}</span><span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions"><span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span><span class="ws-count">${tabCount}</span>`;
       btn.title = wsp.label;
       if (wsp.color) {
         btn.dataset.color = wsp.color;
@@ -3239,7 +3362,7 @@
       btn.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); _suppressPasteUntil = Date.now() + 200; removeWorkspace(wsp.id); } });
       btn.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'workspace', wsp.id); });
 
-      // Drag & drop reorder
+      // Drag & drop: move / reorder (folder-aware)
       btn.addEventListener('dragstart', e => {
         e.dataTransfer.setData('text/plain', wsp.id);
         e.dataTransfer.effectAllowed = 'move';
@@ -3250,7 +3373,7 @@
       btn.addEventListener('dragend', () => {
         btn.classList.remove('dragging');
         window.draggedWsId = null;
-        sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+        clearDropMarks();
         stopResizing();
       });
       btn.addEventListener('dragover', e => {
@@ -3274,20 +3397,13 @@
         const midY = rect.top + rect.height / 2;
         const insertBefore = e.clientY < midY;
 
-        const fromIdx = workspaces.findIndex(w => w.id === draggedId);
-        const toIdx = workspaces.findIndex(w => w.id === wsp.id);
-        if (fromIdx === -1 || toIdx === -1) return;
-
-        const [moved] = workspaces.splice(fromIdx, 1);
-        const targetIdx = workspaces.findIndex(w => w.id === wsp.id);
-        workspaces.splice(insertBefore ? targetIdx : targetIdx + 1, 0, moved);
-
-        sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+        const targetList = getGroupList(folderKey);
+        const to = targetList.findIndex(w => w.id === wsp.id);
+        clearDropMarks();
         window.draggedWsId = null;
         window._wsDragged = true;
         setTimeout(() => { window._wsDragged = false; }, 0);
-        renderSidebar();
-        saveState();
+        moveWsTo(draggedId, folderKey, insertBefore ? to : to + 1);
       });
 
       btn.querySelector('.ws-rename').addEventListener('click', (e) => {
@@ -3298,7 +3414,132 @@
         e.stopPropagation();
         removeWorkspace(wsp.id);
       });
-      sb.insertBefore(btn, actionsEl);
+      return btn;
+    };
+
+    // ── Folder row builder ──
+    // Renders a folder as a tree node with its child workspaces nested below.
+    const buildFolderEl = (folder) => {
+      const wss = getGroupList(folder.id);
+      const isLast = folders[folders.length - 1]?.id === folder.id;
+
+      const row = document.createElement('div');
+      row.className = 'ws-folder-row' + (folder.collapsed ? ' collapsed' : '') + (isLast ? ' last' : '');
+      if (folder.color) {
+        row.dataset.color = folder.color;
+        row.style.setProperty('--ws-color', folder.color);
+      }
+
+      const headerEl = document.createElement('div');
+      headerEl.className = 'ws-folder-header';
+      headerEl.title = folder.label;
+      headerEl.innerHTML = `
+        <span class="ws-folder-icon ws-folder-icon-closed"><i class="ph ph-folder"></i></span>
+        <span class="ws-folder-icon ws-folder-icon-open"><i class="ph ph-folder-open"></i></span>
+        <span class="ws-folder-name">${escHtml(folder.label)}</span>
+        <span class="ws-folder-count">${wss.length}</span>
+        <span class="ws-folder-actions">
+          <span class="ws-folder-action ws-folder-add" title="New workspace here"><i class="ph ph-plus"></i></span>
+          <span class="ws-folder-action ws-folder-rename" title="Rename folder"><i class="ph ph-pencil-simple"></i></span>
+          <span class="ws-folder-action ws-folder-remove" title="Delete folder"><i class="ph ph-x"></i></span>
+        </span>`;
+
+      headerEl.addEventListener('click', e => {
+        if (e.target.closest('.ws-folder-action')) return;
+        if (window._wsDragged || window.draggedFolderId) { window._wsDragged = false; return; }
+        toggleFolderCollapsed(folder.id);
+      });
+      headerEl.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'folder', folder.id); });
+
+      headerEl.querySelector('.ws-folder-add').addEventListener('click', e => { e.stopPropagation(); createWorkspace(undefined, folder.id); });
+      headerEl.querySelector('.ws-folder-rename').addEventListener('click', e => { e.stopPropagation(); renameFolder(folder.id); });
+      headerEl.querySelector('.ws-folder-remove').addEventListener('click', e => { e.stopPropagation(); removeFolder(folder.id); });
+
+      // Drop a workspace onto the folder row → append to this folder
+      row.addEventListener('dragover', e => {
+        if (!window.draggedWsId) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        row.classList.add('drop-into');
+      });
+      row.addEventListener('dragleave', () => row.classList.remove('drop-into'));
+      row.addEventListener('drop', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        row.classList.remove('drop-into');
+        const wsId = window.draggedWsId;
+        if (!wsId) return;
+        window.draggedWsId = null;
+        window._wsDragged = true;
+        setTimeout(() => { window._wsDragged = false; }, 0);
+        moveWsTo(wsId, folder.id, getGroupList(folder.id).length);
+      });
+
+      // Drag a folder row to reorder folders
+      row.draggable = true;
+      row.addEventListener('dragstart', e => {
+        if (window.draggedWsId) { e.preventDefault(); return; }
+        e.dataTransfer.setData('text/plain', folder.id);
+        e.dataTransfer.effectAllowed = 'move';
+        row.classList.add('dragging');
+        window.draggedFolderId = folder.id;
+        startResizing();
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        window.draggedFolderId = null;
+        clearDropMarks();
+        stopResizing();
+      });
+      row.addEventListener('dragover', e => {
+        if (!window.draggedFolderId || window.draggedFolderId === folder.id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        row.classList.add('drop-into');
+      });
+      row.addEventListener('drop', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        row.classList.remove('drop-into');
+        const draggedId = window.draggedFolderId;
+        if (!draggedId || draggedId === folder.id) return;
+        const rect = row.getBoundingClientRect();
+        const insertBefore = e.clientY < rect.top + rect.height / 2;
+        const fromIdx = folders.findIndex(f => f.id === draggedId);
+        const toIdx = folders.findIndex(f => f.id === folder.id);
+        if (fromIdx === -1 || toIdx === -1) return;
+        const [moved] = folders.splice(fromIdx, 1);
+        const targetIdx = folders.findIndex(f => f.id === folder.id);
+        folders.splice(insertBefore ? targetIdx : targetIdx + 1, 0, moved);
+        window.draggedFolderId = null;
+        window._wsDragged = true;
+        setTimeout(() => { window._wsDragged = false; }, 0);
+        renderSidebar();
+        saveState();
+      });
+
+      row.appendChild(headerEl);
+
+      // Tree children: nested workspace buttons under the folder row
+      if (!folder.collapsed && wss.length) {
+        const children = document.createElement('div');
+        children.className = 'ws-folder-children';
+        for (const wsp of wss) children.appendChild(buildWsBtn(wsp, folder.id));
+        row.appendChild(children);
+      }
+      return row;
+    };
+
+    // ── Render: ungrouped workspaces and folders in one list flow ──
+    const order = [];
+    for (const wsp of getGroupList(null)) order.push({ type: 'ws', wsp, folderKey: null });
+    for (const folder of folders) order.push({ type: 'folder', folder });
+    for (const it of order) {
+      if (it.type === 'ws') {
+        sb.insertBefore(buildWsBtn(it.wsp, it.folderKey), actionsEl);
+      } else {
+        sb.insertBefore(buildFolderEl(it.folder), actionsEl);
+      }
     }
   }
 
@@ -3348,8 +3589,26 @@
       item('<i class="ph ph-plus"></i>', 'New terminal', 'Ctrl+Shift+T', () => { activateWorkspace(wsId); addTerminal(wsId); });
       sep();
       item('<i class="ph ph-pencil-simple"></i>', 'Edit workspace', '', () => renameWorkspace(wsId));
+      if (folders.length || findWs(wsId)?.folderId) {
+        sep();
+        for (const f of folders) {
+          const inFolder = findWs(wsId)?.folderId === f.id;
+          item(`<i class="ph ph-folder${inFolder ? '-open' : ''}"></i>`, `${inFolder ? '✓ ' : ''}Move to "${f.label}"`, '', () => moveWsTo(wsId, f.id, getGroupList(f.id).length));
+        }
+        item('<i class="ph ph-folder-simple-plus"></i>', 'New folder', '', () => showPrompt('New folder', '', { color: '' }, (value, color) => { const nf = createFolder(value, color); if (nf) moveWsTo(wsId, nf.id, 0); }));
+        if (findWs(wsId)?.folderId) {
+          item('<i class="ph ph-folder-minus"></i>', 'Remove from folder', '', () => moveWsTo(wsId, null, getGroupList(null).length));
+        }
+      }
       sep();
       item('<i class="ph ph-x"></i>', 'Close workspace', '', () => removeWorkspace(wsId), true);
+    } else if (type === 'folder') {
+      const folderId = data;
+      item('<i class="ph ph-plus"></i>', 'New workspace here', 'Ctrl+Shift+T', () => { const wsp = createWorkspace(undefined, folderId); if (wsp) activateWorkspace(wsp.id); });
+      sep();
+      item('<i class="ph ph-pencil-simple"></i>', 'Rename folder', '', () => renameFolder(folderId));
+      sep();
+      item('<i class="ph ph-x"></i>', 'Delete folder', '', () => removeFolder(folderId), true);
     } else if (type === 'terminal') {
       const { wsId, termId } = data;
       const wsp = findWs(wsId);
@@ -4051,8 +4310,8 @@ function buildColorItem(key, label) {
         // Shortcuts
         renderShortcutsList();
 
-        // Activate last-used category (or explicit deep-link target)
-        switchSettingsCat(typeof cat === 'string' ? cat : settingsCategory);
+        // Always open on the first category (Appearance) unless deep-linked
+        switchSettingsCat(typeof cat === 'string' ? cat : 'appearance');
         settingsOverlay.classList.add('open');
         document.activeElement?.blur();
 
