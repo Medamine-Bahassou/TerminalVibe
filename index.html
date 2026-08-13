@@ -111,28 +111,28 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[16px] h-[16px]"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
       </div>
       <h2 class="text-[12.5px] font-semibold text-[var(--fg)] m-0">Settings</h2>
-      <span class="text-[10.5px] text-[var(--dim-text)] font-mono">v0.5.10</span>
+      <span id="app-version" class="text-[10.5px] text-[var(--dim-text)] font-mono"></span>
     </div>
     <div class="flex flex-1 min-h-0 overflow-hidden">
       <div class="w-[240px] shrink-0 p-3 pr-2 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col gap-0.5 overflow-y-auto">
         <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="appearance">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 010 20"/><circle cx="12" cy="12" r="3"/></svg>
+          <i class="ph ph-sun shrink-0"></i>
           <span>Appearance</span>
         </div>
         <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5  cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="terminal">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          <i class="ph ph-terminal-window shrink-0"></i>
           <span>Terminal</span>
         </div>
         <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5  cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="shortcuts">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="8" x2="6" y2="8.01"/><line x1="10" y1="8" x2="10" y2="8.01"/><line x1="14" y1="8" x2="14" y2="8.01"/><line x1="18" y1="8" x2="18" y2="8.01"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="6" y1="16" x2="6" y2="16.01"/><line x1="18" y1="16" x2="18" y2="16.01"/></svg>
+          <i class="ph ph-keyboard shrink-0"></i>
           <span>Shortcuts</span>
         </div>
         <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5  cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="theme-editor">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 010 20 2 2 0 01-2-2v-1a2 2 0 00-2-2 2 2 0 01-2-2v-1a2 2 0 00-2-2 2 2 0 01-2-2 2 2 0 012-2h1a2 2 0 002-2 2 2 0 012-2"/></svg>
+          <i class="ph ph-palette shrink-0"></i>
           <span>Theme Editor</span>
         </div>
         <div class="settings-cat-btn flex items-center gap-2.5 px-3.5 py-2.5  cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="advanced">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-4 h-4 shrink-0"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          <i class="ph ph-faders-horizontal shrink-0"></i>
           <span>Advanced</span>
         </div>
       </div>

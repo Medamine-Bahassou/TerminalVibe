@@ -800,6 +800,21 @@ font-size: 12.5px;
   transition: background 0.1s;
   white-space: nowrap;
 }
+.settings-cat-btn i.ph {
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-cat-btn i.ph {
+  opacity: 0.8;
+}
+.settings-cat-btn:hover i.ph,
+.settings-cat-btn.active i.ph {
+  opacity: 1;
+}
 .ctx-item i.ph {
   font-size: 16px;
   width: 16px;

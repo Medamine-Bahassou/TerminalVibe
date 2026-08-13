@@ -1,6 +1,9 @@
 (function() {
   'use strict';
 
+  // App version — single source of truth, shared across the whole app
+  const APP_VERSION = '0.5.10';
+
   // Configure Coloris — hex color picker
   Coloris({
     parent: '#settings-modal',
@@ -3970,6 +3973,7 @@ function buildColorItem(key, label) {
       const settingsOverlay = document.getElementById('settings-overlay');
 
       function openSettings(cat) {
+        document.getElementById('app-version').textContent = 'v' + APP_VERSION;
         // Populate theme select
         const themeSelect = document.getElementById('set-theme');
         themeSelect.innerHTML = '';
