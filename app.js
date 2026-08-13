@@ -1,6 +1,11 @@
 (function() {
   'use strict';
 
+  // The settings UI can live in a separate Electron window (index.html?mode=settings)
+  // so it renders above native browser views. In that window only the settings
+  // page boots — the whole terminal/browser/sidebar layer is skipped.
+  const SETTINGS_ONLY = new URLSearchParams(window.location.search).get('mode') === 'settings';
+
   // App version — single source of truth, shared across the whole app
   const APP_VERSION = '0.5.10';
 
@@ -298,7 +303,9 @@
 
   let workspaces = [];       // [{id, label, activeTermId, layout: (Node), folderId?}]
   let folders = [];          // [{id, label, color?, collapsed?}]  — workspace folders/groups
+  let sideOrder = [];        // top-level sidebar flow: [{type:'ws'|'folder', id}] in visual order
   let activeWsId = null;
+  let settingsWindowOpen = false; // separate Electron settings window is up
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
   let focusedSlotId = null;  // DOM id of focused .term-slot
   let _multiSelected = new Set(); // terminal IDs selected via Ctrl+Alt+RightClick
@@ -359,6 +366,23 @@
     const paneArea = document.getElementById('pane-area');
     if (!paneArea) return;
 
+    // A full-screen settings layer is up (either the separate Electron window or
+    // the in-window overlay fallback). Native views paint above the window's DOM,
+    // so detach them all (alive, not destroyed) on every sync — they must never
+    // re-raise above the settings layer.
+    const overlayOpen = settingsWindowOpen ||
+      (document.getElementById('settings-overlay')?.classList.contains('open') === true);
+    if (overlayOpen) {
+      if (window.electronAPI) {
+        for (const ws of workspaces) {
+          for (const t of getWorkspaceTerminals(ws)) {
+            if (t.type === 'browser' && t._viewCreated) window.electronAPI.browserHide(t.id);
+          }
+        }
+      }
+      return;
+    }
+
     // PHASE 1: Batch READ (Prevents Layout Thrashing)
     const paneRect = paneArea.getBoundingClientRect();
     const updates = [];
@@ -418,11 +442,6 @@
     }
 
     if (window.electronAPI) {
-      // Settings page is a full DOM layer; native browser views render above it,
-      // so keep every WebContentsView hidden while the overlay is open.
-      if (document.getElementById('settings-overlay')?.classList.contains('open')) {
-        for (const v of viewUpdates) v.show = false;
-      }
       for (const v of viewUpdates) {
         if (v.show) {
           window.electronAPI.browserResize(v.id, v.rect);
@@ -1095,6 +1114,34 @@
   }
 
   function saveState() {
+    // In the settings window we must NOT clobber the main window's live
+    // workspaces/folders/sideOrder. Only merge the settings fields into the
+    // shared state and ping the main window to re-apply them.
+    if (SETTINGS_ONLY) {
+      const settings = {
+        theme: currentThemeName,
+        fontSize: currentFontSize,
+        fontFamily: currentFontFamily,
+        lineHeight: currentLineHeight,
+        cursorStyle: currentCursorStyle,
+        cursorBlink: currentCursorBlink,
+        statusBarVisible,
+        scrollback: currentScrollback,
+        settingsCategory,
+        backgroundMode,
+        globalBackgroundImage,
+        backgroundOpacity,
+        shortcuts: customShortcuts,
+      };
+      try {
+        const state = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
+        Object.assign(state, settings);
+        localStorage.setItem(STATE_KEY, JSON.stringify(state));
+      } catch {}
+      if (window.electronAPI && window.electronAPI.settingsChanged) window.electronAPI.settingsChanged();
+      return;
+    }
+
     const state = {
       theme: currentThemeName,
       fontSize: currentFontSize,
@@ -1112,12 +1159,13 @@
  sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
  shortcuts: customShortcuts,
  activeWsId,
- folders: folders.map(f => {
-   const o = { id: f.id, label: f.label, collapsed: f.collapsed };
-   if (f.color) o.color = f.color;
-   return o;
- }),
- workspaces: workspaces.map(ws => {
+folders: folders.map(f => {
+    const o = { id: f.id, label: f.label, collapsed: f.collapsed };
+    if (f.color) o.color = f.color;
+    return o;
+  }),
+  sideOrder: sideOrder.map(e => ({ t: e.type, id: e.id })),
+  workspaces: workspaces.map(ws => {
    const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
    if (ws.color) o.color = ws.color;
    if (ws.folderId) o.folderId = ws.folderId;
@@ -1189,6 +1237,13 @@
       }
       normalizeOrder();
 
+      if (Array.isArray(state.sideOrder)) {
+        for (const e of state.sideOrder) sideOrder.push({ type: e.t || e.type, id: e.id });
+        sanitizeSideOrder();
+      } else {
+        rebuildSideOrder();
+      }
+
       activeWsId = state.activeWsId || workspaces[0]?.id;
       return true;
     } catch { return false; }
@@ -1204,14 +1259,17 @@
     const id = uuid();
     const ws = { id, label: label || ('Workspace ' + (workspaces.length + 1)), layout: null, activeTermId: null, folderId: folderId || undefined };
     workspaces.push(ws);
+    if (!folderId) sideOrder.push({ type: 'ws', id });
+    else rebuildWorkspaces();
     activateWorkspace(id);
     addTerminal(id);
     return ws;
   }
 
   /* ── Folder helpers ──
-     workspaces stay in a flat array; visual order = root (ungrouped) block first,
-     then one contiguous block per folder (in folders[] order). */
+     Workspaces stay in a flat array; the top-level sidebar flow (which interleaves
+     root workspaces and folders) is kept in `sideOrder`. Folder children remain a
+     contiguous run inside `workspaces`, in the order they appear per folder. */
   function getGroupList(folderKey) {
     return workspaces.filter(w => (w.folderId || null) === (folderKey || null));
   }
@@ -1233,27 +1291,109 @@
     for (const f of folders) workspaces.push(...(byFolder.get(f.id) || []));
   }
 
-  function rebuildWorkspaces() {
-    const out = [];
-    for (const folderKey of [null, ...folders.map(f => f.id)]) {
-      out.push(...getGroupList(folderKey));
+  // Default top-level order: every root workspace first, then folders.
+  function rebuildSideOrder() {
+    sideOrder = [];
+    for (const ws of getGroupList(null)) sideOrder.push({ type: 'ws', id: ws.id });
+    for (const f of folders) sideOrder.push({ type: 'folder', id: f.id });
+  }
+
+  // Validate sideOrder against current workspaces/folders and append anything missing.
+  function sanitizeSideOrder() {
+    const validWs = new Set(workspaces.filter(w => !w.folderId).map(w => w.id));
+    const validFolder = new Set(folders.map(f => f.id));
+    const seenWs = new Set();
+    const seenFolder = new Set();
+    const clean = [];
+    for (const e of sideOrder) {
+      if (e.type === 'ws' && validWs.has(e.id) && !seenWs.has(e.id)) { clean.push(e); seenWs.add(e.id); }
+      else if (e.type === 'folder' && validFolder.has(e.id) && !seenFolder.has(e.id)) { clean.push(e); seenFolder.add(e.id); }
     }
-    workspaces = out;
+    for (const id of validWs) if (!seenWs.has(id)) clean.push({ type: 'ws', id });
+    for (const id of validFolder) if (!seenFolder.has(id)) clean.push({ type: 'folder', id });
+    sideOrder = clean;
+  }
+
+  // Rebuild the flat `workspaces` array honoring sideOrder: root workspaces in their
+  // sideOrder sequence first, then one contiguous run per folder.
+  function rebuildWorkspaces() {
+    const root = [];
+    for (const e of sideOrder) {
+      if (e.type === 'ws') { const ws = findWs(e.id); if (ws && !ws.folderId) root.push(ws); }
+    }
+    const rest = [];
+    for (const f of folders) rest.push(...getGroupList(f.id));
+    workspaces = [...root, ...rest];
+  }
+
+  // sideOrder slot for making a ws the `li`-th root item (or appended if out of range)
+  function rootSlotForLocal(li) {
+    const wsIdxs = [];
+    sideOrder.forEach((e, i) => { if (e.type === 'ws') wsIdxs.push(i); });
+    if (!wsIdxs.length) return 0;
+    if (li >= wsIdxs.length) return wsIdxs[wsIdxs.length - 1] + 1;
+    return wsIdxs[Math.max(0, li)];
+  }
+
+  // Move a top-level item (root workspace or folder) to a specific sideOrder slot.
+  function moveTopLevelItem(type, id, slot) {
+    let from = sideOrder.findIndex(e => e.type === type && e.id === id);
+    let entry = null;
+    if (from !== -1) {
+      [entry] = sideOrder.splice(from, 1);
+    }
+    let to = slot;
+    if (from !== -1 && from < to) to--;
+    to = Math.max(0, Math.min(to, sideOrder.length));
+    if (!entry) entry = { type, id };
+    sideOrder.splice(to, 0, entry);
+    if (type === 'ws') {
+      const ws = findWs(id);
+      if (ws) ws.folderId = undefined;
+    }
+    rebuildWorkspaces();
+    renderSidebar();
+    saveState();
   }
 
   function moveWsTo(wsId, folderKey, localIndex) {
     const ws = findWs(wsId);
     if (!ws) return;
-    const oldKey = ws.folderId || null;
     const newKey = folderKey || null;
-    const oldList = getGroupList(oldKey);
-    const from = oldList.findIndex(w => w.id === wsId);
-    if (from !== -1) oldList.splice(from, 1);
+    if (newKey === null) {
+      // Move to the top level; `localIndex` is an index within the root list.
+      const li = localIndex === undefined ? getGroupList(null).length : localIndex;
+      moveTopLevelItem('ws', wsId, rootSlotForLocal(li));
+      return;
+    }
+    const from = workspaces.indexOf(ws);
+    if (from !== -1) workspaces.splice(from, 1);
     ws.folderId = newKey;
-    const newList = getGroupList(newKey);
-    const idx = Math.max(0, Math.min(localIndex === undefined ? newList.length : localIndex, newList.length));
-    newList.splice(idx, 0, ws);
-    rebuildWorkspaces();
+
+    // A root workspace entering a folder must leave the top-level flow
+    const soIdx = sideOrder.findIndex(e => e.type === 'ws' && e.id === wsId);
+    if (soIdx !== -1) sideOrder.splice(soIdx, 1);
+
+    // Indices (in the post-removal array) of items already in the target folder
+    const groupItems = [];
+    for (let i = 0; i < workspaces.length; i++) {
+      if ((workspaces[i].folderId || null) === newKey) groupItems.push(i);
+    }
+
+    let idx;
+    if (groupItems.length) {
+      const li = Math.max(0, Math.min(localIndex === undefined ? groupItems.length : localIndex, groupItems.length));
+      idx = li < groupItems.length ? groupItems[li] : groupItems[groupItems.length - 1] + 1;
+    } else {
+      // Empty folder: append after the current root run
+      let insertAt = 0;
+      for (let i = 0; i < workspaces.length; i++) {
+        if (!workspaces[i].folderId) insertAt = i + 1;
+      }
+      idx = insertAt;
+    }
+
+    workspaces.splice(idx, 0, ws);
     renderSidebar();
     saveState();
   }
@@ -1263,6 +1403,7 @@
     const f = { id, label: label || ('Folder ' + (folders.length + 1)) };
     if (color) f.color = color;
     folders.push(f);
+    sideOrder.push({ type: 'folder', id });
     renderSidebar();
     saveState();
     return f;
@@ -1287,6 +1428,13 @@
     ? `Remove folder "${f.label}"? Its ${inFolder} workspace${inFolder > 1 ? 's' : ''} will move to the top level.`
     : `Remove folder "${f.label}"?`;
     showConfirm(msg, () => {
+      const children = getGroupList(id);
+      const entryIdx = sideOrder.findIndex(e => e.type === 'folder' && e.id === id);
+      if (entryIdx !== -1) {
+        sideOrder.splice(entryIdx, 1, ...children.map(w => ({ type: 'ws', id: w.id })));
+      } else {
+        for (const w of children) sideOrder.push({ type: 'ws', id: w.id });
+      }
       folders = folders.filter(x => x.id !== id);
       for (const ws of workspaces) { if (ws.folderId === id) ws.folderId = null; }
       normalizeOrder();
@@ -1365,7 +1513,11 @@
 
     container.style.display = 'block';
 
-    setTimeout(() => {
+    // Let layout settle before measuring: reading rects in the same tick as
+    // display:block (or inside a fixed 30ms timeout) can capture a size from
+    // before the flex tree settles, making .browser-slot short. Double-RAF runs
+    // after the next paint; a late re-sync self-corrects any transient size.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
       const all = getWorkspaceTerminals(wsp);
       all.forEach(fitTerm);
       document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
@@ -1378,7 +1530,8 @@
       updateFocusedGroup();
       updateStatusBar();
       syncBrowserSlots();
-    }, 30);
+    }));
+    setTimeout(() => syncBrowserSlots(), 120);
   }
 
   function nextWorkspace() {
@@ -1419,6 +1572,8 @@
 
     const idx = workspaces.findIndex(w => w.id === id);
     workspaces.splice(idx, 1);
+    const soIdx = sideOrder.findIndex(e => e.type === 'ws' && e.id === id);
+    if (soIdx !== -1) sideOrder.splice(soIdx, 1);
     if (activeWsId === id) {
       if (workspaces.length) { activateWorkspace(workspaces[Math.max(0, idx-1)].id); renderSidebar(); }
       else { activeWsId = null; renderSidebar(); renderPaneArea(); updateStatusBar(); }
@@ -1787,8 +1942,13 @@
         }
       }
     }
-    // RAF ensures layout is recalculated after display toggle before reading rects
-    requestAnimationFrame(() => syncBrowserSlots());
+    // Double-RAF + trailing resync — same fix as switchWorkspacePane, single RAF
+    // can still read a pre-settle size on a busy frame right after display toggle.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const terms = getWorkspaceTerminals(wsp);
+      syncBrowserSlots();
+    }));
+    setTimeout(() => syncBrowserSlots(), 100);
     clearTimeout(activateTerminal._saveTimer);
     activateTerminal._saveTimer = setTimeout(saveState, 500);
   }
@@ -2195,11 +2355,13 @@
     }
     updateFocusedGroup();
 
-    // Fit terminals after layout settles
-    setTimeout(() => {
+    // Fit terminals after layout settles — 0ms can fire before the
+    // display/position changes above have actually been painted.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
       all.forEach(t => fitTerm(t));
       syncBrowserSlots();
-    }, 0);
+    }));
+    setTimeout(() => syncBrowserSlots(), 100);
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -2785,6 +2947,88 @@
           } catch (err) { console.error('[EmbedPDF] init failed:', err); wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; }
         }
 
+        /* Browser surface slot (reference technique): the page renders in a
+           DOM element inside .browser-content — a <webview> tag on Electron
+           (DOM element, separate process, loads any site) or a plain <iframe>
+           elsewhere — so DOM chrome and the settings overlay can layer above it
+           (a native WebContentsView always paints above the window's DOM).
+           Absolute positioning + pixel pinning beats the classic 150px
+           guest-attach sizing bug. */
+        function getBrowserSurface() {
+          const isElectron = isDesktop() && window.electronAPI;
+          const tag = isElectron ? 'webview' : 'iframe';
+          let surface = contentWrap.querySelector(tag + '.browser-surface');
+          if (!surface) {
+            if (!contentWrap.clientWidth || !contentWrap.clientHeight) {
+              if (!contentWrap._waitRo) {
+                contentWrap._waitRo = new ResizeObserver(() => {
+                  if (!contentWrap.clientWidth || !contentWrap.clientHeight) return;
+                  contentWrap._waitRo.disconnect();
+                  contentWrap._waitRo = null;
+                  const s = getBrowserSurface();
+                  if (s && entry._surfaceSrc) s.src = targetUrl(entry._surfaceSrc);
+                });
+                contentWrap._waitRo.observe(contentWrap);
+              }
+              return null;
+            }
+            surface = document.createElement(tag);
+            surface.className = 'browser-surface browser-fallback';
+            surface.setAttribute('data-browser-surface-slot', entry.id);
+            surface.style.cssText = 'width:100%;height:100% !important;border:0';
+            contentWrap.appendChild(surface);
+            if (isElectron) {
+              surface.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
+              surface.setAttribute('allowpopups', '');
+              surface.addEventListener('did-start-loading', () => showLoading(true));
+              surface.addEventListener('did-stop-loading', () => {
+                entry._retryCount = 0;
+                clearTimeout(entry._loadTimer);
+                showLoading(false);
+                resumeBrowserTab(entry);
+              });
+              surface.addEventListener('did-navigate', e => syncUrl(e.url));
+              surface.addEventListener('did-navigate-in-page', e => syncUrl(e.url));
+              surface.addEventListener('did-fail-load', (e, errorCode) => {
+                if (errorCode === -3) return; // ERR_ABORTED = redirect, not real error
+                // Retry a few times before giving up
+                entry._retryCount = (entry._retryCount || 0) + 1;
+                if (entry._retryCount <= 3) {
+                  setTimeout(() => { surface.src = targetUrl(entry.url); }, 500);
+                  return;
+                }
+                clearTimeout(entry._loadTimer);
+                showLoading(false);
+                showError(entry.url, 'Failed to load page.');
+              });
+              surface.addEventListener('new-window', e => { e.preventDefault(); openExternalUrl(e.url); });
+              // Force the inner iframe (shadow DOM) to fill the webview height
+              // immediately — no flash of small height before resize.
+              const pinShadowIframe = () => {
+                try {
+                  const sr = surface.shadowRoot;
+                  if (sr) { const f = sr.querySelector('iframe'); if (f) f.style.height = '100%'; }
+                } catch {}
+              };
+              // Watch for the shadow root to appear (fires instantly, no flash)
+              new MutationObserver(pinShadowIframe).observe(surface, { childList: true, subtree: true });
+              pinShadowIframe();
+            } else {
+              surface.addEventListener('load', () => {
+                clearTimeout(entry._loadTimer);
+                showLoading(false);
+                resumeBrowserTab(entry);
+              });
+              surface.addEventListener('error', () => {
+                clearTimeout(entry._loadTimer);
+                showLoading(false);
+                showError(entry.url, 'Failed to load page.');
+              });
+            }
+          }
+          return surface;
+        }
+
         function normalizeAssetUrl(url) {
           if (url && url.startsWith('asset:')) {
             try {
@@ -2896,10 +3140,9 @@
             return;
           }
 
-          /* Native WebContentsView: the <webview> guest was hard-locked at its default 150px
-             height (upstream Electron bug — width synced, height never left 150). A
-             WebContentsView is owned in main and placed over this .browser-content by the
-             syncBrowserSlots bounds bridge, so it renders full-size with real process isolation. */
+          /* DOM surface slot (reference technique): the page renders in a
+             <webview> tag — a DOM element, so the settings overlay can cover it
+             and the webview stays alive behind the modal. */
           pageView.style.display = 'none';
           if (entry._loadTimer) clearTimeout(entry._loadTimer);
           entry._loadTimer = setTimeout(() => {
@@ -2909,33 +3152,11 @@
             }
           }, 20000);
 
-          if (isDesktop() && window.electronAPI) {
-            if (!entry._viewCreated) {
-              entry._viewCreated = true;
-              browserEventHooks.set(entry.id, (d) => {
-                switch (d.evt) {
-                  case 'did-start-loading': showLoading(true); break;
-                  case 'did-stop-loading':
-                    clearTimeout(entry._loadTimer);
-                    showLoading(false);
-                    resumeBrowserTab(entry);
-                    break;
-                  case 'did-navigate':
-                  case 'did-navigate-in-page': syncUrl(d.url); break;
-                  case 'did-fail-load':
-                    clearTimeout(entry._loadTimer);
-                    showLoading(false);
-                    showError(entry.url, 'Failed to load page.');
-                    break;
-                }
-              });
-              window.electronAPI.browserCreate(entry.id, targetUrl(url));
-            } else {
-              window.electronAPI.browserNavigate(entry.id, targetUrl(url));
-            }
-            window.electronAPI.browserShow(entry.id);
-          }
+          entry._surfaceSrc = url;
           entry.url = url;
+          const surface = getBrowserSurface();
+          if (!surface) return;
+          surface.src = targetUrl(url);
         }
 
         entry._loadUrl = loadUrl;
@@ -3287,12 +3508,13 @@
    ═══════════════════════════════════════════════════════════════ */
   function renderSidebar() {
     const sb = document.getElementById('sidebar');
+    if (!sideOrder.length && (workspaces.length || folders.length)) rebuildSideOrder();
     const actionsEl = sb.querySelector('.sidebar-actions');
     sb.querySelectorAll('.ws-header, .ws-folder-row, .ws-btn').forEach(e => e.remove());
 
     const clearDropMarks = () => {
       sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
-      sb.querySelectorAll('.ws-folder-row.drop-into').forEach(el => el.classList.remove('drop-into'));
+      sb.querySelectorAll('.ws-folder-row.drop-into, .ws-folder-row.drop-above, .ws-folder-row.drop-below').forEach(el => el.classList.remove('drop-into', 'drop-above', 'drop-below'));
     };
 
     // Header above the workspace list: "Workspaces" title + new workspace / new folder.
@@ -3311,21 +3533,23 @@
     addBtn.title = 'New workspace';
     addBtn.innerHTML = '<i class="ph ph-plus"></i>';
     addBtn.addEventListener('click', () => createWorkspace());
-    // Drop on ws-add = move to the front of the top-level (ungrouped) list
+    // Drop on ws-add = move to the front of the top-level flow
     addBtn.addEventListener('dragover', e => {
-      if (!window.draggedWsId) return;
+      if (!window.draggedWsId && !window.draggedFolderId) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
     });
     addBtn.addEventListener('drop', e => {
       e.preventDefault();
       e.stopPropagation();
-      const draggedId = window.draggedWsId;
-      if (!draggedId) return;
+      const dw = window.draggedWsId;
+      const df = window.draggedFolderId;
       window.draggedWsId = null;
+      window.draggedFolderId = null;
       window._wsDragged = true;
       setTimeout(() => { window._wsDragged = false; }, 0);
-      moveWsTo(draggedId, null, 0);
+      if (df) moveTopLevelItem('folder', df, 0);
+      else if (dw) moveTopLevelItem('ws', dw, 0);
     });
     headerActions.appendChild(addBtn);
 
@@ -3340,7 +3564,8 @@
     sb.insertBefore(header, sb.firstChild);
 
     // ── Workspace button builder (shared by root list and folders) ──
-    const buildWsBtn = (wsp, folderKey) => {
+    // slot is the sideOrder index for top-level buttons (undefined for folder children)
+    const buildWsBtn = (wsp, folderKey, slot) => {
       const btn = document.createElement('div');
       const isActive = wsp.id === activeWsId;
       btn.className = 'ws-btn' + (isActive ? ' active' : '');
@@ -3377,33 +3602,59 @@
         stopResizing();
       });
       btn.addEventListener('dragover', e => {
-        if (!window.draggedWsId || window.draggedWsId === wsp.id) return;
+        const dw = window.draggedWsId;
+        const df = window.draggedFolderId;
+        if (slot !== undefined) {
+          // top-level target: accept root/folder-child workspaces and folders
+          if (!dw && !df) return;
+          if (dw === wsp.id) return;
+        } else {
+          // folder-internal target: only workspace drags (reorder / move into this folder)
+          if (!dw || dw === wsp.id) return;
+        }
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         const rect = btn.getBoundingClientRect();
-        const midY = rect.top + rect.height / 2;
-        sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
-        btn.classList.add(e.clientY < midY ? 'drop-above' : 'drop-below');
+        const above = e.clientY < rect.top + rect.height / 2;
+        clearDropMarks();
+        btn.classList.add(above ? 'drop-above' : 'drop-below');
+        if (slot === undefined) e.stopPropagation();
       });
       btn.addEventListener('dragleave', () => {
         btn.classList.remove('drop-above', 'drop-below');
       });
       btn.addEventListener('drop', e => {
         e.preventDefault();
-        e.stopPropagation();
-        const draggedId = window.draggedWsId;
-        if (!draggedId || draggedId === wsp.id) return;
-        const rect = btn.getBoundingClientRect();
-        const midY = rect.top + rect.height / 2;
-        const insertBefore = e.clientY < midY;
-
-        const targetList = getGroupList(folderKey);
-        const to = targetList.findIndex(w => w.id === wsp.id);
-        clearDropMarks();
-        window.draggedWsId = null;
-        window._wsDragged = true;
-        setTimeout(() => { window._wsDragged = false; }, 0);
-        moveWsTo(draggedId, folderKey, insertBefore ? to : to + 1);
+        const dw = window.draggedWsId;
+        const df = window.draggedFolderId;
+        if (slot !== undefined) {
+          if (!dw && !df) return;
+          if (dw === wsp.id) return;
+          const rect = btn.getBoundingClientRect();
+          const above = e.clientY < rect.top + rect.height / 2;
+          e.stopPropagation();
+          clearDropMarks();
+          window._wsDragged = true;
+          setTimeout(() => { window._wsDragged = false; }, 0);
+          if (df) {
+            window.draggedFolderId = null;
+            moveTopLevelItem('folder', df, slot + (above ? 0 : 1));
+          } else {
+            window.draggedWsId = null;
+            moveTopLevelItem('ws', dw, slot + (above ? 0 : 1));
+          }
+        } else {
+          if (!dw || dw === wsp.id) return;
+          const rect = btn.getBoundingClientRect();
+          const above = e.clientY < rect.top + rect.height / 2;
+          const to = getGroupList(folderKey).findIndex(w => w.id === wsp.id);
+          e.stopPropagation();
+          clearDropMarks();
+          window.draggedWsId = null;
+          window._wsDragged = true;
+          setTimeout(() => { window._wsDragged = false; }, 0);
+          moveWsTo(dw, folderKey, above ? to : to + 1);
+        }
       });
 
       btn.querySelector('.ws-rename').addEventListener('click', (e) => {
@@ -3419,7 +3670,7 @@
 
     // ── Folder row builder ──
     // Renders a folder as a tree node with its child workspaces nested below.
-    const buildFolderEl = (folder) => {
+    const buildFolderEl = (folder, slot) => {
       const wss = getGroupList(folder.id);
       const isLast = folders[folders.length - 1]?.id === folder.id;
 
@@ -3455,29 +3706,73 @@
       headerEl.querySelector('.ws-folder-rename').addEventListener('click', e => { e.stopPropagation(); renameFolder(folder.id); });
       headerEl.querySelector('.ws-folder-remove').addEventListener('click', e => { e.stopPropagation(); removeFolder(folder.id); });
 
-      // Drop a workspace onto the folder row → append to this folder
+      // Drop onto the folder button:
+      //   folder → top half = insert above, bottom half = below
+      //   ws closed folder → top third = above, middle third = into, bottom third = below
+      //   ws open folder   → header top half = above, header bottom half = into,
+      //                      anything below the header (the folder's content) = below the whole container
       row.addEventListener('dragover', e => {
-        if (!window.draggedWsId) return;
+        const dw = window.draggedWsId;
+        const df = window.draggedFolderId;
+        if (!dw && !df) return;
+        if (df === folder.id) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
-        row.classList.add('drop-into');
+        const hr = headerEl.getBoundingClientRect();
+        const open = !folder.collapsed && wss.length > 0;
+        const p = (e.clientY - hr.top) / hr.height;
+        let zone;
+        if (df) {
+          zone = p < 0.5 ? 'above' : 'below';
+        } else if (open) {
+          zone = e.clientY < hr.top + hr.height / 2 ? 'above' : (e.clientY <= hr.bottom + 1 ? 'into' : 'below');
+        } else {
+          zone = p < 0.34 ? 'above' : (p < 0.66 ? 'into' : 'below');
+        }
+        clearDropMarks();
+        row.classList.add(zone === 'above' ? 'drop-above' : zone === 'into' ? 'drop-into' : 'drop-below');
       });
-      row.addEventListener('dragleave', () => row.classList.remove('drop-into'));
+      row.addEventListener('dragleave', () => row.classList.remove('drop-into', 'drop-above', 'drop-below'));
       row.addEventListener('drop', e => {
         e.preventDefault();
+        const dw = window.draggedWsId;
+        const df = window.draggedFolderId;
+        if (!dw && !df) return;
+        if (df === folder.id) return;
+        const hr = headerEl.getBoundingClientRect();
+        const open = !folder.collapsed && wss.length > 0;
+        const p = (e.clientY - hr.top) / hr.height;
+        let zone;
+        if (df) {
+          zone = p < 0.5 ? 'above' : 'below';
+        } else if (open) {
+          zone = e.clientY < hr.top + hr.height / 2 ? 'above' : (e.clientY <= hr.bottom + 1 ? 'into' : 'below');
+        } else {
+          zone = p < 0.34 ? 'above' : (p < 0.66 ? 'into' : 'below');
+        }
         e.stopPropagation();
-        row.classList.remove('drop-into');
-        const wsId = window.draggedWsId;
-        if (!wsId) return;
-        window.draggedWsId = null;
+        clearDropMarks();
         window._wsDragged = true;
         setTimeout(() => { window._wsDragged = false; }, 0);
-        moveWsTo(wsId, folder.id, getGroupList(folder.id).length);
+        if (df) {
+          window.draggedFolderId = null;
+          moveTopLevelItem('folder', df, slot + (zone === 'above' ? 0 : 1));
+        } else if (zone === 'above') {
+          window.draggedWsId = null;
+          moveTopLevelItem('ws', dw, slot);
+        } else if (zone === 'into') {
+          window.draggedWsId = null;
+          moveWsTo(dw, folder.id, getGroupList(folder.id).length);
+        } else {
+          window.draggedWsId = null;
+          moveTopLevelItem('ws', dw, slot + 1);
+        }
       });
 
       // Drag a folder row to reorder folders
       row.draggable = true;
       row.addEventListener('dragstart', e => {
+        if (e.target.closest('.ws-btn')) return;
         if (window.draggedWsId) { e.preventDefault(); return; }
         e.dataTransfer.setData('text/plain', folder.id);
         e.dataTransfer.effectAllowed = 'move';
@@ -3490,32 +3785,6 @@
         window.draggedFolderId = null;
         clearDropMarks();
         stopResizing();
-      });
-      row.addEventListener('dragover', e => {
-        if (!window.draggedFolderId || window.draggedFolderId === folder.id) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        row.classList.add('drop-into');
-      });
-      row.addEventListener('drop', e => {
-        e.preventDefault();
-        e.stopPropagation();
-        row.classList.remove('drop-into');
-        const draggedId = window.draggedFolderId;
-        if (!draggedId || draggedId === folder.id) return;
-        const rect = row.getBoundingClientRect();
-        const insertBefore = e.clientY < rect.top + rect.height / 2;
-        const fromIdx = folders.findIndex(f => f.id === draggedId);
-        const toIdx = folders.findIndex(f => f.id === folder.id);
-        if (fromIdx === -1 || toIdx === -1) return;
-        const [moved] = folders.splice(fromIdx, 1);
-        const targetIdx = folders.findIndex(f => f.id === folder.id);
-        folders.splice(insertBefore ? targetIdx : targetIdx + 1, 0, moved);
-        window.draggedFolderId = null;
-        window._wsDragged = true;
-        setTimeout(() => { window._wsDragged = false; }, 0);
-        renderSidebar();
-        saveState();
       });
 
       row.appendChild(headerEl);
@@ -3530,15 +3799,15 @@
       return row;
     };
 
-    // ── Render: ungrouped workspaces and folders in one list flow ──
-    const order = [];
-    for (const wsp of getGroupList(null)) order.push({ type: 'ws', wsp, folderKey: null });
-    for (const folder of folders) order.push({ type: 'folder', folder });
-    for (const it of order) {
-      if (it.type === 'ws') {
-        sb.insertBefore(buildWsBtn(it.wsp, it.folderKey), actionsEl);
+    // ── Render the top-level flow from sideOrder (root workspaces + folders) ──
+    for (let i = 0; i < sideOrder.length; i++) {
+      const e = sideOrder[i];
+      if (e.type === 'ws') {
+        const wsp = findWs(e.id);
+        if (wsp) sb.insertBefore(buildWsBtn(wsp, null, i), actionsEl);
       } else {
-        sb.insertBefore(buildFolderEl(it.folder), actionsEl);
+        const folder = folders.find(f => f.id === e.id);
+        if (folder) sb.insertBefore(buildFolderEl(folder, i), actionsEl);
       }
     }
   }
@@ -4262,7 +4531,6 @@ function buildColorItem(key, label) {
       const settingsOverlay = document.getElementById('settings-overlay');
 
       function openSettings(cat) {
-        document.getElementById('app-version').textContent = 'v' + APP_VERSION;
         // Populate theme select
         const themeSelect = document.getElementById('set-theme');
         themeSelect.innerHTML = '';
@@ -4334,6 +4602,8 @@ function buildColorItem(key, label) {
         applyTheme(currentThemeName);
         settingsOverlay.classList.remove('open');
         syncBrowserSlots();
+        // In the Electron settings window, closing the overlay closes the window
+        if (SETTINGS_ONLY && window.electronAPI && window.electronAPI.settingsClose) window.electronAPI.settingsClose();
       }
 
       function renderShortcutsList() {
@@ -4546,16 +4816,57 @@ function buildColorItem(key, label) {
         saveState();
       }
 
+      // Apply only the settings fields from shared storage (never touches
+      // workspaces/folders/sideOrder) — used by the settings window on boot and
+      // by the main window when the settings window pushes changes.
+      function restoreSettingsOnly() {
+        try {
+          const state = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
+          if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
+          if (state.fontSize) currentFontSize = state.fontSize;
+          if (state.fontFamily) currentFontFamily = state.fontFamily;
+          if (state.lineHeight) currentLineHeight = state.lineHeight;
+          if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
+          if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
+          if (state.statusBarVisible !== undefined) statusBarVisible = state.statusBarVisible;
+          if (state.scrollback) currentScrollback = state.scrollback;
+          if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
+          if (state.backgroundMode) backgroundMode = state.backgroundMode;
+          if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
+          if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
+          if (state.shortcuts) {
+            for (const [k, v] of Object.entries(state.shortcuts)) {
+              if (customShortcuts[k]) customShortcuts[k] = v;
+            }
+          }
+        } catch {}
+      }
+
+      // Browser tabs are DOM <webview>s now, so the in-window overlay covers
+      // them — same technique as the reference preview panel. No separate window.
+      function openSettingsGlobal(cat) {
+        openSettings(cat);
+      }
+
+      // Settings-window bootstrap: skip the entire terminal/browser layer.
+      function settingsOnlyBoot() {
+        loadCustomThemes();
+        restoreSettingsOnly();
+        applyTheme(currentThemeName);
+        document.body.classList.add('settings-only');
+        openSettings('appearance');
+      }
+
       // Open/close
-      document.getElementById('btn-settings').addEventListener('click', () => openSettings());
+      document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
       document.getElementById('settings-close').addEventListener('click', closeSettings);
       settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
       document.addEventListener('keydown', e => {
         if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) { closeSettings(); e.stopPropagation(); }
-        if (e.ctrlKey && e.key === ',' && !e.metaKey && !e.altKey) { e.preventDefault(); openSettings(); }
+        if (e.ctrlKey && e.key === ',' && !e.metaKey && !e.altKey) { e.preventDefault(); openSettingsGlobal(); }
       });
       // Deep-link API: e.g. openSettings('appearance')
-      window.openSettings = openSettings;
+      window.openSettings = openSettingsGlobal;
       window.closeSettings = closeSettings;
 
       // Theme change
@@ -4889,6 +5200,9 @@ function buildColorItem(key, label) {
         if (!e.target.closest('input, textarea, select, [contenteditable]')) e.preventDefault();
       });
         document.getElementById('statusbar').addEventListener('mousedown', e => e.preventDefault());
+
+        // Settings-window bootstrap: skip the entire terminal/browser layer.
+        if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
 
         // Sidebar Split.js
         let sidebarSplit = null;
@@ -5318,6 +5632,7 @@ function buildColorItem(key, label) {
               syncSplitSizes(wsp.layout);
               for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
               updateStatusBar();
+              syncBrowserSlots();
             }
           }, 150);
         });
@@ -5341,6 +5656,35 @@ function buildColorItem(key, label) {
 
         // Apply initial background & opacity
         applyBackground();
+
+        // Settings live in a separate Electron window; re-apply on any change
+        if (isDesktop() && window.electronAPI && window.electronAPI.onSettingsChanged) {
+          window.electronAPI.onSettingsChanged(() => {
+            restoreSettingsOnly();
+            applyTheme(currentThemeName);
+            applyBackground();
+            document.getElementById('statusbar').style.display = statusBarVisible ? '' : 'none';
+            applySettings();
+            syncBrowserSlots();
+          });
+        }
+
+        // While the settings window is open, detach native browser views so they
+        // can never paint above it; re-show them (alive, no reload) on close.
+        if (isDesktop() && window.electronAPI && window.electronAPI.onSettingsWindowState) {
+          window.electronAPI.onSettingsWindowState(({ open }) => {
+            settingsWindowOpen = open;
+            if (open) {
+              for (const ws of workspaces) {
+                for (const t of getWorkspaceTerminals(ws)) {
+                  if (t.type === 'browser' && t._viewCreated) window.electronAPI.browserHide(t.id);
+                }
+              }
+            } else {
+              syncBrowserSlots();
+            }
+          });
+        }
 
         if (restored) {
           renderSidebar();

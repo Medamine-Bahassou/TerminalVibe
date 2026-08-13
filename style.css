@@ -323,6 +323,7 @@ gap: 8px;
   align-items: center;
   width: 100%;
   flex-shrink: 0;
+  position: relative;
 }
 #sidebar.expanded .ws-folder-row { align-items: stretch; }
 
@@ -352,6 +353,20 @@ gap: 8px;
 }
 .ws-folder-header:hover { background: var(--tab-hover-bg); color: var(--fg); }
 .ws-folder-row.drop-into .ws-folder-header { background: var(--accent-dim); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.ws-folder-row.drop-above .ws-folder-header,
+.ws-folder-row.drop-below .ws-folder-header { background: var(--accent-dim); color: var(--accent); }
+/* Full-block top/bottom accent line for above/below placement (button + content) */
+.ws-folder-row.drop-above::after,
+.ws-folder-row.drop-below::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: var(--accent);
+  z-index: 1;
+}
+.ws-folder-row.drop-above::after { top: 0; }
+.ws-folder-row.drop-below::after { bottom: 0; }
 .ws-folder-row.dragging { opacity: 0.4; }
 
 /* Tree children: nested workspace buttons under the folder row.
@@ -452,7 +467,8 @@ gap: 8px;
   padding: 0 4px;
   flex-shrink: 0;
 }
-#sidebar.expanded .ws-folder-count { display: flex; }
+#sidebar.expanded .ws-folder-count { display: flex; opacity: 1; transition: opacity 0.1s; pointer-events: none; }
+#sidebar.expanded .ws-folder-header:hover .ws-folder-count { opacity: 0; }
 
 .ws-folder-actions {
   display: none;
@@ -1189,6 +1205,15 @@ outline: none;
 .settings-section.active { user-select: none !important; }
 .settings-section.active * { user-select: none !important; }
 #settings-overlay.open { display: flex; opacity: 1; }
+
+/* Settings-window mode (index.html?mode=settings): hide the app, show settings */
+body.settings-only #titlebar,
+body.settings-only #app { display: none !important; }
+body.settings-only #settings-overlay {
+  display: flex;
+  opacity: 1;
+  transition: none;
+}
 /* full-page settings view — top strip is the drag handle */
 .settings-header { -webkit-app-region: drag; }
 .settings-header .no-drag { -webkit-app-region: no-drag; }
@@ -1575,6 +1600,29 @@ body.resizing .drag-shield {
   border: none;
   background: #fff;
 }
+
+/* Browser surface slot (reference technique): the <webview>/<iframe> is a DOM
+   element layered with the DOM, so DOM chrome and the settings overlay can sit
+   above it (a native WebContentsView always paints above the window's DOM).
+   Sizing is pinned to the slot's pixels in JS on attach/resize so the guest
+   never keeps Electron's default 150px height. */
+.browser-surface {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: none;
+  background: #fff;
+  z-index: 1;
+}
+
+/* Page viewers (start / error / image / PDF) paint above the surface slot */
+.browser-page-view,
+.browser-pdf-wrap,
+.browser-img-wrap { z-index: 2; }
 
 /* Content wrapper */
 .browser-content {

@@ -10,6 +10,7 @@ const devPort = 7769; // dev-mode app server port
 
 // ── Window ──
 let mainWindow = null;
+let settingsWindow = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -43,6 +44,22 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
+  // Strip X-Frame-Options and CSP frame-ancestors so <webview> guests can
+  // load sites like YouTube that block embedding by default.
+  const { session } = require('electron');
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const headers = details.responseHeaders;
+    if (headers['x-frame-options']) delete headers['x-frame-options'];
+    if (headers['X-Frame-Options']) delete headers['X-Frame-Options'];
+    if (headers['content-security-policy']) {
+      headers['content-security-policy'] = headers['content-security-policy']
+        .map(v => v.replace(/frame-ancestors[^;]*;?\s*/gi, ''))
+        .filter(v => v.trim());
+      if (!headers['content-security-policy'].length) delete headers['content-security-policy'];
+    }
+    callback({ responseHeaders: headers });
+  });
+
   // F12 / Ctrl+Shift+I → toggle DevTools (default menu is hidden by titleBarStyle)
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type === 'keyDown' && input.key === 'F12' ||
@@ -54,6 +71,86 @@ function createWindow() {
 
   mainWindow.on('closed', () => { destroyAllBrowserViews(); mainWindow = null; });
 }
+
+// ── Settings window ──
+// Native WebContentsViews always paint above the window's DOM, so the settings
+// page can never cover them in the same window. It lives in its own child
+// BrowserWindow, which the OS composites above the parent (and its webviews).
+let _settingsBoundsSync = null;
+
+function createSettingsWindow() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) { settingsWindow.focus(); return; }
+
+  const bounds = mainWindow.getContentBounds();
+  settingsWindow = new BrowserWindow({
+    parent: mainWindow,
+    modal: true,
+    alwaysOnTop: true,
+    frame: false, // frameless → fully covers the parent (no OS titlebar eating space)
+    title: 'Settings',
+    width: Math.max(bounds.width, 500),
+    height: Math.max(bounds.height, 400),
+    minWidth: 500,
+    minHeight: 400,
+    resizable: true,
+    show: false,
+    backgroundColor: '#1e1e2e',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  if (isDev) {
+    settingsWindow.loadURL(`http://127.0.0.1:${devPort}/?mode=settings`);
+  } else {
+    settingsWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { mode: 'settings' } });
+  }
+
+  settingsWindow.once('ready-to-show', () => {
+    try { settingsWindow.setAlwaysOnTop(true, 'screen-saver'); } catch {}
+    settingsWindow.setBounds(mainWindow.getContentBounds());
+    settingsWindow.show();
+    settingsWindow.focus();
+    settingsWindow.moveTop();
+    // Belt-and-suspenders: tell the main window to detach its native views so
+    // they can never paint above the settings window on any compositor.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('settings:window', { open: true });
+  });
+
+  // Keep the settings window covering the main window as it moves / resizes
+  const syncBounds = () => {
+    if (!settingsWindow || settingsWindow.isDestroyed()) return;
+    settingsWindow.setBounds(mainWindow.getContentBounds());
+  };
+  _settingsBoundsSync = syncBounds;
+  mainWindow.on('resize', syncBounds);
+  mainWindow.on('move', syncBounds);
+
+  settingsWindow.on('closed', () => {
+    if (_settingsBoundsSync) {
+      mainWindow.removeListener('resize', _settingsBoundsSync);
+      mainWindow.removeListener('move', _settingsBoundsSync);
+      _settingsBoundsSync = null;
+    }
+    settingsWindow = null;
+    // Re-show the detached native views.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('settings:window', { open: false });
+  });
+}
+
+// ── IPC: settings window ──
+ipcMain.on('settings:open', () => createSettingsWindow());
+ipcMain.on('settings:close', () => {
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close();
+});
+ipcMain.on('settings:changed', () => {
+  // The settings window never writes workspaces/terminals state; it only
+  // merges settings fields into localStorage. Tell the main window to re-apply.
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('settings:changed');
+});
 
 // ── IPC: external links ──
 ipcMain.handle('shell:open-external', (_e, url) => {
@@ -186,6 +283,15 @@ app.whenReady().then(() => {
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
+  // Suppress ERR_ABORTED (-3) from webview guest navigations / redirects.
+  // Electron throws this as an unhandled rejection in the main process;
+  // it's benign — the new navigation already took over.
+  app.on('web-contents-created', (_e, wc) => {
+    wc.on('did-fail-load', (_e2, code) => {
+      if (code === -3) _e2.preventDefault();
+    });
   });
 });
 

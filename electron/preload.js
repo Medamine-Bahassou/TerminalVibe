@@ -45,4 +45,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('browser:event', l);
     return () => ipcRenderer.removeListener('browser:event', l);
   },
+
+  // Settings window (separate BrowserWindow)
+  settingsOpen: () => ipcRenderer.send('settings:open'),
+  settingsClose: () => ipcRenderer.send('settings:close'),
+  settingsChanged: () => ipcRenderer.send('settings:changed'),
+  onSettingsChanged: (cb) => {
+    const l = () => cb();
+    ipcRenderer.on('settings:changed', l);
+    return () => ipcRenderer.removeListener('settings:changed', l);
+  },
+  onSettingsWindowState: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('settings:window', l);
+    return () => ipcRenderer.removeListener('settings:window', l);
+  },
 });
