@@ -17,9 +17,10 @@
   --border: rgba(255,255,255,0.08);
   --dim-text: rgba(255,255,255,0.3);
   --muted-text: rgba(255,255,255,0.5);
-  --bg-image: none;
-  --bg-image-mode: none;
-  --bg-opacity: 0.85;
+  /* Background image layer — set by JS on #pane-area (global mode)
+     or on each .term-slot (per-tab mode). */
+  --tv-bg-image: none;
+  --tv-bg-image-opacity: 0;
 }
 
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; margin: 0; }
@@ -315,6 +316,8 @@ flex: 1;
 overflow: hidden;
 position: relative;
 background: var(--bg);
+/* Keep the global background image layer (::before) stacked inside. */
+isolation: isolate;
 }
 
 /* Split container */
@@ -458,12 +461,7 @@ background: var(--bg);
 }
 .focused-group .tg-tab.active { border-bottom-color: var(--accent); }
 .tg-tab-dot {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  opacity: 0.35;
-  flex-shrink: 0;
-  transition: opacity 0.12s;
+  display: none;
 }
 .tg-tab-icon {
   width: 11px; height: 11px;
@@ -593,16 +591,17 @@ background: var(--bg);
   opacity: 1;
 }
 
-/* Terminal slot */
+/* Terminal slot — the panel. Its background-color is the solid base layer that
+   fills the whole panel; the image (if any) is layered on top by ::before. */
 .term-slot {
   overflow: hidden;
   position: absolute;
   inset: 0;
   min-width: 0;
   min-height: 0;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
+  background-color: var(--bg);
+  /* Keep the panel's background image layer (::before) stacked inside. */
+  isolation: isolate;
 }
 /* Skip layout/paint for off-screen terminal panes */
 /*
@@ -638,35 +637,41 @@ background: var(--bg);
 .term-wrap {
   position: absolute;
   inset: 0;
+  z-index: 1;
 }
 
-.term-wrap {
-  position: absolute;
-  inset: 0;
-}
-
-/* ── Terminal Background Overlay ──
- * A ::before pseudo-element on .term-wrap layers the theme background color
- * with variable opacity on top of the background image (set on .term-slot
- * for per-tab or #pane-area for global).
- * The xterm element and its children are made transparent so the overlay
- * controls precisely how much of the image shows through.
- * opacity = 1   → solid terminal, image hidden
- * opacity = 0.5 → half see-through, image and terminal blend
- * opacity = 0   → fully transparent terminal, image fully visible
+/* ── Terminal Background Layers ──
+ * Painted bottom-to-top inside a panel:
+ *   1. .term-slot background-color   → the theme background, fully opaque,
+ *                                      covering the entire panel edge to edge
+ *   2. .term-slot::before            → the background image, drawn on top at
+ *                                      --tv-bg-image-opacity
+ *   3. .term-wrap / xterm            → terminal text, always transparent
+ *                                      (xterm runs with allowTransparency)
+ *
+ * --tv-bg-image-opacity = 0   → image hidden, plain solid terminal
+ * --tv-bg-image-opacity = 0.5 → image and terminal colour blend evenly
+ * --tv-bg-image-opacity = 1   → image fully visible behind the text
+ *
+ * In "global" mode the same two layers live on #pane-area instead, so one
+ * image spans every panel; the panels then go transparent to let it through.
  */
-.term-wrap::before {
+.term-slot::before,
+#pane-area::before {
   content: '';
   position: absolute;
   inset: 0;
-  background-color: var(--term-bg-color, #1e1e2e);
-  opacity: var(--term-bg-opacity, 1);
+  background-image: var(--tv-bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--tv-bg-image-opacity, 0);
   pointer-events: none;
-  z-index: 1;
+  z-index: 0;
   transition: opacity 0.15s ease;
 }
 
-/* Stack xterm above the overlay pseudo-element */
+/* Stack xterm above the background layers */
 .term-wrap .xterm {
   position: relative;
   z-index: 2;
@@ -685,25 +690,12 @@ background: var(--bg);
   background: transparent !important;
 }
 
-/* Background image on terminal slot (per-tab mode) */
-.term-slot.has-bg-image {
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-
-/* Background image on pane area (global mode) */
-#pane-area.has-global-bg {
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-
-/* In global mode, make terminal containers transparent so the pane-area bg shows through.
-   The xterm .xterm element keeps its theme background with opacity from the slider. */
+/* In global mode the colour + image layers live on #pane-area, so every panel
+   below it must be transparent for that single image to span the window. */
 #pane-area.has-global-bg .term-group,
-#pane-area.has-global-bg .term-group-body {
-  background: transparent;
+#pane-area.has-global-bg .term-group-body,
+#pane-area.has-global-bg .term-slot {
+  background-color: transparent;
 }
 #pane-area.has-global-bg .xterm-viewport {
   background-color: transparent !important;

@@ -889,7 +889,10 @@
     for (const wsp of workspaces) {
       const terms = getWorkspaceTerminals(wsp);
       for (const t of terms) {
-        if (t.type !== 'browser') t.term.options.theme = makeXtermTheme(theme);
+        if (t.type !== 'browser') {
+          t._bgTransparent = termHasBgImage(t);
+          t.term.options.theme = makeXtermTheme(theme, t._bgTransparent);
+        }
       }
     }
 
@@ -899,10 +902,14 @@
     applyBackground();
   }
 
-  function makeXtermTheme(theme) {
+  /* transparentBg: when a background image is active behind the panel, xterm
+     must not paint its own background — otherwise the renderer covers the
+     image everywhere except the padding around the cell grid. The panel
+     supplies the colour instead (see "Terminal Background Layers" in CSS). */
+  function makeXtermTheme(theme, transparentBg) {
     const p = theme.palette;
     return {
-      background: theme.bg,
+      background: transparentBg ? '#00000000' : theme.bg,
       foreground: theme.fg,
         cursor: theme.cursor,
         cursorAccent: theme.bg,
@@ -924,27 +931,39 @@
   /* ═══════════════════════════════════════════════════════════════
    B A*CKGROUND IMAGE & OPACITY
    ═══════════════════════════════════════════════════════════════ */
+  /* The opacity slider is "terminal background opacity": 100% = fully solid
+     terminal, 0% = image fully visible. The image layer therefore renders at
+     the complement, on top of the solid theme colour that fills the panel. */
+  function bgImageAlpha() {
+    return Math.max(0, Math.min(1, 1 - backgroundOpacity));
+  }
+
+  function cssUrl(dataUrl) {
+    return 'url("' + String(dataUrl).replace(/["\\]/g, '\\$&') + '")';
+  }
+
+  /* Is an image showing behind this terminal, in either mode? */
+  function termHasBgImage(entry) {
+    if (!entry || entry.type === 'browser') return false;
+    if (backgroundMode === 'global') return !!globalBackgroundImage;
+    if (backgroundMode === 'per-tab') return !!entry.bgImage;
+    return false;
+  }
+
   function applyBackground() {
-    const r = document.documentElement.style;
-    r.setProperty('--bg-opacity', String(backgroundOpacity));
-    r.setProperty('--bg-image-mode', backgroundMode);
-
     const paneArea = document.getElementById('pane-area');
-    const sidebar = document.getElementById('sidebar');
 
-    // Remove all bg classes first
-    paneArea.classList.remove('has-global-bg');
-
-    if (backgroundMode === 'global' && globalBackgroundImage) {
-      paneArea.style.backgroundImage = 'url(' + globalBackgroundImage + ')';
-      paneArea.classList.add('has-global-bg');
-      r.setProperty('--bg-image', 'url(' + globalBackgroundImage + ')');
-    } else if (backgroundMode === 'none' || !globalBackgroundImage) {
-      paneArea.style.backgroundImage = 'none';
-      r.setProperty('--bg-image', 'none');
+    // Global mode: colour + image layers live on #pane-area so one image
+    // spans every panel.
+    if (paneArea) {
+      const useGlobal = backgroundMode === 'global' && !!globalBackgroundImage;
+      paneArea.classList.toggle('has-global-bg', useGlobal);
+      paneArea.style.setProperty('--tv-bg-image', useGlobal ? cssUrl(globalBackgroundImage) : 'none');
+      paneArea.style.setProperty('--tv-bg-image-opacity', useGlobal ? String(bgImageAlpha()) : '0');
+      paneArea.style.backgroundImage = '';   // legacy inline image, layers handle it now
     }
 
-    // Apply per-tab backgrounds
+    // Per-tab mode: each panel carries its own image layer.
     for (const wsp of workspaces) {
       const terms = getWorkspaceTerminals(wsp);
       for (const t of terms) {
@@ -956,27 +975,29 @@
   function applyTermBgImage(entry) {
     if (!entry || !entry.el) return;
     const slot = entry.el;
-    const wrap = slot.querySelector('.term-wrap');
-    const bgColor = currentTheme.bg;
-    const hasGlobalBg = backgroundMode === 'global' && globalBackgroundImage;
-    const hasPerTabBg = backgroundMode === 'per-tab' && entry.bgImage;
-    const anyBgActive = hasGlobalBg || hasPerTabBg;
 
-    // Set slot background image (per-tab mode) or clear it
-    if (hasPerTabBg) {
-      slot.style.backgroundImage = 'url(' + entry.bgImage + ')';
-      slot.classList.add('has-bg-image');
-    } else {
-      slot.style.backgroundImage = 'none';
-      slot.classList.remove('has-bg-image');
+    // Browser tabs render their own opaque content — no background layer.
+    const usePerTab = entry.type !== 'browser' && backgroundMode === 'per-tab' && !!entry.bgImage;
+
+    slot.style.backgroundImage = '';   // legacy inline image, layers handle it now
+    slot.classList.toggle('has-bg-image', usePerTab);
+    slot.style.setProperty('--tv-bg-image', usePerTab ? cssUrl(entry.bgImage) : 'none');
+    slot.style.setProperty('--tv-bg-image-opacity', usePerTab ? String(bgImageAlpha()) : '0');
+
+    // Let the panel's layers show through the cell grid when an image is up.
+    if (entry.type !== 'browser' && entry.term) {
+      const wantTransparent = termHasBgImage(entry);
+      if (entry._bgTransparent !== wantTransparent) {
+        entry._bgTransparent = wantTransparent;
+        entry.term.options.theme = makeXtermTheme(currentTheme, wantTransparent);
+      }
     }
 
-    // Apply overlay opacity via CSS custom properties on .term-wrap
-    // The ::before pseudo-element does the actual rendering
+    // Drop the properties used by the old .term-wrap overlay.
+    const wrap = slot.querySelector('.term-wrap');
     if (wrap) {
-      const alpha = anyBgActive ? Math.max(0, Math.min(1, backgroundOpacity)) : 1.0;
-      wrap.style.setProperty('--term-bg-color', bgColor);
-      wrap.style.setProperty('--term-bg-opacity', String(alpha));
+      wrap.style.removeProperty('--term-bg-color');
+      wrap.style.removeProperty('--term-bg-opacity');
     }
   }
 
@@ -1367,7 +1388,7 @@
       }
     });
 
-    const entry = { id, label, term, fit: fitAddon, search: searchAddon, el: null, opened: false };
+    const entry = { id, label, term, fit: fitAddon, search: searchAddon, el: null, opened: false, _bgTransparent: false };
     return entry;
   }
 
