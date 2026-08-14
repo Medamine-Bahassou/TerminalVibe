@@ -1292,6 +1292,7 @@ body.settings-only #settings-overlay {
 /* Detached-terminal mode (index.html?mode=detached): terminal-only window */
 body.detached #sidebar { display: none !important; }
 body.detached #tabbar { display: none !important; }
+body.detached #btn-sidebar-toggle { display: none; }
 body.detached #main { width: 100% !important; flex: 1 !important; }
 body.detached #pane-area { width: 100%; height: 100%; }
 body.detached #pane-area .term-slot { width: 100%; height: 100%; }
