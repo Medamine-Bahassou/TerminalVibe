@@ -3766,7 +3766,8 @@
       btn.dataset.wsid = wsp.id;
       const abbr = wsp.label.substring(0,3).toUpperCase();
       const tabCount = getWorkspaceTerminals(wsp).length;
-      btn.innerHTML = `<span class="ws-strip"></span><span class="ws-label">${abbr}</span><span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions"><span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span><span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
+      const isInFolder = folderKey !== undefined;
+      btn.innerHTML = `<span class="ws-strip"></span><span class="ws-label">${abbr}</span><span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
       if (wsp.pinned) btn.classList.add('pinned');
       btn.title = wsp.label;
       if (wsp.color) {
@@ -3851,10 +3852,12 @@
         }
       });
 
-      btn.querySelector('.ws-pin').addEventListener('click', (e) => {
-        e.stopPropagation();
-        togglePinWorkspace(wsp.id);
-      });
+      if (!isInFolder) {
+        btn.querySelector('.ws-pin').addEventListener('click', (e) => {
+          e.stopPropagation();
+          togglePinWorkspace(wsp.id);
+        });
+      }
       btn.querySelector('.ws-rename').addEventListener('click', (e) => {
         e.stopPropagation();
         renameWorkspace(wsp.id);
@@ -4152,7 +4155,7 @@
         });
       }
       sep();
-      if (isDesktop() && window.electronAPI?.terminalDetach) {
+      if (isDesktop() && !DETACHED_ONLY && window.electronAPI?.terminalDetach) {
         item('<i class="ph ph-export"></i>', 'Detach to window', '', () => detachTerminal(wsId, termId));
       }
       item('<i class="ph ph-x"></i>', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
