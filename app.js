@@ -1076,7 +1076,12 @@
    S T*ATE PERSISTENCE
    ═══════════════════════════════════════════════════════════════ */
   const STATE_KEY = 'ghostterm-state-v2';
-  const DETACHED_STATE_KEY = 'ghostterm-state-detached-v1';
+  // Per-window key: each detached window gets a unique winId from the main
+  // process (electron/main.js terminal:detach), so multiple detached windows
+  // never clobber each other's saved state and never restore stale workspaces
+  // from a previous detached session.
+  const DETACHED_WIN_ID = DETACHED_ONLY ? DETACHED_PARAMS.get('winId') : null;
+  const DETACHED_STATE_KEY = 'ghostterm-state-detached-' + (DETACHED_WIN_ID || 'default');
 
   function serializeLayout(node) {
     if (!node) return null;
@@ -2062,12 +2067,65 @@
     const slot = getSlotDimensions(entry);
     const cwd = entry.cwd || undefined;
 
+    // Stash the terminal's current screen + scrollback so the detached window
+    // can show the same session. The PTY keeps running (no fresh shell is
+    // spawned), so the content is transferred, not recreated.
+    try {
+      const payload = serializeTermBuffer(entry);
+      if (payload) localStorage.setItem(DETACH_BUFFER_KEY(termId), JSON.stringify(payload));
+    } catch {}
+
     window.electronAPI.terminalDetach({ id: termId, cols: slot.cols, rows: slot.rows, cwd }).then(ok => {
-      if (!ok) return;
-      // Detach succeeded — remove the terminal from this workspace without killing the PTY
-      // The detached window will create a new PTY with the same ID (terminal:create kills the old one)
+      if (!ok) { try { localStorage.removeItem(DETACH_BUFFER_KEY(termId)); } catch {} return; }
+      // Detach succeeded — remove the terminal from this workspace without
+      // killing the PTY. The detached window attaches to the SAME running PTY.
       removeTerminal(wsId, termId, false, true);
     });
+  }
+
+  // Per-terminal key holding the serialized xterm buffer while a detach is in flight.
+  const DETACH_BUFFER_KEY = (termId) => 'ghostterm-detach-buffer-' + termId;
+
+  function serializeTermBuffer(entry) {
+    try {
+      const term = entry.term;
+      const buf = term.buffer.active;
+      const lines = [];
+      for (let y = 0; y < buf.length; y++) {
+        const line = buf.getLine(y);
+        lines.push(line ? line.translateToString(true) : '');
+      }
+      return {
+        cols: term.cols,
+        rows: term.rows,
+        cursorX: buf.cursorX,
+        cursorY: buf.cursorY,
+        viewportY: buf.viewportY,
+        lines,
+      };
+    } catch { return null; }
+  }
+
+  function restoreTermBuffer(entry, payload) {
+    try {
+      const term = entry.term;
+      if (!payload || !Array.isArray(payload.lines) || !payload.lines.length) return;
+      // Replay the captured lines as plain text.
+      term.write(payload.lines.join('\r\n'));
+      // Move the cursor back to its saved position: up to the saved row, then
+      // to column 0, then right to the saved column.
+      const lastIdx = payload.lines.length - 1;
+      const up = Math.max(0, lastIdx - (payload.cursorY || 0));
+      if (up > 0) term.write(`\x1b[${up}A`);
+      term.write('\x1b[G');
+      const right = Math.max(0, payload.cursorX || 0);
+      if (right > 0) term.write(`\x1b[${right}C`);
+      // Restore the scroll offset (0 = top of the buffer).
+      const buf = term.buffer.active;
+      const maxViewport = Math.max(0, buf.length - term.rows);
+      const target = Math.min(maxViewport, payload.viewportY ?? maxViewport);
+      if (target < maxViewport) term.scrollLines(target - maxViewport);
+    } catch {}
   }
 
   function removeTerminal(wsId, termId, skipRender, skipPtyClose) {
@@ -5272,17 +5330,32 @@ function buildColorItem(key, label) {
         if (empty) empty.style.display = 'none';
         renderPaneArea();
 
-        // Connect the PTY after DOM is ready
+        // The PTY for this terminal is already running in the main process (it
+        // was never killed on detach), so we do NOT send terminal:create — that
+        // would kill the session and spawn a fresh shell. Instead, replay the
+        // captured screen/scrollback and then let live output stream in.
+        const active = activeTerminal();
+        if (active && active.type !== 'browser') {
+          // Open at the size the PTY was running at so the replayed lines
+          // don't wrap, then fit to the actual window size after layout.
+          try { active.term.resize(cols, rows); } catch {}
+          try {
+            const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
+            localStorage.removeItem(DETACH_BUFFER_KEY(termId));
+            if (raw) restoreTermBuffer(active, JSON.parse(raw));
+          } catch {}
+        }
+
+        // Tell main we're ready so it flushes any output produced while the
+        // window was booting (it buffers PTY data for detached terminals).
+        if (window.electronAPI && window.electronAPI.terminalAttached) {
+          window.electronAPI.terminalAttached(termId);
+        }
+
+        // Fit after DOM is laid out
         setTimeout(() => {
-          const all = getWorkspaceTerminals(workspaces[0]);
-          for (const t of all) {
-            if (t.type === 'terminal' && !t._ptyReady) {
-              const slot = getSlotDimensions(t);
-              sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd });
-            }
-          }
-          const active = activeTerminal();
-          if (active) fitTerm(active);
+          const t = activeTerminal();
+          if (t && t.type !== 'browser') fitTerm(t);
         }, 80);
       }
 
@@ -5642,144 +5715,6 @@ function buildColorItem(key, label) {
         if (e.target.closest('[draggable="true"]')) return;
         if (!e.target.closest('input, textarea, select, [contenteditable]')) e.preventDefault();
       });
-
-        /* ═══════════════════════════════════════════════════════════════
-         K E*YBOARD SHORTCUTS
-         ═══════════════════════════════════════════════════════════════ */
-        // Capture-phase — intercepts before xterm.js
-        document.addEventListener('keydown', e => {
-          // Escape clears multi-select mode (skip when settings is open)
-          if (e.key === 'Escape' && isInMultiMode() && !settingsOverlay.classList.contains('open')) {
-            e.preventDefault(); e.stopPropagation();
-            clearMultiSelect();
-            return;
-          }
-          // Focus adjacent pane
-          for (const dir of ['Left', 'Down', 'Up', 'Right']) {
-            const action = 'focus' + dir.charAt(0).toUpperCase() + dir.slice(1).toLowerCase();
-            if (matchShortcut(e, action)) {
-              e.preventDefault(); e.stopPropagation();
-              focusAdjacentGroup(dir.toLowerCase());
-              return;
-            }
-          }
-          // Tab switching
-          if (matchShortcut(e, 'prevTab')) { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
-          if (matchShortcut(e, 'nextTab')) { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
-          // Close terminal
-          if (matchShortcut(e, 'closeTerminal')) {
-            e.preventDefault(); e.stopPropagation();
-            const wsp = activeWs();
-            if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
-            return;
-          }
-          // Copy
-          if (matchShortcut(e, 'copy')) {
-            const t = activeTerminal();
-            if (t && t.type !== 'browser' && t.term.hasSelection()) {
-              e.preventDefault(); e.stopPropagation();
-              const text = t.term.getSelection();
-              if (isTauri() && window.__TAURI_INTERNALS__) {
-                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
-              } else {
-                navigator.clipboard.writeText(text);
-              }
-            }
-            return;
-          }
-          // Paste
-          if (matchShortcut(e, 'paste')) {
-            const t = activeTerminal();
-            if (t && t.type !== 'browser') {
-              e.preventDefault(); e.stopPropagation();
-              if (isTauri() && window.__TAURI_INTERNALS__) {
-                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              } else {
-                navigator.clipboard.readText()
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              }
-            }
-            return;
-          }
-          // Ctrl+V paste (non-shift variant)
-          if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') {
-            const t = activeTerminal();
-            if (t && t.type !== 'browser') {
-              e.preventDefault(); e.stopPropagation();
-              if (isTauri() && window.__TAURI_INTERNALS__) {
-                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              } else {
-                navigator.clipboard.readText()
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              }
-            }
-            return;
-          }
-          // Workspace switching
-          if (matchShortcut(e, 'nextWorkspace')) { e.preventDefault(); e.stopPropagation(); nextWorkspace(); return; }
-          if (matchShortcut(e, 'prevWorkspace')) { e.preventDefault(); e.stopPropagation(); prevWorkspace(); return; }
-          // Ctrl+Tab / Ctrl+Shift+Tab
-          if (e.ctrlKey && e.code === 'Tab') {
-            e.preventDefault(); e.stopPropagation();
-            e.shiftKey ? prevTab() : nextTab();
-            return;
-          }
-        }, true);
-
-        // Bubble-phase shortcuts
-        document.addEventListener('keydown', e => {
-          if (matchShortcut(e, 'newTerminal')) { e.preventDefault(); addTerminal(); return; }
-          if (matchShortcut(e, 'splitH')) {
-            e.preventDefault();
-            const wsp = activeWs();
-            const active = activeTerminal();
-            if (wsp && active) {
-              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
-              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'row');
-            }
-            return;
-          }
-          if (matchShortcut(e, 'splitV')) {
-            e.preventDefault();
-            const wsp = activeWs();
-            const active = activeTerminal();
-            if (wsp && active) {
-              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
-              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'column');
-            }
-            return;
-          }
-          if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
-          if (matchShortcut(e, 'browserTab')) {
-            e.preventDefault();
-            const wsp = activeWs();
-            const active = activeTerminal();
-            if (wsp) {
-              const activeGroup = active ? findGroupContainingTerm(wsp.layout, active.id) : findFirstGroup(wsp.layout);
-              if (activeGroup) addBrowserTab(wsp.id, activeGroup.id);
-            }
-            return;
-          }
-          if (matchShortcut(e, 'maximizeTab')) {
-            e.preventDefault(); e.stopPropagation();
-            const wsp = activeWs();
-            if (wsp && wsp.activeTermId) toggleMaximizeTerminal(wsp.id, wsp.activeTermId);
-            return;
-          }
-          // Arrow key tab switching (legacy)
-          if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
-            if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
-            if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
-          }
-        });
-
-        // Settings-window bootstrap: skip the entire terminal/browser layer.
-        if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
-
-        // Detached-terminal bootstrap: minimal terminal-only window.
-        if (DETACHED_ONLY) { detachedOnlyBoot(); return; }
 
         // Sidebar Split.js
         let sidebarSplit = null;

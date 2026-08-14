@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalWrite: (o) => ipcRenderer.send('terminal:write', o),
   terminalClose: (id) => ipcRenderer.send('terminal:close', id),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),
+  terminalAttached: (id) => ipcRenderer.send('terminal:attached', id),
   onTerminalDetachedClosed: (cb) => {
     const l = (_e, d) => cb(d);
     ipcRenderer.on('terminal:detached-closed', l);

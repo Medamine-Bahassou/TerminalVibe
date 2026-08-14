@@ -242,7 +242,15 @@ ipcMain.handle('config:listThemeFiles', () => {
 // ── IPC: native PTY (node-pty runs here in the main process) ──
 const ptys = new Map();
 const detachedWindows = new Map(); // termId -> BrowserWindow
+// While a detached window is booting its renderer, PTY output for its terminal
+// is buffered here so nothing is lost; flushed on 'terminal:attached'.
+const detachedPending = new Map(); // termId -> [{ channel, payload }]
 const sendToRenderer = (channel, payload) => {
+  // Buffer output for a freshly-detached terminal until its renderer is up.
+  if ((channel === 'terminal:data' || channel === 'terminal:exit') && detachedPending.has(payload.id)) {
+    detachedPending.get(payload.id).push({ channel, payload });
+    return;
+  }
   // If this terminal is detached, route to the detached window instead
   if (channel === 'terminal:data' || channel === 'terminal:exit') {
     const dw = detachedWindows.get(payload.id);
@@ -303,6 +311,18 @@ ipcMain.on('terminal:write', (_e, { id, data }) => {
   if (!t) return;
   try { t.write(Buffer.isBuffer(data) ? data : Buffer.from(data || [])); } catch {}
 });
+// The detached window's renderer is up and has replayed the captured buffer;
+// flush any output that was buffered while it was booting.
+ipcMain.on('terminal:attached', (_e, id) => {
+  const pending = detachedPending.get(id);
+  if (!pending) return;
+  detachedPending.delete(id);
+  const dw = detachedWindows.get(id);
+  if (dw && !dw.isDestroyed()) {
+    for (const { channel, payload } of pending) dw.webContents.send(channel, payload);
+  }
+});
+
 ipcMain.on('terminal:close', (_e, id) => {
   const t = ptys.get(id);
   if (t) { try { t.kill(); } catch {} ptys.delete(id); }
@@ -312,11 +332,16 @@ ipcMain.on('terminal:kill-all', () => {
   ptys.clear();
   for (const [id, dw] of detachedWindows) { try { if (!dw.isDestroyed()) dw.close(); } catch {} }
   detachedWindows.clear();
+  detachedPending.clear();
 });
 
 // ── IPC: detach terminal into a new window ──
 ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
   if (detachedWindows.has(id)) return false;
+
+  // Unique id for this detached window so its state never collides with
+  // other detached windows (each one saves under its own localStorage key).
+  const winId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 
   const dw = new BrowserWindow({
     title: 'TerminalVibe — Detached',
@@ -340,8 +365,11 @@ ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
   });
 
   detachedWindows.set(id, dw);
+  // Buffer the terminal's output while the detached window boots so no session
+  // content is lost between detach and the renderer attaching.
+  detachedPending.set(id, []);
 
-  const params = new URLSearchParams({ mode: 'detached', termId: id, cols: String(cols || 80), rows: String(rows || 24) });
+  const params = new URLSearchParams({ mode: 'detached', termId: id, winId, cols: String(cols || 80), rows: String(rows || 24) });
   if (cwd) params.set('cwd', cwd);
   if (isDev) {
     dw.loadURL(`http://127.0.0.1:${devPort}/?${params}`);
@@ -360,6 +388,7 @@ ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
     }
     for (const termId of toDelete) {
       detachedWindows.delete(termId);
+      detachedPending.delete(termId);
       const t = ptys.get(termId);
       if (t) { try { t.kill(); } catch {} ptys.delete(termId); }
     }
