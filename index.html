@@ -354,13 +354,38 @@
         <div class="settings-section select-none" data-cat="advanced">
           <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">System</div>
           <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+            <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
               <div class="flex flex-col gap-1">
                 <span class="text-[12.5px] font-medium text-[var(--fg)]">Default Shell</span>
                 <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Override system default (requires restart)</span>
               </div>
               <div class="flex-1 flex items-center justify-end gap-3">
                 <input type="text" id="set-shell" spellcheck="false" autocomplete="off" placeholder="e.g. /bin/zsh" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+              </div>
+            </div>
+            <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+              <div class="flex flex-col gap-1">
+                <span class="text-[12.5px] font-medium text-[var(--fg)]">Search Engine</span>
+                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Used when typing search queries in the browser</span>
+              </div>
+              <div class="flex-1 flex items-center justify-end gap-3">
+                <select id="set-search-engine" class="native-select-hidden">
+                  <option value="google">Google</option>
+                  <option value="duckduckgo">DuckDuckGo</option>
+                  <option value="brave">Brave</option>
+                  <option value="startpage">Startpage</option>
+                  <option value="custom">Custom</option>
+                </select>
+                <div class="custom-dropdown" data-for="set-search-engine"></div>
+              </div>
+            </div>
+            <div id="set-custom-search-row" class="hidden items-center justify-between px-3 py-2.5 border-t border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+              <div class="flex flex-col gap-1">
+                <span class="text-[12.5px] font-medium text-[var(--fg)]">Custom Search URL</span>
+                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Use %s as the search query placeholder</span>
+              </div>
+              <div class="flex-1 flex items-center justify-end gap-3">
+                <input type="text" id="set-custom-search-url" spellcheck="false" autocomplete="off" placeholder="https://example.com/search?q=%s" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[260px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
               </div>
             </div>
           </div>

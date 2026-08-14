@@ -333,6 +333,20 @@
   let globalBackgroundImage = '';    // data URL for global bg
   let backgroundOpacity = 0.85;       // 0..1
   let settingsCategory = 'appearance'; // last-opened settings category (deep-link via openSettings(cat))
+  let searchEngine = 'google';        // 'google' | 'duckduckgo' | 'brave' | 'bing' | 'yahoo' | 'startpage' | 'custom'
+  let customSearchUrl = '';           // custom search URL with %s placeholder
+  const SEARCH_ENGINES = {
+    google:     'https://www.google.com/search?igu=1&q=%s',
+    duckduckgo: 'https://duckduckgo.com/?q=%s',
+    brave:      'https://search.brave.com/search?q=%s',
+    startpage:  'https://www.startpage.com/do/search?q=%s',
+  };
+  const SEARCH_ENGINE_ICONS = {
+    google:     'M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z',
+    duckduckgo: 'M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm0 .984C18.083.984 23.016 5.916 23.016 12S18.084 23.016 12 23.016.984 18.084.984 12C.984 5.917 5.916.984 12 .984zm0 .938C6.434 1.922 1.922 6.434 1.922 12c0 4.437 2.867 8.205 6.85 9.55-.237-.82-.776-2.753-1.6-6.052-1.184-4.741-2.064-8.606 2.379-9.813.047-.011.064-.064.03-.093-.514-.467-1.382-.548-2.233-.38a.06.06 0 0 1-.07-.058c0-.011 0-.023.011-.035.205-.286.572-.507.822-.64a1.843 1.843 0 0 0-.607-.335c-.059-.022-.059-.12-.006-.144.006-.006.012-.012.024-.012 1.749-.233 3.586.292 4.49 1.448.011.011.023.017.035.023 2.968.635 3.509 4.837 3.328 5.998a9.607 9.607 0 0 0 2.346-.576c.746-.286 1.008-.222 1.101-.053.1.193-.018.513-.28.81-.496.567-1.393 1.01-2.974 1.137-.546.044-1.029.024-1.445.006-.789-.035-1.339-.059-1.633.39-.192.298-.041.998 1.487 1.22 1.09.157 2.078.047 2.798-.034.643-.07 1.073-.118 1.172.069.21.402-.996 1.207-3.066 1.224-.158 0-.315-.006-.467-.011-1.283-.065-2.227-.414-2.816-.735a.094.094 0 0 1-.035-.017c-.105-.059-.31.045-.188.267.07.134.444.478 1.004.776-.058.466.087 1.184.338 2l.088-.016c.041-.009.087-.019.134-.025.507-.082.775.012.926.175.717-.536 1.913-1.294 2.03-1.154.583.694.66 2.332.53 2.99-.004.012-.017.024-.04.035-.274.117-1.783-.296-1.783-.511-.059-1.075-.26-1.173-.493-1.225h-.156c.006.006.012.018.018.03l.052.12c.093.257.24 1.063.13 1.26-.112.199-.835.297-1.284.303-.443.006-.543-.158-.637-.408-.07-.204-.103-.675-.103-.95a.857.857 0 0 1 .012-.216c-.134.058-.333.193-.397.281-.017.262-.017.682.123 1.149.07.221-1.518 1.164-1.74.99-.227-.181-.634-1.952-.459-2.67-.187.017-.338.075-.42.191-.367.508.093 2.933.582 3.248.257.169 1.54-.553 2.176-1.095.105.145.305.158.553.158.326-.012.782-.06 1.103-.158.192.45.423.972.613 1.388 4.47-1.032 7.803-5.037 7.803-9.82 0-5.566-4.512-10.078-10.078-10.078zm1.791 5.646c-.42 0-.678.146-.795.332-.023.047.047.094.094.07.14-.075.357-.161.701-.156.328.006.516.09.67.159l.023.01c.041.017.088-.03.059-.065-.134-.18-.332-.35-.752-.35zm-5.078.198a1.24 1.24 0 0 0-.522.082c-.454.169-.67.526-.67.76 0 .051.112.057.141.011.081-.123.21-.31.617-.478.408-.17.73-.146.951-.094.047.012.083-.041.041-.07a.989.989 0 0 0-.558-.211zm5.434 1.423a.651.651 0 0 0-.655.647.652.652 0 0 0 1.307 0 .646.646 0 0 0-.652-.647zm.283.262h.008a.17.17 0 0 1 .17.17c0 .093-.077.17-.17.17a.17.17 0 0 1-.17-.17c0-.09.072-.165.162-.17zm-5.358.076a.752.752 0 0 0-.758.758c0 .42.338.758.758.758s.758-.337.758-.758a.756.756 0 0 0-.758-.758zm.328.303h.01c.112 0 .2.089.2.2 0 .11-.088.197-.2.197a.195.195 0 0 1-.197-.198c0-.107.082-.194.187-.199z',
+    brave:      'M15.68 0l2.096 2.38s1.84-.512 2.709.358c.868.87 1.584 1.638 1.584 1.638l-.562 1.381.715 2.047s-2.104 7.98-2.35 8.955c-.486 1.919-.818 2.66-2.198 3.633-1.38.972-3.884 2.66-4.293 2.916-.409.256-.92.692-1.38.692-.46 0-.97-.436-1.38-.692a185.796 185.796 0 01-4.293-2.916c-1.38-.973-1.712-1.714-2.197-3.633-.247-.975-2.351-8.955-2.351-8.955l.715-2.047-.562-1.381s.716-.768 1.585-1.638c.868-.87 2.708-.358 2.708-.358L8.321 0h7.36zm-3.679 14.936c-.14 0-1.038.317-1.758.69-.72.373-1.242.637-1.409.742-.167.104-.065.301.087.409.152.107 2.194 1.69 2.393 1.866.198.175.489.464.687.464.198 0 .49-.29.688-.464.198-.175 2.24-1.759 2.392-1.866.152-.108.254-.305.087-.41-.167-.104-.689-.368-1.41-.741-.72-.373-1.617-.69-1.757-.69zm0-11.278s-.409.001-1.022.206-1.278.46-1.584.46c-.307 0-2.581-.434-2.581-.434S4.119 7.152 4.119 7.849c0 .697.339.881.68 1.243l2.02 2.149c.192.203.59.511.356 1.066-.235.555-.58 1.26-.196 1.977.384.716 1.042 1.194 1.464 1.115.421-.08 1.412-.598 1.776-.834.364-.237 1.518-1.19 1.518-1.554 0-.365-1.193-1.02-1.413-1.168-.22-.15-1.226-.725-1.247-.95-.02-.227-.012-.293.284-.851.297-.559.831-1.304.742-1.8-.089-.495-.95-.753-1.565-.986-.615-.232-1.799-.671-1.947-.74-.148-.068-.11-.133.339-.175.448-.043 1.719-.212 2.292-.052.573.16 1.552.403 1.632.532.079.13.149.134.067.579-.081.445-.5 2.581-.541 2.96-.04.38-.12.63.288.724.409.094 1.097.256 1.333.256s.924-.162 1.333-.256c.408-.093.329-.344.288-.723-.04-.38-.46-2.516-.541-2.961-.082-.445-.012-.45.067-.579.08-.129 1.059-.372 1.632-.532.573-.16 1.845.009 2.292.052.449.042.487.107.339.175-.148.069-1.332.508-1.947.74-.615.233-1.476.49-1.565.986-.09.496.445 1.241.742 1.8.297.558.304.624.284.85-.02.226-1.026.802-1.247.95-.22.15-1.413.804-1.413 1.169 0 .364 1.154 1.317 1.518 1.554.364.236 1.355.755 1.776.834.422.079 1.08-.4 1.464-1.115.384-.716.039-1.422-.195-1.977-.235-.555.163-.863.355-1.066l2.02-2.149c.341-.362.68-.546.68-1.243 0-.697-2.695-3.96-2.695-3.96s-2.274.436-2.58.436c-.307 0-.972-.256-1.585-.461-.613-.205-1.022-.206-1.022-.206z',
+    startpage:  'm16.885 14.254.04-.06a8.723 8.723 0 0 0 1.851-4.309c-1.334 0-2.648 0-3.982.04a4.901 4.901 0 0 1-4.758 3.696 4.948 4.948 0 0 1-4.56-3.044 89.632 89.632 0 0 0-3.941.514c1.035 3.697 4.46 6.405 8.501 6.405a8.76 8.76 0 0 0 3.743-.83l.06-.02.04.04 5.455 6.603c.378.454.916.711 1.513.711.458 0 .896-.158 1.234-.435.399-.336.657-.79.697-1.304.04-.514-.1-1.009-.438-1.424zM5.118 8.56c.1-2.59 2.27-4.685 4.918-4.685a4.911 4.911 0 0 1 4.898 4.389c1.314.02 2.608.04 3.922.099C18.616 3.717 14.754 0 10.036 0c-4.858 0-8.82 3.934-8.82 8.758v.178a86.7 86.7 0 0 1 3.902-.376z',
+  };
 
   let workspaces = [];       // [{id, label, activeTermId, layout: (Node), folderId?}]
   let folders = [];          // [{id, label, color?, collapsed?}]  — workspace folders/groups
@@ -1165,6 +1179,8 @@
         globalBackgroundImage,
         backgroundOpacity,
         shortcuts: customShortcuts,
+        searchEngine,
+        customSearchUrl,
       };
       try {
         const state = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
@@ -1190,6 +1206,8 @@
       backgroundMode,
       globalBackgroundImage,
       backgroundOpacity,
+      searchEngine,
+      customSearchUrl,
       sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
  sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
  shortcuts: customShortcuts,
@@ -1242,6 +1260,8 @@
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
+      if (state.searchEngine) searchEngine = state.searchEngine;
+      if (state.customSearchUrl) customSearchUrl = state.customSearchUrl;
       if (state.shortcuts) {
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
@@ -1827,7 +1847,7 @@
     const id = uuid();
     const allTerms = getWorkspaceTerminals(wsp);
     const label = `browser ${allTerms.length + 1}`;
-    const entry = { id, label, type: 'browser', url: url || 'about:blank', iframe: null, el: null, opened: false };
+    const entry = { id, label, type: 'browser', url: url || 'about:blank', iframe: null, el: null, opened: false, _focusUrlOnActivate: true };
 
     if (!wsp.layout) {
       wsp.layout = {
@@ -1896,6 +1916,19 @@
             slot.classList.add('focused');
             body.appendChild(slot);
             focusedSlotId = slot.id; updateFocusedGroup();
+            // Focus URL input for new browser tabs
+            if (entry._focusUrlOnActivate) {
+              entry._focusUrlOnActivate = false;
+              const bc = entry.browserContainer;
+              if (bc) {
+                const focusInput = () => {
+                  const urlInput = bc.querySelector('.browser-url');
+                  if (urlInput) { urlInput.focus(); urlInput.select(); }
+                };
+                requestAnimationFrame(() => requestAnimationFrame(focusInput));
+                setTimeout(focusInput, 100);
+              }
+            }
           }
         }
         // Sync group color from active tab's color
@@ -1982,7 +2015,7 @@
         focusedSlotId = t.el.id; updateFocusedGroup();
         t.el.classList.add('focused');
         if (t.type === 'browser') {
-          // Don't auto-focus URL input on tab switch
+          // handled after syncBrowserSlots positions the container
         } else {
           setTimeout(() => { t.term.focus(); fitTerm(t); }, 20);
         }
@@ -1993,8 +2026,23 @@
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const terms = getWorkspaceTerminals(wsp);
       syncBrowserSlots();
+      const t = terms.find(x => x.id === termId);
+      if (t && t.type === 'browser' && t._focusUrlOnActivate) {
+        t._focusUrlOnActivate = false;
+        const urlInput = t.browserContainer?.querySelector('.browser-url');
+        if (urlInput) { urlInput.focus(); urlInput.select(); }
+      }
     }));
-    setTimeout(() => syncBrowserSlots(), 100);
+    setTimeout(() => {
+      syncBrowserSlots();
+      const terms = getWorkspaceTerminals(wsp);
+      const t = terms.find(x => x.id === termId);
+      if (t && t.type === 'browser' && t._focusUrlOnActivate) {
+        t._focusUrlOnActivate = false;
+        const urlInput = t.browserContainer?.querySelector('.browser-url');
+        if (urlInput) { urlInput.focus(); urlInput.select(); }
+      }
+    }, 100);
     clearTimeout(activateTerminal._saveTimer);
     activateTerminal._saveTimer = setTimeout(saveState, 500);
   }
@@ -2660,33 +2708,25 @@
       const addTabBtn = document.createElement('div');
       addTabBtn.className = 'tg-btn';
       addTabBtn.title = 'New terminal in this group';
-      addTabBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+      addTabBtn.innerHTML = '<i class="ph ph-plus"></i>';
       addTabBtn.addEventListener('click', () => addTerminal(wsp.id, node.id));
 
       const splitH = document.createElement('div');
       splitH.className = 'tg-btn';
       splitH.title = 'Split Horizontal';
-      splitH.innerHTML = `
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <rect x="2" y="2" width="20" height="20" rx="2"/><line x1="12" y1="2" x2="12" y2="22"/>
-      </svg>
-      `;
+      splitH.innerHTML = '<i class="ph ph-square-split-horizontal"></i>';
       splitH.onclick = () => splitGroupDirectly(wsp.id, node.id, 'row');
 
       const splitV = document.createElement('div');
       splitV.className = 'tg-btn';
       splitV.title = 'Split Vertical';
-      splitV.innerHTML = `
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <rect x="2" y="2" width="20" height="20" rx="2"/><line x1="2" y1="12" x2="22" y2="12"/>
-      </svg>
-      `;
+      splitV.innerHTML = '<i class="ph ph-square-split-vertical"></i>';
       splitV.onclick = () => splitGroupDirectly(wsp.id, node.id, 'column');
 
       const addBrowserBtn = document.createElement('div');
       addBrowserBtn.className = 'tg-btn';
       addBrowserBtn.title = 'New browser tab';
-      addBrowserBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>';
+      addBrowserBtn.innerHTML = '<i class="ph ph-globe"></i>';
       addBrowserBtn.onclick = () => addBrowserTab(wsp.id, node.id);
 
       const isMax = wsp._maximizedGroupId === node.id;
@@ -2695,8 +2735,8 @@
       maxBtn.dataset.action = 'maximize';
       maxBtn.title = isMax ? 'Restore' : 'Maximize';
       maxBtn.innerHTML = isMax
-      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>'
-      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+      ? '<i class="ph ph-corners-in"></i>'
+      : '<i class="ph ph-corners-out"></i>';
       maxBtn.onclick = () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); };
 
       actions.appendChild(addTabBtn);
@@ -3142,7 +3182,10 @@
 
           if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) return url;
           if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i.test(url)) return 'http://' + url;
-          if (!url.includes('.') || url.includes(' ')) return 'https://www.google.com/search?igu=1&q=' + encodeURIComponent(url);
+          if (!url.includes('.') || url.includes(' ')) {
+            const tpl = searchEngine === 'custom' && customSearchUrl ? customSearchUrl : (SEARCH_ENGINES[searchEngine] || SEARCH_ENGINES.google);
+            return tpl.replace('%s', encodeURIComponent(url));
+          }
           return 'https://' + url;
         }
 
@@ -4251,7 +4294,7 @@
         dd.innerHTML = '';
         const btn = document.createElement('div');
         btn.className = 'custom-dropdown-btn';
-        btn.innerHTML = `<span class="custom-dropdown-label"></span><span class="dropdown-arrow">▼</span>`;
+        btn.innerHTML = `<span class="custom-dropdown-label"></span><i class="ph ph-caret-down dropdown-arrow"></i>`;
         const menu = document.createElement('div');
         menu.className = 'custom-dropdown-menu';
         dd.appendChild(btn);
@@ -4263,13 +4306,17 @@
             const el = document.createElement('div');
             el.className = 'custom-dropdown-option' + (opt.selected ? ' selected' : '');
             el.dataset.value = opt.value;
+            let content = '';
+            if (opt.dataset.icon) {
+              content += `<svg class="dropdown-icon" viewBox="0 0 24 24" width="16" height="16"><path d="${opt.dataset.icon}"/></svg>`;
+            }
             // Support theme swatches via data-swatches attribute
             if (opt.dataset.swatches) {
               const swatches = opt.dataset.swatches.split(',');
-              el.innerHTML = `<span class="theme-swatch">${swatches.map(c => `<span style="background:${c}"></span>`).join('')}</span><span>${opt.textContent}</span>`;
-            } else {
-              el.textContent = opt.textContent;
+              content += `<span class="theme-swatch">${swatches.map(c => `<span style="background:${c}"></span>`).join('')}</span>`;
             }
+            content += `<span>${opt.textContent}</span>`;
+            el.innerHTML = content;
             el.addEventListener('click', () => {
               select.value = opt.value;
               select.dispatchEvent(new Event('change', { bubbles: true }));
@@ -4282,7 +4329,13 @@
 
         function refresh() {
           const sel = select.options[select.selectedIndex];
-          btn.querySelector('.custom-dropdown-label').textContent = sel ? sel.textContent : '';
+          const label = btn.querySelector('.custom-dropdown-label');
+          let html = '';
+          if (sel && sel.dataset.icon) {
+            html += `<svg class="dropdown-icon" viewBox="0 0 24 24" width="14" height="14"><path d="${sel.dataset.icon}"/></svg>`;
+          }
+          html += sel ? sel.textContent : '';
+          label.innerHTML = html;
           menu.querySelectorAll('.custom-dropdown-option').forEach(el => {
             el.classList.toggle('selected', el.dataset.value === select.value);
           });
@@ -4291,6 +4344,8 @@
         function close() {
           btn.classList.remove('open');
           menu.classList.remove('open');
+          const arrow = btn.querySelector('.dropdown-arrow');
+          if (arrow) { arrow.classList.remove('ph-caret-up'); arrow.classList.add('ph-caret-down'); }
         }
 
         btn.addEventListener('click', e => {
@@ -4298,11 +4353,17 @@
           const isOpen = menu.classList.contains('open');
           // Close all other dropdowns
           document.querySelectorAll('.custom-dropdown-menu.open').forEach(m => m.classList.remove('open'));
-          document.querySelectorAll('.custom-dropdown-btn.open').forEach(b => b.classList.remove('open'));
+          document.querySelectorAll('.custom-dropdown-btn.open').forEach(b => {
+            b.classList.remove('open');
+            const a = b.querySelector('.dropdown-arrow');
+            if (a) { a.classList.remove('ph-caret-up'); a.classList.add('ph-caret-down'); }
+          });
           if (!isOpen) {
             buildOptions();
             btn.classList.add('open');
             menu.classList.add('open');
+            const arrow = btn.querySelector('.dropdown-arrow');
+            if (arrow) { arrow.classList.remove('ph-caret-down'); arrow.classList.add('ph-caret-up'); }
           }
         });
 
@@ -4636,6 +4697,18 @@ function buildColorItem(key, label) {
         document.getElementById('set-scrollback').value = currentScrollback;
         document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
 
+        // Search engine
+        const searchSelect = document.getElementById('set-search-engine');
+        searchSelect.value = searchEngine;
+        for (const opt of searchSelect.options) {
+          if (SEARCH_ENGINE_ICONS[opt.value]) opt.dataset.icon = SEARCH_ENGINE_ICONS[opt.value];
+        }
+        const searchDD = document.querySelector('.custom-dropdown[data-for="set-search-engine"]');
+        if (searchDD) initCustomDropdown(searchDD);
+        document.getElementById('set-custom-search-row').classList.toggle('hidden', searchEngine !== 'custom');
+        document.getElementById('set-custom-search-row').classList.toggle('flex', searchEngine === 'custom');
+        document.getElementById('set-custom-search-url').value = customSearchUrl;
+
         // Background
         refreshBgSettingsUI();
 
@@ -4907,6 +4980,8 @@ function buildColorItem(key, label) {
           if (state.backgroundMode) backgroundMode = state.backgroundMode;
           if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
           if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
+          if (state.searchEngine) searchEngine = state.searchEngine;
+          if (state.customSearchUrl) customSearchUrl = state.customSearchUrl;
           if (state.shortcuts) {
             for (const [k, v] of Object.entries(state.shortcuts)) {
               if (customShortcuts[k]) customShortcuts[k] = v;
@@ -4992,6 +5067,19 @@ function buildColorItem(key, label) {
         currentScrollback = parseInt(e.target.value);
         document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
         applySettings();
+      });
+
+      // Search engine
+      document.getElementById('set-search-engine').addEventListener('change', e => {
+        searchEngine = e.target.value;
+        const row = document.getElementById('set-custom-search-row');
+        row.classList.toggle('hidden', searchEngine !== 'custom');
+        row.classList.toggle('flex', searchEngine === 'custom');
+        saveState();
+      });
+      document.getElementById('set-custom-search-url').addEventListener('input', e => {
+        customSearchUrl = e.target.value;
+        saveState();
       });
 
       // ── Background Image Settings ──
