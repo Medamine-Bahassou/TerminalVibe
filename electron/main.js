@@ -8,6 +8,38 @@ const pty = require('node-pty');
 const isDev = !app.isPackaged;
 const devPort = 7769; // dev-mode app server port
 
+// ── Config directory (~/.terminalvibe/) ──
+const CONFIG_DIR = path.join(require('os').homedir(), '.terminalvibe');
+const CONFIG_THEMES_DIR = path.join(CONFIG_DIR, 'themes');
+const CONFIG_STATE_FILE = path.join(CONFIG_DIR, 'state.json');
+const CONFIG_CUSTOM_THEMES_FILE = path.join(CONFIG_DIR, 'custom-themes.json');
+
+function ensureConfigDir() {
+  try {
+    if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    if (!fs.existsSync(CONFIG_THEMES_DIR)) fs.mkdirSync(CONFIG_THEMES_DIR, { recursive: true });
+  } catch (err) {
+    console.error('[config] failed to create config dir:', err);
+  }
+}
+
+function readConfigFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch { return null; }
+}
+
+function writeConfigFile(filePath, data) {
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    return true;
+  } catch (err) {
+    console.error('[config] write failed:', filePath, err);
+    return false;
+  }
+}
+
 // ── Window ──
 let mainWindow = null;
 let settingsWindow = null;
@@ -169,6 +201,44 @@ ipcMain.handle('file:resolve', (_e, p) => {
   } catch { return null; }
 });
 
+// ── IPC: config directory (~/.terminalvibe/) ──
+ipcMain.handle('config:getPath', () => CONFIG_DIR);
+
+ipcMain.handle('config:readState', () => readConfigFile(CONFIG_STATE_FILE));
+
+ipcMain.handle('config:writeState', (_e, state) => writeConfigFile(CONFIG_STATE_FILE, state));
+
+ipcMain.handle('config:readCustomThemes', () => readConfigFile(CONFIG_CUSTOM_THEMES_FILE));
+
+ipcMain.handle('config:writeCustomThemes', (_e, themes) => writeConfigFile(CONFIG_CUSTOM_THEMES_FILE, themes));
+
+ipcMain.handle('config:readThemeFile', (_e, name) => {
+  const filePath = path.join(CONFIG_THEMES_DIR, `${name}.json`);
+  return readConfigFile(filePath);
+});
+
+ipcMain.handle('config:writeThemeFile', (_e, name, theme) => {
+  const filePath = path.join(CONFIG_THEMES_DIR, `${name}.json`);
+  return writeConfigFile(filePath, theme);
+});
+
+ipcMain.handle('config:deleteThemeFile', (_e, name) => {
+  const filePath = path.join(CONFIG_THEMES_DIR, `${name}.json`);
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    return true;
+  } catch { return false; }
+});
+
+ipcMain.handle('config:listThemeFiles', () => {
+  try {
+    if (!fs.existsSync(CONFIG_THEMES_DIR)) return [];
+    return fs.readdirSync(CONFIG_THEMES_DIR)
+      .filter(f => f.endsWith('.json'))
+      .map(f => f.replace('.json', ''));
+  } catch { return []; }
+});
+
 // ── IPC: native PTY (node-pty runs here in the main process) ──
 const ptys = new Map();
 const sendToRenderer = (channel, payload) => {
@@ -280,6 +350,7 @@ ipcMain.on('browser:destroy', (_e, id) => {
 
 // ── App lifecycle ──
 app.whenReady().then(() => {
+  ensureConfigDir();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

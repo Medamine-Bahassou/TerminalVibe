@@ -60,4 +60,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('settings:window', l);
     return () => ipcRenderer.removeListener('settings:window', l);
   },
+
+  // Config directory (~/.terminalvibe/)
+  configGetPath: () => ipcRenderer.invoke('config:getPath'),
+  configReadState: () => ipcRenderer.invoke('config:readState'),
+  configWriteState: (state) => ipcRenderer.invoke('config:writeState', state),
+  configReadCustomThemes: () => ipcRenderer.invoke('config:readCustomThemes'),
+  configWriteCustomThemes: (themes) => ipcRenderer.invoke('config:writeCustomThemes', themes),
+  configReadThemeFile: (name) => ipcRenderer.invoke('config:readThemeFile', name),
+  configWriteThemeFile: (name, theme) => ipcRenderer.invoke('config:writeThemeFile', name, theme),
+  configDeleteThemeFile: (name) => ipcRenderer.invoke('config:deleteThemeFile', name),
+  configListThemeFiles: () => ipcRenderer.invoke('config:listThemeFiles'),
 });

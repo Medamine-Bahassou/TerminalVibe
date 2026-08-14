@@ -163,8 +163,8 @@ scrollbar-width: none;
 min-width: fit-content;
 }
 #sidebar:not(.expanded) {
-padding-left: 4px;
-padding-right: 4px;
+padding: 0;
+gap: 0;
 }
 #sidebar.expanded {
 min-width: 200px;
@@ -290,6 +290,9 @@ gap: 8px;
   margin-bottom: 8px;
   align-self: center;
 }
+#sidebar:not(.expanded) .ws-header {
+  margin: 0;
+}
 #sidebar.expanded .ws-header {
   width: calc(100% - 12px);
   justify-content: space-between;
@@ -340,6 +343,7 @@ gap: 8px;
   flex-shrink: 0;
   user-select: none;
 }
+#sidebar:not(.expanded) .ws-folder-add-btn { display: none; }
 #sidebar.expanded .ws-folder-add-btn { width: 26px; height: 26px; }
 .ws-folder-add-btn .ph { font-size: 16px; pointer-events: none; }
 .ws-folder-add-btn:hover { color: var(--accent); }
@@ -355,8 +359,12 @@ gap: 8px;
   width: 100%;
   flex-shrink: 0;
   position: relative;
+  padding: 0;
+  margin: 0;
 }
 #sidebar.expanded .ws-folder-row { align-items: stretch; }
+#sidebar:not(.expanded) .ws-folder-header { display: none; }
+#sidebar:not(.expanded) .ws-folder-children { gap: 0; }
 
 .ws-folder-header {
   position: relative;
@@ -372,6 +380,8 @@ gap: 8px;
   color: var(--muted-text);
   transition: background 0.12s, color 0.12s;
   border-radius: 0;
+  padding: 0;
+  margin: 0;
 }
 #sidebar.expanded .ws-folder-header {
   width: 100%;
@@ -544,6 +554,11 @@ min-width: 0;
   flex-shrink: 0;
   width: 100%;
   border-top: 1px solid var(--border);
+}
+#sidebar:not(.expanded) .sidebar-actions {
+  padding: 0;
+  justify-content: center;
+  border-top: none;
 }
 .sidebar-actions .sa-btn {
   width: 36px; height: 36px;
@@ -1152,6 +1167,8 @@ width: 200px;
 position: fixed;
 inset: 0;
 background: rgba(0,0,0,0.5);
+backdrop-filter: blur(8px);
+-webkit-backdrop-filter: blur(8px);
 z-index: 10001;
 display: none;
 align-items: center;
@@ -1230,6 +1247,7 @@ outline: none;
  * ────────────────────────────────────────── */
 /* kill default yellow focus ring; keep a theme ring for keyboard nav */
 #settings-overlay:focus { outline: none; }
+#settings-overlay { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); background: rgba(0,0,0,0.4); }
 #settings-overlay :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #settings-modal { user-select: none !important; }
 #settings-modal * { user-select: none !important; }

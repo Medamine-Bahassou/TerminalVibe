@@ -119,14 +119,22 @@
     },
     'catppuccin-latte': {
       label: 'Catppuccin Latte',
-      bg: '#eff1f5', fg: '#4c4f69', cursor: '#dc8a78', selection: '#bcc0cc',
-      swatches: ['#eff1f5','#4c4f69','#dc8a78'],
+      bg: '#2a2a2a', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#45475a',
+      swatches: ['#2a2a2a','#cdd6f4','#f5e0dc'],
       palette: [
-        '#eff1f5','#d20f39','#40a02b','#df8e1d',
-        '#1e66f5','#ea76cb','#179299','#acb0be',
-        '#5c5f77','#d20f39','#40a02b','#df8e1d',
-        '#1e66f5','#ea76cb','#179299','#6c6f85',
+        '#2a2a2a','#f38ba8','#a6e3a1','#f9e2af',
+        '#89b4fa','#f5c2e7','#94e2d5','#bac2de',
+        '#585b70','#f38ba8','#a6e3a1','#f9e2af',
+        '#89b4fa','#f5c2e7','#94e2d5','#a6adc8',
       ],
+      ui: {
+        accent: '#89b4fa',
+        border: 'rgba(255,255,255,0.08)',
+        tabActiveBg: 'rgba(255,255,255,0.07)',
+        tabHoverBg: 'rgba(255,255,255,0.04)',
+        dimText: 'rgba(255,255,255,0.3)',
+        mutedText: 'rgba(255,255,255,0.5)',
+      },
     },
     'dracula': {
       label: 'Dracula',
@@ -202,36 +210,61 @@
   const CUSTOM_THEMES_KEY = 'ghostterm-custom-themes';
   const BUILTIN_THEME_KEYS = new Set(Object.keys(THEMES));
 
-  function loadCustomThemes() {
+  function configApi() { return window.electronAPI || null; }
+
+  async function loadCustomThemes() {
     try {
-      const raw = localStorage.getItem(CUSTOM_THEMES_KEY);
-      if (!raw) return;
-      const customs = JSON.parse(raw);
-      for (const [name, theme] of Object.entries(customs)) {
-        if (!BUILTIN_THEME_KEYS.has(name)) THEMES[name] = theme;
+      const api = configApi();
+      let customs = null;
+      if (api && api.configReadCustomThemes) {
+        customs = await api.configReadCustomThemes();
+      }
+      if (!customs) {
+        const raw = localStorage.getItem(CUSTOM_THEMES_KEY);
+        if (raw) customs = JSON.parse(raw);
+      }
+      if (customs) {
+        for (const [name, theme] of Object.entries(customs)) {
+          if (!BUILTIN_THEME_KEYS.has(name)) THEMES[name] = theme;
+        }
       }
     } catch {}
   }
 
-  function saveCustomThemes(customs) {
-    try { localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(customs)); } catch {}
+  async function saveCustomThemes(customs) {
+    try {
+      const api = configApi();
+      if (api && api.configWriteCustomThemes) {
+        await api.configWriteCustomThemes(customs);
+      }
+      localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(customs));
+    } catch {}
     for (const [name, theme] of Object.entries(customs)) {
       if (!BUILTIN_THEME_KEYS.has(name)) THEMES[name] = theme;
     }
   }
 
-  function getCustomThemes() {
+  async function getCustomThemes() {
     try {
+      const api = configApi();
+      if (api && api.configReadCustomThemes) {
+        const themes = await api.configReadCustomThemes();
+        if (themes) return themes;
+      }
       const raw = localStorage.getItem(CUSTOM_THEMES_KEY);
       return raw ? JSON.parse(raw) : {};
     } catch { return {}; }
   }
 
-  function deleteCustomTheme(name) {
-    const customs = getCustomThemes();
+  async function deleteCustomTheme(name) {
+    const customs = await getCustomThemes();
     delete customs[name];
-    saveCustomThemes(customs);
+    await saveCustomThemes(customs);
     delete THEMES[name];
+    const api = configApi();
+    if (api && api.configDeleteThemeFile) {
+      await api.configDeleteThemeFile(name);
+    }
     if (currentThemeName === name) {
       applyTheme('catppuccin-mocha');
     }
@@ -1137,6 +1170,8 @@
         const state = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
         Object.assign(state, settings);
         localStorage.setItem(STATE_KEY, JSON.stringify(state));
+        const api = configApi();
+        if (api && api.configWriteState) api.configWriteState(state);
       } catch {}
       if (window.electronAPI && window.electronAPI.settingsChanged) window.electronAPI.settingsChanged();
       return;
@@ -1159,7 +1194,7 @@
  sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
  shortcuts: customShortcuts,
  activeWsId,
-folders: folders.map(f => {
+ folders: folders.map(f => {
     const o = { id: f.id, label: f.label, collapsed: f.collapsed };
     if (f.color) o.color = f.color;
     return o;
@@ -1172,15 +1207,24 @@ folders: folders.map(f => {
    return o;
  }),
     };
-    try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch {}
+    try {
+      localStorage.setItem(STATE_KEY, JSON.stringify(state));
+      const api = configApi();
+      if (api && api.configWriteState) api.configWriteState(state);
+    } catch {}
   }
 
-  function restoreState() {
+  async function restoreState() {
     try {
-      const raw = localStorage.getItem(STATE_KEY);
+      let raw = null;
+      const api = configApi();
+      if (api && api.configReadState) {
+        const diskState = await api.configReadState();
+        if (diskState) raw = JSON.stringify(diskState);
+      }
+      if (!raw) raw = localStorage.getItem(STATE_KEY);
       if (!raw) return false;
       const state = JSON.parse(raw);
-      if (!state.workspaces?.length) return false;
 
       if (state.theme && THEMES[state.theme]) {
         currentThemeName = state.theme;
@@ -1203,6 +1247,8 @@ folders: folders.map(f => {
           if (customShortcuts[k]) customShortcuts[k] = v;
         }
       }
+
+      if (!state.workspaces?.length) return false;
       if (state.sidebarExpanded) document.getElementById('sidebar').classList.add('expanded');
       if (state.sidebarWidth) {
         savedSidebarWidth = Math.max(state.sidebarWidth, SB_EXPANDED_MIN);
@@ -1984,7 +2030,7 @@ folders: folders.map(f => {
     if (entry.type !== 'browser') {
       sendControl({ type: 'close', id: termId });
       if (_ptyListeners[termId]) { _ptyListeners[termId](); delete _ptyListeners[termId]; }
-      if (entry.term) entry.term.dispose();
+      try { if (entry.term) entry.term.dispose(); } catch {}
     } else {
       if (entry._msgCleanup) entry._msgCleanup();
       if (entry._resizeObs) { entry._resizeObs.disconnect(); entry._resizeObs = null; }
@@ -2137,6 +2183,11 @@ folders: folders.map(f => {
     const result = findTermById(id);
     if (!result) return;
     const { ws, term: t } = result;
+    t.dead = true;
+    if (getWorkspaceTerminals(ws).length <= 1) {
+      _removeWorkspace(ws.id);
+      return;
+    }
     if (!isTauri()) sendControl({ type: 'close', id });
     removeTerminal(ws.id, id);
   }
@@ -2152,6 +2203,7 @@ folders: folders.map(f => {
 
   function fitTerm(entry) {
     if (!entry || !entry.el || entry.type === 'browser') return;
+    if (entry.dead) return;
     try {
       // Frontend fits instantly for snappy visual feedback
       entry.fit.fit();
@@ -4831,9 +4883,18 @@ function buildColorItem(key, label) {
       // Apply only the settings fields from shared storage (never touches
       // workspaces/folders/sideOrder) — used by the settings window on boot and
       // by the main window when the settings window pushes changes.
-      function restoreSettingsOnly() {
+      async function restoreSettingsOnly() {
         try {
-          const state = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
+          let state = {};
+          const api = configApi();
+          if (api && api.configReadState) {
+            const diskState = await api.configReadState();
+            if (diskState) state = diskState;
+          }
+          if (!state.theme) {
+            const raw = localStorage.getItem(STATE_KEY);
+            if (raw) state = JSON.parse(raw);
+          }
           if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
           if (state.fontSize) currentFontSize = state.fontSize;
           if (state.fontFamily) currentFontFamily = state.fontFamily;
@@ -4861,9 +4922,9 @@ function buildColorItem(key, label) {
       }
 
       // Settings-window bootstrap: skip the entire terminal/browser layer.
-      function settingsOnlyBoot() {
-        loadCustomThemes();
-        restoreSettingsOnly();
+      async function settingsOnlyBoot() {
+        await loadCustomThemes();
+        await restoreSettingsOnly();
         applyTheme(currentThemeName);
         document.body.classList.add('settings-only');
         openSettings('appearance');
@@ -5043,27 +5104,27 @@ function buildColorItem(key, label) {
       // We'll patch into the existing context menu
 
       // Theme editor — Save
-      document.getElementById('theme-btn-save').addEventListener('click', () => {
+      document.getElementById('theme-btn-save').addEventListener('click', async () => {
         const nameInput = document.getElementById('set-theme-name');
         const name = nameInput.value.trim();
         if (!name) { nameInput.focus(); return; }
         if (BUILTIN_THEME_KEYS.has(name)) { alert('Cannot overwrite a built-in theme.'); return; }
         editingTheme.label = name;
-        const customs = getCustomThemes();
+        const customs = await getCustomThemes();
         customs[name] = { ...editingTheme, _custom: true };
-        saveCustomThemes(customs);
+        await saveCustomThemes(customs);
         applyTheme(name);
         saveState();
         refreshThemeDropdown();
       });
 
       // Theme editor — Delete
-      document.getElementById('theme-btn-delete').addEventListener('click', () => {
+      document.getElementById('theme-btn-delete').addEventListener('click', async () => {
         const nameInput = document.getElementById('set-theme-name');
         const name = nameInput.value.trim();
         if (!name || BUILTIN_THEME_KEYS.has(name)) return;
-        if (!getCustomThemes()[name]) return;
-        deleteCustomTheme(name);
+        if (!(await getCustomThemes())[name]) return;
+        await deleteCustomTheme(name);
         initEditingTheme(currentThemeName);
         nameInput.value = editingTheme.label || '';
         renderThemeEditor();
@@ -5659,9 +5720,10 @@ function buildColorItem(key, label) {
         /* ═══════════════════════════════════════════════════════════════
          B O*OT
          ═══════════════════════════════════════════════════════════════ */
-        loadCustomThemes();
-        const restored = restoreState();
-        applyTheme(currentThemeName);
+        (async () => {
+          await loadCustomThemes();
+          const restored = await restoreState();
+          applyTheme(currentThemeName);
 
         // Hide splash screen after app is ready
         const splash = document.getElementById('splash');
@@ -5802,4 +5864,5 @@ function buildColorItem(key, label) {
           }, 50);
         });
 
+        })(); // async boot
 })();
