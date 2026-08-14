@@ -71,23 +71,6 @@
       </div>
     </div>
 
-    <!-- ── Status bar ── -->
-    <div id="statusbar">
-      <span class="sb-item"><span class="sb-icon">⬡</span><span id="sb-ws">—</span></span>
-      <span class="sb-sep"></span>
-      <span class="sb-item" id="sb-term">—</span>
-      <span class="sb-sep"></span>
-      <span class="sb-item" id="sb-conn">
-        <span id="sb-conn-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#a6e3a1;margin-right:3px"></span>
-        <span id="sb-conn-text">Connecting…</span>
-      </span>
-      <span class="sb-spacer"></span>
-      <span class="sb-item" id="sb-size">—</span>
-      <span class="sb-sep"></span>
-      <span class="sb-item" id="sb-multi" style="display:none"></span>
-      <span class="sb-sep"></span>
-      <span class="sb-item" id="sb-time">—</span>
-    </div>
   </div>
 </div>
 
@@ -233,21 +216,6 @@
               <div class="flex-1 flex items-center justify-end gap-3">
                 <input type="range" id="set-bg-opacity" min="0" max="100" step="1" value="85" class="slider">
                 <span class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]" id="set-bg-opacity-val"></span>
-              </div>
-            </div>
-          </div>
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">Window & Layout</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Show status bar</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Display connection and workspace info</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <label class="inline-flex items-center cursor-pointer">
-                  <input type="checkbox" class="sr-only peer" id="set-statusbar">
-                  <div class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]"></div>
-                </label>
               </div>
             </div>
           </div>

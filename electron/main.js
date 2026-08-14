@@ -241,13 +241,28 @@ ipcMain.handle('config:listThemeFiles', () => {
 
 // ── IPC: native PTY (node-pty runs here in the main process) ──
 const ptys = new Map();
+const detachedWindows = new Map(); // termId -> BrowserWindow
 const sendToRenderer = (channel, payload) => {
+  // If this terminal is detached, route to the detached window instead
+  if (channel === 'terminal:data' || channel === 'terminal:exit') {
+    const dw = detachedWindows.get(payload.id);
+    if (dw && !dw.isDestroyed()) {
+      dw.webContents.send(channel, payload);
+      return;
+    }
+  }
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
 
 ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd }) => {
   try {
-    if (ptys.has(id)) { try { ptys.get(id).kill(); } catch {} }
+    if (ptys.has(id)) {
+      // Replace old PTY — remove exit listener first to avoid sending
+      // terminal:exit to the detached window that's about to reuse this id
+      const old = ptys.get(id);
+      try { old.kill(); } catch {}
+      ptys.delete(id);
+    }
     const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
     const t = pty.spawn(shell, [], {
       name: 'xterm-256color',
@@ -259,9 +274,20 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd }) => {
     ptys.set(id, t);
     t.onData((data) => sendToRenderer('terminal:data', { id, data }));
     t.onExit(({ exitCode }) => {
+      if (ptys.get(id) !== t) return;
       ptys.delete(id);
       sendToRenderer('terminal:exit', { id, code: exitCode });
     });
+
+    if (_e.sender) {
+      for (const [termId, dw] of detachedWindows) {
+        if (dw.webContents.id === _e.sender.id) {
+          detachedWindows.set(id, dw);
+          break;
+        }
+      }
+    }
+
     return true;
   } catch (err) {
     console.error('[pty] create failed:', err);
@@ -284,6 +310,63 @@ ipcMain.on('terminal:close', (_e, id) => {
 ipcMain.on('terminal:kill-all', () => {
   for (const t of ptys.values()) { try { t.kill(); } catch {} }
   ptys.clear();
+  for (const [id, dw] of detachedWindows) { try { if (!dw.isDestroyed()) dw.close(); } catch {} }
+  detachedWindows.clear();
+});
+
+// ── IPC: detach terminal into a new window ──
+ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
+  if (detachedWindows.has(id)) return false;
+
+  const dw = new BrowserWindow({
+    title: 'TerminalVibe — Detached',
+    width: 900,
+    height: 600,
+    minWidth: 400,
+    minHeight: 300,
+    backgroundColor: '#1e1e2e',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#00000000',
+      symbolColor: '#cdd6f4',
+      height: 32,
+    },
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  detachedWindows.set(id, dw);
+
+  const params = new URLSearchParams({ mode: 'detached', termId: id, cols: String(cols || 80), rows: String(rows || 24) });
+  if (cwd) params.set('cwd', cwd);
+  if (isDev) {
+    dw.loadURL(`http://127.0.0.1:${devPort}/?${params}`);
+  } else {
+    dw.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: Object.fromEntries(params) });
+  }
+
+  dw.on('closed', () => {
+    let dwId = null;
+    try { if (!dw.webContents.isDestroyed()) dwId = dw.webContents.id; } catch {}
+    const toDelete = [];
+    for (const [termId, other] of detachedWindows) {
+      try {
+        if (other.webContents.id === dwId || other.webContents.isDestroyed()) toDelete.push(termId);
+      } catch { toDelete.push(termId); }
+    }
+    for (const termId of toDelete) {
+      detachedWindows.delete(termId);
+      const t = ptys.get(termId);
+      if (t) { try { t.kill(); } catch {} ptys.delete(termId); }
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('terminal:detached-closed', { id });
+  });
+
+  return true;
 });
 
 // ── IPC: native browser tab views (WebContentsView) ──

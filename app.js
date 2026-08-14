@@ -5,6 +5,8 @@
   // so it renders above native browser views. In that window only the settings
   // page boots — the whole terminal/browser/sidebar layer is skipped.
   const SETTINGS_ONLY = new URLSearchParams(window.location.search).get('mode') === 'settings';
+  const DETACHED_ONLY = new URLSearchParams(window.location.search).get('mode') === 'detached';
+  const DETACHED_PARAMS = DETACHED_ONLY ? new URLSearchParams(window.location.search) : null;
 
   // App version — single source of truth, shared across the whole app
   const APP_VERSION = '0.5.10';
@@ -327,7 +329,6 @@
   let currentLineHeight = 1.4;
   let currentCursorStyle = 'block';
   let currentCursorBlink = true;
-  let statusBarVisible = true;
   let currentScrollback = 10000;
   let backgroundMode = 'none';       // 'none' | 'per-tab' | 'global'
   let globalBackgroundImage = '';    // data URL for global bg
@@ -360,7 +361,6 @@
   function clearMultiSelect() {
     _multiSelected.clear();
     document.querySelectorAll('.term-slot.multi-selected').forEach(s => s.classList.remove('multi-selected'));
-    updateMultiStatusBar();
   }
   function toggleMultiSelect(termId) {
     const slot = document.getElementById('slot-' + termId);
@@ -371,17 +371,6 @@
     } else {
       _multiSelected.add(termId);
       slot.classList.add('multi-selected');
-    }
-    updateMultiStatusBar();
-  }
-  function updateMultiStatusBar() {
-    const el = document.getElementById('sb-multi');
-    if (!el) return;
-    if (_multiSelected.size > 0) {
-      el.textContent = 'Multi: ' + _multiSelected.size;
-      el.style.display = '';
-    } else {
-      el.style.display = 'none';
     }
   }
   function updateFocusedGroup() {
@@ -539,14 +528,12 @@
   const ID_LEN = 36;
 
   function connectWS() {
-    updateConnStatus(false, true);
     const wsHost = isTauri() ? '127.0.0.1' : (window.location.hostname || '127.0.0.1');
     ws = new WebSocket(`ws://${wsHost}:${WS_PORT}`);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
       wsReady = true;
-      updateConnStatus(true);
 
       if (workspaces.length) {
         for (const ws of workspaces) {
@@ -590,7 +577,6 @@
 
     ws.onclose = () => {
       wsReady = false;
-      updateConnStatus(false);
       setTimeout(connectWS, 2000);
     };
 
@@ -698,18 +684,6 @@
     }
   }
 
-  function updateConnStatus(connected, connecting) {
-    const dot = document.getElementById('sb-conn-dot');
-    const txt = document.getElementById('sb-conn-text');
-    if (connecting) {
-      dot.style.background = currentTheme.palette[3];
-      txt.textContent = 'Connecting…';
-    } else {
-      dot.style.background = connected ? currentTheme.palette[2] : currentTheme.palette[1];
-      txt.textContent = connected ? 'Connected' : 'Disconnected';
-    }
-  }
-
   /* ═══════════════════════════════════════════════════════════════
    T A*URI NATIVE PTY
    ═══════════════════════════════════════════════════════════════ */
@@ -717,7 +691,6 @@
     // Electron: node-pty runs natively in the main process over IPC
     if (isDesktop() && window.electronAPI) {
       const api = window.electronAPI;
-      updateConnStatus(true);
       wsReady = true;
       tauriPtyReady = true;
 
@@ -730,12 +703,22 @@
         }
       });
       api.onTerminalExit(({ id, code }) => handleExit(id, code));
+      if (api.onTerminalDetachedClosed) {
+        api.onTerminalDetachedClosed(({ id }) => {
+          const result = findTermById(id);
+          if (result) {
+            result.term = null;
+            result.dead = false;
+          }
+          renderPaneArea();
+          syncBrowserSlots();
+        });
+      }
 
       restoreOrCreateInitial();
       return;
     }
 
-    updateConnStatus(true);
     wsReady = true;
     tauriPtyReady = true;
 
@@ -963,7 +946,6 @@
       }
     }
 
-    updateStatusBar();
     renderSidebar();
     renderPaneArea();
     applyBackground();
@@ -1094,6 +1076,7 @@
    S T*ATE PERSISTENCE
    ═══════════════════════════════════════════════════════════════ */
   const STATE_KEY = 'ghostterm-state-v2';
+  const DETACHED_STATE_KEY = 'ghostterm-state-detached-v1';
 
   function serializeLayout(node) {
     if (!node) return null;
@@ -1118,6 +1101,7 @@
           if (t.type === 'browser') { o.type = 'browser'; o.url = t.url; }
           else if (t.cwd) o.cwd = t.cwd;
           if (t.bgImage) o.bgImage = t.bgImage;
+          if (t.dead) o.dead = true;
           return o;
         })
       };
@@ -1154,6 +1138,7 @@
         if (tData.color) entry.color = tData.color;
         if (tData.cwd) entry.cwd = tData.cwd;
         if (tData.bgImage) entry.bgImage = tData.bgImage;
+        if (tData.dead) entry.dead = true;
         group.terminals.push(entry);
       }
       return group;
@@ -1172,7 +1157,6 @@
         lineHeight: currentLineHeight,
         cursorStyle: currentCursorStyle,
         cursorBlink: currentCursorBlink,
-        statusBarVisible,
         scrollback: currentScrollback,
         settingsCategory,
         backgroundMode,
@@ -1193,6 +1177,7 @@
       return;
     }
 
+    const key = DETACHED_ONLY ? DETACHED_STATE_KEY : STATE_KEY;
     const state = {
       theme: currentThemeName,
       fontSize: currentFontSize,
@@ -1200,7 +1185,6 @@
       lineHeight: currentLineHeight,
       cursorStyle: currentCursorStyle,
       cursorBlink: currentCursorBlink,
-      statusBarVisible,
       scrollback: currentScrollback,
       settingsCategory,
       backgroundMode,
@@ -1209,38 +1193,45 @@
       searchEngine,
       customSearchUrl,
       sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
- sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
- shortcuts: customShortcuts,
- activeWsId,
- folders: folders.map(f => {
-    const o = { id: f.id, label: f.label, collapsed: f.collapsed };
-    if (f.color) o.color = f.color;
-    return o;
-  }),
-  sideOrder: sideOrder.map(e => ({ t: e.type, id: e.id })),
-  workspaces: workspaces.map(ws => {
-   const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
-   if (ws.color) o.color = ws.color;
-   if (ws.folderId) o.folderId = ws.folderId;
-   return o;
- }),
+  sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
+  shortcuts: customShortcuts,
+  activeWsId,
+   folders: folders.map(f => {
+      const o = { id: f.id, label: f.label, collapsed: f.collapsed };
+      if (f.color) o.color = f.color;
+      if (f.pinned) o.pinned = true;
+      return o;
+    }),
+    sideOrder: sideOrder.map(e => ({ t: e.type, id: e.id })),
+    workspaces: workspaces.map(ws => {
+     const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
+     if (ws.color) o.color = ws.color;
+     if (ws.folderId) o.folderId = ws.folderId;
+     if (ws.pinned) o.pinned = true;
+     return o;
+   }),
     };
     try {
-      localStorage.setItem(STATE_KEY, JSON.stringify(state));
-      const api = configApi();
-      if (api && api.configWriteState) api.configWriteState(state);
+      localStorage.setItem(key, JSON.stringify(state));
+      if (!DETACHED_ONLY) {
+        const api = configApi();
+        if (api && api.configWriteState) api.configWriteState(state);
+      }
     } catch {}
   }
 
   async function restoreState() {
     try {
+      const key = DETACHED_ONLY ? DETACHED_STATE_KEY : STATE_KEY;
       let raw = null;
-      const api = configApi();
-      if (api && api.configReadState) {
-        const diskState = await api.configReadState();
-        if (diskState) raw = JSON.stringify(diskState);
+      if (!DETACHED_ONLY) {
+        const api = configApi();
+        if (api && api.configReadState) {
+          const diskState = await api.configReadState();
+          if (diskState) raw = JSON.stringify(diskState);
+        }
       }
-      if (!raw) raw = localStorage.getItem(STATE_KEY);
+      if (!raw) raw = localStorage.getItem(key);
       if (!raw) return false;
       const state = JSON.parse(raw);
 
@@ -1254,7 +1245,6 @@
       if (state.lineHeight) currentLineHeight = state.lineHeight;
       if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
-      if (state.statusBarVisible !== undefined) statusBarVisible = state.statusBarVisible;
       if (state.scrollback) currentScrollback = state.scrollback;
       if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
@@ -1283,6 +1273,7 @@
         for (const fData of state.folders) {
           const f = { id: fData.id, label: fData.label || 'Folder', collapsed: !!fData.collapsed };
           if (fData.color) f.color = fData.color;
+          if (fData.pinned) f.pinned = true;
           folders.push(f);
         }
       }
@@ -1296,6 +1287,7 @@
         };
         if (wsData.color) ws.color = wsData.color;
         if (wsData.folderId) ws.folderId = wsData.folderId;
+        if (wsData.pinned) ws.pinned = true;
 
         ws.layout = deserializeLayout(wsData.layout, ws);
         workspaces.push(ws);
@@ -1517,6 +1509,22 @@
     saveState();
   }
 
+  function togglePinWorkspace(id) {
+    const ws = findWs(id);
+    if (!ws) return;
+    ws.pinned = !ws.pinned;
+    renderSidebar();
+    saveState();
+  }
+
+  function togglePinFolder(id) {
+    const f = folders.find(x => x.id === id);
+    if (!f) return;
+    f.pinned = !f.pinned;
+    renderSidebar();
+    saveState();
+  }
+
   function activateWorkspace(id, skipRender) {
     if (id === activeWsId) return;
     clearMultiSelect();
@@ -1527,7 +1535,6 @@
         btn.classList.toggle('active', btn.dataset.wsid === id);
       });
       switchWorkspacePane();
-      updateStatusBar();
     }
     saveState();
   }
@@ -1594,7 +1601,6 @@
         if (active.type !== 'browser') active.term.focus();
       }
       updateFocusedGroup();
-      updateStatusBar();
       syncBrowserSlots();
     }));
     setTimeout(() => syncBrowserSlots(), 120);
@@ -1642,11 +1648,12 @@
     if (soIdx !== -1) sideOrder.splice(soIdx, 1);
     if (activeWsId === id) {
       if (workspaces.length) { activateWorkspace(workspaces[Math.max(0, idx-1)].id); renderSidebar(); }
-      else { activeWsId = null; renderSidebar(); renderPaneArea(); updateStatusBar(); }
+      else { activeWsId = null; renderSidebar(); renderPaneArea(); }
     } else {
       renderSidebar();
     }
     saveState();
+    if (DETACHED_ONLY) window.close();
   }
 
   // Strip "user@host:" prefix and turn "/a/b/c" into "c" (~ stays "~")
@@ -1664,7 +1671,6 @@
       ws.label = value.trim() || ws.label;
       ws.color = color || undefined;
       renderSidebar();
-      updateStatusBar();
       saveState();
     });
   }
@@ -2008,7 +2014,6 @@
           });
         }
       }
-      updateStatusBar();
       const terms = getWorkspaceTerminals(wsp);
       const t = terms.find(x => x.id === termId);
       if (t && t.el) {
@@ -2047,13 +2052,32 @@
     activateTerminal._saveTimer = setTimeout(saveState, 500);
   }
 
-  function removeTerminal(wsId, termId, skipRender) {
+  function detachTerminal(wsId, termId) {
     const wsp = findWs(wsId);
     if (!wsp || !wsp.layout) return;
-    if (_multiSelected.has(termId)) { _multiSelected.delete(termId); document.getElementById('slot-' + termId)?.classList.remove('multi-selected'); updateMultiStatusBar(); }
+    const entry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
+    if (!entry || entry.type === 'browser') return;
+    if (!isDesktop() || !window.electronAPI?.terminalDetach) return;
+
+    const slot = getSlotDimensions(entry);
+    const cwd = entry.cwd || undefined;
+
+    window.electronAPI.terminalDetach({ id: termId, cols: slot.cols, rows: slot.rows, cwd }).then(ok => {
+      if (!ok) return;
+      // Detach succeeded — remove the terminal from this workspace without killing the PTY
+      // The detached window will create a new PTY with the same ID (terminal:create kills the old one)
+      removeTerminal(wsId, termId, false, true);
+    });
+  }
+
+  function removeTerminal(wsId, termId, skipRender, skipPtyClose) {
+    const wsp = findWs(wsId);
+    if (!wsp || !wsp.layout) return;
+    if (_multiSelected.has(termId)) { _multiSelected.delete(termId); document.getElementById('slot-' + termId)?.classList.remove('multi-selected'); }
 
     // Last tab in workspace — remove the workspace with confirmation
-    if (!skipRender && getWorkspaceTerminals(wsp).length <= 1) {
+    // Skip confirmation when detaching (skipPtyClose) — just remove silently
+    if (!skipRender && !skipPtyClose && getWorkspaceTerminals(wsp).length <= 1) {
       if (_closingWs.has(wsId)) return;
       _closingWs.add(wsId);
       const label = wsp.label;
@@ -2076,9 +2100,11 @@
 
     const entry = group.terminals[idx];
     if (entry.type !== 'browser') {
-      sendControl({ type: 'close', id: termId });
-      if (_ptyListeners[termId]) { _ptyListeners[termId](); delete _ptyListeners[termId]; }
-      try { if (entry.term) entry.term.dispose(); } catch {}
+      if (!skipPtyClose) {
+        sendControl({ type: 'close', id: termId });
+        if (_ptyListeners[termId]) { _ptyListeners[termId](); delete _ptyListeners[termId]; }
+        try { if (entry.term) entry.term.dispose(); } catch {}
+      }
     } else {
       if (entry._msgCleanup) entry._msgCleanup();
       if (entry._resizeObs) { entry._resizeObs.disconnect(); entry._resizeObs = null; }
@@ -2176,10 +2202,14 @@
           }
         }
       }
-      updateStatusBar();
     }
     renderSidebar();
     saveState();
+
+    // If this was the last terminal (detach case), remove the now-empty workspace
+    if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0) {
+      _removeWorkspace(wsId);
+    }
   }
 
   function applyTabColor(tabEl, color) {
@@ -2222,7 +2252,6 @@
         }
       }
       renderSidebar();
-      updateStatusBar();
       saveState();
     });
   }
@@ -2233,6 +2262,10 @@
     const { ws, term: t } = result;
     t.dead = true;
     if (getWorkspaceTerminals(ws).length <= 1) {
+      if (DETACHED_ONLY) {
+        window.close();
+        return;
+      }
       _removeWorkspace(ws.id);
       return;
     }
@@ -2265,7 +2298,6 @@
         sendControl({ type: 'resize', id: entry.id, cols: dims.cols, rows: dims.rows });
       }, 80);
 
-      updateStatusBar();
     } catch {}
   }
 
@@ -3226,7 +3258,6 @@
           updateNavButtons();
           entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
           renderSidebar();
-          updateStatusBar();
 
           entry._browserZoom = 1;
           const prevImg = contentWrap.querySelector('.browser-img-wrap');
@@ -3279,7 +3310,6 @@
           }
           updateNavButtons();
           renderSidebar();
-          updateStatusBar();
         }
         entry._syncUrl = syncUrl;
 
@@ -3332,7 +3362,6 @@
           const group = findGroupContainingTerm(wsp.layout, entry.id);
           if (group) group.activeTermId = entry.id;
           syncBrowserSlots();
-          updateStatusBar();
         });
 
         updateNavButtons();
@@ -3374,7 +3403,6 @@
       const group = findGroupContainingTerm(wsp.layout, entry.id);
       if (group) group.activeTermId = entry.id;
 
-      updateStatusBar();
       entry.term.focus();
     });
 
@@ -3617,7 +3645,7 @@
     const sb = document.getElementById('sidebar');
     if (!sideOrder.length && (workspaces.length || folders.length)) rebuildSideOrder();
     const actionsEl = sb.querySelector('.sidebar-actions');
-    sb.querySelectorAll('.ws-header, .ws-folder-row, .ws-btn').forEach(e => e.remove());
+    sb.querySelectorAll('.ws-header, .ws-folder-row, .ws-btn, .ws-pin-label, .ws-pin-sep').forEach(e => e.remove());
 
     const clearDropMarks = () => {
       sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
@@ -3680,7 +3708,8 @@
       btn.dataset.wsid = wsp.id;
       const abbr = wsp.label.substring(0,3).toUpperCase();
       const tabCount = getWorkspaceTerminals(wsp).length;
-      btn.innerHTML = `<span class="ws-strip"></span><span class="ws-label">${abbr}</span><span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions"><span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span><span class="ws-count">${tabCount}</span>`;
+      btn.innerHTML = `<span class="ws-strip"></span><span class="ws-label">${abbr}</span><span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions"><span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span><span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
+      if (wsp.pinned) btn.classList.add('pinned');
       btn.title = wsp.label;
       if (wsp.color) {
         btn.dataset.color = wsp.color;
@@ -3764,6 +3793,10 @@
         }
       });
 
+      btn.querySelector('.ws-pin').addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePinWorkspace(wsp.id);
+      });
       btn.querySelector('.ws-rename').addEventListener('click', (e) => {
         e.stopPropagation();
         renameWorkspace(wsp.id);
@@ -3795,12 +3828,15 @@
         <span class="ws-folder-icon ws-folder-icon-closed"><i class="ph ph-folder"></i></span>
         <span class="ws-folder-icon ws-folder-icon-open"><i class="ph ph-folder-open"></i></span>
         <span class="ws-folder-name">${escHtml(folder.label)}</span>
+        ${folder.pinned ? '<span class="ws-folder-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}
         <span class="ws-folder-count">${wss.length}</span>
         <span class="ws-folder-actions">
+          <span class="ws-folder-action ws-folder-pin" title="${folder.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${folder.pinned ? '-slash' : ''}"></i></span>
           <span class="ws-folder-action ws-folder-add" title="New workspace here"><i class="ph ph-plus"></i></span>
           <span class="ws-folder-action ws-folder-rename" title="Rename folder"><i class="ph ph-pencil-simple"></i></span>
           <span class="ws-folder-action ws-folder-remove" title="Delete folder"><i class="ph ph-x"></i></span>
         </span>`;
+      if (folder.pinned) row.classList.add('pinned');
 
       headerEl.addEventListener('click', e => {
         if (e.target.closest('.ws-folder-action')) return;
@@ -3809,6 +3845,7 @@
       });
       headerEl.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'folder', folder.id); });
 
+      headerEl.querySelector('.ws-folder-pin').addEventListener('click', e => { e.stopPropagation(); togglePinFolder(folder.id); });
       headerEl.querySelector('.ws-folder-add').addEventListener('click', e => { e.stopPropagation(); createWorkspace(undefined, folder.id); });
       headerEl.querySelector('.ws-folder-rename').addEventListener('click', e => { e.stopPropagation(); renameFolder(folder.id); });
       headerEl.querySelector('.ws-folder-remove').addEventListener('click', e => { e.stopPropagation(); removeFolder(folder.id); });
@@ -3907,41 +3944,46 @@
     };
 
     // ── Render the top-level flow from sideOrder (root workspaces + folders) ──
-    for (let i = 0; i < sideOrder.length; i++) {
-      const e = sideOrder[i];
+    // Pinned items always appear first, then unpinned in sideOrder order
+    const pinnedItems = [];
+    const unpinnedItems = [];
+    for (const e of sideOrder) {
       if (e.type === 'ws') {
         const wsp = findWs(e.id);
-        if (wsp) sb.insertBefore(buildWsBtn(wsp, null, i), actionsEl);
+        if (wsp) (wsp.pinned ? pinnedItems : unpinnedItems).push({ ...e, _wsp: wsp });
       } else {
         const folder = folders.find(f => f.id === e.id);
-        if (folder) sb.insertBefore(buildFolderEl(folder, i), actionsEl);
+        if (folder) (folder.pinned ? pinnedItems : unpinnedItems).push({ ...e, _folder: folder });
       }
     }
-  }
-
-  /* ═══════════════════════════════════════════════════════════════
-   S T*ATUS BAR
-   ═══════════════════════════════════════════════════════════════ */
-  function updateStatusBar() {
-    const wsp = activeWs();
-    document.getElementById('sb-ws').textContent = wsp ? wsp.label : '—';
-    const t = activeTerminal();
-    document.getElementById('sb-term').textContent = t ? t.label : '—';
-    if (t?.term) {
-      const cols = t.term.cols || 0;
-      const rows = t.term.rows || 0;
-      const fSize = t._customFontSize || currentFontSize;
-      document.getElementById('sb-size').textContent = cols && rows ? `${cols}×${rows} · ${fSize}px` : '—';
+    if (pinnedItems.length) {
+      const pinLabel = document.createElement('div');
+      pinLabel.className = 'ws-pin-label';
+      pinLabel.textContent = 'Pinned';
+      sb.insertBefore(pinLabel, actionsEl);
+      let pinnedSlot = 0;
+      for (const e of pinnedItems) {
+        if (e.type === 'ws') {
+          if (e._wsp) sb.insertBefore(buildWsBtn(e._wsp, null, pinnedSlot), actionsEl);
+        } else {
+          if (e._folder) sb.insertBefore(buildFolderEl(e._folder, pinnedSlot), actionsEl);
+        }
+        pinnedSlot++;
+      }
+      const pinSep = document.createElement('div');
+      pinSep.className = 'ws-pin-sep';
+      sb.insertBefore(pinSep, actionsEl);
+    }
+    let unpinnedSlot = pinnedItems.length;
+    for (const e of unpinnedItems) {
+      if (e.type === 'ws') {
+        if (e._wsp) sb.insertBefore(buildWsBtn(e._wsp, null, unpinnedSlot), actionsEl);
+      } else {
+        if (e._folder) sb.insertBefore(buildFolderEl(e._folder, unpinnedSlot), actionsEl);
+      }
+      unpinnedSlot++;
     }
   }
-
-  function tickClock() {
-    const now = new Date();
-    document.getElementById('sb-time').textContent =
-    now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  }
-  setInterval(tickClock, 1000);
-  tickClock();
 
   /* ═══════════════════════════════════════════════════════════════
    C O*NTEXT MENU
@@ -3962,8 +4004,10 @@
 
     if (type === 'workspace') {
       const wsId = data;
+      const wsPinned = findWs(wsId)?.pinned;
       item('<i class="ph ph-plus"></i>', 'New terminal', 'Ctrl+Shift+T', () => { activateWorkspace(wsId); addTerminal(wsId); });
       sep();
+      item(`<i class="ph ph-push-pin${wsPinned ? '-slash' : ''}"></i>`, wsPinned ? 'Unpin from top' : 'Pin to top', '', () => togglePinWorkspace(wsId));
       item('<i class="ph ph-pencil-simple"></i>', 'Edit workspace', '', () => renameWorkspace(wsId));
       if (folders.length || findWs(wsId)?.folderId) {
         sep();
@@ -3980,8 +4024,10 @@
       item('<i class="ph ph-x"></i>', 'Close workspace', '', () => removeWorkspace(wsId), true);
     } else if (type === 'folder') {
       const folderId = data;
+      const folderPinned = folders.find(f => f.id === folderId)?.pinned;
       item('<i class="ph ph-plus"></i>', 'New workspace here', 'Ctrl+Shift+T', () => { const wsp = createWorkspace(undefined, folderId); if (wsp) activateWorkspace(wsp.id); });
       sep();
+      item(`<i class="ph ph-push-pin${folderPinned ? '-slash' : ''}"></i>`, folderPinned ? 'Unpin from top' : 'Pin to top', '', () => togglePinFolder(folderId));
       item('<i class="ph ph-pencil-simple"></i>', 'Rename folder', '', () => renameFolder(folderId));
       sep();
       item('<i class="ph ph-x"></i>', 'Delete folder', '', () => removeFolder(folderId), true);
@@ -4048,6 +4094,9 @@
         });
       }
       sep();
+      if (isDesktop() && window.electronAPI?.terminalDetach) {
+        item('<i class="ph ph-export"></i>', 'Detach to window', '', () => detachTerminal(wsId, termId));
+      }
       item('<i class="ph ph-x"></i>', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
     }
 
@@ -4226,7 +4275,6 @@
     active._zoomRaf = requestAnimationFrame(() => {
       active.term.options.fontSize = active._customFontSize;
       zoomBadge(active._customFontSize + 'px');
-      updateStatusBar();
     });
 
     // Debounce the heavy FitAddon grid recalculation and backend PTY resize communication
@@ -4689,10 +4737,6 @@ function buildColorItem(key, label) {
         const blinkToggle = document.getElementById('set-cursorblink');
         blinkToggle.checked = currentCursorBlink;
 
-        // Status bar
-        const sbToggle = document.getElementById('set-statusbar');
-        sbToggle.checked = statusBarVisible;
-
         // Scrollback
         document.getElementById('set-scrollback').value = currentScrollback;
         document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
@@ -4949,7 +4993,6 @@ function buildColorItem(key, label) {
           t.term.options.scrollback = currentScrollback;
           fitTerm(t);
         }
-        updateStatusBar();
         saveState();
       }
 
@@ -4974,7 +5017,6 @@ function buildColorItem(key, label) {
           if (state.lineHeight) currentLineHeight = state.lineHeight;
           if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
           if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
-          if (state.statusBarVisible !== undefined) statusBarVisible = state.statusBarVisible;
           if (state.scrollback) currentScrollback = state.scrollback;
           if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
           if (state.backgroundMode) backgroundMode = state.backgroundMode;
@@ -4996,6 +5038,138 @@ function buildColorItem(key, label) {
         openSettings(cat);
       }
 
+        /* ═══════════════════════════════════════════════════════════════
+         K E*YBOARD SHORTCUTS
+         ═══════════════════════════════════════════════════════════════ */
+        // Capture-phase — intercepts before xterm.js
+        document.addEventListener('keydown', e => {
+          // Escape clears multi-select mode (skip when settings is open)
+          if (e.key === 'Escape' && isInMultiMode() && !settingsOverlay.classList.contains('open')) {
+            e.preventDefault(); e.stopPropagation();
+            clearMultiSelect();
+            return;
+          }
+          // Focus adjacent pane
+          for (const dir of ['Left', 'Down', 'Up', 'Right']) {
+            const action = 'focus' + dir.charAt(0).toUpperCase() + dir.slice(1).toLowerCase();
+            if (matchShortcut(e, action)) {
+              e.preventDefault(); e.stopPropagation();
+              focusAdjacentGroup(dir.toLowerCase());
+              return;
+            }
+          }
+          // Tab switching
+          if (matchShortcut(e, 'prevTab')) { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
+          if (matchShortcut(e, 'nextTab')) { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
+          // Close terminal
+          if (matchShortcut(e, 'closeTerminal')) {
+            e.preventDefault(); e.stopPropagation();
+            const wsp = activeWs();
+            if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
+            return;
+          }
+          // Copy
+          if (matchShortcut(e, 'copy')) {
+            const t = activeTerminal();
+            if (t && t.type !== 'browser' && t.term.hasSelection()) {
+              e.preventDefault(); e.stopPropagation();
+              const text = t.term.getSelection();
+              if (isTauri() && window.__TAURI_INTERNALS__) {
+                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
+              } else {
+                navigator.clipboard.writeText(text);
+              }
+            }
+            return;
+          }
+          // Paste
+          if (matchShortcut(e, 'paste')) {
+            const t = activeTerminal();
+            if (t && t.type !== 'browser') {
+              e.preventDefault(); e.stopPropagation();
+              if (isTauri() && window.__TAURI_INTERNALS__) {
+                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
+                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              } else {
+                navigator.clipboard.readText()
+                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              }
+            }
+            return;
+          }
+          // Ctrl+V paste (non-shift variant)
+          if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') {
+            const t = activeTerminal();
+            if (t && t.type !== 'browser') {
+              e.preventDefault(); e.stopPropagation();
+              if (isTauri() && window.__TAURI_INTERNALS__) {
+                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
+                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              } else {
+                navigator.clipboard.readText()
+                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              }
+            }
+            return;
+          }
+          // Workspace switching
+          if (matchShortcut(e, 'nextWorkspace')) { e.preventDefault(); e.stopPropagation(); nextWorkspace(); return; }
+          if (matchShortcut(e, 'prevWorkspace')) { e.preventDefault(); e.stopPropagation(); prevWorkspace(); return; }
+          // Ctrl+Tab / Ctrl+Shift+Tab
+          if (e.ctrlKey && e.code === 'Tab') {
+            e.preventDefault(); e.stopPropagation();
+            e.shiftKey ? prevTab() : nextTab();
+            return;
+          }
+        }, true);
+
+        // Bubble-phase shortcuts
+        document.addEventListener('keydown', e => {
+          if (matchShortcut(e, 'newTerminal')) { e.preventDefault(); addTerminal(); return; }
+          if (matchShortcut(e, 'splitH')) {
+            e.preventDefault();
+            const wsp = activeWs();
+            const active = activeTerminal();
+            if (wsp && active) {
+              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
+              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'row');
+            }
+            return;
+          }
+          if (matchShortcut(e, 'splitV')) {
+            e.preventDefault();
+            const wsp = activeWs();
+            const active = activeTerminal();
+            if (wsp && active) {
+              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
+              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'column');
+            }
+            return;
+          }
+          if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
+          if (matchShortcut(e, 'browserTab')) {
+            e.preventDefault();
+            const wsp = activeWs();
+            const active = activeTerminal();
+            if (wsp) {
+              const activeGroup = active ? findGroupContainingTerm(wsp.layout, active.id) : findFirstGroup(wsp.layout);
+              if (activeGroup) addBrowserTab(wsp.id, activeGroup.id);
+            }
+            return;
+          }
+          if (matchShortcut(e, 'maximizeTab')) {
+            e.preventDefault(); e.stopPropagation();
+            const wsp = activeWs();
+            if (wsp && wsp.activeTermId) toggleMaximizeTerminal(wsp.id, wsp.activeTermId);
+            return;
+          }
+          // Arrow key tab switching (legacy)
+          if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
+            if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
+            if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
+          }
+        });
+
       // Settings-window bootstrap: skip the entire terminal/browser layer.
       async function settingsOnlyBoot() {
         await loadCustomThemes();
@@ -5004,6 +5178,119 @@ function buildColorItem(key, label) {
         document.body.classList.add('settings-only');
         openSettings('appearance');
       }
+
+      async function detachedOnlyBoot() {
+        await loadCustomThemes();
+        // Restore only theme/font settings (not workspaces) for the detached window
+        try {
+          let raw = null;
+          const api = configApi();
+          if (api && api.configReadState) {
+            const diskState = await api.configReadState();
+            if (diskState) raw = JSON.stringify(diskState);
+          }
+          if (!raw) raw = localStorage.getItem(STATE_KEY);
+          if (raw) {
+            const state = JSON.parse(raw);
+            if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
+            if (state.fontSize) currentFontSize = state.fontSize;
+            if (state.fontFamily) currentFontFamily = state.fontFamily;
+            if (state.lineHeight) currentLineHeight = state.lineHeight;
+            if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
+            if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
+            if (state.scrollback !== undefined) currentScrollback = state.scrollback;
+          }
+        } catch {}
+        applyTheme(currentThemeName);
+        document.body.classList.add('detached');
+
+        // Hide splash screen (normal init hides it at line ~6017, after the detached return)
+        const splash = document.getElementById('splash');
+        if (splash) splash.classList.add('hide');
+
+        // Show the titlebar so the window is draggable
+        const tb = document.getElementById('titlebar');
+        if (tb) tb.classList.add('active');
+
+        // Hide sidebar
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar) sidebar.style.display = 'none';
+
+        // Wire up Electron PTY bridge (same as normal init)
+        if (isDesktop() && window.electronAPI) {
+          const api = window.electronAPI;
+          wsReady = true;
+          tauriPtyReady = true;
+          api.onTerminalData(({ id, data }) => {
+            const result = findTermById(id);
+            if (result && result.term && result.term.type !== 'browser') {
+              result.term.term.write(data);
+            }
+          });
+          api.onTerminalExit(({ id, code }) => {
+            const result = findTermById(id);
+            if (result) {
+              result.dead = true;
+              result.term = null;
+            }
+            window.close();
+          });
+        }
+
+        // Read detached params
+        const termId = DETACHED_PARAMS.get('termId');
+        const cols = parseInt(DETACHED_PARAMS.get('cols')) || 80;
+        const rows = parseInt(DETACHED_PARAMS.get('rows')) || 24;
+        const cwd = DETACHED_PARAMS.get('cwd') || undefined;
+
+        if (!termId) return;
+
+        let restored = false;
+        try { restored = await restoreState(); } catch {}
+
+        if (!restored) {
+          // Create a minimal workspace to hold the terminal
+          const wsId = 'detached-ws';
+          const wsp = {
+            id: wsId,
+            label: 'Detached',
+            layout: { type: 'group', id: 'group-detached', terminals: [], activeTermId: null },
+          };
+          workspaces = [wsp];
+          activeWsId = wsId;
+          sideOrder = [{ type: 'ws', id: wsId }];
+
+          // Create the terminal entry
+          const entry = _createTermEntry(wsp, termId, 'terminal');
+          entry.cwd = cwd;
+          wsp.layout.terminals = [entry];
+          wsp.layout.activeTermId = termId;
+        }
+
+        // Render the pane area (creates the DOM and opens the xterm)
+        const empty = document.getElementById('empty-state');
+        if (empty) empty.style.display = 'none';
+        renderPaneArea();
+
+        // Connect the PTY after DOM is ready
+        setTimeout(() => {
+          const all = getWorkspaceTerminals(workspaces[0]);
+          for (const t of all) {
+            if (t.type === 'terminal' && !t._ptyReady) {
+              const slot = getSlotDimensions(t);
+              sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd });
+            }
+          }
+          const active = activeTerminal();
+          if (active) fitTerm(active);
+        }, 80);
+      }
+
+      // Settings-window bootstrap: skip the entire terminal/browser layer.
+      if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
+
+      // Detached-terminal bootstrap: minimal terminal-only window.
+      if (DETACHED_ONLY) { detachedOnlyBoot(); return; }
 
       // Open/close
       document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
@@ -5056,11 +5343,6 @@ function buildColorItem(key, label) {
       });
 
       // Status bar toggle
-      document.getElementById('set-statusbar').addEventListener('change', () => {
-        statusBarVisible = document.getElementById('set-statusbar').checked;
-        document.getElementById('statusbar').style.display = statusBarVisible ? '' : 'none';
-        saveState();
-      });
 
       // Scrollback
       document.getElementById('set-scrollback').addEventListener('input', e => {
@@ -5355,15 +5637,149 @@ function buildColorItem(key, label) {
         refreshThemeCustomSelect();
       }
 
-      // Prevent sidebar and statusbar from stealing terminal focus
+      // Prevent sidebar from stealing terminal focus
       document.getElementById('sidebar').addEventListener('mousedown', e => {
         if (e.target.closest('[draggable="true"]')) return;
         if (!e.target.closest('input, textarea, select, [contenteditable]')) e.preventDefault();
       });
-        document.getElementById('statusbar').addEventListener('mousedown', e => e.preventDefault());
+
+        /* ═══════════════════════════════════════════════════════════════
+         K E*YBOARD SHORTCUTS
+         ═══════════════════════════════════════════════════════════════ */
+        // Capture-phase — intercepts before xterm.js
+        document.addEventListener('keydown', e => {
+          // Escape clears multi-select mode (skip when settings is open)
+          if (e.key === 'Escape' && isInMultiMode() && !settingsOverlay.classList.contains('open')) {
+            e.preventDefault(); e.stopPropagation();
+            clearMultiSelect();
+            return;
+          }
+          // Focus adjacent pane
+          for (const dir of ['Left', 'Down', 'Up', 'Right']) {
+            const action = 'focus' + dir.charAt(0).toUpperCase() + dir.slice(1).toLowerCase();
+            if (matchShortcut(e, action)) {
+              e.preventDefault(); e.stopPropagation();
+              focusAdjacentGroup(dir.toLowerCase());
+              return;
+            }
+          }
+          // Tab switching
+          if (matchShortcut(e, 'prevTab')) { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
+          if (matchShortcut(e, 'nextTab')) { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
+          // Close terminal
+          if (matchShortcut(e, 'closeTerminal')) {
+            e.preventDefault(); e.stopPropagation();
+            const wsp = activeWs();
+            if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
+            return;
+          }
+          // Copy
+          if (matchShortcut(e, 'copy')) {
+            const t = activeTerminal();
+            if (t && t.type !== 'browser' && t.term.hasSelection()) {
+              e.preventDefault(); e.stopPropagation();
+              const text = t.term.getSelection();
+              if (isTauri() && window.__TAURI_INTERNALS__) {
+                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
+              } else {
+                navigator.clipboard.writeText(text);
+              }
+            }
+            return;
+          }
+          // Paste
+          if (matchShortcut(e, 'paste')) {
+            const t = activeTerminal();
+            if (t && t.type !== 'browser') {
+              e.preventDefault(); e.stopPropagation();
+              if (isTauri() && window.__TAURI_INTERNALS__) {
+                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
+                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              } else {
+                navigator.clipboard.readText()
+                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              }
+            }
+            return;
+          }
+          // Ctrl+V paste (non-shift variant)
+          if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') {
+            const t = activeTerminal();
+            if (t && t.type !== 'browser') {
+              e.preventDefault(); e.stopPropagation();
+              if (isTauri() && window.__TAURI_INTERNALS__) {
+                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
+                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              } else {
+                navigator.clipboard.readText()
+                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              }
+            }
+            return;
+          }
+          // Workspace switching
+          if (matchShortcut(e, 'nextWorkspace')) { e.preventDefault(); e.stopPropagation(); nextWorkspace(); return; }
+          if (matchShortcut(e, 'prevWorkspace')) { e.preventDefault(); e.stopPropagation(); prevWorkspace(); return; }
+          // Ctrl+Tab / Ctrl+Shift+Tab
+          if (e.ctrlKey && e.code === 'Tab') {
+            e.preventDefault(); e.stopPropagation();
+            e.shiftKey ? prevTab() : nextTab();
+            return;
+          }
+        }, true);
+
+        // Bubble-phase shortcuts
+        document.addEventListener('keydown', e => {
+          if (matchShortcut(e, 'newTerminal')) { e.preventDefault(); addTerminal(); return; }
+          if (matchShortcut(e, 'splitH')) {
+            e.preventDefault();
+            const wsp = activeWs();
+            const active = activeTerminal();
+            if (wsp && active) {
+              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
+              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'row');
+            }
+            return;
+          }
+          if (matchShortcut(e, 'splitV')) {
+            e.preventDefault();
+            const wsp = activeWs();
+            const active = activeTerminal();
+            if (wsp && active) {
+              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
+              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'column');
+            }
+            return;
+          }
+          if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
+          if (matchShortcut(e, 'browserTab')) {
+            e.preventDefault();
+            const wsp = activeWs();
+            const active = activeTerminal();
+            if (wsp) {
+              const activeGroup = active ? findGroupContainingTerm(wsp.layout, active.id) : findFirstGroup(wsp.layout);
+              if (activeGroup) addBrowserTab(wsp.id, activeGroup.id);
+            }
+            return;
+          }
+          if (matchShortcut(e, 'maximizeTab')) {
+            e.preventDefault(); e.stopPropagation();
+            const wsp = activeWs();
+            if (wsp && wsp.activeTermId) toggleMaximizeTerminal(wsp.id, wsp.activeTermId);
+            return;
+          }
+          // Arrow key tab switching (legacy)
+          if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
+            if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
+            if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
+          }
+        });
 
         // Settings-window bootstrap: skip the entire terminal/browser layer.
         if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
+
+        // Detached-terminal bootstrap: minimal terminal-only window.
+        if (DETACHED_ONLY) { detachedOnlyBoot(); return; }
 
         // Sidebar Split.js
         let sidebarSplit = null;
@@ -5503,137 +5919,6 @@ function buildColorItem(key, label) {
           activateTerminal(wsp.id, targetGroup.activeTermId || targetGroup.terminals[0].id);
         }
 
-        /* ═══════════════════════════════════════════════════════════════
-         K E*YBOARD SHORTCUTS
-         ═══════════════════════════════════════════════════════════════ */
-        // Capture-phase — intercepts before xterm.js
-        document.addEventListener('keydown', e => {
-          // Escape clears multi-select mode (skip when settings is open)
-          if (e.key === 'Escape' && isInMultiMode() && !settingsOverlay.classList.contains('open')) {
-            e.preventDefault(); e.stopPropagation();
-            clearMultiSelect();
-            return;
-          }
-          // Focus adjacent pane
-          for (const dir of ['Left', 'Down', 'Up', 'Right']) {
-            const action = 'focus' + dir.charAt(0).toUpperCase() + dir.slice(1).toLowerCase();
-            if (matchShortcut(e, action)) {
-              e.preventDefault(); e.stopPropagation();
-              focusAdjacentGroup(dir.toLowerCase());
-              return;
-            }
-          }
-          // Tab switching
-          if (matchShortcut(e, 'prevTab')) { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
-          if (matchShortcut(e, 'nextTab')) { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
-          // Close terminal
-          if (matchShortcut(e, 'closeTerminal')) {
-            e.preventDefault(); e.stopPropagation();
-            const wsp = activeWs();
-            if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
-            return;
-          }
-          // Copy
-          if (matchShortcut(e, 'copy')) {
-            const t = activeTerminal();
-            if (t && t.type !== 'browser' && t.term.hasSelection()) {
-              e.preventDefault(); e.stopPropagation();
-              const text = t.term.getSelection();
-              if (isTauri() && window.__TAURI_INTERNALS__) {
-                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
-              } else {
-                navigator.clipboard.writeText(text);
-              }
-            }
-            return;
-          }
-          // Paste
-          if (matchShortcut(e, 'paste')) {
-            const t = activeTerminal();
-            if (t && t.type !== 'browser') {
-              e.preventDefault(); e.stopPropagation();
-              if (isTauri() && window.__TAURI_INTERNALS__) {
-                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              } else {
-                navigator.clipboard.readText()
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              }
-            }
-            return;
-          }
-          // Ctrl+V paste (non-shift variant)
-          if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') {
-            const t = activeTerminal();
-            if (t && t.type !== 'browser') {
-              e.preventDefault(); e.stopPropagation();
-              if (isTauri() && window.__TAURI_INTERNALS__) {
-                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              } else {
-                navigator.clipboard.readText()
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              }
-            }
-            return;
-          }
-          // Workspace switching
-          if (matchShortcut(e, 'nextWorkspace')) { e.preventDefault(); e.stopPropagation(); nextWorkspace(); return; }
-          if (matchShortcut(e, 'prevWorkspace')) { e.preventDefault(); e.stopPropagation(); prevWorkspace(); return; }
-          // Ctrl+Tab / Ctrl+Shift+Tab
-          if (e.ctrlKey && e.code === 'Tab') {
-            e.preventDefault(); e.stopPropagation();
-            e.shiftKey ? prevTab() : nextTab();
-            return;
-          }
-        }, true);
-
-        // Bubble-phase shortcuts
-        document.addEventListener('keydown', e => {
-          if (matchShortcut(e, 'newTerminal')) { e.preventDefault(); addTerminal(); return; }
-          if (matchShortcut(e, 'splitH')) {
-            e.preventDefault();
-            const wsp = activeWs();
-            const active = activeTerminal();
-            if (wsp && active) {
-              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
-              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'row');
-            }
-            return;
-          }
-          if (matchShortcut(e, 'splitV')) {
-            e.preventDefault();
-            const wsp = activeWs();
-            const active = activeTerminal();
-            if (wsp && active) {
-              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
-              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'column');
-            }
-            return;
-          }
-          if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
-          if (matchShortcut(e, 'browserTab')) {
-            e.preventDefault();
-            const wsp = activeWs();
-            const active = activeTerminal();
-            if (wsp) {
-              const activeGroup = active ? findGroupContainingTerm(wsp.layout, active.id) : findFirstGroup(wsp.layout);
-              if (activeGroup) addBrowserTab(wsp.id, activeGroup.id);
-            }
-            return;
-          }
-          if (matchShortcut(e, 'maximizeTab')) {
-            e.preventDefault(); e.stopPropagation();
-            const wsp = activeWs();
-            if (wsp && wsp.activeTermId) toggleMaximizeTerminal(wsp.id, wsp.activeTermId);
-            return;
-          }
-          // Arrow key tab switching (legacy)
-          if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
-            if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
-            if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
-          }
-        });
 
         function prevTab() {
           const wsp = activeWs();
@@ -5754,7 +6039,6 @@ function buildColorItem(key, label) {
             const terms = getWorkspaceTerminals(wsp);
             for (const t of terms) fitTerm(t);
             document.querySelectorAll('.term-group').forEach(updateTabBarOverflow);
-            updateStatusBar();
           });
         });
         ro.observe(document.getElementById('pane-area'));
@@ -5792,7 +6076,6 @@ function buildColorItem(key, label) {
             if (wsp) {
               syncSplitSizes(wsp.layout);
               for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-              updateStatusBar();
               syncBrowserSlots();
             }
           }, 150);
@@ -5817,9 +6100,6 @@ function buildColorItem(key, label) {
         const splash = document.getElementById('splash');
         if (splash) splash.classList.add('hide');
 
-        // Apply initial status bar visibility
-        document.getElementById('statusbar').style.display = statusBarVisible ? '' : 'none';
-
         // Apply initial background & opacity
         applyBackground();
 
@@ -5829,7 +6109,6 @@ function buildColorItem(key, label) {
             restoreSettingsOnly();
             applyTheme(currentThemeName);
             applyBackground();
-            document.getElementById('statusbar').style.display = statusBarVisible ? '' : 'none';
             applySettings();
             syncBrowserSlots();
           });
@@ -5855,7 +6134,6 @@ function buildColorItem(key, label) {
         if (restored) {
           renderSidebar();
           renderPaneArea();
-          updateStatusBar();
         }
 
         // In the desktop shell use the PTY backend; otherwise plain WebSocket
@@ -5903,8 +6181,8 @@ function buildColorItem(key, label) {
         window.addEventListener('beforeunload', (e) => {
           saveState();
           if (!isTauri()) {
-            const hasTerms = workspaces.some(ws => getWorkspaceTerminals(ws).length > 0);
-            if (hasTerms) { e.preventDefault(); e.returnValue = ''; }
+            const hasLiveTerms = workspaces.some(ws => getWorkspaceTerminals(ws).some(t => !t.dead));
+            if (hasLiveTerms) { e.preventDefault(); e.returnValue = ''; }
           }
         });
 
