@@ -2977,6 +2977,18 @@ folders: folders.map(f => {
             surface.setAttribute('data-browser-surface-slot', entry.id);
             surface.style.cssText = 'width:100%;height:100% !important;border:0';
             contentWrap.appendChild(surface);
+            // Pin shadow iframe height as soon as the shadow DOM appears
+            const pinIframe = () => {
+              try {
+                const sr = surface.shadowRoot;
+                if (sr) { const f = sr.querySelector('iframe'); if (f) { f.style.height = '100%'; return true; } }
+              } catch {}
+              return false;
+            };
+            if (!pinIframe()) {
+              const mo = new MutationObserver(() => { if (pinIframe()) mo.disconnect(); });
+              mo.observe(surface, { childList: true, subtree: true });
+            }
             if (isElectron) {
               surface.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
               surface.setAttribute('allowpopups', '');
@@ -5650,6 +5662,10 @@ function buildColorItem(key, label) {
         loadCustomThemes();
         const restored = restoreState();
         applyTheme(currentThemeName);
+
+        // Hide splash screen after app is ready
+        const splash = document.getElementById('splash');
+        if (splash) splash.classList.add('hide');
 
         // Apply initial status bar visibility
         document.getElementById('statusbar').style.display = statusBarVisible ? '' : 'none';
