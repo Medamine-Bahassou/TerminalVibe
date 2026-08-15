@@ -1,53 +1,99 @@
 # Operating system files
 .DS_Store
 Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.Directory
 
 # Logs
 *.log
 logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+electron-debug.log*
 
 # Environment variables
 .env
 .env.*
 !.env.example
+*.env.local
 
 # Dependencies
 node_modules/
 vendor/
 squashfs-root/
-electron/
+jspm_packages/
 
 # Build outputs
 dist/
 build/
 out/
-target/
 release/
+tmp-build/
+*.tsbuildinfo
+*.js.map
+
+# Packaged applications (electron-builder)
+*.AppImage
+*.deb
+*.rpm
+*.snap
+*.dmg
+linux-unpacked/
+mac/
+win-unpacked/
+builder-effective-config.yaml
+builder-debug.yml
+latest-linux.yml
+latest-mac.yml
+latest.yml
 
 # Coverage
 coverage/
 *.lcov
+*.lcov.info
 
 # IDEs and editors
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sess
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.vcxproj
+*.vscode
 
-# Temporary files
+# Temporary and backup files
 tmp/
 temp/
 *.tmp
+*.bak
+*.orig
+*.rej
+*~
 
 # Cache
 .cache/
 .parcel-cache/
+.npm/
+.eslintcache
+.yarn/cache/
+.pnpm-store/
 
 # Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
+.mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
 
 # Java
 *.class
@@ -58,6 +104,9 @@ venv/
 *.o
 *.obj
 *.exe
+*.dll
+*.so
+*.dylib
 
 # Rust
 target/
@@ -65,11 +114,25 @@ Cargo.lock
 
 # Go
 bin/
+*.test
 
 # Test reports
 junit.xml
+test-results/
+allure-results/
 
 # Secrets
 *.pem
 *.key
+*.p12
+*.pfx
+*.keystore
 secrets/
+
+# Local tooling and AI assistant settings
+.openclaude/
+.claude/
+settings.local.json
+
+# Node
+.npminstall
