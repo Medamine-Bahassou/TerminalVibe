@@ -21,6 +21,7 @@ dist/
 build/
 out/
 target/
+release/
 src-tauri/server-dist/
 
 # Coverage
