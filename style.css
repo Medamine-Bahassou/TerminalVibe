@@ -141,12 +141,34 @@ user-select: none;
 display: flex;
 flex: 1;
 overflow: hidden;
+position: relative;
+}
+/* Hover-expand overlay: the expanded sidebar floats above the content
+   (Brave-like) while the collapsed rail keeps its space in the layout */
+#sidebar.hover-overlay {
+  min-width: var(--sb-rail-w);
+  flex-basis: var(--sb-rail-w) !important;
+}
+#sidebar.hover-overlay #sidebar-inner {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  z-index: 60;
+  width: var(--sb-overlay-w, 220px);
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  box-shadow: 8px 0 24px rgba(0, 0, 0, 0.45);
 }
 
 /* ──────────────────────────────────────────
  *   SIDEBAR (vertical workspace tabs)
  * ────────────────────────────────────────── */
 #sidebar {
+position: relative;
+z-index: 20;
+min-width: fit-content;
+--sb-rail-w: 37px;
+}
+#sidebar-inner {
 --sidebar-expanded-w: 200px;
 background: color-mix(in srgb, var(--bg) 80%, #000 20%);
 border-right: 1px solid var(--border);
@@ -157,22 +179,35 @@ padding: 10px 0 8px;
 gap: 2px;
 overflow-y: auto;
 overflow-x: hidden;
-z-index: 20;
 scrollbar-width: none;
 min-width: fit-content;
+height: 100%;
+box-sizing: border-box;
 }
-#sidebar:not(.expanded) {
+#sidebar:not(.expanded) #sidebar-inner {
 padding: 0;
 gap: 0;
 }
 #sidebar.expanded {
 min-width: 200px;
 }
+#sidebar.expanded.hover-overlay {
+min-width: var(--sb-rail-w);
+}
 #sidebar:not(.expanded) ~ .gutter {
-pointer-events: none;
-display: none;
+  pointer-events: none;
+  display: none;
+}
+/* Keep the drag gutter hidden while the hover overlay is open — the sidebar
+   is not really expanded in the layout, so the terminal must not shift. */
+#sidebar.hover-overlay ~ .gutter {
+  display: none;
+}
+body.sb-hidden #sidebar, body.sb-hidden #sidebar ~ .gutter {
+  display: none !important;
 }
 #sidebar::-webkit-scrollbar { display: none; }
+#sidebar-inner::-webkit-scrollbar { display: none; }
 
 .ws-btn {
   position: relative;
@@ -301,7 +336,17 @@ gap: 8px;
   padding: 4px 10px 2px;
   width: 100%;
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
 }
+.ws-pin-label:hover { color: var(--muted-text); }
+.ws-pin-caret { font-size: 10px; transition: transform 0.12s; }
+.ws-pin-label.collapsed .ws-pin-caret { transform: rotate(-90deg); }
+.ws-pin-count { margin-left: auto; opacity: 0.7; }
 #sidebar:not(.expanded) .ws-pin-label { display: none; }
 
 .ws-pin-sep {
@@ -1391,15 +1436,15 @@ body.detached #pane-area .term-slot .xterm { width: 100%; height: 100%; }
 .slider {
   -webkit-appearance: none; appearance: none;
   width: 110px; height: 4px; background: rgba(255,255,255,0.1);
-  border-radius: 0; outline: none; cursor: pointer;
+  border-radius: 2px; outline: none; cursor: pointer;
 }
 .slider::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 0;
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
   background: var(--accent); cursor: pointer;
   border: 2px solid var(--bg);
 }
 .slider::-moz-range-thumb {
-  width: 16px; height: 16px; border-radius: 0;
+  width: 16px; height: 16px; border-radius: 50%;
   background: var(--accent); cursor: pointer;
   border: 2px solid var(--bg);
 }
@@ -1898,3 +1943,74 @@ body.resizing .drag-shield {
   border-radius: 0 !important;
 }
 #zoom-badge.visible { opacity: 1; }
+
+/* ── sharp mode: colored workspace buttons get one full-height left border
+   in the workspace color instead of the small active strip ── */
+body.roundless .ws-btn[data-color] .ws-strip { display: none; }
+body.roundless .ws-btn[data-color].active {
+  box-shadow: inset 2px 0 0 var(--ws-color);
+}
+
+/* ── rounded mode: components whose base style is intentionally square ──
+   Applied only when corner style = Rounded (body lacks .roundless). */
+body:not(.roundless) #sidebar {
+  --sb-rail-w: 45px;
+}
+body:not(.roundless) #sidebar-inner {
+  padding: 6px 4px;
+  gap: 4px;
+}
+body:not(.roundless) #sidebar .sidebar-actions {
+  padding: 4px;
+}
+body:not(.roundless) .ws-btn,
+body:not(.roundless) .ws-add,
+body:not(.roundless) .ws-folder-add-btn,
+body:not(.roundless) .ws-folder-header,
+body:not(.roundless) .sidebar-actions .sa-btn {
+  border-radius: 8px;
+  box-shadow: none;
+}
+body:not(.roundless) #sidebar.expanded #sidebar-inner {
+  padding: 6px 6px;
+}
+body:not(.roundless) .term-group-tabs {
+  padding: 4px;
+  box-sizing: border-box;
+}
+body:not(.roundless) .tg-tab {
+  border-radius: 6px;
+  border-bottom: none;
+  border-right-color: transparent;
+  margin: 0 2px;
+  padding: 0 12px 0 14px;
+}
+body:not(.roundless) .tg-tab.active {
+  border-bottom: none;
+}
+body:not(.roundless) .tg-tab-icon,
+body:not(.roundless) .tg-tab-close,
+body:not(.roundless) .tg-chevron {
+  border-radius: 4px;
+}
+body:not(.roundless) #settings-modal .w-\[200px\] {
+  padding: 6px 4px;
+  gap: 4px;
+}
+body:not(.roundless) .settings-cat-btn {
+  border-radius: 8px;
+}
+body:not(.roundless) .settings-cat-btn.active::before {
+  width: 2px;
+  height: 16px;
+  border-radius: 0 2px 2px 0;
+}
+body:not(.roundless) .titlebar-btn {
+  border-radius: 6px;
+}
+body:not(.roundless) .slider { border-radius: 2px; }
+body.roundless .slider { border-radius: 0 !important; }
+body.roundless .slider::-webkit-slider-thumb,
+body.roundless .slider::-moz-range-thumb {
+  border-radius: 0 !important;
+}

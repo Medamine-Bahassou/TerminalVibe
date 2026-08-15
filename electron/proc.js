@@ -35,24 +35,37 @@ const SHELL_RE = /^(bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|pwsh|nu)$/;
  *   running inside the terminal.
  */
 function hasRunningProcess(pid) {
-  if (process.platform !== 'linux') return true;
-  if (!pid || pid <= 1) return false;
+  return runningProcessInfo(pid).running;
+}
+
+/**
+ * Like hasRunningProcess, but also returns the name (comm) of the running
+ * process when one is detected — used for quit/close confirmation messages.
+ * @returns {{running: boolean, name: string|null}}
+ */
+function runningProcessInfo(pid) {
+  if (process.platform !== 'linux') return { running: true, name: null };
+  if (!pid || pid <= 1) return { running: false, name: null };
   const commRaw = readProc(`/proc/${pid}/comm`);
-  if (commRaw == null) return true; // cannot inspect — assume busy
+  if (commRaw == null) return { running: true, name: null }; // cannot inspect — assume busy
   const comm = commRaw.trim();
   if (!SHELL_RE.test(comm)) {
     // The PTY's direct child is not a shell (e.g. `exec vim`, a direct
     // command or an app) — a process is definitely running.
-    return true;
+    return { running: true, name: comm };
   }
   const fields = procStatFields(pid);
-  if (!fields) return true;
+  if (!fields) return { running: true, name: null };
   // Foreground process group of the terminal. At an idle prompt the shell's
   // own group owns it; when a job runs (foreground, incl. helpers like
   // `tmux`/`nano`), the job's group takes over.
   const pgrp = parseInt(fields[2], 10);
   const tpgid = parseInt(fields[5], 10);
-  return tpgid !== 0 && tpgid !== pgrp;
+  if (tpgid !== 0 && tpgid !== pgrp) {
+    const jobComm = readProc(`/proc/${tpgid}/comm`);
+    return { running: true, name: jobComm ? jobComm.trim() : null };
+  }
+  return { running: false, name: null };
 }
 
-module.exports = { hasRunningProcess };
+module.exports = { hasRunningProcess, runningProcessInfo };

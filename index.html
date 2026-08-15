@@ -41,11 +41,13 @@
 <div id="app">
   <!-- ── Sidebar ── -->
   <nav id="sidebar">
+    <div id="sidebar-inner">
     <!-- workspace buttons injected here -->
     <div class="sidebar-actions">
       <div class="sa-btn" id="btn-settings" title="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
       </div>
+    </div>
     </div>
   </nav>
   <div id="main">
@@ -157,6 +159,33 @@
               <div class="flex-1 flex items-center justify-end gap-3">
                 <select id="set-theme" class="native-select-hidden"></select>
                 <div class="custom-dropdown" data-for="set-theme"></div>
+              </div>
+            </div>
+            <div class="flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] hover:bg-white/[0.01]">
+              <div class="flex flex-col gap-1">
+                <span class="text-[12.5px] font-medium text-[var(--fg)]">Corner style</span>
+                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Component border radius</span>
+              </div>
+              <div class="flex-1 flex items-center justify-end gap-3">
+                <select id="set-corner-style" class="native-select-hidden">
+                  <option value="rounded">Rounded</option>
+                  <option value="sharp">Sharp</option>
+                </select>
+                <div class="custom-dropdown" data-for="set-corner-style"></div>
+              </div>
+            </div>
+            <div class="flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] hover:bg-white/[0.01]">
+              <div class="flex flex-col gap-1">
+                <span class="text-[12.5px] font-medium text-[var(--fg)]">Sidebar style</span>
+                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">How the sidebar is shown</span>
+              </div>
+              <div class="flex-1 flex items-center justify-end gap-3">
+                <select id="set-sidebar-mode" class="native-select-hidden">
+                  <option value="normal">Default</option>
+                  <option value="hover">Expand on hover</option>
+                  <option value="hidden">Hidden (toggle button)</option>
+                </select>
+                <div class="custom-dropdown" data-for="set-sidebar-mode"></div>
               </div>
             </div>
           </div>

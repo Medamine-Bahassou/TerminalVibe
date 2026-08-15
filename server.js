@@ -14,7 +14,7 @@ const url = require("url");
 const os = require("os");
 const { WebSocketServer } = require("ws");
 const pty = require("node-pty");
-const { hasRunningProcess } = require("./electron/proc");
+const { hasRunningProcess, runningProcessInfo } = require("./electron/proc");
 
 const HOST = "127.0.0.1";
 const PORT = parseInt(process.env.WS_PORT || "7681", 10); // WebSocket PTY
@@ -299,7 +299,8 @@ wss.on("connection", (ws) => {
           const sid = msg.id || "";
           const session = SESSIONS[sid];
           const pid = session && session._proc ? session._proc.pid : 0;
-          ws.send(JSON.stringify({ type: "hasprocess", id: sid, running: hasRunningProcess(pid) }));
+          const info = runningProcessInfo(pid);
+          ws.send(JSON.stringify({ type: "hasprocess", id: sid, running: info.running, name: info.name }));
           break;
         }
         case "ping":

@@ -2,7 +2,7 @@ const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard } = requi
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
-const { hasRunningProcess } = require('./proc');
+const { hasRunningProcess, runningProcessInfo } = require('./proc');
 
 // ── Helpers ──
 
@@ -105,7 +105,13 @@ function createWindow() {
     if (input.type === 'keyDown' && input.key === 'F12' ||
         input.type === 'keyDown' && input.control && input.shift && input.key.toLowerCase() === 'i') {
       event.preventDefault();
-      mainWindow.webContents.toggleDevTools();
+      mainWindow.toggleDevTools();
+    }
+    // The hidden default menu still fires its Quit accelerator (Ctrl+Q on
+    // Linux), bypassing the renderer's confirmation. Swallow it so only
+    // Ctrl+Shift+Q — which asks first — can quit.
+    if (input.type === 'keyDown' && input.control && !input.shift && input.key.toLowerCase() === 'q') {
+      event.preventDefault();
     }
   });
 
@@ -338,7 +344,7 @@ ipcMain.on('terminal:close', (_e, id) => {
 });
 ipcMain.handle('terminal:hasRunningProcess', (_e, id) => {
   const t = ptys.get(id);
-  return t ? hasRunningProcess(t.pid) : false;
+  return t ? runningProcessInfo(t.pid) : { running: false, name: null };
 });
 ipcMain.on('terminal:kill-all', () => {
   for (const t of ptys.values()) { try { t.kill(); } catch {} }
@@ -390,6 +396,13 @@ ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
   } else {
     dw.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: Object.fromEntries(params) });
   }
+
+  // Same Ctrl+Q guard as the main window (hidden default menu Quit role)
+  dw.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.control && !input.shift && input.key.toLowerCase() === 'q') {
+      event.preventDefault();
+    }
+  });
 
   dw.on('closed', () => {
     let dwId = null;

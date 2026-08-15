@@ -48,6 +48,7 @@
     prevWorkspace:  { ctrl: true, shift: true, key: 'PageUp', label: 'Ctrl+Shift+PageUp' },
     multiSelect:    { ctrl: true, alt: true, key: 'Click', label: 'Ctrl+Alt+Click' },
     maximizeTab:    { ctrl: true, shift: true, key: 'M', label: 'Ctrl+Shift+M' },
+    quitApp:        { ctrl: true, shift: true, key: 'Q', label: 'Ctrl+Shift+Q' },
   };
 
   const SHORTCUT_LABELS = {
@@ -59,7 +60,7 @@
     focusLeft: 'Focus left pane', focusDown: 'Focus down pane',
     focusUp: 'Focus up pane', focusRight: 'Focus right pane',
     nextWorkspace: 'Next workspace', prevWorkspace: 'Previous workspace',
-    maximizeTab: 'Maximize / restore tab',
+    maximizeTab: 'Maximize / restore tab', quitApp: 'Quit application',
   };
 
   let customShortcuts = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS));
@@ -313,6 +314,7 @@
   let currentThemeName = 'catppuccin-mocha';
   let currentTheme = THEMES[currentThemeName];
   let currentFontSize = 13;
+  let cornerStyle = 'sharp'; // 'rounded' | 'sharp'
   let currentFontFamily = "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace";
   let customFonts = {}; // name -> { name, dataUrl, format }
   const PRESET_FONTS = [
@@ -353,6 +355,8 @@
   let workspaces = [];       // [{id, label, activeTermId, layout: (Node), folderId?}]
   let folders = [];          // [{id, label, color?, collapsed?}]  — workspace folders/groups
   let sideOrder = [];        // top-level sidebar flow: [{type:'ws'|'folder', id}] in visual order
+  let pinnedCollapsed = false; // "Pinned" section collapsed state
+  let sidebarMode = 'normal'; // 'normal' | 'hover' | 'hidden'
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
@@ -860,11 +864,22 @@
   /* ═══════════════════════════════════════════════════════════════
    T H*EME APPLICATION
    ═══════════════════════════════════════════════════════════════ */
+  function applyCornerStyle() {
+    document.body.classList.toggle('roundless', cornerStyle === 'sharp');
+  }
+
+  function applySidebarMode() {
+    document.body.classList.toggle('sb-hidden', sidebarMode === 'hidden');
+    if (window.__sidebarCtl) window.__sidebarCtl.apply(sidebarMode);
+  }
+
   function applyTheme(name) {
     const theme = THEMES[name];
     if (!theme) return;
     currentThemeName = name;
     currentTheme = theme;
+
+    applyCornerStyle();
 
     document.documentElement.style.setProperty('--app-font', currentFontFamily);
 
@@ -1117,12 +1132,15 @@
         fontFamily: currentFontFamily,
         customFonts,
         lineHeight: currentLineHeight,
+        cornerStyle,
         cursorStyle: currentCursorStyle,
         cursorBlink: currentCursorBlink,
         scrollback: currentScrollback,
-        settingsCategory,
-        backgroundMode,
-        globalBackgroundImage,
+      settingsCategory,
+      pinnedCollapsed,
+      sidebarMode,
+      backgroundMode,
+      globalBackgroundImage,
         backgroundOpacity,
         shortcuts: customShortcuts,
         searchEngine,
@@ -1146,10 +1164,13 @@
       fontFamily: currentFontFamily,
       customFonts,
       lineHeight: currentLineHeight,
+      cornerStyle,
       cursorStyle: currentCursorStyle,
       cursorBlink: currentCursorBlink,
       scrollback: currentScrollback,
       settingsCategory,
+      pinnedCollapsed,
+      sidebarMode,
       backgroundMode,
       globalBackgroundImage,
       backgroundOpacity,
@@ -1213,10 +1234,13 @@
         injectCustomFonts();
       }
       if (state.lineHeight) currentLineHeight = state.lineHeight;
+      if (state.cornerStyle) cornerStyle = state.cornerStyle;
       if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
       if (state.scrollback) currentScrollback = state.scrollback;
       if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
+      if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
+      if (state.sidebarMode) sidebarMode = state.sidebarMode;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -1498,12 +1522,25 @@
   function activateWorkspace(id, skipRender) {
     if (id === activeWsId) return;
     clearMultiSelect();
+    const prevWs = workspaces.find(w => w.id === activeWsId);
     activeWsId = id;
     if (!skipRender) {
-      // Update active class in-place to avoid flicker from full sidebar rebuild
-      document.querySelectorAll('.ws-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.wsid === id);
-      });
+      // Collapsed folders only render their active workspace button, so a
+      // switch involving a collapsed folder needs a full sidebar rebuild.
+      const ws = workspaces.find(w => w.id === id);
+      const inCollapsed = w => {
+        if (!w || !w.folderId) return false;
+        const f = folders.find(f => f.id === w.folderId);
+        return !!(f && f.collapsed);
+      };
+      if (inCollapsed(ws) || inCollapsed(prevWs)) {
+        renderSidebar();
+      } else {
+        // Update active class in-place to avoid flicker from full sidebar rebuild
+        document.querySelectorAll('.ws-btn').forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.wsid === id);
+        });
+      }
       switchWorkspacePane();
     }
     saveState();
@@ -3756,7 +3793,7 @@
    S I*DEBAR RENDERING
    ═══════════════════════════════════════════════════════════════ */
   function renderSidebar() {
-    const sb = document.getElementById('sidebar');
+    const sb = document.getElementById('sidebar-inner') || document.getElementById('sidebar');
     if (!sideOrder.length && (workspaces.length || folders.length)) rebuildSideOrder();
     const actionsEl = sb.querySelector('.sidebar-actions');
     sb.querySelectorAll('.ws-header, .ws-folder-row, .ws-btn, .ws-pin-label, .ws-pin-sep').forEach(e => e.remove());
@@ -4021,7 +4058,7 @@
         <span class="ws-folder-actions">
           <span class="ws-folder-action ws-folder-pin" title="${folder.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${folder.pinned ? '-slash' : ''}"></i></span>
           <span class="ws-folder-action ws-folder-add" title="New workspace here"><i class="ph ph-plus"></i></span>
-          <span class="ws-folder-action ws-folder-rename" title="Rename folder"><i class="ph ph-pencil-simple"></i></span>
+          <span class="ws-folder-action ws-folder-rename" title="Edit folder"><i class="ph ph-pencil-simple"></i></span>
           <span class="ws-folder-action ws-folder-remove" title="Delete folder"><i class="ph ph-x"></i></span>
         </span>`;
       if (folder.pinned) row.classList.add('pinned');
@@ -4125,11 +4162,13 @@
 
       row.appendChild(headerEl);
 
-      // Tree children: nested workspace buttons under the folder row
-      if (!folder.collapsed && wss.length) {
+      // Tree children: nested workspace buttons under the folder row.
+      // When the folder is collapsed, only the active workspace stays visible.
+      const visibleWs = folder.collapsed ? wss.filter(w => w.id === activeWsId) : wss;
+      if (visibleWs.length) {
         const children = document.createElement('div');
         children.className = 'ws-folder-children';
-        for (const wsp of wss) children.appendChild(buildWsBtn(wsp, folder.id));
+        for (const wsp of visibleWs) children.appendChild(buildWsBtn(wsp, folder.id));
         row.appendChild(children);
       }
       return row;
@@ -4150,17 +4189,25 @@
     }
     if (pinnedItems.length) {
       const pinLabel = document.createElement('div');
-      pinLabel.className = 'ws-pin-label';
-      pinLabel.textContent = 'Pinned';
+      pinLabel.className = 'ws-pin-label' + (pinnedCollapsed ? ' collapsed' : '');
+      pinLabel.title = pinnedCollapsed ? 'Expand pinned' : 'Collapse pinned';
+      pinLabel.innerHTML = `<i class="ph ph-caret-down ws-pin-caret"></i><span>Pinned</span><span class="ws-pin-count">${pinnedItems.length}</span>`;
+      pinLabel.addEventListener('click', () => {
+        pinnedCollapsed = !pinnedCollapsed;
+        renderSidebar();
+        saveState();
+      });
       sb.insertBefore(pinLabel, actionsEl);
       let pinnedSlot = 0;
-      for (const e of pinnedItems) {
-        if (e.type === 'ws') {
-          if (e._wsp) sb.insertBefore(buildWsBtn(e._wsp, null, pinnedSlot), actionsEl);
-        } else {
-          if (e._folder) sb.insertBefore(buildFolderEl(e._folder, pinnedSlot), actionsEl);
+      if (!pinnedCollapsed) {
+        for (const e of pinnedItems) {
+          if (e.type === 'ws') {
+            if (e._wsp) sb.insertBefore(buildWsBtn(e._wsp, null, pinnedSlot), actionsEl);
+          } else {
+            if (e._folder) sb.insertBefore(buildFolderEl(e._folder, pinnedSlot), actionsEl);
+          }
+          pinnedSlot++;
         }
-        pinnedSlot++;
       }
       const pinSep = document.createElement('div');
       pinSep.className = 'ws-pin-sep';
@@ -4220,7 +4267,7 @@
       item('<i class="ph ph-plus"></i>', 'New workspace here', 'Ctrl+Shift+T', () => { const wsp = createWorkspace(undefined, folderId); if (wsp) activateWorkspace(wsp.id); });
       sep();
       item(`<i class="ph ph-push-pin${folderPinned ? '-slash' : ''}"></i>`, folderPinned ? 'Unpin from top' : 'Pin to top', '', () => togglePinFolder(folderId));
-      item('<i class="ph ph-pencil-simple"></i>', 'Rename folder', '', () => renameFolder(folderId));
+      item('<i class="ph ph-pencil-simple"></i>', 'Edit folder', '', () => renameFolder(folderId));
       sep();
       item('<i class="ph ph-x"></i>', 'Delete folder', '', () => removeFolder(folderId), true);
     } else if (type === 'terminal') {
@@ -4410,11 +4457,18 @@
   const closeConfirmCancel = document.getElementById('cc-cancel');
 
   function showCloseConfirm(label, closesWorkspace, callback, onCancel) {
-    onCancel = onCancel || (() => {});
-    closeConfirmTitle.textContent = 'Close tab?';
-    closeConfirmMessage.innerHTML =
+    showDangerConfirm('Close tab?',
       `<span class="cc-label">${escHtml(label)}</span> is running a process.` +
-      (closesWorkspace ? ' Closing it will terminate the process and remove the workspace.' : ' Closing it will terminate the process.');
+      (closesWorkspace ? ' Closing it will terminate the process and remove the workspace.' : ' Closing it will terminate the process.'),
+      'Close Tab', callback, onCancel);
+  }
+
+  // Shared destructive-style confirmation (red warning icon + red button)
+  function showDangerConfirm(title, messageHTML, okLabel, callback, onCancel) {
+    onCancel = onCancel || (() => {});
+    closeConfirmTitle.textContent = title;
+    closeConfirmMessage.innerHTML = messageHTML;
+    closeConfirmOk.textContent = okLabel;
 
     closeConfirmOverlay.classList.add('open');
     closeConfirmCancel.focus();
@@ -4448,19 +4502,45 @@
     document.addEventListener('keydown', onKey, true);
   }
 
+  // Count live terminals with a running process (excluding idle shells)
+  // across all workspaces, then ask for confirmation before quitting.
+  function confirmQuitApp() {
+    const pending = [];
+    for (const wsp of workspaces) {
+      for (const t of getWorkspaceTerminals(wsp)) {
+        if (isLiveTerminal(t)) {
+          pending.push(checkTerminalRunning(t.id).then(name => name ? { label: t.label, name } : null));
+        }
+      }
+    }
+    Promise.all(pending).then(results => {
+      const running = results.filter(Boolean);
+      const msg = running.length > 0
+        ? `There ${running.length > 1 ? 'are' : 'is'} ${running.length} terminal${running.length > 1 ? 's' : ''} with running processes: ` +
+          running.map(r => `<span class="cc-label">${escHtml(r.label)}</span> (${escHtml(r.name)})`).join(', ') +
+          '. Quitting will terminate them.'
+        : 'All terminals are idle.';
+      showDangerConfirm('Quit TerminalVibe?', msg, 'Quit', () => window.close());
+    });
+  }
+
   function isLiveTerminal(entry) {
     return !!entry && entry.type !== 'browser' && !entry.dead;
   }
 
   // Ask the backend whether a real process (excluding the idle shell) is
-  // running inside the PTY. Resolves true when we can't tell, so we never
-  // silently kill a busy session.
+  // running inside the PTY. Resolves null when idle, otherwise the process
+  // name (or 'unknown' when we can't tell, so we never silently kill a busy
+  // session).
   function checkTerminalRunning(termId) {
     return new Promise((resolve) => {
       if (isDesktop() && window.electronAPI && window.electronAPI.terminalHasRunningProcess) {
         window.electronAPI.terminalHasRunningProcess(termId)
-          .then(running => resolve(!!running))
-          .catch(() => resolve(true));
+          .then(info => {
+            if (info && typeof info === 'object') resolve(info.running ? (info.name || 'unknown') : null);
+            else resolve(info ? 'unknown' : null); // legacy boolean backends
+          })
+          .catch(() => resolve('unknown'));
         return;
       }
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -4471,19 +4551,19 @@
             if (msg && msg.type === 'hasprocess' && msg.id === termId) {
               clearTimeout(timer);
               ws.removeEventListener('message', onMsg);
-              resolve(!!msg.running);
+              resolve(msg.running ? (msg.name || 'unknown') : null);
             }
           } catch {}
         };
         const timer = setTimeout(() => {
           ws.removeEventListener('message', onMsg);
-          resolve(true);
+          resolve('unknown');
         }, 1500);
         ws.addEventListener('message', onMsg);
         ws.send(JSON.stringify({ type: 'hasprocess', id: termId }));
         return;
       }
-      resolve(true);
+      resolve('unknown');
     });
   }
 
@@ -5124,6 +5204,28 @@ function buildColorItem(key, label) {
         const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
         if (themeDD) initCustomDropdown(themeDD);
 
+        // Corner style
+        const cornerSelect = document.getElementById('set-corner-style');
+        cornerSelect.value = cornerStyle;
+        cornerSelect.onchange = e => {
+          cornerStyle = e.target.value;
+          applyCornerStyle();
+          saveState();
+        };
+        const cornerDD = document.querySelector('.custom-dropdown[data-for="set-corner-style"]');
+        if (cornerDD) initCustomDropdown(cornerDD);
+
+        // Sidebar style
+        const sbModeSelect = document.getElementById('set-sidebar-mode');
+        sbModeSelect.value = sidebarMode;
+        sbModeSelect.onchange = e => {
+          sidebarMode = e.target.value;
+          applySidebarMode();
+          saveState();
+        };
+        const sbModeDD = document.querySelector('.custom-dropdown[data-for="set-sidebar-mode"]');
+        if (sbModeDD) initCustomDropdown(sbModeDD);
+
         // Font size
         document.getElementById('set-fontsize').value = currentFontSize;
         document.getElementById('set-fontsize-val').textContent = currentFontSize + 'px';
@@ -5429,10 +5531,18 @@ function buildColorItem(key, label) {
             injectCustomFonts();
           }
           if (state.lineHeight) currentLineHeight = state.lineHeight;
+          if (state.cornerStyle) cornerStyle = state.cornerStyle;
           if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
           if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
           if (state.scrollback) currentScrollback = state.scrollback;
           if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
+          if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
+          if (state.sidebarMode) {
+            if (sidebarMode !== state.sidebarMode) {
+              sidebarMode = state.sidebarMode;
+              applySidebarMode();
+            }
+          }
           if (state.backgroundMode) backgroundMode = state.backgroundMode;
           if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
           if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -5557,6 +5667,11 @@ function buildColorItem(key, label) {
             }
             return;
           }
+          if (matchShortcut(e, 'quitApp')) {
+            e.preventDefault(); e.stopPropagation();
+            confirmQuitApp();
+            return;
+          }
           if (matchShortcut(e, 'maximizeTab')) {
             e.preventDefault(); e.stopPropagation();
             const wsp = activeWs();
@@ -5576,6 +5691,8 @@ function buildColorItem(key, label) {
         await restoreSettingsOnly();
         applyTheme(currentThemeName);
         document.body.classList.add('settings-only');
+        const splash = document.getElementById('splash');
+        if (splash) splash.classList.add('hide');
         openSettings('appearance');
       }
 
@@ -5603,6 +5720,7 @@ function buildColorItem(key, label) {
               injectCustomFonts();
             }
             if (state.lineHeight) currentLineHeight = state.lineHeight;
+            if (state.cornerStyle) cornerStyle = state.cornerStyle;
             if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
             if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
             if (state.scrollback !== undefined) currentScrollback = state.scrollback;
@@ -6130,13 +6248,16 @@ function buildColorItem(key, label) {
               sb.style.willChange = '';
               main.style.willChange = '';
               sb.style.overflowY = '';
-              // Enforce 300px minimum when expanded
+              // Remember the resized width so collapse/expand restores it
               if (sb.classList.contains('expanded')) {
                 const containerW = document.getElementById('app').offsetWidth;
                 const sidebarPx = containerW * sizes[0] / 100;
                 if (sidebarPx < SB_EXPANDED_MIN) {
+                  savedSidebarWidth = SB_EXPANDED_MIN;
                   const pct = (SB_EXPANDED_MIN / containerW) * 100;
                   sidebarSplit.setSizes([pct, 100 - pct]);
+                } else {
+                  savedSidebarWidth = Math.min(sidebarPx, SB_MAX);
                 }
               }
               const wsp = activeWs();
@@ -6150,19 +6271,81 @@ function buildColorItem(key, label) {
 
         initSidebarSplit();
 
+        // ── Sidebar display modes: 'normal' | 'hover' | 'hidden' ──
+        let hoverPinned = false;   // expanded via toggle button while in hover mode
+        let sbTempVisible = false; // temporarily shown via toggle button while in hidden mode
+
+        function sbExpand() {
+          const sb = document.getElementById('sidebar');
+          sb.classList.add('expanded');
+          const px = savedSidebarWidth || Math.max(sb.offsetWidth || 0, SB_EXPANDED_MIN);
+          savedSidebarWidth = Math.max(px, SB_EXPANDED_MIN);
+          const pct = Math.max(5, (savedSidebarWidth / document.getElementById('app').offsetWidth) * 100);
+          sidebarSplit.setSizes([pct, 100 - pct]);
+        }
+        function sbCollapse() {
+          const sb = document.getElementById('sidebar');
+          sb.classList.remove('expanded', 'hover-expanded');
+          sidebarSplit.setSizes([0, 100]);
+        }
+        function sbFit() {
+          const wsp = activeWs();
+          if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+        }
+
+        const sbEl = document.getElementById('sidebar');
+
+        window.__sidebarCtl = {
+          apply(mode) {
+            hoverPinned = false;
+            sbTempVisible = false;
+            sbEl.classList.remove('hover-overlay', 'hover-expanded');
+            if (mode === 'hidden') sbCollapse();
+            sbFit();
+          },
+        };
+
+        sbEl.addEventListener('mouseenter', () => {
+          if (sidebarMode !== 'hover' || hoverPinned) return;
+          if (sbEl.classList.contains('expanded')) return;
+          // Overlay expand: floats above the content (no layout shift, Brave-like)
+          sbEl.style.setProperty('--sb-overlay-w', (savedSidebarWidth || 220) + 'px');
+          sbEl.classList.add('expanded', 'hover-expanded', 'hover-overlay');
+        });
+        sbEl.addEventListener('mouseleave', () => {
+          if (sidebarMode !== 'hover' || hoverPinned) return;
+          if (!sbEl.classList.contains('hover-expanded')) return;
+          sbEl.classList.remove('expanded', 'hover-expanded', 'hover-overlay');
+        });
+
+        applySidebarMode();
+
         document.getElementById('btn-sidebar-toggle').addEventListener('click', () => {
           const sb = document.getElementById('sidebar');
-          const expanded = sb.classList.toggle('expanded');
-          const wsp = activeWs();
-          if (expanded) {
-            const px = savedSidebarWidth || Math.max(sb.offsetWidth || 0, SB_EXPANDED_MIN);
-            savedSidebarWidth = Math.max(px, SB_EXPANDED_MIN);
-            const pct = Math.max(5, (savedSidebarWidth / document.getElementById('app').offsetWidth) * 100);
-            sidebarSplit.setSizes([pct, 100 - pct]);
-          } else {
-            sidebarSplit.setSizes([0, 100]);
+          if (sidebarMode === 'hidden') {
+            sbTempVisible = !sbTempVisible;
+            document.body.classList.toggle('sb-hidden', !sbTempVisible);
+            if (sbTempVisible) sbExpand(); else sbCollapse();
+            sbFit();
+            saveState();
+            return;
           }
-          if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+          const wasHover = sb.classList.contains('hover-expanded');
+          if (wasHover) {
+            // Pin the hover overlay into a real (layout) expanded state
+            sb.classList.remove('hover-overlay', 'hover-expanded');
+            hoverPinned = sidebarMode === 'hover';
+            sbExpand();
+          } else {
+            const expanded = sb.classList.toggle('expanded');
+            hoverPinned = sidebarMode === 'hover' && expanded;
+            if (expanded) {
+              sbExpand();
+            } else {
+              sbCollapse();
+            }
+          }
+          sbFit();
           saveState();
         });
 
@@ -6403,6 +6586,7 @@ function buildColorItem(key, label) {
           await loadCustomThemes();
           const restored = await restoreState();
           applyTheme(currentThemeName);
+          applySidebarMode();
 
         // Hide splash screen after app is ready
         const splash = document.getElementById('splash');
