@@ -1,9 +1,9 @@
 ---
 type: Playbook
 title: Build & Release
-description: Building the production AppImage and bundling frontend + backend assets.
+description: Building the production AppImage and bundling the frontend assets.
 tags: [build, release, appimage, bundling]
-timestamp: 2026-06-19T00:00:00Z
+timestamp: 2026-08-15T00:00:00Z
 ---
 
 # Build & Release
@@ -16,24 +16,19 @@ npm run build
 
 ## What Happens
 
-1. **Frontend bundle** — Outputs to `dist/`
-2. **Server bundle** — Bundles `server.js` + `node_modules/ws` + `node-pty` into `server-dist/`
-3. **AppImage** — Tauri CLI produces a Linux AppImage
+1. **Frontend bundle** — `scripts/build-dist.js` outputs to `dist/`
+2. **Package** — `electron-builder` produces a Linux AppImage and `dir` build
 
 ## Output Structure
 
 ```
 dist/                    # Frontend bundle (HTML, JS, CSS, assets)
-server-dist/             # Bundled Node.js backend
-  server.js
-  node_modules/
-src-tauri/target/release/
-  bundle/appimage/       # AppImage output
+release/                 # electron-builder output
 ```
 
 ## Bundle Resources
 
-`tauri.conf.json` includes `server-dist/*` as resources, so the Node.js backend is bundled into the AppImage.
+`package.json` `build.files` includes `electron/**/*`, `dist/**/*`, and `node_modules/node-pty/**/*`. Extra resources (`logo.png`, `logo-app.svg`) are copied in.
 
 ## Production Ports
 

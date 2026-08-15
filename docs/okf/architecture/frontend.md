@@ -50,13 +50,13 @@ GroupNode = {
 
 ## Dual PTY Backend
 
-The frontend branches on `isTauri() && tauriPtyReady`:
+The frontend branches on `isDesktop() && nativePtyReady`:
 
-1. **Tauri Native PTY** — `invoke('write_terminal', ...)` / events
+1. **Electron Native PTY** — `electronAPI.terminalWrite(...)` / `terminal:data` events
 2. **Node.js WebSocket** — Binary frames on `ws://127.0.0.1:7681`
 
 ## Related
 
-- [Rust Shell Layer](./rust-shell.md) provides Tauri native PTY
+- [Electron Shell Layer](./electron-shell.md) provides native PTY
 - [Node Backend](./node-backend.md) provides WebSocket PTY fallback
 - [Frontend State Model](../api/frontend-state.md) detailed state reference

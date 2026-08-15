@@ -2,6 +2,7 @@ const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard } = requi
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
+const { hasRunningProcess } = require('./proc');
 
 // ── Helpers ──
 
@@ -201,7 +202,7 @@ ipcMain.handle('shell:open-external', (_e, url) => {
 ipcMain.handle('clipboard:write-text', (_e, text) => clipboard.writeText(String(text ?? '')));
 ipcMain.handle('clipboard:read-text', () => clipboard.readText());
 
-// ── IPC: local files (was asset:// in Tauri) ──
+// ── IPC: local files ──
 ipcMain.handle('file:resolve', (_e, p) => {
   try {
     const resolved = path.resolve(p);
@@ -334,6 +335,10 @@ ipcMain.on('terminal:attached', (_e, id) => {
 ipcMain.on('terminal:close', (_e, id) => {
   const t = ptys.get(id);
   if (t) { try { t.kill(); } catch {} ptys.delete(id); }
+});
+ipcMain.handle('terminal:hasRunningProcess', (_e, id) => {
+  const t = ptys.get(id);
+  return t ? hasRunningProcess(t.pid) : false;
 });
 ipcMain.on('terminal:kill-all', () => {
   for (const t of ptys.values()) { try { t.kill(); } catch {} }

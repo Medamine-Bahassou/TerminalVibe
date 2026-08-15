@@ -14,6 +14,7 @@ const url = require("url");
 const os = require("os");
 const { WebSocketServer } = require("ws");
 const pty = require("node-pty");
+const { hasRunningProcess } = require("./electron/proc");
 
 const HOST = "127.0.0.1";
 const PORT = parseInt(process.env.WS_PORT || "7681", 10); // WebSocket PTY
@@ -294,6 +295,13 @@ wss.on("connection", (ws) => {
           }
           break;
         }
+        case "hasprocess": {
+          const sid = msg.id || "";
+          const session = SESSIONS[sid];
+          const pid = session && session._proc ? session._proc.pid : 0;
+          ws.send(JSON.stringify({ type: "hasprocess", id: sid, running: hasRunningProcess(pid) }));
+          break;
+        }
         case "ping":
           ws.send(JSON.stringify({ type: "pong" }));
           break;
@@ -367,14 +375,9 @@ process.on("SIGHUP", shutdownGracefully);
 //  BOOT
 // ─────────────────────────────────────────────────────────────
 
-const isTauriMode = process.env.TAURI === "1" || process.env.TAURI_ENV === "1";
-
-
-if (!isTauriMode) {
-  appServer.listen(APP_PORT, HOST, () => {
-    console.log(`TerminalVibe app server listening on http://${HOST}:${APP_PORT}`);
-  });
-  console.log(`Open http://${HOST}:${APP_PORT} in your browser`);
-}
+appServer.listen(APP_PORT, HOST, () => {
+  console.log(`TerminalVibe app server listening on http://${HOST}:${APP_PORT}`);
+});
+console.log(`Open http://${HOST}:${APP_PORT} in your browser`);
 
 console.log(`TerminalVibe PTY server listening on ws://${HOST}:${PORT}`);

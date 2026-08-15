@@ -4,7 +4,7 @@
 
 <h1 align="center">TerminalVibe</h1>
 
-<p align="center">A terminal multiplexer and desktop workspace app with integrated browser, built on Tauri 2.x.</p>
+<p align="center">A terminal multiplexer and desktop workspace app with integrated browser, built on Electron.</p>
 
 <p align="center">
   <img src="screenshots/main.png" alt="TerminalVibe - Main Interface" width="800">
@@ -40,9 +40,9 @@
 
 | Layer | Technology |
 |-------|-----------|
-| Shell | Tauri 2.x (Rust) - PTY management via `portable-pty`, IPC, window control |
+| Shell | Electron - PTY management via `node-pty` in the main process, IPC, window control |
 | Frontend | Vanilla JS (single IIFE), xterm.js 5.3 with WebGL renderer, no framework |
-| Backend | Node.js - WebSocket PTY server (fallback), HTTP browser proxy, static server |
+| Backend | Node.js - WebSocket PTY server (browser dev mode), HTTP browser proxy, static server |
 
 ## Project Structure
 
@@ -50,32 +50,26 @@
 ├── app.js                  # Frontend UI logic (single IIFE)
 ├── index.html              # HTML entry point
 ├── style.css               # Styles
-├── server.js               # Node.js backend (PTY WebSocket server + HTTP browser proxy)
+├── server.js               # Node.js backend (browser dev mode: PTY WS + HTTP proxy)
+├── electron/
+│   ├── main.js             # Main process: node-pty PTY, WebContentsView browser tabs
+│   └── preload.js          # contextBridge IPC API
 ├── vendor/                 # Vendored xterm.js addons, Coloris, EmbedPDF assets
 ├── dist/                   # Build output
-├── server-dist/            # Bundled server for Tauri
-├── src-tauri/
-│   ├── src/
-│   │   ├── main.rs
-│   │   ├── lib.rs          # Setup, PTY spawn, IPC commands
-│   │   └── pty.rs          # portable-pty integration with OSC 7 shell integration
-│   ├── Cargo.toml
-│   └── tauri.conf.json
 └── ARCHITECTURE.md         # Detailed architecture docs
 ```
 
 ## Prerequisites
 
-- Rust toolchain (rustup)
 - Node.js 18+
 - npm
-- Linux: `GDK_BACKEND=x11` and `WEBKIT_DISABLE_COMPOSITING_MODE=1` may be needed for dev
 
 ## Development
 
 ```bash
 npm install
-npm run dev
+npm run dev            # browser dev mode (Node backend on ports 7681/7682/6969)
+npm run electron:dev   # Electron dev mode (native PTY via node-pty)
 ```
 
 ## Build
@@ -84,5 +78,4 @@ npm run dev
 npm run build
 ```
 
-Outputs the frontend bundle to `dist/` and produces a Linux AppImage via Tauri CLI.
-
+Outputs the frontend bundle to `dist/` and produces Linux packages (AppImage / dir) via electron-builder.

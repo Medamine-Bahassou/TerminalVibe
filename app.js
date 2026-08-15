@@ -274,17 +274,9 @@
 
   let WS_PORT = 7681;
 
-  function isTauri() {
-    return isDesktop() ||
-    window.location.protocol === 'tauri:' ||
-    window.location.hostname === 'tauri.localhost';
-  }
-
   function openExternalUrl(url) {
     if (isDesktop() && window.electronAPI) {
       window.electronAPI.openExternal(url);
-    } else if (isTauri() && window.__TAURI_INTERNALS__) {
-      window.__TAURI_INTERNALS__.invoke('plugin:opener|open_url', { url });
     } else {
       window.open(url, '_blank');
     }
@@ -296,10 +288,6 @@
       window.electronAPI.clipboardRead().then(text => {
         if (text) sendStdin(entry.id, new TextEncoder().encode(text));
       }).catch(err => console.warn('Paste failed:', err));
-    } else if (isTauri() && window.__TAURI_INTERNALS__) {
-      window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text').then(text => {
-        if (text) sendStdin(entry.id, new TextEncoder().encode(text));
-      }).catch(err => console.warn('Paste failed:', err));
     } else {
       navigator.clipboard.readText().then(text => {
         if (text) sendStdin(entry.id, new TextEncoder().encode(text));
@@ -307,7 +295,7 @@
     }
   }
 
-  // Fallback paste handler for native Ctrl+V (non-Tauri)
+  // Fallback paste handler for native Ctrl+V
   document.addEventListener('paste', e => {
     if (Date.now() < _suppressPasteUntil) { e.preventDefault(); e.stopPropagation(); return; }
     const t = activeTerminal();
@@ -382,8 +370,7 @@
 
   let ws = null;             // WebSocket
   let wsReady = false;
-  let tauriPtyReady = false; // Tauri native PTY backend ready
-  let _ptyListeners = {};    // termId -> unlisten function for Tauri PTY events
+  let nativePtyReady = false; // native PTY backend ready (Electron main process)
 
   let _browserSyncRaf = null;
   const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
@@ -528,7 +515,7 @@
   const ID_LEN = 36;
 
   function connectWS() {
-    const wsHost = isTauri() ? '127.0.0.1' : (window.location.hostname || '127.0.0.1');
+    const wsHost = window.location.hostname || '127.0.0.1';
     ws = new WebSocket(`ws://${wsHost}:${WS_PORT}`);
     ws.binaryType = 'arraybuffer';
 
@@ -636,19 +623,11 @@
   }
 
   function sendControl(obj) {
-    if (isTauri() && tauriPtyReady) {
-      if (isDesktop() && window.electronAPI) {
-        const api = window.electronAPI;
-        if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null });
-        else if (obj.type === 'resize') api.terminalResize({ id: obj.id, cols: obj.cols, rows: obj.rows });
-        else if (obj.type === 'close') api.terminalClose(obj.id);
-      } else if (obj.type === 'create') {
-        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('create_terminal', /*tauri*/ { id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null }).catch(() => {});
-      } else if (obj.type === 'resize') {
-        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('resize_terminal', /*tauri*/ { id: obj.id, cols: obj.cols, rows: obj.rows }).catch(() => {});
-      } else if (obj.type === 'close') {
-        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('close_terminal', /*tauri*/ { id: obj.id }).catch(() => {});
-      }
+    if (isDesktop() && window.electronAPI && nativePtyReady) {
+      const api = window.electronAPI;
+      if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null });
+      else if (obj.type === 'resize') api.terminalResize({ id: obj.id, cols: obj.cols, rows: obj.rows });
+      else if (obj.type === 'close') api.terminalClose(obj.id);
       return;
     }
     if (ws && ws.readyState === WebSocket.OPEN)
@@ -656,12 +635,8 @@
   }
 
   function _sendStdinRaw(sid, data) {
-    if (isTauri() && tauriPtyReady) {
-      if (isDesktop() && window.electronAPI) {
-        window.electronAPI.terminalWrite({ id: sid, data });
-      } else {
-        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('write_terminal', /*tauri*/ { id: sid, data: Array.from(data) }).catch(() => {});
-      }
+    if (isDesktop() && window.electronAPI && nativePtyReady) {
+      window.electronAPI.terminalWrite({ id: sid, data });
       return;
     }
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -685,14 +660,14 @@
   }
 
   /* ═══════════════════════════════════════════════════════════════
-   T A*URI NATIVE PTY
+   N A*TIVE PTY (Electron)
    ═══════════════════════════════════════════════════════════════ */
-  function connectTauriPTY() {
+  function connectNativePTY() {
     // Electron: node-pty runs natively in the main process over IPC
     if (isDesktop() && window.electronAPI) {
       const api = window.electronAPI;
       wsReady = true;
-      tauriPtyReady = true;
+      nativePtyReady = true;
 
       api.onTerminalData(({ id, data }) => {
         const result = findTermById(id);
@@ -719,42 +694,8 @@
       return;
     }
 
-    wsReady = true;
-    tauriPtyReady = true;
-
-    // Listen for PTY events using __TAURI_INTERNALS__ (always available)
-    function tauriListen(eventName, handler) {
-      try {
-        // Try high-level API first
-        if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen) {
-          window.__TAURI__.event.listen(eventName, handler);
-          return;
-        }
-      } catch {}
-      // Fallback: use internal callback mechanism
-      try {
-        const cbId = window.__TAURI_INTERNALS__.transformCallback(handler, false);
-        window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('plugin:event|listen', /*tauri*/ { event: eventName, target: { kind: 'Any' }, handler: cbId });
-      } catch (e) { console.error('tauriListen failed for', eventName, e); }
-    }
-
-    tauriListen('pty://output', (e) => {
-      const { id, data } = e.payload;
-      const result = findTermById(id);
-      if (result) {
-        const u8 = new Uint8Array(data);
-        const oscCwd = _extractOSC7Cwd(u8);
-        if (oscCwd) result.term.cwd = oscCwd;
-        result.term.term.write(u8);
-      }
-    });
-
-      tauriListen('pty://exit', (e) => {
-        const { id, code } = e.payload;
-        handleExit(id, code);
-      });
-
-      restoreOrCreateInitial();
+    // Browser mode: fall back to the WebSocket PTY server
+    restoreOrCreateInitial();
   }
 
   // Create initial workspace or restore pending terminals after the PTY backend is ready
@@ -2128,15 +2069,41 @@
     } catch {}
   }
 
-  function removeTerminal(wsId, termId, skipRender, skipPtyClose) {
+  const _processCheckPending = new Set(); // termIds with an in-flight running-process check
+
+  function removeTerminal(wsId, termId, skipRender, skipPtyClose, confirmed, checked) {
     const wsp = findWs(wsId);
     if (!wsp || !wsp.layout) return;
     if (_multiSelected.has(termId)) { _multiSelected.delete(termId); document.getElementById('slot-' + termId)?.classList.remove('multi-selected'); }
+
+    // Confirm before closing a tab that has a process running inside it
+    // (something other than the idle shell). Skipped for dead terminals,
+    // browser tabs, detaches and internal teardowns.
+    if (!confirmed && !checked && !skipRender && !skipPtyClose) {
+      const entry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
+      if (isLiveTerminal(entry)) {
+        if (_processCheckPending.has(termId)) return;
+        _processCheckPending.add(termId);
+        checkTerminalRunning(termId).then(running => {
+          _processCheckPending.delete(termId);
+          if (running) {
+            const closesWorkspace = getWorkspaceTerminals(wsp).length <= 1;
+            showCloseConfirm(entry.label, closesWorkspace,
+              () => removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true),
+              () => {});
+          } else {
+            removeTerminal(wsId, termId, skipRender, skipPtyClose, false, true);
+          }
+        });
+        return;
+      }
+    }
 
     // Last tab in workspace — remove the workspace with confirmation
     // Skip confirmation when detaching (skipPtyClose) — just remove silently
     if (!skipRender && !skipPtyClose && getWorkspaceTerminals(wsp).length <= 1) {
       if (_closingWs.has(wsId)) return;
+      if (confirmed) { _removeWorkspace(wsId); return; }
       _closingWs.add(wsId);
       const label = wsp.label;
       showConfirm(`Close "${label}"?`,
@@ -2160,7 +2127,6 @@
     if (entry.type !== 'browser') {
       if (!skipPtyClose) {
         sendControl({ type: 'close', id: termId });
-        if (_ptyListeners[termId]) { _ptyListeners[termId](); delete _ptyListeners[termId]; }
         try { if (entry.term) entry.term.dispose(); } catch {}
       }
     } else {
@@ -2327,7 +2293,7 @@
       _removeWorkspace(ws.id);
       return;
     }
-    if (!isTauri()) sendControl({ type: 'close', id });
+    if (!isDesktop()) sendControl({ type: 'close', id });
     removeTerminal(ws.id, id);
   }
 
@@ -3329,18 +3295,11 @@
             if (isDesktop() && window.electronAPI) {
               return normalizeAssetUrl(window.electronAPI.resolveLocalPath(p).then ? 'asset://localhost/' + p : ('asset://localhost/' + p));
             }
-            if (isTauri() && window.__TAURI__ && window.__TAURI__.core) {
-              return normalizeAssetUrl(window.__TAURI__.core.convertFileSrc(p));
-            }
             return 'file://' + p.replace(/\\/g, '/');
           }
 
           if (url.startsWith('file://') && isDesktop() && window.electronAPI) {
             return normalizeAssetUrl('asset://localhost/' + url.slice(7));
-          }
-
-          if (url.startsWith('file://') && isTauri() && window.__TAURI__ && window.__TAURI__.core) {
-            return normalizeAssetUrl(window.__TAURI__.core.convertFileSrc(url.slice(7)));
           }
 
           if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) return url;
@@ -4279,8 +4238,6 @@
             const text = t.term.term.getSelection();
             if (isDesktop() && window.electronAPI) {
               window.electronAPI.clipboardWrite(text);
-            } else if (isTauri() && window.__TAURI_INTERNALS__) {
-              window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
             } else {
               navigator.clipboard.writeText(text);
             }
@@ -4291,9 +4248,6 @@
           if (t && t.term.type !== 'browser') {
             if (isDesktop() && window.electronAPI) {
               window.electronAPI.clipboardRead()
-              .then(text => { if (text) t.term.term.paste(text); }).catch(() => {});
-            } else if (isTauri() && window.__TAURI_INTERNALS__) {
-              window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
               .then(text => { if (text) t.term.term.paste(text); }).catch(() => {});
             } else {
               navigator.clipboard.readText()
@@ -4423,6 +4377,90 @@
       promptCancel.onclick = cancel;
       promptOverlay.onclick = e => { if (e.target === promptOverlay) cancel(); };
       document.addEventListener('keydown', onKey, true);
+  }
+
+  const closeConfirmOverlay = document.getElementById('close-confirm-overlay');
+  const closeConfirmTitle = document.getElementById('cc-title');
+  const closeConfirmMessage = document.getElementById('cc-message');
+  const closeConfirmOk = document.getElementById('cc-close');
+  const closeConfirmCancel = document.getElementById('cc-cancel');
+
+  function showCloseConfirm(label, closesWorkspace, callback, onCancel) {
+    onCancel = onCancel || (() => {});
+    closeConfirmTitle.textContent = 'Close tab?';
+    closeConfirmMessage.innerHTML =
+      `<span class="cc-label">${escHtml(label)}</span> is running a process.` +
+      (closesWorkspace ? ' Closing it will terminate the process and remove the workspace.' : ' Closing it will terminate the process.');
+
+    closeConfirmOverlay.classList.add('open');
+    closeConfirmCancel.focus();
+
+    let onKey;
+    let cancelled = false;
+    const close = () => {
+      closeConfirmOverlay.classList.remove('open');
+      closeConfirmOk.onclick = null;
+      closeConfirmCancel.onclick = null;
+      closeConfirmOverlay.onclick = null;
+      document.removeEventListener('keydown', onKey, true);
+    };
+    const cancel = () => {
+      if (cancelled) return;
+      cancelled = true;
+      onCancel();
+      close();
+    };
+    const submit = () => { close(); callback(); };
+
+    onKey = e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') submit();
+      if (e.key === 'Escape') cancel();
+    };
+
+    closeConfirmOk.onclick = submit;
+    closeConfirmCancel.onclick = cancel;
+    closeConfirmOverlay.onclick = e => { if (e.target === closeConfirmOverlay) cancel(); };
+    document.addEventListener('keydown', onKey, true);
+  }
+
+  function isLiveTerminal(entry) {
+    return !!entry && entry.type !== 'browser' && !entry.dead;
+  }
+
+  // Ask the backend whether a real process (excluding the idle shell) is
+  // running inside the PTY. Resolves true when we can't tell, so we never
+  // silently kill a busy session.
+  function checkTerminalRunning(termId) {
+    return new Promise((resolve) => {
+      if (isDesktop() && window.electronAPI && window.electronAPI.terminalHasRunningProcess) {
+        window.electronAPI.terminalHasRunningProcess(termId)
+          .then(running => resolve(!!running))
+          .catch(() => resolve(true));
+        return;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        const onMsg = (e) => {
+          if (typeof e.data !== 'string') return;
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg && msg.type === 'hasprocess' && msg.id === termId) {
+              clearTimeout(timer);
+              ws.removeEventListener('message', onMsg);
+              resolve(!!msg.running);
+            }
+          } catch {}
+        };
+        const timer = setTimeout(() => {
+          ws.removeEventListener('message', onMsg);
+          resolve(true);
+        }, 1500);
+        ws.addEventListener('message', onMsg);
+        ws.send(JSON.stringify({ type: 'hasprocess', id: termId }));
+        return;
+      }
+      resolve(true);
+    });
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -5283,11 +5321,7 @@ function buildColorItem(key, label) {
             if (t && t.type !== 'browser' && t.term.hasSelection()) {
               e.preventDefault(); e.stopPropagation();
               const text = t.term.getSelection();
-              if (isTauri() && window.__TAURI_INTERNALS__) {
-                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|write_text', { text });
-              } else {
-                navigator.clipboard.writeText(text);
-              }
+              navigator.clipboard.writeText(text);
             }
             return;
           }
@@ -5296,13 +5330,8 @@ function buildColorItem(key, label) {
             const t = activeTerminal();
             if (t && t.type !== 'browser') {
               e.preventDefault(); e.stopPropagation();
-              if (isTauri() && window.__TAURI_INTERNALS__) {
-                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              } else {
-                navigator.clipboard.readText()
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              }
+              navigator.clipboard.readText()
+              .then(text => { if (text) t.term.paste(text); }).catch(() => {});
             }
             return;
           }
@@ -5311,13 +5340,8 @@ function buildColorItem(key, label) {
             const t = activeTerminal();
             if (t && t.type !== 'browser') {
               e.preventDefault(); e.stopPropagation();
-              if (isTauri() && window.__TAURI_INTERNALS__) {
-                window.__TAURI_INTERNALS__.invoke('plugin:clipboard-manager|read_text')
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              } else {
-                navigator.clipboard.readText()
-                .then(text => { if (text) t.term.paste(text); }).catch(() => {});
-              }
+              navigator.clipboard.readText()
+              .then(text => { if (text) t.term.paste(text); }).catch(() => {});
             }
             return;
           }
@@ -5429,7 +5453,7 @@ function buildColorItem(key, label) {
         if (isDesktop() && window.electronAPI) {
           const api = window.electronAPI;
           wsReady = true;
-          tauriPtyReady = true;
+          nativePtyReady = true;
           api.onTerminalData(({ id, data }) => {
             const result = findTermById(id);
             if (result && result.term && result.term.type !== 'browser') {
@@ -6222,15 +6246,15 @@ function buildColorItem(key, label) {
           renderPaneArea();
         }
 
-        // In the desktop shell use the PTY backend; otherwise plain WebSocket
-        if (isTauri()) {
-          setTimeout(() => { try { connectTauriPTY(); } catch (e) { console.error('connectTauriPTY failed:', e); } }, 100);
+        // In the desktop shell use the native PTY backend; otherwise plain WebSocket
+        if (isDesktop()) {
+          setTimeout(() => { try { connectNativePTY(); } catch (e) { console.error('connectNativePTY failed:', e); } }, 100);
         } else {
           try { connectWS(); } catch (e) { console.error('connectWS failed:', e); }
         }
 
         // Desktop shell: show the native-overlay titlebar strip (drag region + label)
-        if (isTauri()) {
+        if (isDesktop()) {
           const tb = document.getElementById('titlebar');
           if (tb) tb.classList.add('active');
         }
@@ -6263,27 +6287,18 @@ function buildColorItem(key, label) {
         // Auto-save every 30 seconds
         setInterval(saveState, 30000);
 
-        // Save on close (browser) or Tauri destroy event
+        // Save on close (browser)
         window.addEventListener('beforeunload', (e) => {
           saveState();
-          if (!isTauri()) {
+          if (!isDesktop()) {
             const hasLiveTerms = workspaces.some(ws => getWorkspaceTerminals(ws).some(t => !t.dead));
             if (hasLiveTerms) { e.preventDefault(); e.returnValue = ''; }
           }
         });
 
-        // Save on window destroy (Electron) / close-requested (Tauri)
+        // Save on window close (Electron)
         if (isDesktop() && window.electronAPI) {
           window.addEventListener('beforeunload', () => saveState());
-        } else if (isTauri()) {
-          try {
-            if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen) {
-              window.__TAURI__.event.listen('tauri://close-requested', () => saveState());
-            } else {
-              const cbId = window.__TAURI_INTERNALS__.transformCallback(() => saveState(), false);
-              window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('plugin:event|listen', /*tauri*/ { event: 'tauri://close-requested', target: { kind: 'Any' }, handler: cbId });
-            }
-          } catch {}
         }
 
         // Robust Cross-Origin & Local Asset Iframe Focus Tracker
@@ -6301,7 +6316,7 @@ function buildColorItem(key, label) {
           }
         }, 100);
 
-        // Keep blur for instant reaction and Tauri native child webviews
+        // Keep blur for instant reaction and Electron native child webviews
         window.addEventListener('blur', () => {
           setTimeout(() => {
             if (document.activeElement && document.activeElement.tagName === 'IFRAME') {

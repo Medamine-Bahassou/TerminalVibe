@@ -2,7 +2,7 @@
 
 ## Overview
 
-TerminalVibe is a terminal multiplexer / desktop app built with **Tauri 2** (Rust shell + WebView frontend). It supports multiple workspaces, split panes, tabbed terminal groups, and embedded browser tabs, all backed by PTY sessions.
+TerminalVibe is a terminal multiplexer / desktop app built with **Electron** (Chromium shell + Node.js main process). It supports multiple workspaces, split panes, tabbed terminal groups, and embedded browser tabs, all backed by PTY sessions.
 
 The app has three distinct layers:
 
@@ -11,13 +11,14 @@ The app has three distinct layers:
 │  Frontend (index.html + app.js + style.css) │
 │  xterm.js + vanilla JS state management     │
 └──────────────────┬──────────────────────────┘
-                   │  Tauri invoke / events
+                   │  Electron IPC (preload bridge)
 ┌──────────────────▼──────────────────────────┐
-│  Rust Shell (src-tauri/src/)               │
-│  - PtyManager (portable-pty)                │
-│  - Spawns Node.js backend                   │
+│  Electron Shell (electron/main.js)          │
+│  - node-pty PTY sessions (main process)     │
+│  - WebContentsView browser tabs             │
+│  - Settings / detached windows, config dir  │
 └──────────────────┬──────────────────────────┘
-                   │  child process
+                   │  (browser dev mode only)
 ┌──────────────────▼──────────────────────────┐
 │  Node.js Backend (server.js)                │
 │  - WebSocket PTY server (port 7681)         │
@@ -71,17 +72,17 @@ Key state variables:
 
 The frontend talks to PTY sessions through **one of two backends**, selected at runtime:
 
-1. **Tauri Native PTY** (preferred in desktop builds):
-   - Commands: `create_terminal`, `write_terminal`, `resize_terminal`, `close_terminal`
-   - Events: `pty://output`, `pty://exit`
-   - Flag: `tauriPtyReady = true`
+1. **Electron Native PTY** (desktop builds):
+   - IPC commands: `terminal:create`, `terminal:write`, `terminal:resize`, `terminal:close`
+   - Events: `terminal:data`, `terminal:exit`
+   - Flag: `nativePtyReady = true`
 
-2. **Node.js WebSocket PTY** (fallback / browser mode):
+2. **Node.js WebSocket PTY** (browser dev mode):
    - WebSocket on `ws://127.0.0.1:7681`
    - Binary frames: `[36-byte termId][pty bytes...]`
    - JSON control frames: `{type:'create'|'resize'|'close', ...}`
 
-`sendStdin()` and `sendControl()` branch on `isTauri() && tauriPryReady`.
+`sendStdin()` and `sendControl()` branch on `isDesktop() && nativePtyReady`.
 
 ### Workspace / Split / Group Rendering
 
@@ -105,58 +106,38 @@ The frontend talks to PTY sessions through **one of two backends**, selected at 
 
 - `saveState()` / `restoreState()` serialize to `localStorage['ghostterm-state-v2']`.
 - Layout is serialized as JSON (splits + groups + terminal metadata). Browser URLs are persisted; terminal PTY state is not.
+- Settings and themes persist to `~/.terminalvibe/` via Electron IPC (`config:*` handlers).
 
 ---
 
-## Layer 2 — Rust Shell (`src-tauri/src/`)
+## Layer 2 — Electron Shell (`electron/`)
 
-### `main.rs`
+### `main.js`
 
-Minimal entry point: calls `terminalvibe::run()`.
+- Creates the frameless main window (1200×684, min 600×400) with `titleBarOverlay`.
+- Runs **node-pty in the main process**: `terminal:create/write/resize/close` IPC handlers keep a `Map<termId, IPty>`.
+- Owns native **WebContentsView** browser tabs (`browser:create/show/hide/resize/navigate/...`), placed by renderer-reported bounds. These paint above the window DOM, so the settings window is a separate always-on-top `BrowserWindow`.
+- Detach-to-window: `terminal:detach` spawns a child window that reuses the same running PTY; output is buffered (`detachedPending`) until the renderer attaches.
+- IPC for external links, clipboard, local file resolution, and the `~/.terminalvibe/` config directory.
 
-### `lib.rs`
+### `preload.js`
 
-- Registers Tauri commands: `create_terminal`, `write_terminal`, `resize_terminal`, `close_terminal`.
-- Manages two pieces of state:
-  - `PtyManager` — native PTY sessions
-  - `Mutex<Option<Child>>` — the Node.js server process
-- `setup()` spawns `node server.js`:
-  - In dev: ports 7781/7782/7769
-  - In prod: ports 7681/7682/6969
-- `on_window_event(Destroyed)` kills all PTY sessions and the Node server.
-
-### `pty.rs` — `PtyManager`
-
-- Uses `portable-pty` + `parking_lot::Mutex<HashMap<String, PtySession>>`
-- `PtySession` holds `writer`, `master`, `child` (killable)
-- `create_terminal()`:
-  - Opens a PTY pair, spawns the user's `$SHELL -l` with `TERM=xterm-256color`
-  - Spawns a background thread that reads master output and emits `pty://output` events
-  - On EOF / error, emits `pty://exit` with the exit code
-- `write()`, `resize()`, `close()`, `close_all()` are straightforward wrappers
-
-### `tauri.conf.json`
-
-- Custom frameless window (1200×684, min 600×400)
-- `beforeDevCommand` copies static assets to `dist/` with a hot-reload loop
-- `beforeBuildCommand` bundles `server.js` + `node_modules/ws` + `node-pty` into `server-dist/`
-- Resources: `server-dist/*` is bundled into the AppImage
+Exposes a sandboxed `electronAPI` bridge via `contextBridge`: terminal, browser, clipboard, settings-window, and config methods.
 
 ---
 
 ## Layer 3 — Node.js Backend (`server.js`)
 
-The backend is spawned by the Rust shell and serves three roles:
+Used only in **browser dev mode** (`npm start`). The Electron app does not spawn it — node-pty runs in Electron's main process instead.
 
-### A. WebSocket PTY Server (port 7681 / 7781)
+### A. WebSocket PTY Server (port 7681)
 
 - Uses `node-pty` to create PTY sessions keyed by `sessionId` (UUID)
 - WebSocket frames:
   - **Client → Server**: `{type:'create', id, cols, rows, cwd}` / `{type:'resize'|'close'}`
   - **Server → Client**: binary `[sessionId bytes][pty output bytes]`
-- In Tauri mode the frontend prefers the native Rust PTY; the Node WS server exists for browser mode and as a fallback.
 
-### B. HTTP Browser Proxy (port 7682 / 7782)
+### B. HTTP Browser Proxy (port 7682)
 
 - Transparent HTTP proxy that:
   - Strips framing / CSP / X-Frame-Options headers
@@ -167,10 +148,9 @@ The backend is spawned by the Rust shell and serves three roles:
 - DNS results are cached for 30 s
 - Handles WebSocket upgrades for proxied targets via `wsProxy`
 
-### C. Static App Server (port 6969 / 7769)
+### C. Static App Server (port 6969)
 
-- Serves the bundled frontend files from `dist/` (or `../dist` in dev)
-- Used only when running outside Tauri (browser dev mode)
+- Serves the frontend files from `dist/` for browser dev mode.
 
 ---
 
@@ -182,8 +162,8 @@ The backend is spawned by the Rust shell and serves three roles:
 User keystroke
   → xterm.onData
   → sendStdin(termId, bytes)
-  → [Tauri] invoke('write_terminal', {id, data})
-      → PtyManager.write() → PTY master writer
+  → [Electron] electronAPI.terminalWrite({id, data})
+      → main process node-pty writer
   → [WS] binary frame [termId][bytes] → server.js → node-pty writer
 ```
 
@@ -191,8 +171,8 @@ User keystroke
 
 ```
 PTY master read
-  → [Rust] background thread → app.emit('pty://output', {id, data})
-      → frontend listener → xterm.write()
+  → [Electron] main process → webContents.send('terminal:data', {id, data})
+      → preload onTerminalData → xterm.write()
   → [Node] ws.send(binary frame)
       → frontend ws.onmessage → xterm.write()
 ```
@@ -201,10 +181,9 @@ PTY master read
 
 ```
 addBrowserTab(url)
-  → lazy iframe creation in getOrCreateSlot()
-  → iframe.src = proxyPathUrl(url)  (e.g. /p/<b64>/)
-  → HTTP proxy on 7682 rewrites + caches upstream content
-  → syncBrowserSlots() positions container via transform3d
+  → native WebContentsView in main process (electron/main.js)
+  → renderer reports slot bounds via syncBrowserSlots()
+  → browser:create / browser:resize / browser:show
 ```
 
 ---
@@ -216,9 +195,10 @@ addBrowserTab(url)
 | Workspace | `app.js` | Top-level container; one active at a time; sidebar buttons |
 | Layout tree | `app.js` | Recursive `split` / `group` structure defining pane arrangement |
 | Group | `app.js` | Tabbed container of terminals + optional browser tabs |
-| TerminalEntry | `app.js` | Wrapper around xterm.js instance or browser iframe |
-| PtyManager | `src-tauri/src/pty.rs` | Rust-side PTY session pool |
-| PTYSession | `server.js` | Node-side PTY session wrapper |
+| TerminalEntry | `app.js` | Wrapper around xterm.js instance or browser tab |
+| PtyManager | `electron/main.js` | Main-process `node-pty` session pool |
+| PTYSession | `server.js` | Node-side PTY session wrapper (browser dev mode) |
+| WebContentsView | `electron/main.js` | Native browser tab views owned by the main process |
 | DiskCache | `server.js` | On-disk LRU cache for proxied HTTP responses |
 | Proxy rewrite | `server.js` | HTML/CSS/JS/URL rewriter for transparent proxying |
 
@@ -228,8 +208,9 @@ addBrowserTab(url)
 
 | Command | Effect |
 |---|---|
-| `npm run dev` | Starts Tauri in dev mode; Rust spawns Node on ports 7781/7782/7769 |
-| `npm run build` | Bundles frontend + Node deps into `server-dist/`, builds AppImage |
+| `npm run dev` | Starts the dev static server + `server.js` (browser mode) |
+| `npm run electron:dev` | Dev server + Electron with native PTY |
+| `npm run build` | Bundles frontend to `dist/`, produces Linux packages via electron-builder |
 | `npm start` | Runs Node backend standalone (browser mode, ports 7681/7682/6969) |
 
 ---

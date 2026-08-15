@@ -99,4 +99,4 @@ ws.onmessage = (event) => {
 ## Related
 
 - [Node Backend](../architecture/node-backend.md) implementation
-- [Tauri IPC Commands](./tauri-ipc.md) preferred native protocol
+- [Electron IPC Commands](./electron-ipc.md) preferred native protocol

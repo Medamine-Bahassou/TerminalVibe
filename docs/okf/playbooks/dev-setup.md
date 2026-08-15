@@ -3,7 +3,7 @@ type: Playbook
 title: Development Setup
 description: Prerequisites and instructions for running TerminalVibe in development mode.
 tags: [development, setup, prerequisites]
-timestamp: 2026-06-19T00:00:00Z
+timestamp: 2026-08-15T00:00:00Z
 ---
 
 # Development Setup
@@ -12,10 +12,8 @@ timestamp: 2026-06-19T00:00:00Z
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Rust toolchain | Latest | Install via [rustup](https://rustup.rs/) |
 | Node.js | 18+ | LTS recommended |
 | npm | Latest | Comes with Node.js |
-| Linux only | — | `GDK_BACKEND=x11` and `WEBKIT_DISABLE_COMPOSITING_MODE=1` may be needed |
 
 ## Quick Start
 
@@ -25,29 +23,24 @@ git clone <repo-url>
 cd terminal3
 npm install
 
-# Start dev mode
+# Start Electron dev mode (native PTY)
+npm run electron:dev
+
+# Or browser dev mode (Node backend)
 npm run dev
 ```
 
 ## What Happens
 
-1. Tauri starts in dev mode
-2. Rust shell spawns Node.js backend on dev ports:
-   - PTY WebSocket: 7781
-   - Browser Proxy: 7782
-   - Static Server: 7769
-3. Frontend hot-reload loop copies assets to `dist/`
-4. WebView opens with the app
+**Electron dev mode (`npm run electron:dev`):**
 
-## Linux-Specific
+1. `electron/dev-server.js` serves the frontend on port 7769
+2. Electron opens the app, PTY runs natively via node-pty in the main process
 
-If the app doesn't render properly:
+**Browser dev mode (`npm run dev`):**
 
-```bash
-export GDK_BACKEND=x11
-export WEBKIT_DISABLE_COMPOSITING_MODE=1
-npm run dev
-```
+1. `server.js` starts on ports 7681/7682/6969
+2. Frontend loads in the browser and connects over WebSocket
 
 ## Dev vs Prod Ports
 
@@ -64,10 +57,10 @@ npm run dev
 - Check if ports are in use: `lsof -i :7781`
 - Ensure `npm install` completed successfully
 
-### WebView blank
+### App blank
 
-- Check Rust console for errors
-- Verify Node server is running on expected ports
+- Check the Electron console for errors (F12 to toggle DevTools)
+- Verify the dev server is running on port 7769
 
 ### PTY not connecting
 

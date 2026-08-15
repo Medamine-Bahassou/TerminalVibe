@@ -722,7 +722,7 @@ isolation: isolate;
   min-width: 0;
 }
 
-/* Hide scrollbar on WebKit browsers (Chrome, Safari, Tauri) */
+/* Hide scrollbar on WebKit browsers (Chrome, Safari, Electron) */
 .term-group-tabs::-webkit-scrollbar {
   display: none !important;
   width: 0 !important;
@@ -1269,6 +1269,66 @@ outline: none;
 .focused-group .tg-tab.active[data-color] { border-bottom-color: var(--tab-color); background: color-mix(in srgb, var(--tab-color) 18%, var(--tab-active-bg)); }
 
 /* ──────────────────────────────────────────
+ *   CLOSE-TAB CONFIRMATION MODAL (running process)
+ * ────────────────────────────────────────── */
+#close-confirm-overlay {
+position: fixed;
+inset: 0;
+background: rgba(0,0,0,0.5);
+backdrop-filter: blur(8px);
+-webkit-backdrop-filter: blur(8px);
+z-index: 10002;
+display: none;
+align-items: center;
+justify-content: center;
+}
+#close-confirm-overlay.open { display: flex; }
+#close-confirm-modal {
+background: color-mix(in srgb, var(--bg) 97%, #fff 3%);
+border: 1px solid var(--border);
+border-radius: 10px;
+padding: 22px 24px 20px;
+min-width: 320px;
+max-width: 420px;
+box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+}
+.cc-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(243,139,168,0.15);
+  color: #f38ba8;
+  font-size: 20px;
+  margin-bottom: 14px;
+}
+#cc-title {
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  user-select: none;
+}
+#cc-message {
+  color: var(--muted-text);
+  font-size: 12.5px;
+  line-height: 1.55;
+  user-select: none;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+#cc-message .cc-label { color: var(--fg); font-weight: 600; }
+#cc-close {
+  background: #f38ba8;
+  color: #11111b;
+  border-color: #f38ba8;
+  font-weight: 600;
+}
+#cc-close:hover { filter: brightness(1.1); }
+
+/* ──────────────────────────────────────────
  *   SETTINGS MODAL — minimal retained CSS
  *   (layout now uses Tailwind utilities)
  * ────────────────────────────────────────── */
@@ -1726,7 +1786,7 @@ body.resizing .drag-shield {
   position: relative;
   z-index: 2;
   background: #fff;
-  /* When native Tauri webview is active, JS sets this to transparent */
+  /* When native Electron webview is active, JS sets this to transparent */
   transition: background 0.1s;
 }
 

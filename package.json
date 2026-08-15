@@ -32,7 +32,6 @@
     "xterm-addon-webgl": "^0.16.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3"
   },
@@ -61,7 +60,7 @@
         "dir"
       ],
       "category": "Utility",
-      "icon": "src-tauri/icons"
+      "icon": "electron/icon.png"
     },
     "directories": {
       "output": "release"

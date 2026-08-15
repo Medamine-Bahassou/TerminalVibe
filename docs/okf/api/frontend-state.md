@@ -101,4 +101,4 @@ State is persisted to `localStorage['ghostterm-state-v2']`:
 ## Related
 
 - [Frontend Layer](../architecture/frontend.md) implementation details
-- [Tauri IPC Commands](./tauri-ipc.md) terminal lifecycle
+- [Electron IPC Commands](./electron-ipc.md) terminal lifecycle

@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clipboardWrite: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   clipboardRead: () => ipcRenderer.invoke('clipboard:read-text'),
 
-  // Local file path resolution (replaces Tauri asset://)
+  // Local file path resolution
   resolveLocalPath: (p) => ipcRenderer.invoke('file:resolve', p),
 
   // Native PTY (node-pty runs in the main process)
@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalResize: (o) => ipcRenderer.send('terminal:resize', o),
   terminalWrite: (o) => ipcRenderer.send('terminal:write', o),
   terminalClose: (id) => ipcRenderer.send('terminal:close', id),
+  terminalHasRunningProcess: (id) => ipcRenderer.invoke('terminal:hasRunningProcess', id),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),
   terminalAttached: (id) => ipcRenderer.send('terminal:attached', id),
   onTerminalDetachedClosed: (cb) => {

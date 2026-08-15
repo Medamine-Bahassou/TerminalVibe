@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 /**
  * Builds dist/ for the Electron app: copies the frontend assets (the packaged
- * app loads dist/index.html via loadFile). Also stages server-dist/ so the
- * Node backend can be shipped as extraResources in dev-like layouts.
+ * app loads dist/index.html via loadFile).
  */
 const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
 const dist = path.join(root, 'dist');
-const serverDist = path.join(root, 'src-tauri', 'server-dist');
 
 const assets = ['index.html', 'app.js', 'style.css', 'logo.png', 'logo-app.svg'];
 
@@ -50,13 +48,4 @@ if (fs.existsSync(vendorEmbed)) {
   fs.cpSync(vendorEmbed, path.join(dist, 'vendor', 'embedpdf'), { recursive: true });
 }
 
-// Stage server-dist (also used by the old Tauri bundle layout)
-fs.rmSync(serverDist, { recursive: true, force: true });
-fs.mkdirSync(serverDist, { recursive: true });
-fs.copyFileSync(path.join(root, 'server.js'), path.join(serverDist, 'server.js'));
-for (const dep of ['ws', 'node-pty']) {
-  fs.cpSync(path.join(root, 'node_modules', dep), path.join(serverDist, 'node_modules', dep), { recursive: true });
-}
-
 console.log('[build] dist/ written to', dist);
-console.log('[build] server-dist/ staged at', serverDist);

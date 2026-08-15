@@ -9,7 +9,7 @@ timestamp: 2026-06-19T00:00:00Z
 
 # Node.js Backend
 
-Spawned by the Rust shell, `server.js` serves three roles: WebSocket PTY server, HTTP browser proxy, and static app server.
+Runs standalone in browser dev mode; `server.js` serves three roles: WebSocket PTY server, HTTP browser proxy, and static app server.
 
 ## Roles
 
@@ -34,7 +34,7 @@ Transparent HTTP proxy for embedded browser tabs:
 ### C. Static App Server (port 6969)
 
 - Serves bundled frontend from `dist/`
-- Used only in browser dev mode (outside Tauri)
+- Used only in browser dev mode
 
 ## Key Abstractions
 
@@ -48,4 +48,4 @@ Transparent HTTP proxy for embedded browser tabs:
 
 - [WebSocket PTY Protocol](../api/websocket-pty.md) detailed protocol
 - [Browser Proxy Protocol](../api/browser-proxy.md) proxy details
-- [Rust Shell Layer](./rust-shell.md) spawns this backend
+- [Electron Shell Layer](./electron-shell.md) runs PTY natively in desktop builds
