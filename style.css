@@ -53,7 +53,7 @@
   --tv-bg-image-opacity: 0;
 }
 
-html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; margin: 0; }
+html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); font-family: var(--app-font, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace); margin: 0; }
 
 body { display: flex; flex-direction: column; height: 100vh; }
 

@@ -314,6 +314,19 @@
   let currentTheme = THEMES[currentThemeName];
   let currentFontSize = 13;
   let currentFontFamily = "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace";
+  let customFonts = {}; // name -> { name, dataUrl, format }
+  const PRESET_FONTS = [
+    { name: 'JetBrains Mono', family: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace" },
+    { name: 'Fira Code', family: "'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace" },
+    { name: 'Cascadia Code', family: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace" },
+    { name: 'Hack', family: "'Hack', 'Fira Code', 'Consolas', 'Courier New', monospace" },
+    { name: 'Source Code Pro', family: "'Source Code Pro', 'JetBrains Mono', 'Consolas', 'Courier New', monospace" },
+    { name: 'Ubuntu Mono', family: "'Ubuntu Mono', 'DejaVu Sans Mono', 'Consolas', 'Courier New', monospace" },
+    { name: 'DejaVu Sans Mono', family: "'DejaVu Sans Mono', 'Consolas', 'Courier New', monospace" },
+    { name: 'Menlo', family: "'Menlo', 'Monaco', 'Consolas', 'Courier New', monospace" },
+    { name: 'Consolas', family: "'Consolas', 'Courier New', monospace" },
+    { name: 'Courier New', family: "'Courier New', monospace" },
+  ];
   let currentLineHeight = 1.4;
   let currentCursorStyle = 'block';
   let currentCursorBlink = true;
@@ -853,6 +866,8 @@
     currentThemeName = name;
     currentTheme = theme;
 
+    document.documentElement.style.setProperty('--app-font', currentFontFamily);
+
     const r = document.documentElement.style;
     r.setProperty('--bg', theme.bg);
     r.setProperty('--fg', theme.fg);
@@ -1100,6 +1115,7 @@
         theme: currentThemeName,
         fontSize: currentFontSize,
         fontFamily: currentFontFamily,
+        customFonts,
         lineHeight: currentLineHeight,
         cursorStyle: currentCursorStyle,
         cursorBlink: currentCursorBlink,
@@ -1128,6 +1144,7 @@
       theme: currentThemeName,
       fontSize: currentFontSize,
       fontFamily: currentFontFamily,
+      customFonts,
       lineHeight: currentLineHeight,
       cursorStyle: currentCursorStyle,
       cursorBlink: currentCursorBlink,
@@ -1188,6 +1205,13 @@
 
       if (state.fontSize) currentFontSize = state.fontSize;
       if (state.fontFamily) currentFontFamily = state.fontFamily;
+      if (state.customFonts) {
+        customFonts = {};
+        for (const [k, v] of Object.entries(state.customFonts)) {
+          if (v && v.dataUrl) customFonts[k] = { name: v.name || k, dataUrl: v.dataUrl, format: v.format || 'truetype' };
+        }
+        injectCustomFonts();
+      }
       if (state.lineHeight) currentLineHeight = state.lineHeight;
       if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
@@ -4581,6 +4605,140 @@
       /* ═══════════════════════════════════════════════════════════════
        C U*STOM DROPDOWN
        ═══════════════════════════════════════════════════════════════ */
+      function customFontFamily(name) {
+        const safe = String(name).replace(/['"]/g, '').trim();
+        return `'${safe}', monospace`;
+      }
+
+      function fontFormatFromName(fileName) {
+        const ext = (fileName.split('.').pop() || '').toLowerCase();
+        return { ttf: 'truetype', otf: 'opentype', woff: 'woff', woff2: 'woff2' }[ext] || null;
+      }
+
+      function injectCustomFonts() {
+        let styleEl = document.getElementById('tv-custom-fonts-style');
+        if (!styleEl) {
+          styleEl = document.createElement('style');
+          styleEl.id = 'tv-custom-fonts-style';
+          document.head.appendChild(styleEl);
+        }
+        let css = '';
+        for (const [name, f] of Object.entries(customFonts)) {
+          const safe = String(name).replace(/['"]/g, '').trim();
+          css += `@font-face{font-family:'${safe}';src:url(${f.dataUrl}) format('${f.format}');font-display:swap;}\n`;
+        }
+        styleEl.textContent = css;
+      }
+
+      function importFontFiles(files) {
+        for (const file of files) {
+          const format = fontFormatFromName(file.name);
+          if (!format) continue;
+          const reader = new FileReader();
+          reader.onload = () => {
+            const base = file.name.replace(/\.[^.]+$/, '');
+            customFonts[base] = { name: base, dataUrl: reader.result, format };
+            injectCustomFonts();
+            saveState();
+            refreshFontPresetUI();
+            renderCustomFontsList();
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+
+      function removeCustomFont(name) {
+        delete customFonts[name];
+        injectCustomFonts();
+        if (currentFontFamily === customFontFamily(name)) {
+          currentFontFamily = PRESET_FONTS[0].family;
+        }
+        saveState();
+        refreshFontPresetUI();
+        renderCustomFontsList();
+        applySettings();
+      }
+
+      function renderCustomFontsList() {
+        const list = document.getElementById('custom-fonts-list');
+        if (!list) return;
+        list.innerHTML = '';
+        const names = Object.keys(customFonts);
+        if (!names.length) {
+          const empty = document.createElement('div');
+          empty.className = 'text-[11px] text-[var(--dim-text)]';
+          empty.textContent = 'No custom fonts imported yet.';
+          list.appendChild(empty);
+          return;
+        }
+        for (const name of names) {
+          const row = document.createElement('div');
+          row.className = 'flex items-center justify-between gap-3 px-2.5 py-1.5 rounded bg-black/20 border border-[var(--border)]';
+          const label = document.createElement('span');
+          label.className = 'text-[12px] text-[var(--fg)] truncate max-w-[220px]';
+          label.style.fontFamily = customFontFamily(name);
+          label.textContent = name;
+          const rm = document.createElement('button');
+          rm.type = 'button';
+          rm.className = 'text-[11px] text-[#e55] hover:text-[#f77] cursor-pointer bg-transparent border-0 shrink-0';
+          rm.textContent = 'Remove';
+          rm.addEventListener('click', () => removeCustomFont(name));
+          row.appendChild(label);
+          row.appendChild(rm);
+          list.appendChild(row);
+        }
+      }
+
+      function refreshFontPresetUI() {
+        const select = document.getElementById('set-fontpreset');
+        const customRow = document.getElementById('fontfamily-custom-row');
+        if (!select || !customRow) return;
+        select.innerHTML = '';
+
+        const addOpt = (value, label, selected) => {
+          const opt = document.createElement('option');
+          opt.value = value;
+          opt.textContent = label;
+          if (selected) opt.selected = true;
+          select.appendChild(opt);
+        };
+
+        for (const p of PRESET_FONTS) {
+          addOpt(p.family, p.name, currentFontFamily === p.family);
+        }
+
+        const customNames = Object.keys(customFonts);
+        if (customNames.length) {
+          const g = document.createElement('optgroup');
+          g.label = 'Imported';
+          for (const name of customNames) {
+            addOpt(customFontFamily(name), name, currentFontFamily === customFontFamily(name));
+          }
+          select.appendChild(g);
+        }
+
+        addOpt('__custom__', 'Custom CSS font-family…', false);
+
+        const matchesPreset = PRESET_FONTS.some(p => p.family === currentFontFamily);
+        const matchesCustom = customNames.some(n => currentFontFamily === customFontFamily(n));
+        const useCustom = !matchesPreset && !matchesCustom;
+
+        if (useCustom) {
+          select.value = '__custom__';
+          customRow.classList.remove('hidden');
+          customRow.classList.add('flex');
+          document.getElementById('set-fontfamily').value = currentFontFamily;
+        } else {
+          customRow.classList.add('hidden');
+          customRow.classList.remove('flex');
+          if (matchesPreset) select.value = currentFontFamily;
+          if (matchesCustom) select.value = customFontFamily(customNames.find(n => currentFontFamily === customFontFamily(n)));
+        }
+
+        const dd = document.querySelector('.custom-dropdown[data-for="set-fontpreset"]');
+        if (dd) initCustomDropdown(dd);
+      }
+
       function initCustomDropdown(dd) {
         const selectId = dd.dataset.for;
         const select = document.getElementById(selectId);
@@ -4971,7 +5129,8 @@ function buildColorItem(key, label) {
         document.getElementById('set-fontsize-val').textContent = currentFontSize + 'px';
 
         // Font family
-        document.getElementById('set-fontfamily').value = currentFontFamily;
+        refreshFontPresetUI();
+        renderCustomFontsList();
 
         // Line height
         document.getElementById('set-lineheight').value = currentLineHeight;
@@ -5226,6 +5385,7 @@ function buildColorItem(key, label) {
       });
 
       function applySettings() {
+        document.documentElement.style.setProperty('--app-font', currentFontFamily);
         const wsp = activeWs();
         if (!wsp) return;
         const terms = getWorkspaceTerminals(wsp);
@@ -5261,6 +5421,13 @@ function buildColorItem(key, label) {
           if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
           if (state.fontSize) currentFontSize = state.fontSize;
           if (state.fontFamily) currentFontFamily = state.fontFamily;
+          if (state.customFonts) {
+            customFonts = {};
+            for (const [k, v] of Object.entries(state.customFonts)) {
+              if (v && v.dataUrl) customFonts[k] = { name: v.name || k, dataUrl: v.dataUrl, format: v.format || 'truetype' };
+            }
+            injectCustomFonts();
+          }
           if (state.lineHeight) currentLineHeight = state.lineHeight;
           if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
           if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
@@ -5428,6 +5595,13 @@ function buildColorItem(key, label) {
             if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
             if (state.fontSize) currentFontSize = state.fontSize;
             if (state.fontFamily) currentFontFamily = state.fontFamily;
+            if (state.customFonts) {
+              customFonts = {};
+              for (const [k, v] of Object.entries(state.customFonts)) {
+                if (v && v.dataUrl) customFonts[k] = { name: v.name || k, dataUrl: v.dataUrl, format: v.format || 'truetype' };
+              }
+              injectCustomFonts();
+            }
             if (state.lineHeight) currentLineHeight = state.lineHeight;
             if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
             if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
@@ -5565,10 +5739,34 @@ function buildColorItem(key, label) {
         applySettings();
       });
 
-      // Font family
+      // Font family preset
+      document.getElementById('set-fontpreset').addEventListener('change', e => {
+        const v = e.target.value;
+        const customRow = document.getElementById('fontfamily-custom-row');
+        if (v === '__custom__') {
+          customRow.classList.remove('hidden');
+          customRow.classList.add('flex');
+          return;
+        }
+        currentFontFamily = v;
+        customRow.classList.add('hidden');
+        customRow.classList.remove('flex');
+        applySettings();
+      });
+
+      // Font family (custom CSS stack)
       document.getElementById('set-fontfamily').addEventListener('change', e => {
         currentFontFamily = e.target.value;
         applySettings();
+      });
+
+      // Font import
+      document.getElementById('font-import-btn').addEventListener('click', () => {
+        document.getElementById('font-import-input').click();
+      });
+      document.getElementById('font-import-input').addEventListener('change', e => {
+        importFontFiles(e.target.files);
+        e.target.value = '';
       });
 
       // Line height
@@ -6216,11 +6414,12 @@ function buildColorItem(key, label) {
         // Settings live in a separate Electron window; re-apply on any change
         if (isDesktop() && window.electronAPI && window.electronAPI.onSettingsChanged) {
           window.electronAPI.onSettingsChanged(() => {
-            restoreSettingsOnly();
-            applyTheme(currentThemeName);
-            applyBackground();
-            applySettings();
-            syncBrowserSlots();
+            restoreSettingsOnly().then(() => {
+              applyTheme(currentThemeName);
+              applyBackground();
+              applySettings();
+              syncBrowserSlots();
+            });
           });
         }
 
