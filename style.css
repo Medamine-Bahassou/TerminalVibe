@@ -774,6 +774,15 @@ isolation: isolate;
   height: 0 !important;
 }
 
+/* Drop-target highlight while a detached window's tab is dragged over the
+   main window (re-attach gesture). */
+.term-group-tabs.reattach-target {
+  outline: 1px dashed var(--accent, #89b4fa);
+  outline-offset: -2px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent, #89b4fa) 12%, transparent);
+}
+
 /* Overflow chevrons (VSCode-style edge paging). Shown only when the bar
    overflows, disabled per-side at the scroll edges. */
 .tg-chevron {

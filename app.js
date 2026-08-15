@@ -362,6 +362,11 @@
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
   let focusedSlotId = null;  // DOM id of focused .term-slot
   let _multiSelected = new Set(); // terminal IDs selected via Ctrl+Alt+RightClick
+  // Tab double-click detection state. Declared here (IIFE scope) because the
+  // old declaration lived after the detached-mode early return, leaving it
+  // uninitialized there and breaking every tab click in detached windows.
+  let _lastTabClickTime = 0;
+  let _lastTabClickTermId = null;
   function isInMultiMode() { return _multiSelected.size > 0; }
   function clearMultiSelect() {
     _multiSelected.clear();
@@ -704,6 +709,52 @@
           }
           renderPaneArea();
           syncBrowserSlots();
+        });
+      }
+      // A tab dragged out of a detached window and dropped over this window:
+      // re-create the tab here attached to the same running PTY.
+      if (api.onTerminalReattach) {
+        api.onTerminalReattach(({ id, cols, rows, cwd, placement }) => {
+          try { reattachTerminal(id, cols, rows, cwd, placement); } catch (e) { console.error('[reattach] failed:', e); }
+        });
+      }
+      // While such a tab is being dragged, highlight the tab bars as a drop target.
+      if (api.onTabDragOver) {
+        api.onTabDragOver(({ over }) => {
+          document.querySelectorAll('.term-group-tabs.reattach-target').forEach(el => el.classList.remove('reattach-target'));
+          if (over) document.querySelectorAll('.term-group-tabs').forEach(el => el.classList.add('reattach-target'));
+        });
+      }
+      // The main process accepted a cross-window move for a tab living HERE —
+      // snapshot its buffer, remove it without killing the PTY, and report
+      // how many tabs remain so main can decide whether to close a window.
+      if (api.onTabDragComplete) {
+        api.onTabDragComplete(({ id }) => {
+          let ready = { id, remaining: 0 };
+          try {
+            for (const wsp of workspaces) {
+              const group = findGroupContainingTerm(wsp.layout, id);
+              if (!group) continue;
+              const entry = group.terminals.find(x => x.id === id);
+              if (entry && entry.term) {
+                const payload = serializeTermBuffer(entry);
+                if (payload) localStorage.setItem(DETACH_BUFFER_KEY(id), JSON.stringify(payload));
+                ready = { id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd, label: entry.label, remaining: 0 };
+              }
+              removeTerminal(wsp.id, id, false, true);
+              ready.remaining = getWorkspaceTerminals(wsp).length;
+              break;
+            }
+          } catch {}
+          if (api.tabDragReady) api.tabDragReady(ready);
+        });
+      }
+      // The main process broadcasts which detached terminal is being dragged —
+      // drag data set in another window's renderer is unreadable here, so this
+      // id is how the main window recognizes the cross-window drop.
+      if (api.onTabDragActive) {
+        api.onTabDragActive(({ id }) => {
+          window.externalDragTermId = id || null;
         });
       }
 
@@ -1803,11 +1854,11 @@
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
             // Drag & drop
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); });
-            tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
+            tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
             tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
             tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
-            tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+            tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || window.externalDragTermId || e.dataTransfer.getData('text/plain'); if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) { const api = window.electronAPI; if (api && api.tabDragDrop) { const r = tab.getBoundingClientRect(); api.tabDragDrop({ id: draggedId, targetGroupId: targetGroup.id, zone: 'center', beforeTabId: e.clientX < r.left + r.width / 2 ? entry.id : null }); } window.externalDragTermId = null; return; } if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
             tabsContainer.appendChild(tab);
             updateTabBarOverflow(groupEl);
             scrollTabIntoView(groupEl, entry.id);
@@ -1913,11 +1964,11 @@
               }
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); });
-            tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
+            tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
             tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
             tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
-            tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+            tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || window.externalDragTermId || e.dataTransfer.getData('text/plain'); if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) { const api = window.electronAPI; if (api && api.tabDragDrop) { const r = tab.getBoundingClientRect(); api.tabDragDrop({ id: draggedId, targetGroupId: targetGroup.id, zone: 'center', beforeTabId: e.clientX < r.left + r.width / 2 ? entry.id : null }); } window.externalDragTermId = null; return; } if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
             tabsContainer.appendChild(tab);
             updateTabBarOverflow(groupEl);
             scrollTabIntoView(groupEl, entry.id);
@@ -2098,6 +2149,7 @@
         lines.push(line ? line.translateToString(true) : '');
       }
       return {
+        label: entry.label,
         cols: term.cols,
         rows: term.rows,
         cursorX: buf.cursorX,
@@ -2128,6 +2180,91 @@
       const target = Math.min(maxViewport, payload.viewportY ?? maxViewport);
       if (target < maxViewport) term.scrollLines(target - maxViewport);
     } catch {}
+  }
+
+  // Reverse of detachTerminal: the detached window was closed by dragging its
+  // tab over this window; re-create the tab here attached to the SAME PTY
+  // (no terminal:create — that would kill the session and spawn a new shell).
+  // `placement` ({ targetGroupId, zone }) drops it into a specific group,
+  // splitting the pane like a normal tab drag-and-drop.
+  function reattachTerminal(termId, cols, rows, cwd, placement) {
+    let wsp = workspaces.find(w => w.id === activeWsId) || workspaces[0];
+    if (!wsp) {
+      // All workspaces were closed while the tab was detached — make a fresh
+      // one manually (createWorkspace would spawn a new terminal/PTY).
+      wsp = { id: uuid(), label: 'Workspace 1', layout: null, activeTermId: null };
+      workspaces.push(wsp);
+      sideOrder.push({ type: 'ws', id: wsp.id });
+      activeWsId = wsp.id;
+      const empty = document.getElementById('empty-state');
+      if (empty) empty.style.display = 'none';
+    }
+
+    // Read the stashed buffer first so the tab can keep its name; the PTY is
+    // re-attached, the content replayed from this snapshot.
+    let stash = null;
+    try {
+      const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
+      localStorage.removeItem(DETACH_BUFFER_KEY(termId));
+      if (raw) stash = JSON.parse(raw);
+    } catch {}
+
+    const entry = _createTermEntry(wsp, termId, (stash && stash.label) || 'terminal');
+    entry.cwd = cwd;
+
+    if (!wsp.layout) {
+      wsp.layout = { type: 'group', id: 'group-' + uuid(), terminals: [entry], activeTermId: termId };
+    } else {
+      const targetGroup = (placement && placement.targetGroupId && findGroupById(wsp.layout, placement.targetGroupId))
+        || (activeTerminal() && findGroupContainingTerm(wsp.layout, activeTerminal().id))
+        || findFirstGroup(wsp.layout);
+      if (!targetGroup) return;
+      targetGroup.terminals.push(entry);
+      if (!targetGroup._history) targetGroup._history = [];
+      if (targetGroup.activeTermId) targetGroup._history.push(targetGroup.activeTermId);
+      targetGroup.activeTermId = termId;
+      // Dropped on a specific tab — place it at that position in the bar.
+      if (placement && placement.beforeTabId) {
+        const idx = targetGroup.terminals.findIndex(x => x.id === placement.beforeTabId);
+        if (idx !== -1) {
+          targetGroup.terminals.splice(targetGroup.terminals.indexOf(entry), 1);
+          targetGroup.terminals.splice(idx, 0, entry);
+        }
+      }
+    }
+    wsp.activeTermId = termId;
+
+    if (placement && placement.zone && placement.zone !== 'center' && findGroupById(wsp.layout, placement.targetGroupId)) {
+      // Split placement: route through the normal drop handler so the same
+      // guards (maximized, min size) and split logic apply.
+      handleTerminalDrop(termId, placement.targetGroupId, placement.zone, wsp);
+    } else {
+      renderPaneArea();
+      activateTerminal(wsp.id, termId);
+    }
+
+    // Open at the size the PTY is running at so replayed lines don't wrap,
+    // replay the stashed screen/scrollback, then announce the attach so main
+    // flushes output buffered while the detached window was closing.
+    try { entry.term.resize(cols || 80, rows || 24); } catch {}
+    if (stash) { try { restoreTermBuffer(entry, stash); } catch {} }
+    if (window.electronAPI && window.electronAPI.terminalAttached) {
+      window.electronAPI.terminalAttached(termId);
+    }
+
+    // Fit to the new layout, then sync the PTY to the fitted size.
+    setTimeout(() => {
+      try {
+        fitTerm(entry);
+        if (entry.term && window.electronAPI && window.electronAPI.terminalResize) {
+          window.electronAPI.terminalResize({ id: termId, cols: entry.term.cols, rows: entry.term.rows });
+        }
+      } catch {}
+      try { entry.term && entry.term.focus(); } catch {}
+    }, 80);
+
+    renderSidebar();
+    saveState();
   }
 
   const _processCheckPending = new Set(); // termIds with an in-flight running-process check
@@ -2686,7 +2823,14 @@
 
       // Container-level drop handling for gaps between tabs and edges
       tabsContainer.addEventListener('dragover', (e) => {
-        if (!window.draggedTermId) return;
+        if (!window.draggedTermId) {
+          // Cross-window drag (tab from a detached window): accept it.
+          if (e.target !== tabsContainer) return;
+          if (!window.externalDragTermId && !e.dataTransfer.types.includes('text/plain')) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          return;
+        }
         if (e.target !== tabsContainer) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
@@ -2717,7 +2861,21 @@
         }
       });
       tabsContainer.addEventListener('drop', (e) => {
-        if (!window.draggedTermId) return;
+        // Cross-window drag (tab from a detached window): attach into this group.
+        if (!window.draggedTermId) {
+          if (e.target !== tabsContainer) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const extId = window.externalDragTermId || e.dataTransfer.getData('text/plain');
+          if (extId && !findGroupContainingTerm(wsp.layout, extId)) {
+            const api = window.electronAPI;
+            if (api && api.tabDragDrop) {
+              api.tabDragDrop({ id: extId, targetGroupId: node.id, zone: 'center' });
+            }
+          }
+          window.externalDragTermId = null;
+          return;
+        }
         if (e.target !== tabsContainer) return;
         e.preventDefault();
         e.stopPropagation();
@@ -2815,17 +2973,100 @@
           window.dragSourceGroupId = node.id;
           tab.classList.add('dragging');
           startResizing();
+          // Announce the drag to the main process so every OTHER window can
+          // recognize this tab if it's dropped there (drag data is unreadable
+          // across renderers).
+          if (window.electronAPI && window.electronAPI.tabDragStart) {
+            window.electronAPI.tabDragStart({ id: t.id, cols: t.term ? t.term.cols : 80, rows: t.term ? t.term.rows : 24, cwd: t.cwd, label: t.label });
+          }
         });
-        tab.addEventListener('dragend', () => {
+        tab.addEventListener('dragend', e => {
           tab.classList.remove('dragging');
           tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
             el.classList.remove('drop-left', 'drop-right');
           });
           stopResizing();
+          // Main window: releasing a terminal tab where no tab bar accepted
+          // the drop (dropEffect 'none' — i.e. outside the app, or away from
+          // any drop target) detaches it into its own window.
+          if (!DETACHED_ONLY && t.type !== 'browser' && t.term
+              && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) {
+            detachTerminal(wsp.id, t.id);
+          }
+          if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) {
+            // Ends the active-drag broadcast. The detach above (if any) is an
+            // independent flow; this message is cancelled so main won't move
+            // the terminal a second time.
+            window.electronAPI.tabDragEnd({ id: t.id, cancelled: true });
+          }
         });
 
+        // Detached window: the tab uses the same HTML5 drag technique as the
+        // main window's tabs (draggable + dragstart/dragend, reorder still
+        // works locally). On top of that, dragend reports the release
+        // position to the main process — releasing outside this window
+        // re-attaches the tab to the main window.
+        if (DETACHED_ONLY) {
+          // Track pointer presence during the drag: dragenter/dragover mean
+          // the pointer is over THIS window; a dragleave with no
+          // relatedTarget means it left the window entirely. At dragend this
+          // state (not a timing heuristic) decides local-drop vs drag-out.
+          if (!window._detachDragTrackInit) {
+            window._detachDragTrackInit = true;
+            window._detachDragInside = false;
+            document.addEventListener('dragenter', () => { window._detachDragInside = true; }, true);
+            document.addEventListener('dragover', () => { window._detachDragInside = true; }, true);
+            document.addEventListener('dragleave', e => { if (!e.relatedTarget) window._detachDragInside = false; }, true);
+          }
+          tab.addEventListener('dragstart', () => {
+            window._detachDragInside = true;
+            try {
+              const payload = serializeTermBuffer(t);
+              if (payload) localStorage.setItem(DETACH_BUFFER_KEY(t.id), JSON.stringify(payload));
+            } catch {}
+          });
+          tab.addEventListener('dragend', e => {
+            const api = window.electronAPI;
+            if (!api || !api.tabDragEnd) return;
+            // dropEffect === 'none' means no local target accepted the drop —
+            // the drag ended outside this window's handlers (the re-attach
+            // case). Coordinates on dragend are often stale/clamped once the
+            // pointer has left the window, so they're only a secondary signal.
+            const unhandled = !e.dataTransfer || e.dataTransfer.dropEffect === 'none';
+            const outside = e && (e.clientX < 0 || e.clientX > window.innerWidth || e.clientY < 0 || e.clientY > window.innerHeight);
+            // Tracked dragenter/dragleave state: was the pointer still over
+            // this window when the button was released?
+            const insideAtEnd = !!window._detachDragInside;
+            api.tabDragEnd({
+              id: t.id,
+              unhandled: !!unhandled,
+              insideAtEnd,
+              clientX: e ? e.clientX : null,
+              clientY: e ? e.clientY : null,
+              screenX: e ? e.screenX : null,
+              screenY: e ? e.screenY : null,
+              outside: !!outside,
+              cols: t.term.cols, rows: t.term.rows, cwd: t.cwd,
+            });
+          });
+        }
+
         tab.addEventListener('dragover', e => {
-          if (!window.draggedTermId) return;
+          if (!window.draggedTermId) {
+            // Cross-window drag (tab from a detached window): accept the drop
+            // and show the insertion hint using the broadcast drag id.
+            if (!window.externalDragTermId && !e.dataTransfer.types.includes('text/plain')) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (window.externalDragTermId) {
+              tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
+                el.classList.remove('drop-left', 'drop-right');
+              });
+              const rect = tab.getBoundingClientRect();
+              tab.classList.add(e.clientX < rect.left + rect.width / 2 ? 'drop-left' : 'drop-right');
+            }
+            return;
+          }
           e.preventDefault();
           e.dataTransfer.dropEffect = 'move';
           const rect = tab.getBoundingClientRect();
@@ -2847,6 +3088,23 @@
         tab.addEventListener('drop', e => {
           e.preventDefault();
           e.stopPropagation();
+          // Cross-window drag (tab from a detached window): attach it into
+          // this group, at the release position relative to this tab.
+          if (!window.draggedTermId) {
+            const extId = window.externalDragTermId || e.dataTransfer.getData('text/plain');
+            if (extId && !findGroupContainingTerm(wsp.layout, extId)) {
+              const api = window.electronAPI;
+              if (api && api.tabDragDrop) {
+                const rect0 = tab.getBoundingClientRect();
+                api.tabDragDrop({
+                  id: extId, targetGroupId: node.id, zone: 'center',
+                  beforeTabId: e.clientX < rect0.left + rect0.width / 2 ? t.id : null,
+                });
+              }
+            }
+            window.externalDragTermId = null;
+            return;
+          }
           const draggedId = window.draggedTermId;
           if (!draggedId || draggedId === t.id) return;
           const rect = tab.getBoundingClientRect();
@@ -3654,7 +3912,7 @@
 
     bodyEl.addEventListener('dragover', e => {
       e.preventDefault();
-      const draggedId = window.draggedTermId || e.dataTransfer.getData('text/plain');
+      const draggedId = window.draggedTermId || window.externalDragTermId || e.dataTransfer.getData('text/plain');
       if (!draggedId) return;
 
       const rect = bodyEl.getBoundingClientRect();
@@ -3700,7 +3958,7 @@
       dragDepth = 0;
       overlay.classList.remove('active');
 
-      const draggedId = window.draggedTermId || e.dataTransfer.getData('text/plain');
+      const draggedId = window.draggedTermId || window.externalDragTermId || e.dataTransfer.getData('text/plain');
       if (!draggedId) return;
 
       const rect = bodyEl.getBoundingClientRect();
@@ -3714,6 +3972,18 @@
       else if (x > w * 0.75) zone = 'right';
       else if (y < h * 0.25) zone = 'top';
       else if (y > h * 0.75) zone = 'bottom';
+
+      // Cross-window drag: the terminal lives in a detached window, not in
+      // this layout — ask main to re-attach it here (splitting per zone)
+      // instead of running the local move/split handler.
+      if (!window.draggedTermId && !findGroupContainingTerm(wsp.layout, draggedId)) {
+        const api = window.electronAPI;
+        if (api && api.tabDragDrop) {
+          api.tabDragDrop({ id: draggedId, targetGroupId: groupNode.id, zone });
+        }
+        window.externalDragTermId = null;
+        return;
+      }
 
       handleTerminalDrop(draggedId, groupNode.id, zone, wsp);
     });
@@ -5760,6 +6030,49 @@ function buildColorItem(key, label) {
             }
             window.close();
           });
+          // Main process accepted a cross-window move for a tab living in
+          // THIS window — snapshot its buffer, remove the tab locally, and
+          // report how many tabs remain (main closes this window at 0).
+          if (api.onTabDragComplete) {
+            api.onTabDragComplete(({ id }) => {
+              let ready = { id, remaining: 0 };
+              try {
+                const wsp = workspaces[0];
+                const group = wsp && findGroupContainingTerm(wsp.layout, id);
+                const entry = group && group.terminals.find(x => x.id === id);
+                if (entry && entry.term) {
+                  const payload = serializeTermBuffer(entry);
+                  if (payload) localStorage.setItem(DETACH_BUFFER_KEY(id), JSON.stringify(payload));
+                  ready = { id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd, label: entry.label, remaining: 0 };
+                }
+                if (group) {
+                  group.terminals = group.terminals.filter(x => x.id !== id);
+                  if (group.activeTermId === id) group.activeTermId = group.terminals[0]?.id || null;
+                  ready.remaining = getWorkspaceTerminals(wsp).length;
+                  if (ready.remaining > 0) {
+                    renderPaneArea();
+                    const nt = activeTerminal();
+                    if (nt) activateTerminal(wsp.id, nt.id);
+                    saveState();
+                  }
+                }
+              } catch {}
+              if (api.tabDragReady) api.tabDragReady(ready);
+            });
+          }
+          // A terminal dragged from another window (main or a sibling
+          // detached window) and dropped here — re-create the tab attached
+          // to the same PTY, placed like a normal tab drop.
+          if (api.onTerminalReattach) {
+            api.onTerminalReattach(({ id, cols, rows, cwd, placement }) => {
+              try { reattachTerminal(id, cols, rows, cwd, placement); } catch (e) { console.error('[reattach] failed:', e); }
+            });
+          }
+          // Which terminal another window is currently dragging — used by the
+          // shared tab-bar/pane drop handlers to route the cross-window drop.
+          if (api.onTabDragActive) {
+            api.onTabDragActive(({ id }) => { window.externalDragTermId = id || null; });
+          }
         }
 
         // Read detached params
@@ -5771,6 +6084,7 @@ function buildColorItem(key, label) {
         if (!termId) return;
 
         let restored = false;
+        let detachedBuffer = null; // stashed screen/scrollback (with tab label)
         try { restored = await restoreState(); } catch {}
 
         if (!restored) {
@@ -5785,8 +6099,14 @@ function buildColorItem(key, label) {
           activeWsId = wsId;
           sideOrder = [{ type: 'ws', id: wsId }];
 
+          // Read the stashed buffer now so the tab keeps its original name
+          try {
+            const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
+            if (raw) detachedBuffer = JSON.parse(raw);
+          } catch {}
+
           // Create the terminal entry
-          const entry = _createTermEntry(wsp, termId, 'terminal');
+          const entry = _createTermEntry(wsp, termId, (detachedBuffer && detachedBuffer.label) || 'terminal');
           entry.cwd = cwd;
           wsp.layout.terminals = [entry];
           wsp.layout.activeTermId = termId;
@@ -5806,11 +6126,15 @@ function buildColorItem(key, label) {
           // Open at the size the PTY was running at so the replayed lines
           // don't wrap, then fit to the actual window size after layout.
           try { active.term.resize(cols, rows); } catch {}
-          try {
-            const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
-            localStorage.removeItem(DETACH_BUFFER_KEY(termId));
-            if (raw) restoreTermBuffer(active, JSON.parse(raw));
-          } catch {}
+          if (!detachedBuffer) {
+            // restored-from-state path: the stash wasn't read above
+            try {
+              const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
+              detachedBuffer = raw ? JSON.parse(raw) : null;
+            } catch {}
+          }
+          try { localStorage.removeItem(DETACH_BUFFER_KEY(termId)); } catch {}
+          if (detachedBuffer) restoreTermBuffer(active, detachedBuffer);
         }
 
         // Tell main we're ready so it flushes any output produced while the
@@ -6503,8 +6827,6 @@ function buildColorItem(key, label) {
         let resizeRaf = null;
         let _suppressResize = false;
         let _suppressPasteUntil = 0;
-        let _lastTabClickTime = 0;
-        let _lastTabClickTermId = null;
         function syncSplitSizes(node) {
           if (!node) return;
           if (node.type === 'split') {

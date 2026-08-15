@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
@@ -260,6 +260,9 @@ const detachedWindows = new Map(); // termId -> BrowserWindow
 // While a detached window is booting its renderer, PTY output for its terminal
 // is buffered here so nothing is lost; flushed on 'terminal:attached'.
 const detachedPending = new Map(); // termId -> [{ channel, payload }]
+// termIds whose detached window is closing because the tab was dragged back
+// into the main window — the PTY must survive the window close.
+const reattachingIds = new Set();
 const sendToRenderer = (channel, payload) => {
   // Buffer output for a freshly-detached terminal until its renderer is up.
   if ((channel === 'terminal:data' || channel === 'terminal:exit') && detachedPending.has(payload.id)) {
@@ -332,9 +335,10 @@ ipcMain.on('terminal:attached', (_e, id) => {
   const pending = detachedPending.get(id);
   if (!pending) return;
   detachedPending.delete(id);
-  const dw = detachedWindows.get(id);
-  if (dw && !dw.isDestroyed()) {
-    for (const { channel, payload } of pending) dw.webContents.send(channel, payload);
+  // Flush to whichever window attached — the detached window on first boot,
+  // or the main window when the tab is dragged back in.
+  if (_e.sender && !_e.sender.isDestroyed()) {
+    for (const { channel, payload } of pending) _e.sender.send(channel, payload);
   }
 });
 
@@ -408,6 +412,7 @@ ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
     let dwId = null;
     try { if (!dw.webContents.isDestroyed()) dwId = dw.webContents.id; } catch {}
     const toDelete = [];
+    const reattachedThisClose = reattachingIds.size > 0;
     for (const [termId, other] of detachedWindows) {
       try {
         if (other.webContents.id === dwId || other.webContents.isDestroyed()) toDelete.push(termId);
@@ -416,13 +421,186 @@ ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
     for (const termId of toDelete) {
       detachedWindows.delete(termId);
       detachedPending.delete(termId);
+      if (reattachingIds.has(termId)) {
+        // Tab was dragged back into the main window — keep the PTY alive.
+        reattachingIds.delete(termId);
+        continue;
+      }
       const t = ptys.get(termId);
       if (t) { try { t.kill(); } catch {} ptys.delete(termId); }
     }
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('terminal:detached-closed', { id });
+    if (mainWindow && !mainWindow.isDestroyed() && !reattachedThisClose) {
+      mainWindow.webContents.send('terminal:detached-closed', { id });
+    }
   });
 
   return true;
+});
+
+// ── IPC: cross-window tab drag (detach / re-attach / move between windows) ──
+// HTML5 drag data written by one window's renderer is not reliably readable
+// in another window's renderer, so the dragged terminal's id travels through
+// the main process: the source window announces the drag ('tab-drag:start'),
+// every other window receives 'tab-drag:active' {id}, and a drop is reported
+// by whichever window accepted it ('tab-drag:drop'). The source window of a
+// move is asked to snapshot + remove the tab ('tab-drag:complete') and the
+// target window is told to re-create it ('terminal:reattach'). A detached
+// window whose last tab was moved away is closed with its PTY preserved.
+let tabDragState = null; // { termId, overMain, timer }
+
+function pointInRect(pt, r) {
+  return !!r && pt.x >= r.x && pt.x <= r.x + r.width && pt.y >= r.y && pt.y <= r.y + r.height;
+}
+
+function eachDragWindow(fn) {
+  if (mainWindow && !mainWindow.isDestroyed()) fn(mainWindow.webContents);
+  const seen = new Set();
+  for (const dw of detachedWindows.values()) {
+    if (!dw || dw.isDestroyed()) continue;
+    try {
+      if (seen.has(dw.webContents.id)) continue;
+      seen.add(dw.webContents.id);
+      fn(dw.webContents);
+    } catch {}
+  }
+}
+
+function broadcastDragActive(id, exceptWc) {
+  eachDragWindow(wc => {
+    if (exceptWc && wc.id === exceptWc.id) return;
+    try { wc.send('tab-drag:active', { id }); } catch {}
+  });
+}
+
+function stopTabDrag() {
+  if (tabDragState) {
+    clearInterval(tabDragState.timer);
+    tabDragState = null;
+  }
+  broadcastDragActive(null, null);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('tab-drag:over', { over: false });
+  }
+}
+
+ipcMain.on('tab-drag:start', (e, { id } = {}) => {
+  stopTabDrag();
+  if (!id || (!ptys.has(id) && !detachedWindows.has(id))) return;
+  // Tell every OTHER window which terminal is being dragged.
+  broadcastDragActive(id, e.sender);
+  if (!detachedWindows.has(id)) return; // main-window drag: no re-attach polling
+  // Best-effort live highlight: poll the cursor only where the platform
+  // reports real positions (on Wayland it returns 0,0 → skip).
+  const poll = () => {
+    if (!tabDragState) return;
+    let pt = null;
+    try { pt = screen.getCursorScreenPoint(); } catch {}
+    if (!pt || (pt.x === 0 && pt.y === 0)) return;
+    const over = pointInRect(pt, mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMinimized()
+      ? mainWindow.getBounds() : null);
+    if (over !== tabDragState.overMain) {
+      tabDragState.overMain = over;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('tab-drag:over', { id, over });
+      }
+    }
+  };
+  tabDragState = { termId: id, overMain: false, timer: setInterval(poll, 60) };
+});
+
+const tabDragFinishers = new Map(); // termId -> { finish, timer, cols, rows, cwd, remaining }
+
+ipcMain.on('tab-drag:ready', (_e, { id, cols, rows, cwd, remaining } = {}) => {
+  const f = id && tabDragFinishers.get(id);
+  if (!f) return;
+  if (cols) f.cols = cols;
+  if (rows) f.rows = rows;
+  if (cwd) f.cwd = cwd;
+  if (Number.isFinite(remaining)) f.remaining = remaining;
+  clearTimeout(f.timer);
+  tabDragFinishers.delete(id);
+  f.finish();
+});
+
+// Move a terminal from its current window into the window identified by
+// `targetWcId` (the webContents that reported the drop). The PTY never dies:
+// output is buffered while the source removes the tab and the target
+// re-creates it. `placement` ({ targetGroupId, zone, beforeTabId }) tells the
+// target where in its layout the tab should land.
+function startTabMove(p, placement, targetWcId) {
+  const id = p && p.id;
+  if (!id || !ptys.has(id) || tabDragFinishers.has(id)) return;
+
+  let targetWc = null;
+  let targetDw = null;
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.id === targetWcId) {
+    targetWc = mainWindow.webContents;
+  } else {
+    for (const dw of detachedWindows.values()) {
+      if (dw && !dw.isDestroyed() && dw.webContents.id === targetWcId) { targetDw = dw; targetWc = dw.webContents; break; }
+    }
+  }
+  if (!targetWc || targetWc.isDestroyed()) return;
+
+  const srcDw = detachedWindows.get(id) || null;
+  if (srcDw && srcDw === targetDw) return;              // same detached window: renderer-local
+  if (!srcDw && targetWc === (mainWindow && mainWindow.webContents)) return; // main→main: renderer-local
+  console.log('[tab-drag] move:', id, '→', targetDw ? `detached#${targetWc.id}` : 'main',
+    placement ? `zone=${placement.zone} group=${placement.targetGroupId}` : 'fallback');
+
+  reattachingIds.add(id);
+  detachedWindows.delete(id);   // stop routing output to the source window
+  detachedPending.set(id, []);  // buffer PTY output until the target attaches
+  const f = {
+    cols: p.cols, rows: p.rows, cwd: p.cwd,
+    remaining: 1, // keep the source window open unless it reports it's empty
+    timer: null,
+    finish: () => {
+      if (tabDragFinishers.get(id)?.finish === f.finish) tabDragFinishers.delete(id);
+      reattachingIds.delete(id);
+      // Close the source window iff the moved tab was its last one.
+      if (srcDw && !srcDw.isDestroyed() && f.remaining === 0) { try { srcDw.close(); } catch {} }
+      // Route further output to the target window and have it create the tab.
+      if (targetDw && !targetDw.isDestroyed()) detachedWindows.set(id, targetDw);
+      if (targetWc && !targetWc.isDestroyed()) {
+        targetWc.send('terminal:reattach', { id, cols: f.cols, rows: f.rows, cwd: f.cwd, placement: placement || null });
+      }
+    },
+  };
+  const srcWc = srcDw && !srcDw.isDestroyed() ? srcDw.webContents
+    : (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null);
+  try { if (srcWc && !srcWc.isDestroyed()) srcWc.send('tab-drag:complete', { id }); } catch {}
+  f.timer = setTimeout(f.finish, 350);
+  tabDragFinishers.set(id, f);
+}
+
+ipcMain.on('tab-drag:end', (_e, p) => {
+  stopTabDrag();
+  if (!p || !p.id || p.cancelled) return;
+  if (tabDragFinishers.has(p.id)) return; // a drop already started the move
+  const dw = detachedWindows.get(p.id);
+  if (!dw || dw.isDestroyed() || !ptys.has(p.id)) return;
+
+  // If some window ACCEPTED the drop (a tab bar or pane overlay), that
+  // window's drop handler owns the follow-up — its 'tab-drag:drop' IPC races
+  // this message across processes, so acting here would conflict with it.
+  // dragend is only the fallback for drags no target accepted.
+  if (!p.unhandled && !p.outside) return;
+  // The pointer was still over the detached window at release
+  // (dragenter/dragleave state) — that's a local drop, never a re-attach.
+  if (p.insideAtEnd) return;
+  // Fallback: attach into the main window's active group.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    startTabMove(p, null, mainWindow.webContents.id);
+  }
+});
+
+// A window accepted the drop on a specific target (tab bar / pane zone).
+// The target window is the sender of this message.
+ipcMain.on('tab-drag:drop', (e, p) => {
+  stopTabDrag();
+  if (!p || !p.id || !p.targetGroupId) return;
+  startTabMove({ id: p.id }, { targetGroupId: p.targetGroupId, zone: p.zone || 'center', beforeTabId: p.beforeTabId || null }, e.sender.id);
 });
 
 // ── IPC: native browser tab views (WebContentsView) ──

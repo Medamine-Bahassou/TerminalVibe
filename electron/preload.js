@@ -26,6 +26,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('terminal:detached-closed', l);
     return () => ipcRenderer.removeListener('terminal:detached-closed', l);
   },
+  // Drag a detached window's tab back into the main window (re-attach)
+  tabDragStart: (o) => ipcRenderer.send('tab-drag:start', o),
+  tabDragEnd: (o) => ipcRenderer.send('tab-drag:end', o),
+  tabDragDrop: (o) => ipcRenderer.send('tab-drag:drop', o),
+  tabDragReady: (o) => ipcRenderer.send('tab-drag:ready', o),
+  onTerminalReattach: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('terminal:reattach', l);
+    return () => ipcRenderer.removeListener('terminal:reattach', l);
+  },
+  onTabDragOver: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('tab-drag:over', l);
+    return () => ipcRenderer.removeListener('tab-drag:over', l);
+  },
+  onTabDragActive: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('tab-drag:active', l);
+    return () => ipcRenderer.removeListener('tab-drag:active', l);
+  },
+  onTabDragComplete: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('tab-drag:complete', l);
+    return () => ipcRenderer.removeListener('tab-drag:complete', l);
+  },
   onTerminalData: (cb) => {
     const l = (_e, d) => cb(d);
     ipcRenderer.on('terminal:data', l);
