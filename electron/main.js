@@ -44,9 +44,16 @@ function writeConfigFile(filePath, data) {
 let mainWindow = null;
 let settingsWindow = null;
 
+function getIconPath() {
+  const iconPath = path.join(__dirname, 'icon.png');
+  if (fs.existsSync(iconPath)) return iconPath;
+  return undefined;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     title: 'TerminalVibe',
+    icon: getIconPath(),
     width: 1200,
     height: 684,
     minWidth: 600,
@@ -119,8 +126,9 @@ function createSettingsWindow() {
     modal: true,
     alwaysOnTop: true,
     frame: false, // frameless → fully covers the parent (no OS titlebar eating space)
-    title: 'Settings',
-    width: Math.max(bounds.width, 500),
+     title: 'Settings',
+     icon: getIconPath(),
+     width: Math.max(bounds.width, 500),
     height: Math.max(bounds.height, 400),
     minWidth: 500,
     minHeight: 400,
@@ -344,8 +352,9 @@ ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
   const winId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 
   const dw = new BrowserWindow({
-    title: 'TerminalVibe — Detached',
-    width: 900,
+     title: 'TerminalVibe — Detached',
+     icon: getIconPath(),
+     width: 900,
     height: 600,
     minWidth: 400,
     minHeight: 300,

@@ -1804,7 +1804,7 @@
             tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); });
             tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
             tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
-            tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
+            tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
             tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
             tabsContainer.appendChild(tab);
             updateTabBarOverflow(groupEl);
@@ -1914,7 +1914,7 @@
             tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); });
             tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
             tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
-            tab.addEventListener('dragleave', () => { tab.classList.remove('drop-left', 'drop-right'); });
+            tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
             tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || e.dataTransfer.getData('text/plain'); if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
             tabsContainer.appendChild(tab);
             updateTabBarOverflow(groupEl);
@@ -2657,6 +2657,77 @@
       tabsContainer.className = 'term-group-tabs';
       tabsContainer.addEventListener('scroll', () => updateTabBarOverflow(groupEl));
 
+      // Container-level drop handling for gaps between tabs and edges
+      tabsContainer.addEventListener('dragover', (e) => {
+        if (!window.draggedTermId) return;
+        if (e.target !== tabsContainer) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const tabs = Array.from(tabsContainer.querySelectorAll('.tg-tab'))
+          .filter(el => !el.classList.contains('dragging'));
+        if (!tabs.length) return;
+        let closest = tabs[0];
+        let bestDist = Infinity;
+        const cx = e.clientX;
+        for (const t of tabs) {
+          const r = t.getBoundingClientRect();
+          const dist = Math.abs(cx - (r.left + r.width / 2));
+          if (dist < bestDist) { bestDist = dist; closest = t; }
+        }
+        tabs.forEach(t => t.classList.remove('drop-left', 'drop-right'));
+        const r = closest.getBoundingClientRect();
+        if (cx < r.left + r.width / 2) {
+          closest.classList.add('drop-left');
+        } else {
+          closest.classList.add('drop-right');
+        }
+      });
+      tabsContainer.addEventListener('dragleave', (e) => {
+        if (!e.relatedTarget || !tabsContainer.contains(e.relatedTarget)) {
+          tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
+            el.classList.remove('drop-left', 'drop-right');
+          });
+        }
+      });
+      tabsContainer.addEventListener('drop', (e) => {
+        if (!window.draggedTermId) return;
+        if (e.target !== tabsContainer) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const tabs = Array.from(tabsContainer.querySelectorAll('.tg-tab'))
+          .filter(el => !el.classList.contains('dragging'));
+        if (!tabs.length) return;
+        let closest = tabs[0];
+        let bestDist = Infinity;
+        const cx = e.clientX;
+        for (const t of tabs) {
+          const r = t.getBoundingClientRect();
+          const dist = Math.abs(cx - (r.left + r.width / 2));
+          if (dist < bestDist) { bestDist = dist; closest = t; }
+        }
+        const draggedId = window.draggedTermId;
+        const targetTermId = closest.dataset.termid;
+        const r = closest.getBoundingClientRect();
+        const insertBefore = cx < r.left + r.width / 2;
+        tabs.forEach(t => t.classList.remove('drop-left', 'drop-right'));
+        if (window.dragSourceGroupId === node.id) {
+          const fromIdx = node.terminals.findIndex(x => x.id === draggedId);
+          let toIdx = node.terminals.findIndex(x => x.id === targetTermId);
+          if (fromIdx === -1 || toIdx === -1) return;
+          const [moved] = node.terminals.splice(fromIdx, 1);
+          toIdx = node.terminals.findIndex(x => x.id === targetTermId);
+          const insertIdx = insertBefore ? toIdx : toIdx + 1;
+          node.terminals.splice(insertIdx, 0, moved);
+          node.activeTermId = draggedId;
+          renderPaneArea();
+          saveState();
+        } else {
+          handleTerminalDrop(draggedId, node.id, 'center', wsp);
+        }
+        window.draggedTermId = null;
+        window.dragSourceGroupId = null;
+      });
+
       // VSCode-style edge paging chevrons, shown only while the bar overflows
       const tabsWrap = document.createElement('div');
       tabsWrap.className = 'term-group-tabs-wrap';
@@ -2741,8 +2812,10 @@
             tab.classList.add('drop-right');
           }
         });
-        tab.addEventListener('dragleave', () => {
-          tab.classList.remove('drop-left', 'drop-right');
+        tab.addEventListener('dragleave', (e) => {
+          if (!e.relatedTarget || !tab.contains(e.relatedTarget)) {
+            tab.classList.remove('drop-left', 'drop-right');
+          }
         });
         tab.addEventListener('drop', e => {
           e.preventDefault();
@@ -3710,6 +3783,73 @@
       sb.querySelectorAll('.ws-folder-row.drop-into, .ws-folder-row.drop-above, .ws-folder-row.drop-below').forEach(el => el.classList.remove('drop-into', 'drop-above', 'drop-below'));
     };
 
+    // Container-level drop handling for gaps between and around sidebar items
+    if (!sb._wsSidebarDrop) {
+      sb._wsSidebarDrop = true;
+      const findClosestItem = (cy) => {
+        const items = Array.from(sb.querySelectorAll('.ws-btn[draggable="true"], .ws-folder-row[draggable="true"]'))
+          .filter(el => el.dataset.slot !== undefined);
+        if (!items.length) return null;
+        let closest = items[0];
+        let bestDist = Infinity;
+        for (const el of items) {
+          const r = el.getBoundingClientRect();
+          const dist = Math.abs(cy - (r.top + r.height / 2));
+          if (dist < bestDist) { bestDist = dist; closest = el; }
+        }
+        return closest;
+      };
+      sb.addEventListener('dragover', (e) => {
+        const dw = window.draggedWsId;
+        const df = window.draggedFolderId;
+        if (!dw && !df) return;
+        if (e.target !== sb) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const closest = findClosestItem(e.clientY);
+        if (!closest) return;
+        clearDropMarks();
+        const r = closest.getBoundingClientRect();
+        if (e.clientY > r.top + r.height / 2) {
+          closest.classList.add('drop-below');
+        } else {
+          closest.classList.add('drop-above');
+        }
+      });
+      sb.addEventListener('dragleave', (e) => {
+        if (!e.relatedTarget || !sb.contains(e.relatedTarget)) {
+          clearDropMarks();
+        }
+      });
+      sb.addEventListener('drop', (e) => {
+        const dw = window.draggedWsId;
+        const df = window.draggedFolderId;
+        if (!dw && !df) return;
+        if (e.target !== sb) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const closest = findClosestItem(e.clientY);
+        clearDropMarks();
+        window._wsDragged = true;
+        setTimeout(() => { window._wsDragged = false; }, 0);
+        if (!closest) {
+          if (df) { window.draggedFolderId = null; moveTopLevelItem('folder', df, 0); }
+          else if (dw) { window.draggedWsId = null; moveTopLevelItem('ws', dw, 0); }
+          return;
+        }
+        const slot = parseInt(closest.dataset.slot, 10);
+        const r = closest.getBoundingClientRect();
+        const below = e.clientY > r.top + r.height / 2;
+        if (df) {
+          window.draggedFolderId = null;
+          moveTopLevelItem('folder', df, slot + (below ? 1 : 0));
+        } else if (dw) {
+          window.draggedWsId = null;
+          moveTopLevelItem('ws', dw, slot + (below ? 1 : 0));
+        }
+      });
+    }
+
     // Header above the workspace list: "Workspaces" title + new workspace / new folder.
     const header = document.createElement('div');
     header.className = 'ws-header';
@@ -3764,6 +3904,7 @@
       btn.className = 'ws-btn' + (isActive ? ' active' : '');
       btn.draggable = true;
       btn.dataset.wsid = wsp.id;
+      if (slot !== undefined) btn.dataset.slot = String(slot);
       const abbr = wsp.label.substring(0,3).toUpperCase();
       const tabCount = getWorkspaceTerminals(wsp).length;
       const isInFolder = folderKey !== undefined;
@@ -3815,8 +3956,10 @@
         btn.classList.add(above ? 'drop-above' : 'drop-below');
         if (slot === undefined) e.stopPropagation();
       });
-      btn.addEventListener('dragleave', () => {
-        btn.classList.remove('drop-above', 'drop-below');
+      btn.addEventListener('dragleave', (e) => {
+        if (!e.relatedTarget || !btn.contains(e.relatedTarget)) {
+          btn.classList.remove('drop-above', 'drop-below');
+        }
       });
       btn.addEventListener('drop', e => {
         e.preventDefault();
@@ -3877,6 +4020,7 @@
 
       const row = document.createElement('div');
       row.className = 'ws-folder-row' + (folder.collapsed ? ' collapsed' : '') + (isLast ? ' last' : '');
+      row.dataset.slot = String(slot);
       if (folder.color) {
         row.dataset.color = folder.color;
         row.style.setProperty('--ws-color', folder.color);
@@ -3937,7 +4081,11 @@
         clearDropMarks();
         row.classList.add(zone === 'above' ? 'drop-above' : zone === 'into' ? 'drop-into' : 'drop-below');
       });
-      row.addEventListener('dragleave', () => row.classList.remove('drop-into', 'drop-above', 'drop-below'));
+      row.addEventListener('dragleave', (e) => {
+        if (!e.relatedTarget || !row.contains(e.relatedTarget)) {
+          row.classList.remove('drop-into', 'drop-above', 'drop-below');
+        }
+      });
       row.addEventListener('drop', e => {
         e.preventDefault();
         const dw = window.draggedWsId;

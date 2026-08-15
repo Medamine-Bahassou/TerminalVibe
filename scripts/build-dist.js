@@ -21,7 +21,7 @@ for (const a of assets) {
   fs.copyFileSync(path.join(root, a), path.join(dist, a));
 }
 
-const vendorXterm = path.join(root, 'vendor', 'xterm');
+  const vendorXterm = path.join(root, 'vendor', 'xterm');
 if (fs.existsSync(vendorXterm)) {
   fs.cpSync(vendorXterm, path.join(dist, 'vendor', 'xterm'), { recursive: true });
 } else {
@@ -38,10 +38,16 @@ if (fs.existsSync(vendorXterm)) {
   }
 }
 
-// Copy coloris assets
-for (const f of ['coloris.min.css', 'coloris.min.js']) {
+// Copy all vendor assets (coloris, split, embedpdf) to dist/vendor/
+// index.html references them with the vendor/ prefix
+for (const f of ['coloris.min.css', 'coloris.min.js', 'split.min.js']) {
   const src = path.join(root, 'vendor', f);
-  if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dist, f));
+  if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dist, 'vendor', f));
+}
+
+const vendorEmbed = path.join(root, 'vendor', 'embedpdf');
+if (fs.existsSync(vendorEmbed)) {
+  fs.cpSync(vendorEmbed, path.join(dist, 'vendor', 'embedpdf'), { recursive: true });
 }
 
 // Stage server-dist (also used by the old Tauri bundle layout)

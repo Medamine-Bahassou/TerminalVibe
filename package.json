@@ -42,11 +42,7 @@
     "asar": true,
     "files": [
       "electron/**/*",
-      "index.html",
-      "app.js",
-      "style.css",
-      "logo.png",
-      "logo-app.svg",
+      "dist/**/*",
       "node_modules/node-pty/**/*"
     ],
     "extraResources": [
