@@ -34,12 +34,17 @@
 
 ## Screenshots
 
-<p align="center">
-  <img src="screenshots/youtube.png" alt="TerminalVibe - Built-in browser playing YouTube" width="800">
-</p>
 
 <p align="center">
   <img src="screenshots/claude.png" alt="TerminalVibe - Running Claude Code in the terminal" width="800">
+</p>
+
+<p align="center">
+  <img src="screenshots/splits.png" alt="TerminalVibe - Split panes and workspaces" width="800">
+</p>
+
+<p align="center">
+  <img src="screenshots/youtube.png" alt="TerminalVibe - Built-in browser playing YouTube" width="800">
 </p>
 
 <p align="center">
