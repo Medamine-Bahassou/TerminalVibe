@@ -7,7 +7,7 @@
 <p align="center">A terminal multiplexer and desktop workspace app with integrated browser, built on Electron.</p>
 
 <p align="center">
-  <img src="screenshots/main.png" alt="TerminalVibe - Main Interface" width="800">
+  <img src="screenshots/splits.png" alt="TerminalVibe - Split panes and workspaces" width="800">
 </p>
 
 ## Features
@@ -31,6 +31,16 @@
 - **Persistent state** - layout, themes, settings, and open browser URLs persist across sessions (auto-save every 30s)
 - **Frameless window** - custom titlebar with logo, sidebar toggle, and window controls (minimize/maximize/close)
 - **Status bar** - shows active workspace, terminal name, terminal dimensions + font size, connection status, multi-select count, and real-time clock
+
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/youtube.png" alt="TerminalVibe - Built-in browser playing YouTube" width="800">
+</p>
+
+<p align="center">
+  <img src="screenshots/claude.png" alt="TerminalVibe - Running Claude Code in the terminal" width="800">
+</p>
 
 <p align="center">
   <img src="screenshots/settings.png" alt="TerminalVibe - Settings" width="800">
