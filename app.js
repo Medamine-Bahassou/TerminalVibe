@@ -11,9 +11,10 @@
   // App version — single source of truth, shared across the whole app
   const APP_VERSION = '0.5.10';
 
-  // Configure Coloris — hex color picker
+  // Configure Coloris — hex color picker.
+  // Keep the picker parented to <body> (the default): style.css lifts it
+  // above the settings (z-10000) and prompt (z-10001) overlays.
   Coloris({
-    parent: '#settings-modal',
     themeMode: 'dark',
     theme: 'default',
     format: 'hex',
@@ -1072,14 +1073,75 @@
     }
   }
 
+  /* Imported backgrounds live as data URLs inside the saved state, so giant
+     photos overflow the localStorage quota and silently skip persistence.
+     Re-encode anything over the budget: cap the longest edge and keep the
+     original only if re-encoding can't shrink it. GIFs are exempt — canvas
+     re-encoding would flatten the animation. */
+  const BG_IMG_BUDGET = 300 * 1024;
+  const BG_IMG_MAX_EDGE = 1920;
+
+  function optimizeBgImage(dataUrl, callback) {
+    if (!dataUrl || dataUrl.length < BG_IMG_BUDGET || dataUrl.startsWith('data:image/gif')) {
+      callback(dataUrl);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      let out = dataUrl;
+      try {
+        const longEdge = Math.max(img.naturalWidth, img.naturalHeight);
+        if (longEdge > 0) {
+          const scale = Math.min(1, BG_IMG_MAX_EDGE / longEdge);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          const re = canvas.toDataURL('image/webp', 0.85);
+          if (re && re !== 'data:,' && re.length < out.length) out = re;
+        }
+      } catch {}
+      callback(out);
+    };
+    img.onerror = () => callback(dataUrl);
+    img.src = dataUrl;
+  }
+
   function loadBgImageFromFile(file, callback) {
     if (!file) { callback(''); return; }
     const reader = new FileReader();
-    reader.onload = (e) => {
-      callback(e.target.result);
-    };
+    reader.onload = (e) => optimizeBgImage(e.target.result, callback);
     reader.onerror = () => { callback(''); };
     reader.readAsDataURL(file);
+  }
+
+  /* Workspace icons are tiny thumbnails stored as data URLs in the saved
+     state, so rasterize picks down to a small square. GIFs (animation) and
+     SVGs (vector) pass through untouched. */
+  const WS_ICON_SIZE = 64;
+
+  function optimizeIconImage(dataUrl, callback) {
+    if (!dataUrl || dataUrl.startsWith('data:image/gif') || dataUrl.startsWith('data:image/svg')) {
+      callback(dataUrl);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      let out = dataUrl;
+      try {
+        const scale = Math.min(1, WS_ICON_SIZE / Math.max(img.naturalWidth, img.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        let re = canvas.toDataURL('image/webp', 0.9);
+        if (!re || re === 'data:,' || re.length > out.length) re = canvas.toDataURL('image/png');
+        if (re && re !== 'data:,' && re.length < out.length) out = re;
+      } catch {}
+      callback(out);
+    };
+    img.onerror = () => callback(dataUrl);
+    img.src = dataUrl;
   }
 
   function setGlobalBackgroundImage(dataUrl) {
@@ -1197,13 +1259,19 @@
         searchEngine,
         customSearchUrl,
       };
+      // Disk state is what restoreState prefers — write it even when the
+      // localStorage copy overflows the quota.
+      let merged = settings;
       try {
-        const state = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
-        Object.assign(state, settings);
-        localStorage.setItem(STATE_KEY, JSON.stringify(state));
-        const api = configApi();
-        if (api && api.configWriteState) api.configWriteState(state);
+        merged = Object.assign(JSON.parse(localStorage.getItem(STATE_KEY) || '{}'), settings);
       } catch {}
+      const api = configApi();
+      if (api && api.configWriteState) api.configWriteState(merged);
+      try {
+        localStorage.setItem(STATE_KEY, JSON.stringify(merged));
+      } catch (err) {
+        console.warn('[state] localStorage write failed (disk copy saved):', err);
+      }
       if (window.electronAPI && window.electronAPI.settingsChanged) window.electronAPI.settingsChanged();
       return;
     }
@@ -1241,18 +1309,21 @@
     workspaces: workspaces.map(ws => {
      const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
      if (ws.color) o.color = ws.color;
+     if (ws.icon) o.icon = ws.icon;
      if (ws.folderId) o.folderId = ws.folderId;
      if (ws.pinned) o.pinned = true;
      return o;
    }),
     };
+    if (!DETACHED_ONLY) {
+      const api = configApi();
+      if (api && api.configWriteState) api.configWriteState(state);
+    }
     try {
       localStorage.setItem(key, JSON.stringify(state));
-      if (!DETACHED_ONLY) {
-        const api = configApi();
-        if (api && api.configWriteState) api.configWriteState(state);
-      }
-    } catch {}
+    } catch (err) {
+      console.warn('[state] localStorage write failed (disk copy saved):', err);
+    }
   }
 
   async function restoreState() {
@@ -1331,6 +1402,7 @@
           layout: null
         };
         if (wsData.color) ws.color = wsData.color;
+        if (wsData.icon) ws.icon = wsData.icon;
         if (wsData.folderId) ws.folderId = wsData.folderId;
         if (wsData.pinned) ws.pinned = true;
 
@@ -1725,9 +1797,10 @@
     const ws = findWs(id);
     if (!ws) return;
 
-    showPrompt('Edit workspace', ws.label, { color: ws.color || '' }, (value, color) => {
+    showPrompt('Edit workspace', ws.label, { color: ws.color || '', icon: ws.icon || '' }, (value, color, icon) => {
       ws.label = value.trim() || ws.label;
       ws.color = color || undefined;
+      if (icon) ws.icon = icon; else delete ws.icon;
       renderSidebar();
       saveState();
     });
@@ -4198,7 +4271,10 @@
       const abbr = wsp.label.substring(0,3).toUpperCase();
       const tabCount = getWorkspaceTerminals(wsp).length;
       const isInFolder = folderKey != null;
-      btn.innerHTML = `<span class="ws-strip"></span><span class="ws-label">${abbr}</span><span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
+      const labelHtml = wsp.icon
+        ? `<img class="ws-icon" src="${escHtml(wsp.icon)}" alt="" draggable="false">`
+        : `<span class="ws-label">${abbr}</span>`;
+      btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
       if (wsp.pinned) btn.classList.add('pinned');
       btn.title = wsp.label;
       if (wsp.color) {
@@ -4520,14 +4596,34 @@
       item('<i class="ph ph-pencil-simple"></i>', 'Edit workspace', '', () => renameWorkspace(wsId));
       if (folders.length || findWs(wsId)?.folderId) {
         sep();
+        // Submenu keeps the menu short when there are many folders
+        const ws = findWs(wsId);
+        const sub = document.createElement('div');
+        sub.className = 'ctx-sub';
+        const subItem = (icon, label, fn, checked, danger) => {
+          const el = document.createElement('div');
+          el.className = 'ctx-item' + (danger ? ' danger' : '') + (checked ? ' checked' : '');
+          el.innerHTML = `<span>${icon}</span><span>${label}</span>${checked ? '<span class="ci-key"><i class="ph ph-check"></i></span>' : ''}`;
+          el.addEventListener('click', () => { if (!fn) return; hideCtxMenu(); fn(); });
+          sub.appendChild(el);
+        };
+        const subSep = () => { const el = document.createElement('div'); el.className = 'ctx-sep'; sub.appendChild(el); };
+        if (ws?.folderId) {
+          subItem('<i class="ph ph-folder-minus"></i>', 'Remove from folder', () => moveWsTo(wsId, null, getGroupList(null).length));
+          subSep();
+        }
         for (const f of folders) {
-          const inFolder = findWs(wsId)?.folderId === f.id;
-          item(`<i class="ph ph-folder${inFolder ? '-open' : ''}"></i>`, `${inFolder ? '✓ ' : ''}Move to "${f.label}"`, '', () => moveWsTo(wsId, f.id, getGroupList(f.id).length));
+          const inFolder = ws?.folderId === f.id;
+          subItem(`<i class="ph ph-folder${inFolder ? '-open' : ''}"></i>`, escHtml(f.label), inFolder ? null : () => moveWsTo(wsId, f.id, getGroupList(f.id).length), inFolder);
         }
-        item('<i class="ph ph-folder-simple-plus"></i>', 'New folder', '', () => showPrompt('New folder', '', { color: '' }, (value, color) => { const nf = createFolder(value, color); if (nf) moveWsTo(wsId, nf.id, 0); }));
-        if (findWs(wsId)?.folderId) {
-          item('<i class="ph ph-folder-minus"></i>', 'Remove from folder', '', () => moveWsTo(wsId, null, getGroupList(null).length));
-        }
+        subSep();
+        subItem('<i class="ph ph-folder-simple-plus"></i>', 'New folder…', () => showPrompt('New folder', '', { color: '' }, (value, color) => { const nf = createFolder(value, color); if (nf) moveWsTo(wsId, nf.id, 0); }));
+
+        const trigger = document.createElement('div');
+        trigger.className = 'ctx-item has-sub';
+        trigger.innerHTML = `<span><i class="ph ph-folder-simple"></i></span><span>Move to folder</span><span class="ci-sub-caret"><i class="ph ph-caret-right"></i></span>`;
+        trigger.appendChild(sub);
+        ctxEl.appendChild(trigger);
       }
       sep();
       item('<i class="ph ph-x"></i>', 'Close workspace', '', () => removeWorkspace(wsId), true);
@@ -4613,6 +4709,8 @@
     if (y + menuH > window.innerHeight) y = window.innerHeight - menuH - 4;
     ctxEl.style.left = Math.max(0, x) + 'px';
     ctxEl.style.top = Math.max(0, y) + 'px';
+    // Flip the submenu to the left when the menu sits near the right screen edge
+    ctxEl.classList.toggle('sub-flip', x + menuW + 210 > window.innerWidth);
   }
 
   function hideCtxMenu() { ctxEl.classList.remove('open'); }
@@ -4628,27 +4726,92 @@
   const promptCancel = document.getElementById('prompt-cancel');
   const promptColors = document.getElementById('prompt-colors');
   const promptSwatches = promptColors.querySelectorAll('.prompt-swatch');
+  const promptIconBtn = document.getElementById('prompt-icon-btn');
+  const promptIconImg = document.getElementById('prompt-icon-img');
+  const promptIconClear = document.getElementById('prompt-icon-clear');
+  const promptIconFile = document.getElementById('prompt-icon-file');
 
   function showPrompt(label, value, opts, callback) {
     if (typeof opts === 'function') { callback = opts; opts = {}; }
     promptLabel.textContent = label;
     promptInput.value = value;
 
-    // Color swatches
+    // Color swatches (last one opens a Coloris picker for any color)
     let selectedColor = '';
+    let colorisInput = null;
+    const customSwatch = promptColors.querySelector('.prompt-swatch-custom');
+    const setActiveSwatch = (el) => {
+      promptSwatches.forEach(x => x.classList.remove('active'));
+      if (el) el.classList.add('active');
+    };
     if (opts.color !== undefined) {
       promptColors.style.display = 'block';
       selectedColor = opts.color || '';
+      const isPreset = (c) => Array.from(promptSwatches).some(s => s !== customSwatch && s.dataset.color === c);
       promptSwatches.forEach(s => {
+        if (s === customSwatch) return;
         s.classList.toggle('active', s.dataset.color === selectedColor);
         s.onclick = () => {
           selectedColor = s.dataset.color;
-          promptSwatches.forEach(x => x.classList.remove('active'));
-          s.classList.add('active');
+          setActiveSwatch(s);
         };
       });
+      if (selectedColor && !isPreset(selectedColor)) {
+        customSwatch.style.background = selectedColor;
+        setActiveSwatch(customSwatch);
+      }
+      customSwatch.onclick = () => {
+        const tempInput = document.createElement('input');
+        tempInput.type = 'text';
+        tempInput.value = selectedColor || '#89b4fa';
+        tempInput.style.position = 'fixed';
+        tempInput.style.opacity = '0';
+        tempInput.style.pointerEvents = 'none';
+        // Anchor the popup next to the swatch (Coloris positions from the input's rect)
+        const r = customSwatch.getBoundingClientRect();
+        tempInput.style.left = Math.max(8, Math.min(window.innerWidth - 210, r.left - 85)) + 'px';
+        tempInput.style.top = Math.min(window.innerHeight - 8, r.bottom + 6) + 'px';
+        tempInput.style.width = '1px';
+        tempInput.style.height = '1px';
+        tempInput.setAttribute('data-coloris', '');
+        document.body.appendChild(tempInput);
+        colorisInput = tempInput;
+        // This Coloris build exposes no .open()/.on(): a click on a
+        // [data-coloris] input opens the picker via its own delegation, and
+        // picked values arrive as 'input' events on that input.
+        tempInput.addEventListener('input', () => {
+          selectedColor = tempInput.value;
+          customSwatch.style.background = tempInput.value;
+          setActiveSwatch(customSwatch);
+        });
+        tempInput.addEventListener('close', () => { tempInput.remove(); colorisInput = null; });
+        setTimeout(() => tempInput.click(), 0);
+      };
     } else {
       promptColors.style.display = 'none';
+    }
+
+    // Workspace icon picker (left of the input)
+    let selectedIcon = '';
+    const setIcon = (dataUrl) => {
+      selectedIcon = dataUrl || '';
+      promptIconBtn.classList.toggle('has-icon', !!selectedIcon);
+      if (selectedIcon) promptIconImg.src = selectedIcon;
+    };
+    if (opts.icon !== undefined) {
+      promptIconBtn.style.display = '';
+      setIcon(opts.icon || '');
+      promptIconBtn.onclick = () => { promptIconFile.value = ''; promptIconFile.click(); };
+      promptIconClear.onclick = (e) => { e.stopPropagation(); setIcon(''); };
+      promptIconFile.onchange = () => {
+        const file = promptIconFile.files && promptIconFile.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => optimizeIconImage(e.target.result, setIcon);
+        reader.readAsDataURL(file);
+      };
+    } else {
+      promptIconBtn.style.display = 'none';
     }
 
     promptOverlay.classList.add('open');
@@ -4657,17 +4820,28 @@
 
     const close = () => {
       promptOverlay.classList.remove('open');
+      // Dismiss a still-open Coloris popup and drop its temp input
+      if (colorisInput) {
+        const ci = colorisInput;
+        try { if (document.querySelector('#clr-picker.clr-open')) Coloris.close(); } catch {}
+        ci.remove();
+        colorisInput = null;
+      }
       promptOk.onclick = null;
       promptCancel.onclick = null;
       promptInput.onkeydown = null;
       promptOverlay.onclick = null;
       promptSwatches.forEach(s => { s.onclick = null; });
+      promptIconBtn.onclick = null;
+      promptIconClear.onclick = null;
+      promptIconFile.onchange = null;
+      promptIconFile.value = '';
     };
 
     const submit = () => {
       const val = promptInput.value;
       close();
-      callback(val, selectedColor);
+      callback(val, selectedColor, selectedIcon);
     };
 
     promptOk.onclick = submit;
@@ -4685,6 +4859,7 @@
     promptLabel.textContent = message;
     promptInput.style.display = 'none';
     promptColors.style.display = 'none';
+    promptIconBtn.style.display = 'none';
 
     promptOverlay.classList.add('open');
     promptOk.focus();
@@ -5280,25 +5455,25 @@ function setThemeColor(key, val) {
          tempInput.style.position = 'fixed';
          tempInput.style.opacity = '0';
          tempInput.style.pointerEvents = 'none';
+         // Anchor the popup next to the swatch (Coloris positions from the input's rect)
+         const r = swatchEl.getBoundingClientRect();
+         tempInput.style.left = Math.max(8, Math.min(window.innerWidth - 210, r.left - 85)) + 'px';
+         tempInput.style.top = r.bottom + 6 + 'px';
+         tempInput.style.width = '1px';
+         tempInput.style.height = '1px';
          tempInput.setAttribute('data-coloris', '');
          document.body.appendChild(tempInput);
 
-         const onChange = (color) => {
-           setThemeColor(themeKey, color);
-           swatchEl.style.background = color;
+         // This Coloris build exposes no .open()/.on(): a click on a
+         // [data-coloris] input opens the picker via its own delegation, and
+         // picked values arrive as 'input' events on that input.
+         tempInput.addEventListener('input', () => {
+           setThemeColor(themeKey, tempInput.value);
+           swatchEl.style.background = tempInput.value;
            previewTheme();
-         };
-
-         const onClose = () => {
-           document.body.removeChild(tempInput);
-           Coloris.off('change', onChange);
-           Coloris.off('close', onClose);
-         };
-
-         Coloris.on('change', onChange);
-         Coloris.on('close', onClose);
-         Coloris.open(false, tempInput);
-         tempInput.focus();
+         });
+         tempInput.addEventListener('close', () => tempInput.remove());
+         setTimeout(() => tempInput.click(), 0);
        }
 
        function previewTheme() {
@@ -6254,39 +6429,20 @@ function buildColorItem(key, label) {
 
       // ── Background Image Settings ──
       const bgModeSelect = document.getElementById('set-bg-mode');
-      const bgImageRow = document.getElementById('bg-image-row');
       const bgOpacitySlider = document.getElementById('set-bg-opacity');
       const bgOpacityVal = document.getElementById('set-bg-opacity-val');
       const bgUploadArea = document.getElementById('set-bg-image-area');
       const bgFileInput = document.getElementById('set-bg-image-input');
       const bgPreview = bgUploadArea.querySelector('.bg-upload-preview');
       const bgClearBtn = document.getElementById('bg-image-clear');
-
-      function updateBgImageRowHelpText() {
-        const textEl = bgUploadArea.querySelector('.bg-upload-text');
-        if (backgroundMode === 'global') {
-          textEl.textContent = 'Click to select global background image';
-        } else if (backgroundMode === 'per-tab') {
-          textEl.textContent = 'Click to set background for current tab';
-        } else {
-          textEl.textContent = 'Enable a background mode first';
-        }
-      }
+      const bgPerTabNote = document.getElementById('bg-per-tab-note');
+      const bgControlsRow = document.getElementById('bg-image-controls');
 
       function updateBgUploadPreview() {
-        let hasImage = false;
-        let src = '';
-        if (backgroundMode === 'global') {
-          hasImage = !!globalBackgroundImage;
-          src = globalBackgroundImage;
-        } else if (backgroundMode === 'per-tab') {
-          const active = activeTerminal();
-          hasImage = active && !!active.bgImage;
-          src = active ? (active.bgImage || '') : '';
-        }
+        const hasImage = backgroundMode === 'global' && !!globalBackgroundImage;
         bgUploadArea.classList.toggle('has-image', hasImage);
         if (hasImage) {
-          bgPreview.src = src;
+          bgPreview.src = globalBackgroundImage;
         }
       }
 
@@ -6295,11 +6451,11 @@ function buildColorItem(key, label) {
         const dd = document.querySelector('.custom-dropdown[data-for="set-bg-mode"]');
         if (dd) initCustomDropdown(dd);
 
-        const isEnabled = backgroundMode !== 'none';
-        bgImageRow.style.display = isEnabled ? '' : 'none';
+        bgControlsRow.style.display = backgroundMode === 'none' ? 'none' : '';
+        bgUploadArea.style.display = backgroundMode === 'global' ? '' : 'none';
+        bgPerTabNote.style.display = backgroundMode === 'per-tab' ? '' : 'none';
         bgOpacitySlider.value = Math.round(backgroundOpacity * 100);
         bgOpacityVal.textContent = Math.round(backgroundOpacity * 100) + '%';
-        updateBgImageRowHelpText();
         updateBgUploadPreview();
       }
 
@@ -6332,12 +6488,6 @@ function buildColorItem(key, label) {
         loadBgImageFromFile(file, (dataUrl) => {
           if (backgroundMode === 'global') {
             setGlobalBackgroundImage(dataUrl);
-          } else if (backgroundMode === 'per-tab') {
-            const active = activeTerminal();
-            if (active) {
-              setTermBackgroundImage(active, dataUrl);
-              applyBackground();
-            }
           }
           refreshBgSettingsUI();
         });
@@ -6348,18 +6498,9 @@ function buildColorItem(key, label) {
         e.stopPropagation();
         if (backgroundMode === 'global') {
           setGlobalBackgroundImage('');
-        } else if (backgroundMode === 'per-tab') {
-          const active = activeTerminal();
-          if (active) {
-            setTermBackgroundImage(active, '');
-            applyBackground();
-          }
         }
         refreshBgSettingsUI();
       });
-
-      // Also add "Set background…" context menu option for per-tab
-      // We'll patch into the existing context menu
 
       // Theme editor — Save
       document.getElementById('theme-btn-save').addEventListener('click', async () => {
