@@ -51,6 +51,9 @@
   <img src="screenshots/settings.png" alt="TerminalVibe - Settings" width="800">
 </p>
 
+<p align="center">
+  <img src="screenshots/background.png" alt="TerminalVibe - Settings" width="800">
+</p>
 ## Tech Stack
 
 | Layer | Technology |
