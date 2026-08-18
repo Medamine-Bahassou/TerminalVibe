@@ -104,4 +104,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   configWriteThemeFile: (name, theme) => ipcRenderer.invoke('config:writeThemeFile', name, theme),
   configDeleteThemeFile: (name) => ipcRenderer.invoke('config:deleteThemeFile', name),
   configListThemeFiles: () => ipcRenderer.invoke('config:listThemeFiles'),
+
+  // Images stored as files in ~/.terminalvibe/images/ (backgrounds, icons)
+  configWriteImages: (images) => ipcRenderer.invoke('config:writeImages', images),
+  configReadImage: (id) => ipcRenderer.invoke('config:readImage', id),
 });

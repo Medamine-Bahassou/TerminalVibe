@@ -1036,7 +1036,8 @@ isolation: isolate;
  * image spans every panel; the panels then go transparent to let it through.
  */
 .term-slot::before,
-#pane-area::before {
+#pane-area::before,
+.ws-pane-container.has-ws-bg::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -1084,6 +1085,25 @@ isolation: isolate;
 }
 /* Keep the tab header opaque — only terminal content shows the bg image */
 #pane-area.has-global-bg .term-group-header {
+  background: color-mix(in srgb, var(--bg) 92%, #000 8%);
+}
+
+/* In per-workspace mode the colour + image layers live on the workspace
+   container (.ws-pane-container), so every panel inside it must be transparent
+   for that single image to span the whole workspace. */
+.ws-pane-container.has-ws-bg .term-group,
+.ws-pane-container.has-ws-bg .term-group-body,
+.ws-pane-container.has-ws-bg .term-slot {
+  background-color: transparent;
+}
+.ws-pane-container.has-ws-bg .xterm-viewport {
+  background-color: transparent !important;
+}
+.ws-pane-container.has-ws-bg canvas {
+  background-color: transparent !important;
+}
+/* Keep the tab header opaque — only terminal content shows the bg image */
+.ws-pane-container.has-ws-bg .term-group-header {
   background: color-mix(in srgb, var(--bg) 92%, #000 8%);
 }
 

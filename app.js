@@ -334,7 +334,7 @@
   let currentCursorStyle = 'block';
   let currentCursorBlink = true;
   let currentScrollback = 10000;
-  let backgroundMode = 'none';       // 'none' | 'per-tab' | 'global'
+  let backgroundMode = 'none';       // 'none' | 'per-tab' | 'per-workspace' | 'global'
   let globalBackgroundImage = '';    // data URL for global bg
   let backgroundOpacity = 0.85;       // 0..1
   let settingsCategory = 'appearance'; // last-opened settings category (deep-link via openSettings(cat))
@@ -1006,9 +1006,10 @@
   /* The opacity slider is "terminal background opacity": 100% = fully solid
      terminal, 0% = image fully visible. The image layer therefore renders at
      the complement, on top of the solid theme colour that fills the panel. */
-  function bgImageAlpha() {
-    return Math.max(0, Math.min(1, 1 - backgroundOpacity));
-  }
+	  function bgImageAlpha(wsp) {
+	    const opacity = (wsp && wsp.bgOpacity != null) ? wsp.bgOpacity : backgroundOpacity;
+	    return Math.max(0, Math.min(1, 1 - opacity));
+	  }
 
   function cssUrl(dataUrl) {
     return 'url("' + String(dataUrl).replace(/["\\]/g, '\\$&') + '")';
@@ -1018,6 +1019,10 @@
   function termHasBgImage(entry) {
     if (!entry || entry.type === 'browser') return false;
     if (backgroundMode === 'global') return !!globalBackgroundImage;
+    if (backgroundMode === 'per-workspace') {
+      const found = findTermById(entry.id);
+      return found ? !!found.ws.bgImage : false;
+    }
     if (backgroundMode === 'per-tab') return !!entry.bgImage;
     return false;
   }
@@ -1035,26 +1040,49 @@
       paneArea.style.backgroundImage = '';   // legacy inline image, layers handle it now
     }
 
-    // Per-tab mode: each panel carries its own image layer.
+    // Loop terminals to keep xterm transparency in sync with each mode.
     for (const wsp of workspaces) {
+      // Per-workspace mode: one image spans the whole workspace container.
+      const container = _wsDomCache ? _wsDomCache[wsp.id] : null;
+      if (container) {
+        const useWs = backgroundMode === 'per-workspace' && !!wsp.bgImage;
+        container.classList.toggle('has-ws-bg', useWs);
+        container.style.setProperty('--tv-bg-image', useWs ? cssUrl(wsp.bgImage) : 'none');
+        container.style.setProperty('--tv-bg-image-opacity', useWs ? String(bgImageAlpha(wsp)) : '0');
+      }
+
       const terms = getWorkspaceTerminals(wsp);
       for (const t of terms) {
-        applyTermBgImage(t);
+        applyTermBgImage(t, wsp);
       }
     }
   }
 
-  function applyTermBgImage(entry) {
+  function applyTermBgImage(entry, wsp) {
     if (!entry || !entry.el) return;
     const slot = entry.el;
 
     // Browser tabs render their own opaque content — no background layer.
-    const usePerTab = entry.type !== 'browser' && backgroundMode === 'per-tab' && !!entry.bgImage;
+    let usePerTab = false;
+    let bgImg = '';
+    if (entry.type !== 'browser') {
+      if (backgroundMode === 'per-tab' && entry.bgImage) {
+        usePerTab = true;
+        bgImg = entry.bgImage;
+      } else if (backgroundMode === 'per-workspace') {
+        // The image is painted once on the workspace container
+        // (.ws-pane-container.has-ws-bg) so it spans the whole workspace.
+        if (!wsp) {
+          const found = findTermById(entry.id);
+          if (found) wsp = found.ws;
+        }
+      }
+    }
 
     slot.style.backgroundImage = '';   // legacy inline image, layers handle it now
     slot.classList.toggle('has-bg-image', usePerTab);
-    slot.style.setProperty('--tv-bg-image', usePerTab ? cssUrl(entry.bgImage) : 'none');
-    slot.style.setProperty('--tv-bg-image-opacity', usePerTab ? String(bgImageAlpha()) : '0');
+    slot.style.setProperty('--tv-bg-image', usePerTab ? cssUrl(bgImg) : 'none');
+    slot.style.setProperty('--tv-bg-image-opacity', usePerTab ? String(bgImageAlpha(wsp)) : '0');
 
     // Let the panel's layers show through the cell grid when an image is up.
     if (entry.type !== 'browser' && entry.term) {
@@ -1234,6 +1262,128 @@
     }
   }
 
+  /* Backgrounds and workspace icons are persisted as real files in
+     ~/.terminalvibe/images/ instead of base64 data URLs inside the saved
+     state — data URLs blow up state.json/localStorage and overflow the quota.
+     Each image gets a content-hashed filename so identical images dedupe and
+     re-saving is a no-op. The saved state stores only a tiny { image: id }
+     reference; restore swaps it back to a data URL by reading the file.
+     Plain-browser mode has no filesystem, so it keeps data URLs as before. */
+  function fnv1a(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(8, '0');
+  }
+
+  function isDataUrl(v) { return typeof v === 'string' && v.startsWith('data:'); }
+  function isImgRef(v) { return v && typeof v === 'object' && typeof v.image === 'string'; }
+
+  function imgRefId(dataUrl) {
+    const m = /^data:([^;,]+)/.exec(dataUrl);
+    const mime = (m && m[1]) ? m[1].toLowerCase() : '';
+    let ext = 'img';
+    if (mime === 'image/webp') ext = 'webp';
+    else if (mime === 'image/png') ext = 'png';
+    else if (mime === 'image/jpeg') ext = 'jpg';
+    else if (mime === 'image/gif') ext = 'gif';
+    else if (mime === 'image/svg+xml') ext = 'svg';
+    else if (mime.startsWith('image/')) { const e = mime.slice(6).replace(/[^a-z0-9]/g, ''); if (e) ext = e; }
+    return fnv1a(dataUrl) + '.' + ext;
+  }
+
+  // Swaps every image data URL in a state object for an { image: id } ref and
+  // returns the { id, dataUrl } list needed to materialize the files. Ids
+  // already written this session are sent bare (no dataUrl) to keep the IPC
+  // payload tiny — the main process skips them once the file exists.
+  const _writtenImgIds = new Set();
+  function collectStateImages(state) {
+    const images = [];
+    const add = (dataUrl) => {
+      if (!isDataUrl(dataUrl)) return null;
+      const id = imgRefId(dataUrl);
+      if (_writtenImgIds.has(id)) images.push({ id });
+      else { _writtenImgIds.add(id); images.push({ id, dataUrl }); }
+      return id;
+    };
+    // Register an existing ref so the main process never garbage-collects the
+    // files behind it (a settings-only window persists refs it didn't create).
+    const keepRef = (ref) => { if (isImgRef(ref)) images.push({ id: ref.image }); };
+    const walkLayout = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node.terminals)) {
+        for (const t of node.terminals) {
+          if (!t) continue;
+          if (isDataUrl(t.bgImage)) t.bgImage = { image: add(t.bgImage) };
+          else keepRef(t.bgImage);
+        }
+      }
+      if (Array.isArray(node.children)) for (const c of node.children) walkLayout(c);
+    };
+    if (isDataUrl(state.globalBackgroundImage)) state.globalBackgroundImage = { image: add(state.globalBackgroundImage) };
+    else keepRef(state.globalBackgroundImage);
+    if (Array.isArray(state.workspaces)) {
+      for (const ws of state.workspaces) {
+        if (!ws) continue;
+        if (isDataUrl(ws.icon)) ws.icon = { image: add(ws.icon) };
+        else keepRef(ws.icon);
+        if (isDataUrl(ws.bgImage)) ws.bgImage = { image: add(ws.bgImage) };
+        else keepRef(ws.bgImage);
+        if (ws.layout) walkLayout(ws.layout);
+      }
+    }
+    return images;
+  }
+
+  // Reverse of collectStateImages: swap { image: id } refs back to data URLs
+  // by reading the image files through the main process.
+  async function resolveStateImages(state) {
+    if (!state || typeof state !== 'object') return;
+    const api = configApi();
+    if (!api || !api.configReadImage) return;
+    const resolve = async (ref) => {
+      if (!isImgRef(ref)) return ref;
+      const dataUrl = await api.configReadImage(ref.image);
+      return dataUrl || '';
+    };
+    const walkLayout = async (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node.terminals)) {
+        for (const t of node.terminals) { if (t && isImgRef(t.bgImage)) t.bgImage = await resolve(t.bgImage); }
+      }
+      if (Array.isArray(node.children)) for (const c of node.children) await walkLayout(c);
+    };
+    if (isImgRef(state.globalBackgroundImage)) state.globalBackgroundImage = await resolve(state.globalBackgroundImage);
+    if (Array.isArray(state.workspaces)) {
+      for (const ws of state.workspaces) {
+        if (!ws) continue;
+        if (isImgRef(ws.icon)) ws.icon = await resolve(ws.icon);
+        if (isImgRef(ws.bgImage)) ws.bgImage = await resolve(ws.bgImage);
+        if (ws.layout) await walkLayout(ws.layout);
+      }
+    }
+  }
+
+  // Writes image files first (so refs never dangle), then the state itself to
+  // disk and localStorage. On desktop the state holds { image: id } refs;
+  // plain-browser mode falls back to base64 data URLs in localStorage.
+  function persistStateToStorage(state, key) {
+    const api = configApi();
+    const images = (api && api.configWriteImages) ? collectStateImages(state) : [];
+    const commit = () => {
+      if (!DETACHED_ONLY && api && api.configWriteState) api.configWriteState(state);
+      try {
+        localStorage.setItem(key, JSON.stringify(state));
+      } catch (err) {
+        console.warn('[state] localStorage write failed (disk copy saved):', err);
+      }
+    };
+    if (images.length) api.configWriteImages(images).then(commit).catch(commit);
+    else commit();
+  }
+
   function saveState() {
     // In the settings window we must NOT clobber the main window's live
     // workspaces/folders/sideOrder. Only merge the settings fields into the
@@ -1265,13 +1415,7 @@
       try {
         merged = Object.assign(JSON.parse(localStorage.getItem(STATE_KEY) || '{}'), settings);
       } catch {}
-      const api = configApi();
-      if (api && api.configWriteState) api.configWriteState(merged);
-      try {
-        localStorage.setItem(STATE_KEY, JSON.stringify(merged));
-      } catch (err) {
-        console.warn('[state] localStorage write failed (disk copy saved):', err);
-      }
+      persistStateToStorage(merged, STATE_KEY);
       if (window.electronAPI && window.electronAPI.settingsChanged) window.electronAPI.settingsChanged();
       return;
     }
@@ -1312,18 +1456,12 @@
      if (ws.icon) o.icon = ws.icon;
      if (ws.folderId) o.folderId = ws.folderId;
      if (ws.pinned) o.pinned = true;
+     if (ws.bgImage) o.bgImage = ws.bgImage;
+     if (ws.bgOpacity != null) o.bgOpacity = ws.bgOpacity;
      return o;
    }),
     };
-    if (!DETACHED_ONLY) {
-      const api = configApi();
-      if (api && api.configWriteState) api.configWriteState(state);
-    }
-    try {
-      localStorage.setItem(key, JSON.stringify(state));
-    } catch (err) {
-      console.warn('[state] localStorage write failed (disk copy saved):', err);
-    }
+    persistStateToStorage(state, key);
   }
 
   async function restoreState() {
@@ -1340,6 +1478,7 @@
       if (!raw) raw = localStorage.getItem(key);
       if (!raw) return false;
       const state = JSON.parse(raw);
+      await resolveStateImages(state);
 
       if (state.theme && THEMES[state.theme]) {
         currentThemeName = state.theme;
@@ -1405,6 +1544,8 @@
         if (wsData.icon) ws.icon = wsData.icon;
         if (wsData.folderId) ws.folderId = wsData.folderId;
         if (wsData.pinned) ws.pinned = true;
+        if (wsData.bgImage) ws.bgImage = wsData.bgImage;
+        if (wsData.bgOpacity != null) ws.bgOpacity = wsData.bgOpacity;
 
         ws.layout = deserializeLayout(wsData.layout, ws);
         workspaces.push(ws);
@@ -1736,16 +1877,48 @@
     setTimeout(() => syncBrowserSlots(), 120);
   }
 
+  // Workspace ids in the sidebar's visual order: pinned items first (in their
+  // sideOrder sequence), then the rest, with each folder expanded into its
+  // children where it sits. Used by Ctrl+Shift+PageUp/PageDown so the cycle
+  // follows the layout even when workspaces live inside folders.
+  function getOrderedWorkspaceIds() {
+    const ids = [];
+    const visit = (e) => {
+      if (e.type === 'ws') {
+        const ws = findWs(e.id);
+        if (ws) ids.push(ws.id);
+      } else if (e.type === 'folder') {
+        for (const ws of getGroupList(e.id)) ids.push(ws.id);
+      }
+    };
+    const pinned = [];
+    const unpinned = [];
+    for (const e of sideOrder) {
+      if (e.type === 'ws') {
+        const ws = findWs(e.id);
+        if (ws) (ws.pinned ? pinned : unpinned).push(e);
+      } else {
+        const f = folders.find(f => f.id === e.id);
+        if (f) (f.pinned ? pinned : unpinned).push(e);
+      }
+    }
+    pinned.forEach(visit);
+    unpinned.forEach(visit);
+    return ids;
+  }
+
   function nextWorkspace() {
-    if (workspaces.length <= 1) return;
-    const idx = workspaces.findIndex(w => w.id === activeWsId);
-    activateWorkspace(workspaces[(idx + 1) % workspaces.length].id);
+    const ids = getOrderedWorkspaceIds();
+    if (ids.length <= 1) return;
+    const idx = ids.indexOf(activeWsId);
+    activateWorkspace(ids[(idx + 1) % ids.length]);
   }
 
   function prevWorkspace() {
-    if (workspaces.length <= 1) return;
-    const idx = workspaces.findIndex(w => w.id === activeWsId);
-    activateWorkspace(workspaces[(idx - 1 + workspaces.length) % workspaces.length].id);
+    const ids = getOrderedWorkspaceIds();
+    if (ids.length <= 1) return;
+    const idx = ids.indexOf(activeWsId);
+    activateWorkspace(ids[(idx - 1 + ids.length) % ids.length]);
   }
 
   const _closingWs = new Set();
@@ -2847,6 +3020,7 @@
       delete _wsDomCache[wsp.id];
     }
     switchWorkspacePane();
+    applyBackground();
   }
 
   function buildNodeDom(node, wsp) {
@@ -4666,6 +4840,32 @@
             input.click();
           });
         }
+      } else if (backgroundMode === 'per-workspace' && wsp) {
+        if (wsp.bgImage) {
+          item('🖼', 'Clear workspace background', '', () => {
+            wsp.bgImage = '';
+            delete wsp.bgOpacity;
+            applyBackground();
+            saveState();
+          });
+        } else {
+          item('🖼', 'Set workspace background…', '', () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.onchange = (e) => {
+              const file = e.target.files[0];
+              if (!file) return;
+              loadBgImageFromFile(file, (dataUrl) => {
+                wsp.bgImage = dataUrl;
+                wsp.bgOpacity = backgroundOpacity;
+                applyBackground();
+                saveState();
+              });
+            };
+            input.click();
+          });
+        }
       }
       // Copy & Paste — only when right-clicking on the terminal body
       if (data._fromBody) {
@@ -5965,6 +6165,7 @@ function buildColorItem(key, label) {
             const raw = localStorage.getItem(STATE_KEY);
             if (raw) state = JSON.parse(raw);
           }
+          await resolveStateImages(state);
           if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
           if (state.fontSize) currentFontSize = state.fontSize;
           if (state.fontFamily) currentFontFamily = state.fontFamily;
@@ -6453,7 +6654,7 @@ function buildColorItem(key, label) {
 
         bgControlsRow.style.display = backgroundMode === 'none' ? 'none' : '';
         bgUploadArea.style.display = backgroundMode === 'global' ? '' : 'none';
-        bgPerTabNote.style.display = backgroundMode === 'per-tab' ? '' : 'none';
+        bgPerTabNote.style.display = (backgroundMode === 'per-tab' || backgroundMode === 'per-workspace') ? '' : 'none';
         bgOpacitySlider.value = Math.round(backgroundOpacity * 100);
         bgOpacityVal.textContent = Math.round(backgroundOpacity * 100) + '%';
         updateBgUploadPreview();

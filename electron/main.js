@@ -12,6 +12,7 @@ const devPort = 7769; // dev-mode app server port
 // ── Config directory (~/.terminalvibe/) ──
 const CONFIG_DIR = path.join(require('os').homedir(), '.terminalvibe');
 const CONFIG_THEMES_DIR = path.join(CONFIG_DIR, 'themes');
+const CONFIG_IMAGES_DIR = path.join(CONFIG_DIR, 'images');
 const CONFIG_STATE_FILE = path.join(CONFIG_DIR, 'state.json');
 const CONFIG_CUSTOM_THEMES_FILE = path.join(CONFIG_DIR, 'custom-themes.json');
 
@@ -19,9 +20,20 @@ function ensureConfigDir() {
   try {
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
     if (!fs.existsSync(CONFIG_THEMES_DIR)) fs.mkdirSync(CONFIG_THEMES_DIR, { recursive: true });
+    if (!fs.existsSync(CONFIG_IMAGES_DIR)) fs.mkdirSync(CONFIG_IMAGES_DIR, { recursive: true });
   } catch (err) {
     console.error('[config] failed to create config dir:', err);
   }
+}
+
+// Decode a data: URL into its raw bytes (base64 or percent-encoded payload).
+function decodeDataUrl(dataUrl) {
+  if (typeof dataUrl !== 'string') return null;
+  const m = /^data:([^;,]*)?(;base64)?,(.*)$/s.exec(dataUrl);
+  if (!m) return null;
+  try {
+    return m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]), 'utf-8');
+  } catch { return null; }
 }
 
 function readConfigFile(filePath) {
@@ -220,6 +232,69 @@ ipcMain.handle('file:resolve', (_e, p) => {
 ipcMain.handle('config:getPath', () => CONFIG_DIR);
 
 ipcMain.handle('config:readState', () => readConfigFile(CONFIG_STATE_FILE));
+
+// Backgrounds and workspace icons are stored as files in ~/.terminalvibe/images/
+// instead of base64 data URLs crammed into state.json. Each image id is a
+// content-hashed filename, so identical images dedupe and re-saves are no-ops.
+// Sending { id } without a dataUrl (already written this session) keeps the
+// IPC payload small. After writing, the dir is reconciled to the referenced
+// set unioned with the refs already in state.json — orphan cleanup.
+ipcMain.handle('config:writeImages', (_e, images) => {
+  if (!Array.isArray(images)) return [];
+  try { if (!fs.existsSync(CONFIG_IMAGES_DIR)) fs.mkdirSync(CONFIG_IMAGES_DIR, { recursive: true }); } catch {}
+  const referenced = new Set();
+  const written = [];
+  for (const img of images) {
+    if (!img || typeof img.id !== 'string') continue;
+    const id = img.id.replace(/[^a-zA-Z0-9_.-]/g, '');
+    if (!id || id !== img.id) continue;
+    referenced.add(id);
+    const fp = path.join(CONFIG_IMAGES_DIR, id);
+    if (fs.existsSync(fp)) { written.push(id); continue; }
+    if (typeof img.dataUrl !== 'string') continue; // bare id for an existing file
+    try {
+      const buf = decodeDataUrl(img.dataUrl);
+      if (!buf) continue;
+      fs.writeFileSync(fp, buf);
+      written.push(id);
+    } catch (err) { console.error('[config] image write failed:', id, err); }
+  }
+  // Remove files no longer referenced by this save or by the state on disk.
+  const keep = new Set(referenced);
+  try {
+    const diskState = readConfigFile(CONFIG_STATE_FILE);
+    const collectRefs = (obj) => {
+      if (!obj || typeof obj !== 'object') return;
+      if (typeof obj.image === 'string' && Object.keys(obj).length === 1) { keep.add(obj.image); return; }
+      for (const v of Object.values(obj)) collectRefs(v);
+    };
+    if (diskState) collectRefs(diskState);
+  } catch {}
+  try {
+    for (const f of fs.readdirSync(CONFIG_IMAGES_DIR)) {
+      if (!keep.has(f)) { try { fs.unlinkSync(path.join(CONFIG_IMAGES_DIR, f)); } catch {} }
+    }
+  } catch {}
+  return written;
+});
+
+ipcMain.handle('config:readImage', (_e, id) => {
+  if (typeof id !== 'string') return null;
+  const safe = id.replace(/[^a-zA-Z0-9_.-]/g, '');
+  if (safe !== id) return null;
+  const fp = path.join(CONFIG_IMAGES_DIR, id);
+  try {
+    if (!fs.existsSync(fp)) return null;
+    const buf = fs.readFileSync(fp);
+    const ext = path.extname(id).slice(1).toLowerCase();
+    const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+      : ext === 'svg' ? 'image/svg+xml'
+      : ext === 'webp' ? 'image/webp'
+      : ext === 'gif' ? 'image/gif'
+      : 'image/png';
+    return `data:${mime};base64,${buf.toString('base64')}`;
+  } catch { return null; }
+});
 
 ipcMain.handle('config:writeState', (_e, state) => writeConfigFile(CONFIG_STATE_FILE, state));
 
