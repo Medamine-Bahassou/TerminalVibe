@@ -358,6 +358,7 @@
   let sideOrder = [];        // top-level sidebar flow: [{type:'ws'|'folder', id}] in visual order
   let pinnedCollapsed = false; // "Pinned" section collapsed state
   let sidebarMode = 'normal'; // 'normal' | 'hover' | 'hidden'
+  let showWsProcs = true;     // show running processes in workspace buttons
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
@@ -389,6 +390,32 @@
     if (!focusedSlotId) return;
     const slot = document.getElementById(focusedSlotId);
     if (slot) { const g = slot.closest('.term-group'); if (g) g.classList.add('focused-group'); }
+  }
+
+  /* Browser tabs render in an absolutely-positioned .browser-slot overlay that
+     sits above the .term-slot, so its focus border must live on that overlay —
+     a .term-slot.focused::after border is hidden underneath it. These helpers
+     keep the focus state of both elements in sync everywhere. */
+  function clearSlotFocus() {
+    document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+    document.querySelectorAll('.browser-slot.focused').forEach(s => s.classList.remove('focused'));
+  }
+
+  function focusSlot(entry) {
+    if (!entry || !entry.el) return;
+    clearSlotFocus();
+    entry.el.classList.add('focused');
+    focusedSlotId = entry.el.id;
+    updateFocusedGroup();
+    if (entry.type === 'browser' && entry.browserContainer) {
+      entry.browserContainer.classList.add('focused');
+    }
+    const found = findTermById(entry.id);
+    if (found && found.ws) {
+      found.ws.activeTermId = entry.id;
+      const group = findGroupContainingTerm(found.ws.layout, entry.id);
+      if (group) group.activeTermId = entry.id;
+    }
   }
 
   let ws = null;             // WebSocket
@@ -506,9 +533,6 @@
   // Background browser tabs are suspended after this much invisibility
   // to free memory (dev-server pages can hold hundreds of MB).
   const BROWSER_SUSPEND_MS = 30_000;
-
-  const IMAGE_EXT_RE = /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)([?#].*)?$/i;
-  const PDF_EXT_RE = /\.pdf([?#].*)?$/i;
 
   const SPLIT_MIN_PX = 200;
   const ZOOM_MIN = 0.25;
@@ -923,6 +947,11 @@
   function applySidebarMode() {
     document.body.classList.toggle('sb-hidden', sidebarMode === 'hidden');
     if (window.__sidebarCtl) window.__sidebarCtl.apply(sidebarMode);
+  }
+
+  function applyWsProcsSetting() {
+    document.body.classList.toggle('no-ws-procs', !showWsProcs);
+    if (showWsProcs) refreshAllWorkspaceProcs();
   }
 
   function applyTheme(name) {
@@ -1402,6 +1431,7 @@
       settingsCategory,
       pinnedCollapsed,
       sidebarMode,
+      showWsProcs,
       backgroundMode,
       globalBackgroundImage,
         backgroundOpacity,
@@ -1434,6 +1464,7 @@
       settingsCategory,
       pinnedCollapsed,
       sidebarMode,
+      showWsProcs,
       backgroundMode,
       globalBackgroundImage,
       backgroundOpacity,
@@ -1502,6 +1533,7 @@
       if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
       if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
       if (state.sidebarMode) sidebarMode = state.sidebarMode;
+      if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -1857,6 +1889,18 @@
 
     container.style.display = 'block';
 
+    // A freshly built container (or a cached one from a previous session) has no
+    // background layers yet — apply the per-workspace/global image right away so
+    // the image is visible as soon as the workspace is shown, not only after the
+    // next renderPaneArea() call (split/action).
+    applyBackground();
+
+    // Sync overlays immediately: overlays of the workspace we just switched
+    // away from must hide in this tick (their slots report 0 size now), and
+    // the active workspace's overlay gets an approximate position that the
+    // delayed resyncs below correct once the flex tree settles.
+    syncBrowserSlots();
+
     // Let layout settle before measuring: reading rects in the same tick as
     // display:block (or inside a fixed 30ms timeout) can capture a size from
     // before the flex tree settles, making .browser-slot short. Double-RAF runs
@@ -1864,11 +1908,10 @@
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const all = getWorkspaceTerminals(wsp);
       all.forEach(fitTerm);
-      document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+      clearSlotFocus();
       const active = all.find(x => x.id === wsp.activeTermId);
       if (active && active.el) {
-        focusedSlotId = active.el.id;
-        active.el.classList.add('focused');
+        focusSlot(active);
         if (active.type !== 'browser') active.term.focus();
       }
       updateFocusedGroup();
@@ -2110,12 +2153,11 @@
             scrollTabIntoView(groupEl, entry.id);
             // Create and add the slot
             const slot = getOrCreateSlot(entry, wsp, body);
-            document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+            clearSlotFocus();
             body.querySelectorAll('.term-slot').forEach(s => { s.style.display = 'none'; });
             slot.style.display = entry.type === 'browser' ? 'flex' : 'block';
-            slot.classList.add('focused');
             body.appendChild(slot);
-            focusedSlotId = slot.id; updateFocusedGroup();
+            focusSlot(entry);
             // Double RAF ensures DOM has rendered and canvas is ready
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
@@ -2220,12 +2262,14 @@
             scrollTabIntoView(groupEl, entry.id);
             // Create slot
             const slot = getOrCreateSlot(entry, wsp, body);
-            document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+            clearSlotFocus();
             body.querySelectorAll('.term-slot').forEach(s => { s.style.display = 'none'; });
             slot.style.display = 'flex';
-            slot.classList.add('focused');
             body.appendChild(slot);
-            focusedSlotId = slot.id; updateFocusedGroup();
+            focusSlot(entry);
+            // Hiding the previously-active browser slot must take effect on
+            // its overlay in the same tick or its white surface lingers.
+            syncBrowserSlots();
             // Focus URL input for new browser tabs
             if (entry._focusUrlOnActivate) {
               entry._focusUrlOnActivate = false;
@@ -2286,7 +2330,7 @@
       // Lightweight update: toggle visibility without rebuilding the DOM
       // (preserves browser tab state, iframe content, etc.)
       // Clear focus from ALL slots across all groups
-      document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+      clearSlotFocus();
 
       if (group) {
         const groupEl = document.getElementById('group-' + group.id);
@@ -2313,16 +2357,25 @@
             slot.style.display = isActive ? showAs : 'none';
             if (t.type === 'browser') {
               if (isActive) resumeBrowserTab(t);
-              else suspendBrowserTab(t);
+              else {
+                suspendBrowserTab(t);
+                // Hide the overlay NOW — waiting for the delayed sync leaves
+                // the white browser surface painted above the terminal for
+                // 2+ frames (visible as a blank white flash / stuck overlay).
+                if (t.browserContainer) {
+                  t.browserContainer.style.visibility = 'hidden';
+                }
+              }
             }
           });
+          // Sync overlays in the same tick: hiding must never wait for a RAF.
+          syncBrowserSlots();
         }
       }
       const terms = getWorkspaceTerminals(wsp);
       const t = terms.find(x => x.id === termId);
       if (t && t.el) {
-        focusedSlotId = t.el.id; updateFocusedGroup();
-        t.el.classList.add('focused');
+        focusSlot(t);
         if (t.type === 'browser') {
           // handled after syncBrowserSlots positions the container
         } else {
@@ -2521,16 +2574,36 @@
     if (_multiSelected.has(termId)) { _multiSelected.delete(termId); document.getElementById('slot-' + termId)?.classList.remove('multi-selected'); }
 
     // Confirm before closing a tab that has a process running inside it
-    // (something other than the idle shell). Skipped for dead terminals,
-    // browser tabs, detaches and internal teardowns.
+    // (something other than the idle shell), or a browser tab showing content.
+    // Skipped for dead terminals, blank browser tabs, detaches and internal
+    // teardowns.
     if (!confirmed && !checked && !skipRender && !skipPtyClose) {
       const entry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
+      if (browserHasContent(entry)) {
+        if (dontAskAgain('closebrowser')) {
+          removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true);
+          return;
+        }
+        const closesWorkspace = getWorkspaceTerminals(wsp).length <= 1;
+        showDangerConfirm('Close browser tab?',
+          `<span class="cc-label">${escHtml(entry.label || 'Browser')}</span> is showing content (${escHtml(entry.url)}).` +
+          (closesWorkspace ? ' Closing it will close the tab and remove the workspace.' : ' Closing it will close the tab and lose its page.'),
+          'Close Tab',
+          () => removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true),
+          () => {},
+          'closebrowser');
+        return;
+      }
       if (isLiveTerminal(entry)) {
         if (_processCheckPending.has(termId)) return;
         _processCheckPending.add(termId);
         checkTerminalRunning(termId).then(running => {
           _processCheckPending.delete(termId);
           if (running) {
+            if (dontAskAgain('closeprocess')) {
+              removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true);
+              return;
+            }
             const closesWorkspace = getWorkspaceTerminals(wsp).length <= 1;
             showCloseConfirm(entry.label, closesWorkspace,
               () => removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true),
@@ -2641,13 +2714,16 @@
           // Show/hide slots
           const body = groupEl.querySelector('.term-group-body');
           if (body) {
-            document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+            clearSlotFocus();
             group.terminals.forEach(t => {
               const slot = document.getElementById('slot-' + t.id);
               if (!slot) return;
               const isActive = t.id === group.activeTermId;
               slot.style.display = isActive ? (t.type === 'browser' ? 'flex' : 'block') : 'none';
-              if (isActive) slot.classList.add('focused');
+              if (isActive) {
+                slot.classList.add('focused');
+                if (t.type === 'browser' && t.browserContainer) t.browserContainer.classList.add('focused');
+              }
             });
           }
         }
@@ -2658,9 +2734,7 @@
       if (newActiveId) {
         const newEntry = getWorkspaceTerminals(wsp).find(x => x.id === newActiveId);
         if (newEntry && newEntry.el) {
-          focusedSlotId = newEntry.el.id;
-          updateFocusedGroup();
-          newEntry.el.classList.add('focused');
+          focusSlot(newEntry);
 
           if (newEntry.type !== 'browser' && newEntry.term) {
             setTimeout(() => {
@@ -2753,6 +2827,13 @@
   function fitTerm(entry) {
     if (!entry || !entry.el || entry.type === 'browser') return;
     if (entry.dead) return;
+    // Never fit a hidden terminal. When the slot (or an ancestor group /
+    // workspace container) is display:none, computed dimensions resolve to 0
+    // and FitAddon calls term.resize(0-ish) — corrupting the buffer so the
+    // tab renders blank the next time it is activated. A later fit when the
+    // slot becomes visible (activateTerminal / syncBrowserSlots path) picks
+    // the correct size up.
+    if (entry.el.style.display === 'none' || entry.el.offsetParent === null) return;
     try {
       // Frontend fits instantly for snappy visual feedback
       entry.fit.fit();
@@ -2928,6 +3009,10 @@
       container.querySelectorAll('.sash').forEach(el => {
         el.style.display = 'none';
       });
+      // Hide overlays belonging to the now-hidden groups in the same tick —
+      // their white surfaces paint above the maximized pane until the next
+      // sync, which shows up as a blank white page over the terminal.
+      syncBrowserSlots();
     }
 
     // Update maximize button icons in all groups
@@ -2944,13 +3029,12 @@
     });
 
     // Update focus
-    document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+    clearSlotFocus();
     focusedSlotId = null;
     const all = getWorkspaceTerminals(wsp);
     const active = all.find(x => x.id === wsp.activeTermId);
     if (active && active.el) {
-      focusedSlotId = active.el.id;
-      active.el.classList.add('focused');
+      focusSlot(active);
       if (active.type !== 'browser') active.term.focus();
     }
     updateFocusedGroup();
@@ -3526,7 +3610,7 @@
         }
         // Don't steal focus when clicking inside an iframe
         if (e.target.tagName === 'IFRAME') return;
-        document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+        clearSlotFocus();
         const activeSlot = body.querySelector('.term-slot[style*="display: block"], .term-slot[style*="display: flex"]');
         if (activeSlot) {
           activeSlot.classList.add('focused');
@@ -3537,7 +3621,7 @@
         if (activeEntry) {
           wsp.activeTermId = activeEntry.id;
           if (activeEntry.type === 'browser') {
-            // Don't auto-focus URL input — let iframe keep focus
+            if (activeEntry.browserContainer) activeEntry.browserContainer.classList.add('focused');
           } else if (activeEntry.term) {
             setTimeout(() => activeEntry.term.focus(), 20);
           }
@@ -3640,7 +3724,6 @@
         document.getElementById('pane-area').appendChild(bc);
         entry.browserContainer = bc;
         entry._pageView = pageView;
-        entry._browserZoom = 1;
 
         let loading = false;
         function showLoading(on) {
@@ -3693,47 +3776,6 @@
           </div>`;
         }
 
-        function showImageViewer(url) {
-          if (window.electronAPI) window.electronAPI.browserHide(entry.id);
-          pageView.style.display = 'none';
-          let wrap = contentWrap.querySelector('.browser-img-wrap');
-          if (!wrap) {
-            wrap = document.createElement('div');
-            wrap.className = 'browser-img-wrap';
-            contentWrap.appendChild(wrap);
-          }
-          wrap.innerHTML = '<img class="browser-img" alt="">';
-          wrap.style.display = 'flex';
-          const img = wrap.querySelector('img');
-          img.src = targetUrl(url);
-          entry._imgEl = img;
-          entry._browserZoom = 1;
-        }
-
-        function showPdfViewer(url) {
-          if (window.electronAPI) window.electronAPI.browserHide(entry.id);
-          pageView.style.display = 'none';
-          const iframe = contentWrap.querySelector('iframe.browser-fallback');
-          if (iframe) iframe.style.display = 'none';
-          let wrap = contentWrap.querySelector('.browser-pdf-wrap');
-          if (!wrap) {
-            wrap = document.createElement('div');
-            wrap.className = 'browser-pdf-wrap';
-            wrap.innerHTML = '<div></div>';
-            contentWrap.appendChild(wrap);
-          }
-          wrap.style.display = 'block';
-          entry._pdfWrap = wrap;
-          const target = wrap.querySelector('div');
-          target.innerHTML = '';
-          const srcUrl = targetUrl(url);
-          console.log('[EmbedPDF] src:', srcUrl, '(original:', url, ')');
-          if (!window.EmbedPDF) { wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; return; }
-          try {
-            window.EmbedPDF.init({ type: 'container', target, src: srcUrl, worker: false, tabBar: 'never' });
-          } catch (err) { console.error('[EmbedPDF] init failed:', err); wrap.style.display = 'none'; const fb = contentWrap.querySelector('iframe.browser-fallback'); if (fb) fb.style.display = ''; }
-        }
-
         /* Browser surface slot (reference technique): the page renders in a
            DOM element inside .browser-content — a <webview> tag on Electron
            (DOM element, separate process, loads any site) or a plain <iframe>
@@ -3779,6 +3821,13 @@
             if (isElectron) {
               surface.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
               surface.setAttribute('allowpopups', '');
+              // Clicking inside the webview never reaches the host DOM, so the
+              // .browser-slot mousedown handler can't mark the tab as focused.
+              // The <webview> tag emits focus/blur DOM events when its guest
+              // gains/loses focus — use them to keep the slot highlighted.
+              surface.addEventListener('focus', () => {
+                if (entry.type === 'browser') focusSlot(entry);
+              });
               surface.addEventListener('did-start-loading', () => showLoading(true));
               surface.addEventListener('did-stop-loading', () => {
                 entry._retryCount = 0;
@@ -3915,25 +3964,6 @@
           entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
           renderSidebar();
 
-          entry._browserZoom = 1;
-          const prevImg = contentWrap.querySelector('.browser-img-wrap');
-          if (prevImg) prevImg.style.display = 'none';
-          entry._imgEl = null;
-          const prevPdfWrap = contentWrap.querySelector('.browser-pdf-wrap');
-          if (prevPdfWrap) prevPdfWrap.style.display = 'none';
-
-          if (PDF_EXT_RE.test(url)) {
-            showPdfViewer(url);
-            showLoading(false);
-            return;
-          }
-
-          if (IMAGE_EXT_RE.test(url)) {
-            showImageViewer(url);
-            showLoading(false);
-            return;
-          }
-
           /* DOM surface slot (reference technique): the page renders in a
              <webview> tag — a DOM element, so the settings overlay can cover it
              and the webview stays alive behind the modal. */
@@ -4010,13 +4040,7 @@
         btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') openExternalUrl(entry.url); });
 
         bc.addEventListener('mousedown', (e) => {
-          document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
-          slot.classList.add('focused');
-          focusedSlotId = slot.id;
-          updateFocusedGroup();
-          wsp.activeTermId = entry.id;
-          const group = findGroupContainingTerm(wsp.layout, entry.id);
-          if (group) group.activeTermId = entry.id;
+          focusSlot(entry);
           syncBrowserSlots();
         });
 
@@ -4050,14 +4074,7 @@
         toggleMultiSelect(entry.id);
         return;
       }
-      document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
-      slot.classList.add('focused');
-      focusedSlotId = slot.id;
-      updateFocusedGroup();
-      wsp.activeTermId = entry.id;
-
-      const group = findGroupContainingTerm(wsp.layout, entry.id);
-      if (group) group.activeTermId = entry.id;
+      focusSlot(entry);
 
       entry.term.focus();
     });
@@ -4448,7 +4465,7 @@
       const labelHtml = wsp.icon
         ? `<img class="ws-icon" src="${escHtml(wsp.icon)}" alt="" draggable="false">`
         : `<span class="ws-label">${abbr}</span>`;
-      btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<span class="ws-name">${escHtml(wsp.label)}</span><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
+      btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<div class="ws-info"><span class="ws-name">${escHtml(wsp.label)}</span><div class="ws-procs"></div></div><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
       if (wsp.pinned) btn.classList.add('pinned');
       btn.title = wsp.label;
       if (wsp.color) {
@@ -4549,6 +4566,7 @@
         e.stopPropagation();
         removeWorkspace(wsp.id);
       });
+      if (showWsProcs) updateWorkspaceProcs(wsp, btn);
       return btn;
     };
 
@@ -4742,6 +4760,54 @@
       }
       unpinnedSlot++;
     }
+  }
+
+  /* ── Workspace sidebar: live processes per workspace ──
+     Each workspace button shows the running processes (excluding idle shells)
+     as up to 3 lines. When more than 3 exist, the 3rd line becomes "+N". */
+  const _wsProcsCache = new Map(); // wsId -> { names: string[], termIds: string, ts: number }
+  const _WS_PROCS_TTL = 4000;
+
+  function renderWsProcs(procsEl, names) {
+    if (!procsEl) return;
+    if (!names || !names.length) { procsEl.textContent = ''; return; }
+    const total = names.length;
+    const shown = total > 3 ? names.slice(0, 2) : names.slice(0, 3);
+    const extra = total - shown.length;
+    let html = shown.map(n => `<div class="ws-proc">${escHtml(n)}</div>`).join('');
+    if (extra > 0) html += `<div class="ws-proc ws-proc-more">+${extra}</div>`;
+    procsEl.innerHTML = html;
+  }
+
+  function updateWorkspaceProcs(wsp, btn) {
+    const procsEl = btn && btn.querySelector('.ws-procs');
+    if (!procsEl) return;
+    const terms = getWorkspaceTerminals(wsp).filter(isLiveTerminal);
+    const termIds = terms.map(t => t.id).sort().join(',');
+    const cached = _wsProcsCache.get(wsp.id);
+    if (cached && cached.termIds === termIds && Date.now() - cached.ts < _WS_PROCS_TTL) {
+      renderWsProcs(procsEl, cached.names);
+      return;
+    }
+    if (!terms.length) {
+      _wsProcsCache.set(wsp.id, { names: [], termIds, ts: Date.now() });
+      renderWsProcs(procsEl, []);
+      return;
+    }
+    Promise.all(terms.map(t => checkTerminalRunning(t.id))).then(names => {
+      if (!btn.isConnected) return;
+      const unique = [...new Set(names.filter(Boolean))];
+      _wsProcsCache.set(wsp.id, { names: unique, termIds, ts: Date.now() });
+      renderWsProcs(procsEl, unique);
+    });
+  }
+
+  function refreshAllWorkspaceProcs() {
+    if (!showWsProcs) return;
+    document.querySelectorAll('.ws-btn').forEach(btn => {
+      const wsp = findWs(btn.dataset.wsid);
+      if (wsp) updateWorkspaceProcs(wsp, btn);
+    });
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -5100,20 +5166,34 @@
   const closeConfirmMessage = document.getElementById('cc-message');
   const closeConfirmOk = document.getElementById('cc-close');
   const closeConfirmCancel = document.getElementById('cc-cancel');
+  const closeConfirmDontAgain = document.getElementById('cc-dontagain');
+  const closeConfirmDontAgainRow = document.getElementById('cc-dont-again-row');
+
+  // "Don't ask again" preferences are stored per-confirmation type.
+  function dontAskAgain(key) {
+    try { return localStorage.getItem('tv-dontask-' + key) === '1'; } catch { return false; }
+  }
+  function setDontAskAgain(key) {
+    try { localStorage.setItem('tv-dontask-' + key, '1'); } catch {}
+  }
 
   function showCloseConfirm(label, closesWorkspace, callback, onCancel) {
     showDangerConfirm('Close tab?',
       `<span class="cc-label">${escHtml(label)}</span> is running a process.` +
       (closesWorkspace ? ' Closing it will terminate the process and remove the workspace.' : ' Closing it will terminate the process.'),
-      'Close Tab', callback, onCancel);
+      'Close Tab', callback, onCancel, 'closeprocess');
   }
 
-  // Shared destructive-style confirmation (red warning icon + red button)
-  function showDangerConfirm(title, messageHTML, okLabel, callback, onCancel) {
+  // Shared destructive-style confirmation (red warning icon + red button).
+  // `key` optionally enables a "Don't ask again" checkbox; when the user
+  // confirms with it checked, future confirmations of that type are skipped.
+  function showDangerConfirm(title, messageHTML, okLabel, callback, onCancel, key) {
     onCancel = onCancel || (() => {});
     closeConfirmTitle.textContent = title;
     closeConfirmMessage.innerHTML = messageHTML;
     closeConfirmOk.textContent = okLabel;
+    if (closeConfirmDontAgain) closeConfirmDontAgain.checked = false;
+    if (closeConfirmDontAgainRow) closeConfirmDontAgainRow.style.display = key ? 'flex' : 'none';
 
     closeConfirmOverlay.classList.add('open');
     closeConfirmCancel.focus();
@@ -5133,7 +5213,11 @@
       onCancel();
       close();
     };
-    const submit = () => { close(); callback(); };
+    const submit = () => {
+      if (key && closeConfirmDontAgain && closeConfirmDontAgain.checked) setDontAskAgain(key);
+      close();
+      callback();
+    };
 
     onKey = e => {
       e.stopPropagation();
@@ -5171,6 +5255,14 @@
 
   function isLiveTerminal(entry) {
     return !!entry && entry.type !== 'browser' && !entry.dead;
+  }
+
+  // A browser tab is considered to be showing content when it has navigated
+  // away from the blank start page (i.e. it has a real URL loaded).
+  function browserHasContent(entry) {
+    if (!entry || entry.type !== 'browser') return false;
+    const u = entry.url;
+    return !!u && u !== 'about:blank' && u.trim() !== '';
   }
 
   // Ask the backend whether a real process (excluding the idle shell) is
@@ -5235,19 +5327,6 @@
   document.getElementById('pane-area').addEventListener('wheel', (e) => {
     if (!e.ctrlKey) return;
     const active = activeTerminal();
-
-    // Browser image zoom (iframe use native zoom, not intercepted)
-    if (active && active.type === 'browser' && active._imgEl) {
-      e.preventDefault();
-      const delta = e.deltaY > 0 ? -1 : 1;
-      const cur = active._browserZoom || 1;
-      const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, cur + delta * ZOOM_STEP));
-      if (newZoom === cur) return;
-      active._browserZoom = newZoom;
-      active._imgEl.style.transform = 'scale(' + newZoom + ')';
-      zoomBadge(Math.round(newZoom * 100) + '%');
-      return;
-    }
 
     // Terminal font size (not browser tabs — let iframe handle natively)
     if (!active || active.type === 'browser') return;
@@ -5871,6 +5950,18 @@ function buildColorItem(key, label) {
         const sbModeDD = document.querySelector('.custom-dropdown[data-for="set-sidebar-mode"]');
         if (sbModeDD) initCustomDropdown(sbModeDD);
 
+        // Workspace process details
+        const wsProcsToggle = document.getElementById('set-wsprocs');
+        if (wsProcsToggle) {
+          wsProcsToggle.checked = showWsProcs;
+          wsProcsToggle.onchange = e => {
+            showWsProcs = e.target.checked;
+            applyWsProcsSetting();
+            renderSidebar();
+            saveState();
+          };
+        }
+
         // Font size
         document.getElementById('set-fontsize').value = currentFontSize;
         document.getElementById('set-fontsize-val').textContent = currentFontSize + 'px';
@@ -5943,21 +6034,38 @@ function buildColorItem(key, label) {
       function renderShortcutsList() {
         const list = document.getElementById('shortcuts-list');
         if (!list) return;
+        const searchInput = document.getElementById('shortcuts-search');
+        const query = (searchInput?.value || '').trim().toLowerCase();
         list.innerHTML = '';
+        let shown = 0;
         for (const [action, sc] of Object.entries(customShortcuts)) {
+          const label = SHORTCUT_LABELS[action] || action;
+          const combo = formatKeyCombo(sc);
+          if (query && !label.toLowerCase().includes(query) && !combo.toLowerCase().includes(query)) continue;
+          shown++;
           const item = document.createElement('div');
           item.className = 'shortcut-item';
-          const label = document.createElement('span');
-          label.textContent = SHORTCUT_LABELS[action] || action;
+          const labelEl = document.createElement('span');
+          labelEl.textContent = label;
           const key = document.createElement('span');
           key.className = 'shortcut-key';
-          key.textContent = formatKeyCombo(sc);
+          key.textContent = combo;
           key.addEventListener('click', () => startRecording(item, key, action));
-          item.appendChild(label);
+          item.appendChild(labelEl);
           item.appendChild(key);
           list.appendChild(item);
         }
+        if (!shown) {
+          const empty = document.createElement('div');
+          empty.className = 'shortcuts-empty';
+          empty.textContent = 'No shortcuts match your search';
+          list.appendChild(empty);
+        }
       }
+
+      document.addEventListener('input', e => {
+        if (e.target && e.target.id === 'shortcuts-search') renderShortcutsList();
+      });
 
       function startRecording(item, keyEl, action) {
         // Cancel any existing recording
@@ -6189,6 +6297,7 @@ function buildColorItem(key, label) {
               applySidebarMode();
             }
           }
+          if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
           if (state.backgroundMode) backgroundMode = state.backgroundMode;
           if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
           if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -7251,6 +7360,7 @@ function buildColorItem(key, label) {
           const restored = await restoreState();
           applyTheme(currentThemeName);
           applySidebarMode();
+          applyWsProcsSetting();
 
         // Hide splash screen after app is ready
         const splash = document.getElementById('splash');
@@ -7266,6 +7376,8 @@ function buildColorItem(key, label) {
               applyTheme(currentThemeName);
               applyBackground();
               applySettings();
+              applyWsProcsSetting();
+              renderSidebar();
               syncBrowserSlots();
             });
           });
@@ -7334,6 +7446,9 @@ function buildColorItem(key, label) {
         // Auto-save every 30 seconds
         setInterval(saveState, 30000);
 
+        // Keep the workspace buttons' running-process lists up to date
+        setInterval(refreshAllWorkspaceProcs, 5000);
+
         // Save on close (browser)
         window.addEventListener('beforeunload', (e) => {
           saveState();
@@ -7348,14 +7463,16 @@ function buildColorItem(key, label) {
           window.addEventListener('beforeunload', () => saveState());
         }
 
-        // Robust Cross-Origin & Local Asset Iframe Focus Tracker
+        // Robust Cross-Origin & Local Asset Iframe Focus Tracker. Also watches the
+        // <webview> tag: its guest holds focus while clicking a browser tab, so
+        // the slot must be highlighted even though the host DOM sees no mousedown.
         let _lastActiveIframe = null;
         setInterval(() => {
-          if (document.activeElement && document.activeElement.tagName === 'IFRAME') {
-            const activeIframe = document.activeElement;
-            if (activeIframe !== _lastActiveIframe) {
-              _lastActiveIframe = activeIframe;
-              const bc = activeIframe.closest('.browser-slot');
+          const ae = document.activeElement;
+          if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'WEBVIEW')) {
+            if (ae !== _lastActiveIframe) {
+              _lastActiveIframe = ae;
+              const bc = ae.closest('.browser-slot');
               if (bc) bc.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
             }
           } else {
@@ -7366,8 +7483,9 @@ function buildColorItem(key, label) {
         // Keep blur for instant reaction and Electron native child webviews
         window.addEventListener('blur', () => {
           setTimeout(() => {
-            if (document.activeElement && document.activeElement.tagName === 'IFRAME') {
-               const bc = document.activeElement.closest('.browser-slot');
+            const ae = document.activeElement;
+            if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'WEBVIEW')) {
+               const bc = ae.closest('.browser-slot');
                if (bc) bc.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
             } else {
                const active = activeTerminal();

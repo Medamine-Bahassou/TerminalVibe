@@ -16,8 +16,8 @@
 - **Split panes** - recursive horizontal and vertical splits with drag-and-drop terminal reordering between panes
 - **Tabbed groups** - each pane holds a tab bar for terminals or browser sessions
 - **Built-in browser** - embedded web browsing with URL bar, navigation (back/forward/reload), history, and local file support
-- **PDF viewer** - open PDFs directly in a tab via EmbedPDF
-- **Image viewer** - display images inline in a browser tab
+- **PDF viewer** - open PDFs directly in a tab via the browser's native viewer
+- **Image viewer** - display images inline in a browser tab via the browser's native viewer
 - **Background images** - set terminal background images in global or per-tab mode, with adjustable opacity
 - **Shell integration** - automatic current working directory (CWD) reporting via OSC 7 for bash and zsh, persisted across sessions
 - **Custom themes** - create, edit, import, and export themes with full color control (terminal palette + UI colors), with live preview
@@ -72,7 +72,7 @@
 ├── electron/
 │   ├── main.js             # Main process: node-pty PTY, WebContentsView browser tabs
 │   └── preload.js          # contextBridge IPC API
-├── vendor/                 # Vendored xterm.js addons, Coloris, EmbedPDF assets
+├── vendor/                 # Vendored xterm.js addons, Coloris assets
 ├── dist/                   # Build output
 └── ARCHITECTURE.md         # Detailed architecture docs
 ```

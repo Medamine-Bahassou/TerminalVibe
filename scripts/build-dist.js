@@ -36,16 +36,11 @@ if (fs.existsSync(vendorXterm)) {
   }
 }
 
-// Copy all vendor assets (coloris, split, embedpdf) to dist/vendor/
+// Copy all vendor assets (coloris, split) to dist/vendor/
 // index.html references them with the vendor/ prefix
 for (const f of ['coloris.min.css', 'coloris.min.js', 'split.min.js']) {
   const src = path.join(root, 'vendor', f);
   if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dist, 'vendor', f));
-}
-
-const vendorEmbed = path.join(root, 'vendor', 'embedpdf');
-if (fs.existsSync(vendorEmbed)) {
-  fs.cpSync(vendorEmbed, path.join(dist, 'vendor', 'embedpdf'), { recursive: true });
 }
 
 console.log('[build] dist/ written to', dist);

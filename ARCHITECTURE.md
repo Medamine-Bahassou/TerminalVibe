@@ -217,7 +217,6 @@ addBrowserTab(url)
 
 ## Current Known Limitations (from TODO)
 
-- PDF state (comments, scroll) via embedPDF is not persisted
 - Multiple-select single command not implemented
 - On startup PDF not loaded (browser tab restore issue)
 - Split arrangement + maximize edge cases during minimize/restore

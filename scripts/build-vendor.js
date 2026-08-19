@@ -30,9 +30,6 @@ for (const addon of ['fit', 'web-links', 'search', 'unicode11', 'webgl']) {
 // split.js
 cp(path.join(root, 'node_modules/split.js/dist/split.min.js'), path.join(vendor, 'split.min.js'));
 
-// embedpdf
-cp(path.join(root, 'node_modules/@embedpdf/snippet/dist/embedpdf.js'), path.join(vendor, 'embedpdf', 'embedpdf.js'));
-
 // coloris — copy the real @melloware/coloris UMD build out of node_modules
 cp(path.join(root, 'node_modules/@melloware/coloris/dist/umd/coloris.min.js'), path.join(vendor, 'coloris.min.js'));
 cp(path.join(root, 'node_modules/@melloware/coloris/dist/coloris.min.css'), path.join(vendor, 'coloris.min.css'));

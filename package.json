@@ -16,7 +16,6 @@
     "electron:install": "node node_modules/electron/install.js"
   },
   "dependencies": {
-    "@embedpdf/snippet": "^2.14.3",
     "@melloware/coloris": "^0.25.0",
     "node-pty": "^1.0.0",
     "puppeteer-core": "^24.43.1",
