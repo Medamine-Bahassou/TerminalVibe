@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TerminalVibe Plugin Docs — API Reference</title>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<nav class="docs-nav">
+  <div class="brand">
+    <svg viewBox="30 55 440 290" fill="currentColor" aria-hidden="true">
+      <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z"/>
+      <rect x="228" y="60" width="237" height="80"/>
+      <rect x="228" y="260" width="237" height="80"/>
+    </svg>
+    <div>
+      <div class="brand-name">TerminalVibe</div>
+      <div class="brand-sub">Plugin System Docs</div>
+    </div>
+  </div>
+  <div class="nav-section">Getting Started</div>
+  <a href="index.html">Overview</a>
+  <div class="nav-section">Reference</div>
+  <a href="manifest.html">Manifest (plugin.json)</a>
+  <a href="api-reference.html" class="active">API Reference</a>
+  <div class="nav-section">Guides</div>
+  <a href="tutorial.html">Tutorial</a>
+  <a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<main class="docs-main">
+  <h1>Plugin API Reference</h1>
+  <p>Every plugin entry calls <code>TerminalVibe.register({ id, activate, deactivate })</code>. The app then invokes <code>activate(api)</code> with a per-plugin <code>api</code> object. Everything a plugin can do goes through this object.</p>
+
+  <h2>Identity &amp; logging</h2>
+  <table>
+    <thead><tr><th>Member</th><th>Type</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.id</code></td><td>string</td><td>Plugin id (directory name)</td></tr>
+      <tr><td><code>api.name</code></td><td>string</td><td>Manifest <code>name</code></td></tr>
+      <tr><td><code>api.version</code></td><td>string</td><td>Manifest <code>version</code></td></tr>
+      <tr><td><code>api.log(...args)</code></td><td>fn</td><td>Logs to the console with a <code>[plugin:&lt;id&gt;]</code> prefix</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Events</h2>
+  <table>
+    <thead><tr><th>Member</th><th>Signature</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.events.on</code></td><td><code>(event, callback) =&gt; void</code></td><td>Subscribe to an event</td></tr>
+      <tr><td><code>api.events.off</code></td><td><code>(event, callback) =&gt; void</code></td><td>Unsubscribe a handler</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Events</h3>
+  <table>
+    <thead><tr><th>Event</th><th>Payload</th><th>Fired when</th></tr></thead>
+    <tbody>
+      <tr><td><code>terminal:add</code></td><td><code>{ wsId, termId, type, label?, url? }</code></td><td>A terminal (<code>type: 'terminal'</code>) or browser tab (<code>type: 'browser'</code>) is created</td></tr>
+      <tr><td><code>terminal:activate</code></td><td><code>{ wsId, termId }</code></td><td>A tab becomes active</td></tr>
+      <tr><td><code>terminal:remove</code></td><td><code>{ wsId, termId, type }</code></td><td>A tab is removed</td></tr>
+      <tr><td><code>terminal:exit</code></td><td><code>{ termId, code }</code></td><td>A terminal's PTY process exits</td></tr>
+      <tr><td><code>theme:changed</code></td><td><code>{ name }</code></td><td>The active theme changes</td></tr>
+    </tbody>
+  </table>
+  <pre><code>api.events.on('terminal:add', ({ termId, type, label }) => {
+  api.log('added', type, termId, label);
+});
+api.events.on('theme:changed', ({ name }) => {
+  api.log('theme is now', name);
+});</code></pre>
+
+  <h2>Commands + keybindings</h2>
+  <table>
+    <thead><tr><th>Member</th><th>Signature</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.commands.register</code></td><td><code>(def) =&gt; void</code></td><td>Register a command, optionally with a keybinding</td></tr>
+      <tr><td><code>api.commands.unregister</code></td><td><code>(id) =&gt; void</code></td><td>Remove a command by id</td></tr>
+      <tr><td><code>api.commands.run</code></td><td><code>(id) =&gt; void</code></td><td>Invoke a command by id</td></tr>
+    </tbody>
+  </table>
+  <pre><code>{
+  id: 'my-plugin.greet',      // unique command id (string)
+  label: 'Greet in terminal', // human label (optional)
+  combo: { ctrl: true, shift: true, key: 'H' }, // optional keybinding
+  handler() { ... }           // function — runs the command
+}</code></pre>
+  <p><code>combo</code> modifiers are booleans: <code>ctrl</code>, <code>shift</code>, <code>alt</code>, <code>meta</code>. <code>key</code> is a single character (case-insensitive) or a key/code string such as <code>'F5'</code> or <code>'PageDown'</code>.</p>
+  <div class="note"><strong>Priority:</strong> built-in app shortcuts win; plugin combos only fire when no built-in action matched. Commands run from any window that loaded the plugin.</div>
+  <p>Writing to a terminal from a command:</p>
+  <pre><code>handler() {
+  const term = api.state.getActiveTerminal();
+  if (!term) return;
+  const data = new TextEncoder().encode('\r\nhello from plugin!\r\n');
+  window.electronAPI.terminalWrite({ id: term.id, data });
+}</code></pre>
+
+  <h2>Context-menu items</h2>
+  <table>
+    <thead><tr><th>Member</th><th>Signature</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.menus.add</code></td><td><code>(type, item) =&gt; void</code></td><td>Add an item to a context menu</td></tr>
+      <tr><td><code>api.menus.remove</code></td><td><code>(type, label) =&gt; void</code></td><td>Remove an item by label</td></tr>
+    </tbody>
+  </table>
+  <p><code>type</code> is one of <code>'terminal'</code>, <code>'workspace'</code>, or <code>'folder'</code>.</p>
+  <pre><code>{
+  label: 'My item',                          // required
+  icon: '&lt;i class="ph ph-hand-wave"&gt;&lt;/i&gt;',   // optional HTML (ph = phosphor icons)
+  when: (data) =&gt; true,                      // optional guard — item hidden if falsy
+  handler: (data) =&gt; { ... }                 // required
+}</code></pre>
+  <p><code>data</code> is the context payload:</p>
+  <table>
+    <thead><tr><th>Menu</th><th><code>data</code></th></tr></thead>
+    <tbody>
+      <tr><td><code>terminal</code></td><td><code>{ wsId, termId }</code> (plus <code>_fromBody</code> when right-clicked on the terminal body)</td></tr>
+      <tr><td><code>workspace</code></td><td><code>{ wsId }</code></td></tr>
+      <tr><td><code>folder</code></td><td><code>{ folderId }</code></td></tr>
+    </tbody>
+  </table>
+  <p>Plugin items are appended after the built-in items, behind a separator.</p>
+
+  <h2>Themes</h2>
+  <table>
+    <thead><tr><th>Member</th><th>Signature</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.themes.register</code></td><td><code>(name, theme) =&gt; void</code></td><td>Add a theme to the picker</td></tr>
+      <tr><td><code>api.themes.unregister</code></td><td><code>(name) =&gt; void</code></td><td>Remove a theme added by this plugin</td></tr>
+    </tbody>
+  </table>
+  <pre><code>api.themes.register('my-theme', {
+  label: 'My Theme',                 // shown in the picker
+  bg: '#1b1b2f', fg: '#e0e0ff',
+  cursor: '#e0e0ff', selection: '#353570',
+  swatches: ['#1b1b2f', '#e0e0ff'],  // for the theme dropdown
+  palette: [                         // 16 colors: 0-7 normal, 8-15 bright
+    '#1b1b2f', '#ff6b6b', '#51cf66', '#ffd43b',
+    '#4dabf7', '#cc5de8', '#22b8cf', '#f8f9fa',
+    '#495057', '#ff8787', '#8ce99a', '#ffe066',
+    '#74c0fc', '#da77f2', '#66d9e8', '#f1f3f5'
+  ],
+  ui: { accent: '#4dabf7' }          // optional UI overrides
+});</code></pre>
+  <p>Registered themes appear in Settings → Appearance → Theme automatically. Names already used by built-in or custom themes win and are ignored.</p>
+
+  <h2>Configurable settings</h2>
+  <p>Plugins declare options in <code>plugin.json</code> (the <code>settings</code> array) and read/write them through <code>api.config</code>. The values are edited by the user in <strong>Settings → Plugins → &lt;plugin&gt; → Options</strong> and persisted in <code>state.json</code>. Edits apply live to every loaded window.</p>
+  <table>
+    <thead><tr><th>Member</th><th>Signature</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.config.get</code></td><td><code>(key, fallback?) =&gt; any</code></td><td>Read a value; falls back to the schema <code>default</code>, then to <code>fallback</code></td></tr>
+      <tr><td><code>api.config.set</code></td><td><code>(key, value) =&gt; void</code></td><td>Write a value (persisted + delivered to all handlers)</td></tr>
+      <tr><td><code>api.config.all</code></td><td><code>() =&gt; object</code></td><td>All values merged over defaults</td></tr>
+      <tr><td><code>api.config.onChange</code></td><td><code>(cb) =&gt; void</code></td><td>Subscribe; <code>cb</code> fires with <code>{ id, config, changed }</code> whenever values change</td></tr>
+    </tbody>
+  </table>
+  <pre><code>const greeting = api.config.get('greeting', 'hello');
+api.config.onChange(({ config }) =&gt; {
+  api.log('config changed →', JSON.stringify(config));
+});</code></pre>
+  <p>Settings are declared in the manifest (see <a href="./manifest.html">Manifest Reference</a> → <code>settings</code>). The default schema supports <code>text</code>, <code>number</code>, <code>boolean</code>, and <code>select</code> types.</p>
+
+  <h2>UI widgets</h2>
+  <table>
+    <thead><tr><th>Member</th><th>Signature</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.ui.addWidget</code></td><td><code>(widget) =&gt; void</code></td><td>Mount a DOM element into the UI</td></tr>
+      <tr><td><code>api.ui.removeWidget</code></td><td><code>(id) =&gt; void</code></td><td>Unmount a widget by id</td></tr>
+    </tbody>
+  </table>
+  <pre><code>const clock = document.createElement('span');
+clock.textContent = '...';
+api.ui.addWidget({ id: 'clock', position: 'statusbar', el: clock });</code></pre>
+  <table>
+    <thead><tr><th><code>position</code></th><th>Mounts to</th></tr></thead>
+    <tbody>
+      <tr><td><code>'statusbar'</code></td><td>A strip below the pane area; the strip is hidden until a plugin adds the first widget</td></tr>
+      <tr><td><code>'sidebar'</code></td><td>The bottom of the sidebar</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Read-only state access</h2>
+  <table>
+    <thead><tr><th>Member</th><th>Returns</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.state.getActiveTerminal()</code></td><td><code>{ id, label, type, url?, wsId } | null</code></td></tr>
+      <tr><td><code>api.state.getActiveWorkspace()</code></td><td><code>{ id, label } | null</code></td></tr>
+      <tr><td><code>api.state.getWorkspaces()</code></td><td><code>[{ id, label }]</code></td></tr>
+    </tbody>
+  </table>
+  <pre><code>const term = api.state.getActiveTerminal();
+if (term) api.log('active:', term.label, '(' + term.type + ')');</code></pre>
+
+  <div class="docs-footer">
+    <a href="manifest.html">← Manifest (plugin.json)</a>
+    <a class="next" href="tutorial.html"><span>Next</span><br>Tutorial →</a>
+  </div>
+</main>
+</body>
+</html>

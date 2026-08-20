@@ -94,6 +94,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('settings:window', l);
   },
 
+  // Quit confirmation (OS close button → renderer modal)
+  onAppCloseRequest: (cb) => {
+    const l = () => cb();
+    ipcRenderer.on('app:confirm-close', l);
+    return () => ipcRenderer.removeListener('app:confirm-close', l);
+  },
+  appCloseConfirmed: () => ipcRenderer.send('app:close-confirmed'),
+
   // Config directory (~/.terminalvibe/)
   configGetPath: () => ipcRenderer.invoke('config:getPath'),
   configReadState: () => ipcRenderer.invoke('config:readState'),
@@ -104,6 +112,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   configWriteThemeFile: (name, theme) => ipcRenderer.invoke('config:writeThemeFile', name, theme),
   configDeleteThemeFile: (name) => ipcRenderer.invoke('config:deleteThemeFile', name),
   configListThemeFiles: () => ipcRenderer.invoke('config:listThemeFiles'),
+
+  // Plugins (~/.terminalvibe/plugins/<id>/)
+  configListPlugins: () => ipcRenderer.invoke('config:listPlugins'),
+  configReadPluginFile: (id, relPath) => ipcRenderer.invoke('config:readPluginFile', id, relPath),
+  configOpenPluginFolder: (id) => ipcRenderer.invoke('config:openPluginFolder', id),
+  configOpenPluginsDir: () => ipcRenderer.invoke('config:openPluginsDir'),
 
   // Images stored as files in ~/.terminalvibe/images/ (backgrounds, icons)
   configWriteImages: (images) => ipcRenderer.invoke('config:writeImages', images),

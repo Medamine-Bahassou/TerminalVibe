@@ -19,6 +19,14 @@ okf_version: "0.1"
 - [Browser Proxy Protocol](./api/browser-proxy.md) — HTTP proxy for embedded browser tabs
 - [Frontend State Model](./api/frontend-state.md) — Workspaces, layouts, groups, terminals
 
+## Plugins
+
+- [Plugin Overview](../plugins/index.md) — what plugins can do and how to install them
+- [Plugin Manifest](../plugins/manifest.md) — `plugin.json` reference
+- [Plugin API Reference](../plugins/api-reference.md) — the full `api` object
+- [Plugin Tutorial](../plugins/tutorial.md) — build a plugin step by step
+- [Plugin Troubleshooting](../plugins/troubleshooting.md) — limitations and debugging
+
 ## Playbooks
 
 - [Development Setup](./playbooks/dev-setup.md) — Prerequisites and running in dev mode

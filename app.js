@@ -310,6 +310,575 @@
   }, true);
 
   /* ═══════════════════════════════════════════════════════════════
+   P L U G I N   S Y S T E M
+   ─────────────────────────────────────────────────────────────
+   Plugins live in ~/.terminalvibe/plugins/<id>/ with a plugin.json
+   manifest + a JS entry. The Electron main process reads manifests and
+   entry sources over IPC; entries are evaluated in this renderer against
+   a small `TerminalVibe` registration namespace and activated with an
+   `api` object (commands, events, menus, themes, settings sections, UI
+   widgets). Enable/disable state persists in state.json (pluginStates).
+   ═══════════════════════════════════════════════════════════════ */
+const _pluginRegistry = new Map();   // id -> { activate, deactivate }
+   const _pluginStates = new Map();     // id -> true/false (from state.json)
+   const _pluginManifests = new Map();  // id -> manifest (for config resolution)
+   const _pluginConfigs = new Map();    // id -> { key: value } persisted config
+   const _pluginConfigCbs = new Map();  // id -> Set<cb> config onChange handlers
+   const _pluginConfigLast = new Map(); // id -> JSON snapshot of last delivered config
+   const _pluginCommands = new Map();   // id -> { pluginId, label, combo, handler }
+   const _pluginMenuItems = { terminal: [], workspace: [], folder: [] };
+   const _pluginThemes = new Map();     // themeName -> { pluginId, theme }
+   const _pluginWidgets = [];           // { pluginId, id, position, el }
+   const _pluginBus = new Map();        // event -> Set<{ pluginId, cb }>
+   let _pluginsView = { mode: 'list' }; // { mode: 'list' } | { mode: 'detail', id }
+
+   function pluginEmit(event, data) {
+     const set = _pluginBus.get(event);
+     if (!set) return;
+     for (const h of [...set]) { try { h.cb(data); } catch (e) { console.error('[plugin] handler for', event, 'failed:', e); } }
+   }
+
+  function _pluginComboMatches(combo, e) {
+    if (!combo || !combo.key) return false;
+    const keyMatch = combo.key.length === 1
+      ? e.key.toLowerCase() === combo.key.toLowerCase()
+      : (e.key === combo.key || e.code === combo.key);
+    return keyMatch
+      && !!e.ctrlKey === !!combo.ctrl
+      && !!e.shiftKey === !!combo.shift
+      && !!e.altKey === !!combo.alt
+      && !!e.metaKey === !!combo.meta;
+  }
+
+  function _makePluginApi(manifest) {
+    const api = {
+      id: manifest.id,
+      name: manifest.name,
+      version: manifest.version,
+      log: (...args) => console.log(`[plugin:${manifest.id}]`, ...args),
+      events: {
+        on: (ev, cb) => {
+          if (typeof cb !== 'function') return;
+          if (!_pluginBus.has(ev)) _pluginBus.set(ev, new Set());
+          _pluginBus.get(ev).add({ pluginId: manifest.id, cb });
+        },
+        off: (ev, cb) => {
+          const set = _pluginBus.get(ev);
+          if (!set) return;
+          for (const h of [...set]) { if (h.cb === cb) set.delete(h); }
+        },
+      },
+      commands: {
+        register: (def) => {
+          if (!def || typeof def.id !== 'string' || typeof def.handler !== 'function') return;
+          _pluginCommands.set(def.id, { pluginId: manifest.id, id: def.id, label: def.label || def.id, combo: def.combo || null, handler: def.handler });
+        },
+        unregister: (id) => { _pluginCommands.delete(id); },
+        run: (id) => {
+          const c = _pluginCommands.get(id);
+          if (c) { try { c.handler(); } catch (e) { console.error('[plugin] command', id, 'failed:', e); } }
+        },
+      },
+      menus: {
+        add: (type, item) => {
+          if (!['terminal', 'workspace', 'folder'].includes(type)) return;
+          if (!item || typeof item.handler !== 'function') return;
+          _pluginMenuItems[type].push({ pluginId: manifest.id, label: item.label, icon: item.icon || '', handler: item.handler, when: item.when || null });
+        },
+        remove: (type, label) => {
+          const arr = _pluginMenuItems[type];
+          if (!arr) return;
+          const i = arr.findIndex(x => x.pluginId === manifest.id && x.label === label);
+          if (i !== -1) arr.splice(i, 1);
+        },
+      },
+      themes: {
+        register: (name, theme) => {
+          if (!name || !theme || BUILTIN_THEME_KEYS.has(name)) return;
+          THEMES[name] = theme;
+          _pluginThemes.set(name, { pluginId: manifest.id, theme });
+        },
+        unregister: (name) => {
+          const rec = _pluginThemes.get(name);
+          if (rec && rec.pluginId === manifest.id) { delete THEMES[name]; _pluginThemes.delete(name); }
+        },
+      },
+      ui: {
+        addWidget: (w) => {
+          if (!w || !w.el) return;
+          _pluginWidgets.push({ pluginId: manifest.id, id: w.id || ('w' + Math.random().toString(36).slice(2)), position: w.position || 'statusbar', el: w.el });
+          renderPluginWidgets();
+        },
+        removeWidget: (id) => {
+          const i = _pluginWidgets.findIndex(x => x.pluginId === manifest.id && x.id === id);
+          if (i !== -1) { const [w] = _pluginWidgets.splice(i, 1); w.el.remove(); renderPluginWidgets(); }
+        },
+      },
+      // Plugin-declared settings (manifest.settings). Values are persisted in
+      // state.json (pluginConfigs) and edited from Settings → Plugins.
+      config: {
+        get: (key, fallback) => {
+          const stored = (_pluginConfigs.get(manifest.id) || {})[key];
+          if (stored !== undefined) return stored;
+          const schema = (manifest.settings || []).find(s => s.key === key);
+          if (schema && schema.default !== undefined) return schema.default;
+          return fallback;
+        },
+        set: (key, value) => {
+          const cfg = Object.assign({}, _pluginConfigs.get(manifest.id) || {});
+          cfg[key] = value;
+          _pluginConfigs.set(manifest.id, cfg);
+          _pluginConfigLast.delete(manifest.id); // force re-delivery
+          saveState();
+          deliverPluginConfig(manifest.id, [key]);
+        },
+        all: () => {
+          const out = {};
+          for (const s of (manifest.settings || [])) out[s.key] = api.config.get(s.key, s.default);
+          return out;
+        },
+        onChange: (cb) => {
+          if (typeof cb !== 'function') return;
+          if (!_pluginConfigCbs.has(manifest.id)) _pluginConfigCbs.set(manifest.id, new Set());
+          _pluginConfigCbs.get(manifest.id).add(cb);
+          deliverPluginConfig(manifest.id, null);
+        },
+      },
+      state: {
+        getActiveTerminal: () => {
+          const t = activeTerminal();
+          if (!t) return null;
+          return { id: t.id, label: t.label, type: t.type, url: t.url || null, wsId: activeWsId };
+        },
+        getActiveWorkspace: () => {
+          const w = activeWs();
+          return w ? { id: w.id, label: w.label } : null;
+        },
+        getWorkspaces: () => workspaces.map(w => ({ id: w.id, label: w.label })),
+      },
+    };
+    return api;
+  }
+
+  // Deliver the plugin's persisted config to its onChange handlers (deduped
+  // by snapshot, so a delivery only fires when values actually changed).
+  function deliverPluginConfig(id, changedKeys) {
+    const manifest = _pluginManifests.get(id);
+    const cbs = _pluginConfigCbs.get(id);
+    if (!manifest || !cbs || !cbs.size) return;
+    const snapshot = JSON.stringify(_pluginConfigs.get(id) || {});
+    if (snapshot === _pluginConfigLast.get(id) && changedKeys === null) return;
+    _pluginConfigLast.set(id, snapshot);
+    for (const cb of [...cbs]) {
+      try { cb({ id, config: Object.assign({}, _pluginConfigs.get(id) || {}), changed: changedKeys }); }
+      catch (e) { console.error('[plugin] config onChange failed for', id, ':', e); }
+    }
+  }
+
+  // Persist a plugin config value (used by the Settings → Plugins page).
+  function setPluginConfigValue(id, key, value) {
+    const cfg = Object.assign({}, _pluginConfigs.get(id) || {});
+    cfg[key] = value;
+    _pluginConfigs.set(id, cfg);
+    _pluginConfigLast.delete(id);
+    saveState();
+    deliverPluginConfig(id, [key]);
+  }
+
+  function renderPluginWidgets() {
+    const dock = document.getElementById('statusbar');
+    if (!dock) return;
+    dock.querySelectorAll('[data-plugin-widget]').forEach(el => el.remove());
+    const sbWidgets = _pluginWidgets.filter(w => w.position === 'statusbar');
+    dock.classList.toggle('active', sbWidgets.length > 0);
+    const sbRight = dock.querySelector('#statusbar-right') || dock;
+    for (const w of sbWidgets) { w.el.dataset.pluginWidget = '1'; sbRight.appendChild(w.el); }
+    const sidebarInner = document.getElementById('sidebar-inner');
+    if (sidebarInner) {
+      sidebarInner.querySelectorAll('[data-plugin-widget]').forEach(el => el.remove());
+      for (const w of _pluginWidgets.filter(x => x.position === 'sidebar')) {
+        w.el.dataset.pluginWidget = '1';
+        sidebarInner.appendChild(w.el);
+      }
+    }
+  }
+
+  // Render the Settings → Plugins page: one row per installed plugin with a
+  // status, an activate/deactivate toggle, and an "open folder" access button.
+  async function renderPluginsSettings() {
+    const list = document.getElementById('plugins-list');
+    if (!list) return;
+    const api = configApi();
+    let manifests = [];
+    if (api && api.configListPlugins) {
+      try { manifests = await api.configListPlugins(); } catch { manifests = []; }
+    }
+    list.innerHTML = '';
+    updatePluginsSectionTitle(manifests);
+    if (!Array.isArray(manifests) || !manifests.length) {
+      const empty = document.createElement('div');
+      empty.className = 'px-3 py-2.5 text-[11px] text-[var(--muted-text)]';
+      empty.textContent = 'No plugins installed. Drop a folder into ~/.terminalvibe/plugins/ and restart.';
+      list.appendChild(empty);
+      return;
+    }
+    // Detail view: options for a single plugin, with a back button at top.
+    if (_pluginsView.mode === 'detail') {
+      const manifest = manifests.find(m => m.id === _pluginsView.id);
+      if (manifest) { renderPluginDetailPage(list, manifest); return; }
+      _pluginsView = { mode: 'list' };
+      updatePluginsSectionTitle(manifests);
+    }
+    for (const manifest of manifests) {
+      const enabled = _pluginStates.get(manifest.id) !== false;
+      const row = document.createElement('div');
+      row.className = 'flex items-center justify-between px-3 py-2.5 gap-3 border-b border-[var(--border)] last:border-b-0 hover:bg-white/[0.01]';
+      const meta = document.createElement('div');
+      meta.className = 'flex flex-col gap-0.5 min-w-0';
+      const head = document.createElement('div');
+      head.className = 'flex items-center gap-2 flex-wrap';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'text-[12.5px] font-medium text-[var(--fg)]';
+      nameEl.textContent = manifest.name || manifest.id;
+      head.appendChild(nameEl);
+      if (manifest.version) {
+        const v = document.createElement('span');
+        v.className = 'text-[10px] px-1.5 py-0.5 rounded bg-black/20 text-[var(--dim-text)]';
+        v.textContent = 'v' + manifest.version;
+        head.appendChild(v);
+      }
+      const status = document.createElement('span');
+      status.className = 'text-[10px] px-1.5 py-0.5 rounded ' + (enabled ? 'bg-[color-mix(in_srgb,var(--accent)_25%,transparent)] text-[var(--accent)]' : 'bg-black/20 text-[var(--dim-text)]');
+      status.textContent = enabled ? 'Active' : 'Disabled';
+      head.appendChild(status);
+      meta.appendChild(head);
+      if (manifest.description) {
+        const desc = document.createElement('div');
+        desc.className = 'text-[11px] text-[var(--muted-text)] leading-tight truncate max-w-[420px]';
+        desc.textContent = manifest.description;
+        meta.appendChild(desc);
+      }
+      const idEl = document.createElement('div');
+      idEl.className = 'text-[10px] text-[var(--dim-text)]';
+      idEl.textContent = manifest.id + (manifest.author ? '  ·  ' + manifest.author : '');
+      meta.appendChild(idEl);
+      row.appendChild(meta);
+
+      const controls = document.createElement('div');
+      controls.className = 'flex items-center gap-2 shrink-0';
+      const schema = Array.isArray(manifest.settings) ? manifest.settings : [];
+      if (schema.length) {
+        const cfgBtn = document.createElement('button');
+        cfgBtn.type = 'button';
+        cfgBtn.className = 'plugin-icon-btn';
+        cfgBtn.title = 'Configure ' + (manifest.name || manifest.id);
+        cfgBtn.innerHTML = '<i class="ph ph-sliders-horizontal"></i>';
+        cfgBtn.addEventListener('click', () => {
+          _pluginsView = { mode: 'detail', id: manifest.id };
+          renderPluginsSettings();
+        });
+        controls.appendChild(cfgBtn);
+      }
+      const folderBtn = document.createElement('button');
+      folderBtn.type = 'button';
+      folderBtn.className = 'plugin-icon-btn';
+      folderBtn.title = 'Open plugin folder';
+      folderBtn.innerHTML = '<i class="ph ph-folder-open"></i>';
+      folderBtn.addEventListener('click', () => {
+        if (api && api.configOpenPluginFolder) api.configOpenPluginFolder(manifest.id);
+      });
+      controls.appendChild(folderBtn);
+
+      const label = document.createElement('label');
+      label.className = 'inline-flex items-center cursor-pointer';
+      label.title = enabled ? 'Deactivate plugin' : 'Activate plugin';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.className = 'sr-only peer plugin-toggle';
+      input.dataset.id = manifest.id;
+      input.checked = enabled;
+      const knob = document.createElement('div');
+      knob.className = 'relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[\'\'] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]';
+      label.appendChild(input);
+      label.appendChild(knob);
+      input.addEventListener('change', () => {
+        togglePlugin(manifest.id, input.checked);
+      });
+      controls.appendChild(label);
+      row.appendChild(controls);
+      list.appendChild(row);
+    }
+  }
+
+  // Swap the section title: detail view shows "‹ plugin name" (transparent back
+  // button + name); list view restores the plain "Plugins" heading.
+  function updatePluginsSectionTitle(manifests) {
+    const titleEl = document.getElementById('plugins-title');
+    const openDirBtn = document.getElementById('plugins-open-dir');
+    if (!titleEl) return;
+    if (_pluginsView.mode === 'detail') {
+      const manifest = (manifests || []).find(m => m.id === _pluginsView.id);
+      if (openDirBtn) openDirBtn.style.display = 'none';
+      titleEl.className = 'flex items-center gap-1.5 min-w-0';
+      titleEl.textContent = '';
+      const back = document.createElement('button');
+      back.type = 'button';
+      back.className = 'plugin-icon-btn';
+      back.title = 'Back to all plugins';
+      back.innerHTML = '<i class="ph ph-arrow-left"></i>';
+      back.addEventListener('click', () => {
+        _pluginsView = { mode: 'list' };
+        renderPluginsSettings();
+      });
+      titleEl.appendChild(back);
+      const name = document.createElement('span');
+      name.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--fg)] truncate';
+      name.textContent = manifest ? (manifest.name || manifest.id) : 'Plugins';
+      titleEl.appendChild(name);
+    } else {
+      if (openDirBtn) openDirBtn.style.display = '';
+      titleEl.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)]';
+      titleEl.textContent = 'Plugins';
+    }
+  }
+
+  // Detail page for one plugin's declared settings (manifest.settings).
+  function renderPluginDetailPage(list, manifest) {
+    const schema = Array.isArray(manifest.settings) ? manifest.settings : [];
+
+    if (!schema.length) {
+      const none = document.createElement('div');
+      none.className = 'px-3 py-2.5 text-[11px] text-[var(--muted-text)]';
+      none.textContent = 'This plugin has no configurable options.';
+      list.appendChild(none);
+      return;
+    }
+
+    // Intro line
+    const intro = document.createElement('div');
+    intro.className = 'px-3 pt-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--dim-text)]';
+    intro.textContent = 'Options';
+    list.appendChild(intro);
+
+    for (const s of schema) {
+      const wrap = document.createElement('div');
+      wrap.className = 'flex items-center justify-between gap-3 px-3 py-2.5 border-b border-[var(--border)] last:border-b-0';
+      wrap.appendChild(renderPluginConfigField(manifest, s));
+      list.appendChild(wrap);
+    }
+  }
+
+  // Build an editable field for one manifest.settings entry: label/description
+  // on the left, the control on the right.
+  function renderPluginConfigField(manifest, s) {
+    const wrap = document.createElement('div');
+    wrap.className = 'flex items-center justify-between gap-3 min-w-0 flex-1';
+    const labelEl = document.createElement('div');
+    labelEl.className = 'flex flex-col gap-0.5 min-w-0';
+    const lab = document.createElement('div');
+    lab.className = 'text-[11px] text-[var(--fg)]';
+    lab.textContent = s.label || s.key;
+    labelEl.appendChild(lab);
+    if (s.description) {
+      const d = document.createElement('div');
+      d.className = 'text-[10px] text-[var(--dim-text)] leading-tight';
+      d.textContent = s.description;
+      labelEl.appendChild(d);
+    }
+    wrap.appendChild(labelEl);
+
+    const current = (_pluginConfigs.get(manifest.id) || {})[s.key];
+    const value = current !== undefined ? current : s.default;
+
+    const commit = (v) => { setPluginConfigValue(manifest.id, s.key, v); };
+
+    let control;
+    if (s.type === 'boolean') {
+      const lbl = document.createElement('label');
+      lbl.className = 'inline-flex items-center cursor-pointer shrink-0';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'sr-only peer';
+      cb.checked = !!value;
+      const knob = document.createElement('div');
+      knob.className = 'relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[\'\'] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]';
+      cb.addEventListener('change', () => commit(cb.checked));
+      lbl.appendChild(cb);
+      lbl.appendChild(knob);
+      control = lbl;
+    } else if (s.type === 'select') {
+      const sel = document.createElement('select');
+      sel.className = 'bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2 py-1 text-[11px] max-w-[160px] focus:border-[var(--accent)] focus:outline-none';
+      for (const opt of (s.options || [])) {
+        const o = document.createElement('option');
+        o.value = opt;
+        o.textContent = opt;
+        if (opt === value) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.addEventListener('change', () => commit(sel.value));
+      control = sel;
+    } else if (s.type === 'number') {
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.value = value !== undefined ? value : '';
+      inp.className = 'bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2 py-1 text-[11px] w-[90px] focus:border-[var(--accent)] focus:outline-none';
+      inp.addEventListener('change', () => {
+        const n = parseFloat(inp.value);
+        commit(Number.isFinite(n) ? n : s.default);
+      });
+      control = inp;
+    } else {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.value = value !== undefined ? value : '';
+      inp.className = 'bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2 py-1 text-[11px] w-[180px] focus:border-[var(--accent)] focus:outline-none';
+      inp.addEventListener('change', () => commit(inp.value));
+      control = inp;
+    }
+    wrap.appendChild(control);
+    return wrap;
+  }
+
+  // Live activate/deactivate a plugin (no restart) and persist to state.json.
+  async function togglePlugin(id, enabled) {
+    _pluginStates.set(id, !!enabled);
+    saveState();
+    if (enabled) {
+      const api = configApi();
+      if (!api || !api.configListPlugins || !api.configReadPluginFile) return;
+      const manifests = await api.configListPlugins();
+      const manifest = (manifests || []).find(m => m.id === id);
+      if (!manifest) return;
+      try {
+        await activatePlugin(manifest);
+      } catch (e) {
+        console.error('[plugin] activate failed for', id, ':', e);
+      }
+    } else {
+      try { deactivatePlugin(id); } catch (e) { console.error('[plugin] deactivate failed for', id, ':', e); }
+    }
+    renderPluginsSettings();
+  }
+
+  // Evaluate + activate one plugin manifest.
+  async function activatePlugin(manifest) {
+    const api = configApi();
+    if (!window.TerminalVibe) window.TerminalVibe = { register: registerPlugin };
+    _pluginManifests.set(manifest.id, manifest);
+    if (typeof manifest.main !== 'string') { console.warn('[plugin]', manifest.id, 'missing "main" entry'); return; }
+    const code = await api.configReadPluginFile(manifest.id, manifest.main);
+    if (!code) { console.warn('[plugin]', manifest.id, 'entry not readable:', manifest.main); return; }
+    try {
+      (new Function('TerminalVibe', code))(window.TerminalVibe);
+    } catch (e) {
+      console.error('[plugin] failed to evaluate', manifest.id, ':', e);
+      return;
+    }
+    const def = _pluginRegistry.get(manifest.id);
+    if (!def || typeof def.activate !== 'function') return;
+    def.activate(_makePluginApi(manifest));
+    // Deliver persisted config to the freshly-activated plugin
+    _pluginConfigLast.delete(manifest.id);
+    deliverPluginConfig(manifest.id, null);
+  }
+
+  // Unload a plugin: run its deactivate, then drop everything it registered.
+  function deactivatePlugin(id) {
+    const def = _pluginRegistry.get(id);
+    if (def && typeof def.deactivate === 'function') {
+      try { def.deactivate(); } catch (e) { console.error('[plugin] deactivate hook failed for', id, ':', e); }
+    }
+    for (const [cid, cmd] of [..._pluginCommands]) {
+      if (cmd.pluginId === id) _pluginCommands.delete(cid);
+    }
+    for (const type of ['terminal', 'workspace', 'folder']) {
+      _pluginMenuItems[type] = _pluginMenuItems[type].filter(x => x.pluginId !== id);
+    }
+    for (const [name, rec] of [..._pluginThemes]) {
+      if (rec.pluginId === id) {
+        delete THEMES[name];
+        _pluginThemes.delete(name);
+        if (currentThemeName === name) {
+          currentThemeName = 'catppuccin-mocha';
+          currentTheme = THEMES[currentThemeName];
+          applyTheme(currentThemeName);
+        }
+      }
+    }
+    const removedWidgets = _pluginWidgets.filter(w => w.pluginId === id);
+    for (const w of removedWidgets) { try { w.el.remove(); } catch {} }
+    _pluginWidgets.splice(0, _pluginWidgets.length, ..._pluginWidgets.filter(w => w.pluginId !== id));
+    renderPluginWidgets();
+    for (const [ev, set] of _pluginBus) {
+      for (const h of [...set]) { if (h.pluginId === id) set.delete(h); }
+    }
+    _pluginConfigCbs.delete(id);
+    _pluginConfigLast.delete(id);
+    _pluginManifests.delete(id);
+    _pluginRegistry.delete(id);
+  }
+
+  function dispatchPluginKeydown(e) {
+    for (const cmd of _pluginCommands.values()) {
+      if (!cmd.combo) continue;
+      if (_pluginComboMatches(cmd.combo, e)) {
+        e.preventDefault();
+        try { cmd.handler(); } catch (err) { console.error('[plugin] command failed:', cmd.id, err); }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Plugin entry JS calls TerminalVibe.register({ id, activate, deactivate }).
+  function registerPlugin(def) {
+    if (!def || typeof def.id !== 'string') return;
+    _pluginRegistry.set(def.id, def);
+  }
+
+  async function loadPlugins() {
+    try {
+      const api = configApi();
+      if (!api || !api.configListPlugins) return; // browser dev mode: no plugin host
+      const manifests = await api.configListPlugins();
+      if (!Array.isArray(manifests) || !manifests.length) return;
+
+      window.TerminalVibe = { register: registerPlugin };
+
+      for (const manifest of manifests) {
+        if (_pluginStates.get(manifest.id) === false) continue;
+        try { await activatePlugin(manifest); } catch (e) { console.error('[plugin] activate failed for', manifest.id, ':', e); }
+      }
+    } catch (e) {
+      console.error('[plugin] loadPlugins failed:', e);
+    }
+  }
+
+  // Reconcile active plugins with persisted state (used after a settings change
+  // pushes new pluginStates to the main window).
+  async function syncPlugins() {
+    const api = configApi();
+    if (!api || !api.configListPlugins) return;
+    const manifests = await api.configListPlugins();
+    if (!Array.isArray(manifests)) return;
+    const ids = new Set(manifests.map(m => m.id));
+    for (const [id, def] of [..._pluginRegistry]) {
+      if (!ids.has(id) || _pluginStates.get(id) === false) deactivatePlugin(id);
+    }
+    for (const manifest of manifests) {
+      if (_pluginStates.get(manifest.id) === false) continue;
+      if (_pluginRegistry.has(manifest.id)) {
+        // Config may have been updated by the settings window — re-deliver.
+        _pluginConfigLast.delete(manifest.id);
+        deliverPluginConfig(manifest.id, null);
+        continue;
+      }
+      try { await activatePlugin(manifest); } catch (e) { console.error('[plugin] activate failed for', manifest.id, ':', e); }
+    }
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
    S T*ATE
    ═══════════════════════════════════════════════════════════════ */
   let currentThemeName = 'catppuccin-mocha';
@@ -1001,6 +1570,7 @@
     renderSidebar();
     renderPaneArea();
     applyBackground();
+    pluginEmit('theme:changed', { name });
   }
 
   /* transparentBg: when a background image is active behind the panel, xterm
@@ -1438,6 +2008,8 @@
         shortcuts: customShortcuts,
         searchEngine,
         customSearchUrl,
+        pluginStates: Object.fromEntries(_pluginStates),
+        pluginConfigs: Object.fromEntries(_pluginConfigs),
       };
       // Disk state is what restoreState prefers — write it even when the
       // localStorage copy overflows the quota.
@@ -1473,6 +2045,8 @@
       sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
   sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
   shortcuts: customShortcuts,
+  pluginStates: Object.fromEntries(_pluginStates),
+  pluginConfigs: Object.fromEntries(_pluginConfigs),
   activeWsId,
    folders: folders.map(f => {
       const o = { id: f.id, label: f.label, collapsed: f.collapsed };
@@ -1542,6 +2116,14 @@
       if (state.shortcuts) {
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
+        }
+      }
+      if (state.pluginStates) {
+        for (const [k, v] of Object.entries(state.pluginStates)) _pluginStates.set(k, !!v);
+      }
+      if (state.pluginConfigs) {
+        for (const [k, v] of Object.entries(state.pluginConfigs)) {
+          if (v && typeof v === 'object') _pluginConfigs.set(k, Object.assign({}, v));
         }
       }
 
@@ -2189,6 +2771,7 @@
     }, 80);
 
     saveState();
+    pluginEmit('terminal:add', { wsId: wsp.id, termId: id, type: 'terminal', label: entry.label });
     return entry;
   }
 
@@ -2299,6 +2882,7 @@
 
     renderSidebar();
     saveState();
+    pluginEmit('terminal:add', { wsId: wsp.id, termId: id, type: 'browser', url: entry.url });
     return entry;
   }
 
@@ -2316,6 +2900,7 @@
     const wsp = findWs(wsId);
     if (!wsp) return;
     wsp.activeTermId = termId;
+    pluginEmit('terminal:activate', { wsId, termId });
 
     const group = findGroupContainingTerm(wsp.layout, termId);
     if (group) {
@@ -2752,6 +3337,7 @@
     if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0) {
       _removeWorkspace(wsId);
     }
+    pluginEmit('terminal:remove', { wsId, termId, type: entry?.type });
   }
 
   function applyTabColor(tabEl, color) {
@@ -2803,6 +3389,7 @@
     if (!result) return;
     const { ws, term: t } = result;
     t.dead = true;
+    pluginEmit('terminal:exit', { termId: id, code });
     if (getWorkspaceTerminals(ws).length <= 1) {
       if (DETACHED_ONLY) {
         window.close();
@@ -4966,6 +5553,17 @@
       item('<i class="ph ph-x"></i>', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
     }
 
+    // Plugin-provided context-menu items (appended after built-ins)
+    const pluginItems = _pluginMenuItems[type];
+    if (pluginItems && pluginItems.length) {
+      let addedSep = false;
+      for (const it of pluginItems) {
+        if (it.when && !it.when(data)) continue;
+        if (!addedSep) { sep(); addedSep = true; }
+        item(it.icon, escHtml(it.label), '', () => it.handler(data));
+      }
+    }
+
     ctxEl.classList.add('open');
     const menuW = ctxEl.offsetWidth;
     const menuH = ctxEl.offsetHeight;
@@ -5249,7 +5847,16 @@
           running.map(r => `<span class="cc-label">${escHtml(r.label)}</span> (${escHtml(r.name)})`).join(', ') +
           '. Quitting will terminate them.'
         : 'All terminals are idle.';
-      showDangerConfirm('Quit TerminalVibe?', msg, 'Quit', () => window.close());
+      const quit = () => {
+        // Desktop: tell main to release the close it intercepted from the OS
+        // button (window.close() would just re-trigger the intercepted close).
+        if (isDesktop() && window.electronAPI && window.electronAPI.appCloseConfirmed) {
+          window.electronAPI.appCloseConfirmed();
+        } else {
+          window.close();
+        }
+      };
+      showDangerConfirm('Quit TerminalVibe?', msg, 'Quit', quit);
     });
   }
 
@@ -6021,6 +6628,7 @@ function buildColorItem(key, label) {
         refreshThemeCustomSelect();
         settingsOverlay.focus({ preventScroll: true });
         syncBrowserSlots();
+        if (cat === 'plugins') renderPluginsSettings();
       }
 
       function closeSettings() {
@@ -6193,6 +6801,8 @@ function buildColorItem(key, label) {
         document.querySelector('.settings-section')?.parentElement?.scrollTo({ top: 0 });
         settingsCategory = cat;
         saveState();
+        if (cat === 'plugins') renderPluginsSettings();
+        if (prevCat === 'plugins' && cat !== 'plugins') _pluginsView = { mode: 'list' };
       }
 
       // Track theme editor mode so it persists across category switches
@@ -6306,6 +6916,14 @@ function buildColorItem(key, label) {
           if (state.shortcuts) {
             for (const [k, v] of Object.entries(state.shortcuts)) {
               if (customShortcuts[k]) customShortcuts[k] = v;
+            }
+          }
+          if (state.pluginStates) {
+            for (const [k, v] of Object.entries(state.pluginStates)) _pluginStates.set(k, !!v);
+          }
+          if (state.pluginConfigs) {
+            for (const [k, v] of Object.entries(state.pluginConfigs)) {
+              if (v && typeof v === 'object') _pluginConfigs.set(k, Object.assign({}, v));
             }
           }
         } catch {}
@@ -6438,12 +7056,15 @@ function buildColorItem(key, label) {
             if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
             if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
           }
+          // Plugin command combos (last, so built-in shortcuts win)
+          if (dispatchPluginKeydown(e)) return;
         });
 
       // Settings-window bootstrap: skip the entire terminal/browser layer.
       async function settingsOnlyBoot() {
         await loadCustomThemes();
         await restoreSettingsOnly();
+        await loadPlugins();
         applyTheme(currentThemeName);
         document.body.classList.add('settings-only');
         const splash = document.getElementById('splash');
@@ -6635,6 +7256,18 @@ function buildColorItem(key, label) {
         }, 80);
       }
 
+      // Background image settings controls (declared here so the settings-window
+      // bootstrap can read them before the wiring below runs — TDZ guard).
+      const bgModeSelect = document.getElementById('set-bg-mode');
+      const bgOpacitySlider = document.getElementById('set-bg-opacity');
+      const bgOpacityVal = document.getElementById('set-bg-opacity-val');
+      const bgUploadArea = document.getElementById('set-bg-image-area');
+      const bgFileInput = document.getElementById('set-bg-image-input');
+      const bgPreview = bgUploadArea.querySelector('.bg-upload-preview');
+      const bgClearBtn = document.getElementById('bg-image-clear');
+      const bgPerTabNote = document.getElementById('bg-per-tab-note');
+      const bgControlsRow = document.getElementById('bg-image-controls');
+
       // Settings-window bootstrap: skip the entire terminal/browser layer.
       if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
 
@@ -6652,6 +7285,15 @@ function buildColorItem(key, label) {
       // Deep-link API: e.g. openSettings('appearance')
       window.openSettings = openSettingsGlobal;
       window.closeSettings = closeSettings;
+
+      // Plugins: open the plugins directory in the OS file manager
+      const pluginsOpenDir = document.getElementById('plugins-open-dir');
+      if (pluginsOpenDir) {
+        pluginsOpenDir.addEventListener('click', () => {
+          const api = configApi();
+          if (api && api.configOpenPluginsDir) api.configOpenPluginsDir();
+        });
+      }
 
       // Theme change
       document.getElementById('set-theme').addEventListener('change', e => {
@@ -6738,16 +7380,6 @@ function buildColorItem(key, label) {
       });
 
       // ── Background Image Settings ──
-      const bgModeSelect = document.getElementById('set-bg-mode');
-      const bgOpacitySlider = document.getElementById('set-bg-opacity');
-      const bgOpacityVal = document.getElementById('set-bg-opacity-val');
-      const bgUploadArea = document.getElementById('set-bg-image-area');
-      const bgFileInput = document.getElementById('set-bg-image-input');
-      const bgPreview = bgUploadArea.querySelector('.bg-upload-preview');
-      const bgClearBtn = document.getElementById('bg-image-clear');
-      const bgPerTabNote = document.getElementById('bg-per-tab-note');
-      const bgControlsRow = document.getElementById('bg-image-controls');
-
       function updateBgUploadPreview() {
         const hasImage = backgroundMode === 'global' && !!globalBackgroundImage;
         bgUploadArea.classList.toggle('has-image', hasImage);
@@ -7358,6 +7990,7 @@ function buildColorItem(key, label) {
         (async () => {
           await loadCustomThemes();
           const restored = await restoreState();
+          await loadPlugins();
           applyTheme(currentThemeName);
           applySidebarMode();
           applyWsProcsSetting();
@@ -7379,6 +8012,7 @@ function buildColorItem(key, label) {
               applyWsProcsSetting();
               renderSidebar();
               syncBrowserSlots();
+              syncPlugins();
             });
           });
         }
@@ -7398,6 +8032,12 @@ function buildColorItem(key, label) {
               syncBrowserSlots();
             }
           });
+        }
+
+        // OS close button ("X") → run the same quit-confirmation modal as the
+        // Ctrl+Shift+Q shortcut. Main holds the window open until we confirm.
+        if (isDesktop() && window.electronAPI && window.electronAPI.onAppCloseRequest) {
+          window.electronAPI.onAppCloseRequest(() => confirmQuitApp());
         }
 
         if (restored) {

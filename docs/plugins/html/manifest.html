@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TerminalVibe Plugin Docs — Manifest</title>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<nav class="docs-nav">
+  <div class="brand">
+    <svg viewBox="30 55 440 290" fill="currentColor" aria-hidden="true">
+      <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z"/>
+      <rect x="228" y="60" width="237" height="80"/>
+      <rect x="228" y="260" width="237" height="80"/>
+    </svg>
+    <div>
+      <div class="brand-name">TerminalVibe</div>
+      <div class="brand-sub">Plugin System Docs</div>
+    </div>
+  </div>
+  <div class="nav-section">Getting Started</div>
+  <a href="index.html">Overview</a>
+  <div class="nav-section">Reference</div>
+  <a href="manifest.html" class="active">Manifest (plugin.json)</a>
+  <a href="api-reference.html">API Reference</a>
+  <div class="nav-section">Guides</div>
+  <a href="tutorial.html">Tutorial</a>
+  <a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<main class="docs-main">
+  <h1>Plugin Manifest (<code>plugin.json</code>)</h1>
+  <p>Every plugin lives in <code>~/.terminalvibe/plugins/&lt;id&gt;/</code> and must contain a <code>plugin.json</code> manifest. The directory name is the plugin <code>id</code>.</p>
+
+  <h2>Location</h2>
+  <pre><code>~/.terminalvibe/plugins/&lt;id&gt;/
+├── plugin.json      # this file
+└── plugin.js        # the entry, named by "main"</code></pre>
+  <p>The <code>id</code> is the directory name. It is used to namespace commands, config settings, widgets, and enable/disable state, so keep it stable and unique.</p>
+
+  <h2>Fields</h2>
+  <table>
+    <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>name</code></td><td>string</td><td>yes</td><td>Human-readable display name</td></tr>
+      <tr><td><code>version</code></td><td>string</td><td>yes</td><td>Semver-ish version, e.g. <code>1.0.0</code></td></tr>
+      <tr><td><code>description</code></td><td>string</td><td>yes</td><td>Short summary of what the plugin does</td></tr>
+      <tr><td><code>author</code></td><td>string</td><td>no</td><td>Author name or handle</td></tr>
+      <tr><td><code>main</code></td><td>string</td><td>yes</td><td>Entry JS file, relative to the plugin folder</td></tr>
+      <tr><td><code>settings</code></td><td>array</td><td>no</td><td>Declared options the user can configure (see below)</td></tr>
+      <tr><td><code>css</code></td><td>string</td><td>no</td><td>Reserved — plugin stylesheet (not auto-injected yet)</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Settings (configurable options)</h2>
+  <p>The optional <code>settings</code> array declares variables the user can customize from <strong>Settings → Plugins → &lt;plugin&gt; → Options</strong>. Each entry:</p>
+  <table>
+    <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>key</code></td><td>string</td><td>Unique key within this plugin; the <code>api.config.get/set</code> name</td></tr>
+      <tr><td><code>label</code></td><td>string</td><td>Human-readable label shown in the UI</td></tr>
+      <tr><td><code>type</code></td><td>string</td><td><code>text</code>, <code>number</code>, <code>boolean</code>, or <code>select</code></td></tr>
+      <tr><td><code>default</code></td><td>any</td><td>Fallback value (required for <code>number</code>/<code>boolean</code>; optional for <code>text</code>)</td></tr>
+      <tr><td><code>options</code></td><td>array</td><td>Only for <code>select</code> — the allowed values</td></tr>
+      <tr><td><code>description</code></td><td>string</td><td>Optional helper text under the label</td></tr>
+    </tbody>
+  </table>
+  <pre><code>"settings": [
+  { "key": "greeting", "label": "Greeting", "type": "text", "default": "hello" },
+  { "key": "style", "label": "Greeting color", "type": "select",
+    "default": "green", "options": ["green", "yellow", "cyan"] },
+  { "key": "showClock", "label": "Show clock", "type": "boolean", "default": true }
+]</code></pre>
+  <p>Values are persisted in <code>~/.terminalvibe/state.json</code> under <code>pluginConfigs</code> keyed by plugin id, and exposed to the plugin through <code>api.config</code> (see <a href="api-reference.html">API Reference</a>).</p>
+
+  <h2>Example</h2>
+  <pre><code>{
+  "name": "Hello TerminalVibe",
+  "version": "1.0.0",
+  "description": "Example plugin demonstrating the TerminalVibe plugin API.",
+  "author": "TerminalVibe",
+  "main": "plugin.js"
+}</code></pre>
+
+  <h2>Validation rules</h2>
+  <ul>
+    <li>The directory name (the <code>id</code>) must match the <code>id</code> passed to <code>TerminalVibe.register</code> in the entry file.</li>
+    <li><code>main</code> must exist and be readable; otherwise the plugin is skipped with a warning in the console.</li>
+    <li>Unknown fields are ignored — extra metadata is fine.</li>
+    <li>A malformed <code>plugin.json</code> (invalid JSON, or not an object) is skipped silently.</li>
+    <li>Settings with a <code>type</code> other than <code>text</code>, <code>number</code>, <code>boolean</code>, or <code>select</code> render as a plain text field.</li>
+  </ul>
+
+  <h2>Entry contract</h2>
+  <p>The file named by <code>main</code> is evaluated against the global <code>TerminalVibe</code> namespace. It should register the plugin:</p>
+  <pre><code>TerminalVibe.register({
+  id: 'hello',               // must match the folder name
+  activate(api) { ... },     // required — sets up the plugin
+  deactivate() { ... }       // optional — cleanup on unload
+});</code></pre>
+
+  <h2>Enable / disable</h2>
+  <p>Plugins are enabled by default. State is stored in <code>~/.terminalvibe/state.json</code> under <code>pluginStates</code>:</p>
+  <pre><code>{
+  "pluginStates": {
+    "hello": true,
+    "disabled-plugin": false
+  }
+}</code></pre>
+  <p>A plugin with <code>false</code> is discovered but never evaluated or activated.</p>
+
+  <div class="docs-footer">
+    <a href="index.html">← Overview</a>
+    <a class="next" href="api-reference.html"><span>Next</span><br>API Reference →</a>
+  </div>
+</main>
+</body>
+</html>

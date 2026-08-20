@@ -13,6 +13,7 @@ const devPort = 7769; // dev-mode app server port
 const CONFIG_DIR = path.join(require('os').homedir(), '.terminalvibe');
 const CONFIG_THEMES_DIR = path.join(CONFIG_DIR, 'themes');
 const CONFIG_IMAGES_DIR = path.join(CONFIG_DIR, 'images');
+const CONFIG_PLUGINS_DIR = path.join(CONFIG_DIR, 'plugins');
 const CONFIG_STATE_FILE = path.join(CONFIG_DIR, 'state.json');
 const CONFIG_CUSTOM_THEMES_FILE = path.join(CONFIG_DIR, 'custom-themes.json');
 
@@ -21,6 +22,7 @@ function ensureConfigDir() {
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
     if (!fs.existsSync(CONFIG_THEMES_DIR)) fs.mkdirSync(CONFIG_THEMES_DIR, { recursive: true });
     if (!fs.existsSync(CONFIG_IMAGES_DIR)) fs.mkdirSync(CONFIG_IMAGES_DIR, { recursive: true });
+    if (!fs.existsSync(CONFIG_PLUGINS_DIR)) fs.mkdirSync(CONFIG_PLUGINS_DIR, { recursive: true });
   } catch (err) {
     console.error('[config] failed to create config dir:', err);
   }
@@ -56,6 +58,9 @@ function writeConfigFile(filePath, data) {
 // ── Window ──
 let mainWindow = null;
 let settingsWindow = null;
+// Set once the user confirms quitting from the OS close button, so the
+// close event can proceed instead of re-showing the confirmation modal.
+let allowWindowClose = false;
 
 function getIconPath() {
   const iconPath = path.join(__dirname, 'icon.png');
@@ -127,7 +132,23 @@ function createWindow() {
     }
   });
 
-  mainWindow.on('closed', () => { destroyAllBrowserViews(); mainWindow = null; });
+  mainWindow.on('closed', () => { destroyAllBrowserViews(); mainWindow = null; allowWindowClose = false; });
+
+  // Intercept the OS "X" close button so the renderer's quit-confirmation
+  // modal runs first (same flow as the Ctrl+Shift+Q shortcut). We hold the
+  // window open until the renderer confirms, then close for real.
+  mainWindow.on('close', (e) => {
+    if (allowWindowClose) return;
+    e.preventDefault();
+    const wc = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
+    if (!wc || wc.isDestroyed() || wc.isLoading()) {
+      // Renderer not ready (splash/boot) — can't show the modal, just close.
+      allowWindowClose = true;
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+      return;
+    }
+    wc.send('app:confirm-close');
+  });
 }
 
 // ── Settings window ──
@@ -209,6 +230,13 @@ ipcMain.on('settings:changed', () => {
   // The settings window never writes workspaces/terminals state; it only
   // merges settings fields into localStorage. Tell the main window to re-apply.
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('settings:changed');
+});
+
+// Renderer confirmed quitting (OS close button / quit shortcut). Allow the
+// close to proceed now.
+ipcMain.on('app:close-confirmed', () => {
+  allowWindowClose = true;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
 });
 
 // ── IPC: external links ──
@@ -327,6 +355,77 @@ ipcMain.handle('config:listThemeFiles', () => {
       .filter(f => f.endsWith('.json'))
       .map(f => f.replace('.json', ''));
   } catch { return []; }
+});
+
+// ── IPC: plugins (~/.terminalvibe/plugins/<id>/) ──
+// Each plugin is a directory containing plugin.json + a JS entry. The renderer
+// reads manifests + entry sources over IPC and evaluates them in a sandboxed
+// (contextIsolation) page, so only these read handlers are exposed — never a
+// generic write. Enable/disable state is persisted in state.json by the renderer.
+
+const PLUGIN_MANIFEST = 'plugin.json';
+
+function pluginDir(id) {
+  const safe = String(id || '').replace(/[^a-zA-Z0-9_.-]/g, '');
+  if (!safe || safe !== id) return null;
+  return path.join(CONFIG_PLUGINS_DIR, safe);
+}
+
+// Scan ~/.terminalvibe/plugins/ for plugin manifests.
+ipcMain.handle('config:listPlugins', () => {
+  try {
+    if (!fs.existsSync(CONFIG_PLUGINS_DIR)) return [];
+    const out = [];
+    for (const id of fs.readdirSync(CONFIG_PLUGINS_DIR)) {
+      const dir = pluginDir(id);
+      if (!dir) continue;
+      const manifestPath = path.join(dir, PLUGIN_MANIFEST);
+      if (!fs.existsSync(manifestPath)) continue;
+      const manifest = readConfigFile(manifestPath);
+      if (!manifest || typeof manifest !== 'object') continue;
+      out.push({ ...manifest, id });
+    }
+    return out;
+  } catch (err) {
+    console.error('[plugins] list failed:', err);
+    return [];
+  }
+});
+
+// Reveal a plugin's folder in the OS file manager ("access" a plugin).
+ipcMain.handle('config:openPluginFolder', (_e, id) => {
+  const dir = pluginDir(id);
+  if (!dir) return false;
+  try { shell.openPath(dir); return true; } catch (err) {
+    console.error('[plugins] open folder failed:', id, err);
+    return false;
+  }
+});
+
+// Reveal the plugins directory itself in the OS file manager.
+ipcMain.handle('config:openPluginsDir', () => {
+  try { shell.openPath(CONFIG_PLUGINS_DIR); return true; } catch (err) {
+    console.error('[plugins] open dir failed:', err);
+    return false;
+  }
+});
+
+// Read a plugin file (entry JS, CSS, manifest, assets). Path is resolved
+// against the plugin dir and must stay inside it.
+ipcMain.handle('config:readPluginFile', (_e, id, relPath) => {
+  const dir = pluginDir(id);
+  if (!dir) return null;
+  const rel = String(relPath || '').replace(/^\/+/, '');
+  if (!rel || rel.includes('..')) return null;
+  const fp = path.join(dir, rel);
+  if (!fp.startsWith(dir + path.sep) && fp !== path.join(dir, PLUGIN_MANIFEST)) return null;
+  try {
+    if (!fs.existsSync(fp)) return null;
+    return fs.readFileSync(fp, 'utf-8');
+  } catch (err) {
+    console.error('[plugins] read failed:', id, rel, err);
+    return null;
+  }
 });
 
 // ── IPC: native PTY (node-pty runs here in the main process) ──

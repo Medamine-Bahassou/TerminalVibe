@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TerminalVibe Plugin Docs — Troubleshooting</title>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<nav class="docs-nav">
+  <div class="brand">
+    <svg viewBox="30 55 440 290" fill="currentColor" aria-hidden="true">
+      <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z"/>
+      <rect x="228" y="60" width="237" height="80"/>
+      <rect x="228" y="260" width="237" height="80"/>
+    </svg>
+    <div>
+      <div class="brand-name">TerminalVibe</div>
+      <div class="brand-sub">Plugin System Docs</div>
+    </div>
+  </div>
+  <div class="nav-section">Getting Started</div>
+  <a href="index.html">Overview</a>
+  <div class="nav-section">Reference</div>
+  <a href="manifest.html">Manifest (plugin.json)</a>
+  <a href="api-reference.html">API Reference</a>
+  <div class="nav-section">Guides</div>
+  <a href="tutorial.html">Tutorial</a>
+  <a href="troubleshooting.html" class="active">Troubleshooting</a>
+</nav>
+<main class="docs-main">
+  <h1>Plugin Troubleshooting</h1>
+
+  <h2>Limitations</h2>
+  <table>
+    <thead><tr><th>Limitation</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr><td>Desktop only</td><td>Plugins load only in the Electron app. Browser dev mode (<code>npm run dev</code>) has no plugin host.</td></tr>
+      <tr><td>No marketplace</td><td>Install by copying a folder into <code>~/.terminalvibe/plugins/</code>. No network install.</td></tr>
+      <tr><td>No hot reload</td><td>Plugins load at startup. Restart the app after adding or editing a plugin.</td></tr>
+      <tr><td>No Node access</td><td>Plugins run in the sandboxed renderer — no <code>require</code>, no filesystem. Use <code>window.electronAPI.*</code> for app capabilities.</td></tr>
+      <tr><td><code>style.css</code> not auto-loaded</td><td>A plugin stylesheet is not injected automatically. Inject styles via <code>document.createElement('style')</code> in <code>activate</code> if needed.</td></tr>
+      <tr><td><code>deactivate</code> on app exit</td><td><code>deactivate()</code> runs on unload/reload paths, not guaranteed on window close.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Debugging</h2>
+  <h3>See plugin logs</h3>
+  <p>Open the developer console (<strong>F12</strong> / Ctrl+Shift+I). All <code>api.log(...)</code> output is prefixed with <code>[plugin:&lt;id&gt;]</code>.</p>
+
+  <h3>Plugin did not load</h3>
+  <p>Check the console for these warnings:</p>
+  <table>
+    <thead><tr><th>Message</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>missing "main" entry</code></td><td><code>plugin.json</code> has no <code>main</code> field</td></tr>
+      <tr><td><code>entry not readable</code></td><td>The file named by <code>main</code> is missing or unreadable</td></tr>
+      <tr><td><code>failed to evaluate &lt;id&gt;</code></td><td>The entry threw while executing. The error follows on the same line.</td></tr>
+      <tr><td><code>activate failed for &lt;id&gt;</code></td><td><code>activate(api)</code> threw. The error follows on the same line.</td></tr>
+    </tbody>
+  </table>
+  <p>Also confirm:</p>
+  <ul>
+    <li>The folder name matches the <code>id</code> in <code>TerminalVibe.register</code>.</li>
+    <li>The folder is directly inside <code>~/.terminalvibe/plugins/</code> (no nesting).</li>
+    <li><code>plugin.json</code> is valid JSON.</li>
+    <li>The plugin is enabled in <code>pluginStates</code> inside <code>~/.terminalvibe/state.json</code>.</li>
+  </ul>
+
+  <h3>Keybinding does nothing</h3>
+  <ul>
+    <li>Built-in shortcuts win. Pick a combo the app does not already use.</li>
+    <li>Verify the combo's modifiers: <code>{ ctrl: true, shift: true, key: 'H' }</code> means Ctrl+Shift+H.</li>
+    <li>A single-character <code>key</code> matches case-insensitively; multi-char keys match <code>e.key</code> or <code>e.code</code>.</li>
+  </ul>
+
+  <h3>Menu item missing</h3>
+  <ul>
+    <li>Check <code>api.menus.add</code> — <code>when(data)</code> must return truthy for the current context.</li>
+    <li>Confirm the type matches where you expect it: <code>'terminal'</code>, <code>'workspace'</code>, or <code>'folder'</code>.</li>
+  </ul>
+
+  <h3>Status bar / widget not visible</h3>
+  <ul>
+    <li>The status bar strip only shows once at least one plugin adds a widget with <code>position: 'statusbar'</code>.</li>
+    <li>A widget removed with <code>api.ui.removeWidget</code> is gone permanently for the session.</li>
+  </ul>
+
+  <h2>Security model</h2>
+  <p>Plugins are <strong>trusted user code</strong> running with the same privileges as the app itself:</p>
+  <ul>
+    <li>They execute in the renderer, so they can read/write the DOM and the app state, and use the <code>window.electronAPI</code> bridge (PTY writes, clipboard, browser tabs).</li>
+    <li>They <strong>cannot</strong> access Node.js APIs or the filesystem directly.</li>
+    <li>The <code>contextIsolation</code> + <code>sandbox</code> Electron settings are unchanged — plugins are evaluated in the same world as the app.</li>
+  </ul>
+  <div class="note danger"><strong>Treat plugins like shell scripts:</strong> only install plugins you wrote or that you trust, and review the source of anything you copy into <code>~/.terminalvibe/plugins/</code>.</div>
+
+  <h2>Error handling in your plugin</h2>
+  <p>Wrap risky code in <code>try/catch</code>; the app catches errors in event handlers, commands, <code>activate</code>, and menu handlers and logs them without crashing.</p>
+  <pre><code>handler() {
+  try {
+    // ...
+  } catch (err) {
+    api.log('command failed:', err);
+  }
+}</code></pre>
+
+  <div class="docs-footer">
+    <a href="tutorial.html">← Tutorial</a>
+    <a class="next" href="index.html"><span>Back to start</span><br>Overview →</a>
+  </div>
+</main>
+</body>
+</html>

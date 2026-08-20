@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TerminalVibe Plugin Docs — Overview</title>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<nav class="docs-nav">
+  <div class="brand">
+    <svg viewBox="30 55 440 290" fill="currentColor" aria-hidden="true">
+      <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z"/>
+      <rect x="228" y="60" width="237" height="80"/>
+      <rect x="228" y="260" width="237" height="80"/>
+    </svg>
+    <div>
+      <div class="brand-name">TerminalVibe</div>
+      <div class="brand-sub">Plugin System Docs</div>
+    </div>
+  </div>
+  <div class="nav-section">Getting Started</div>
+  <a href="index.html" class="active">Overview</a>
+  <div class="nav-section">Reference</div>
+  <a href="manifest.html">Manifest (plugin.json)</a>
+  <a href="api-reference.html">API Reference</a>
+  <div class="nav-section">Guides</div>
+  <a href="tutorial.html">Tutorial</a>
+  <a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<main class="docs-main">
+  <h1>TerminalVibe Plugin System</h1>
+  <blockquote>Extend TerminalVibe with JavaScript plugins — commands, keybindings, terminal lifecycle hooks, context-menu items, themes, configurable settings, and UI widgets.</blockquote>
+
+  <h2>What are plugins?</h2>
+  <p>A plugin is a small folder placed inside <code>~/.terminalvibe/plugins/</code>. Each plugin ships a <code>plugin.json</code> manifest and a JavaScript entry file. On startup the app finds every enabled plugin, evaluates its entry, and calls <code>activate(api)</code> with a per-plugin API object that exposes the app's extension points.</p>
+  <pre><code>~/.terminalvibe/
+├── plugins/
+│   └── my-plugin/
+│       ├── plugin.json      # manifest (required)
+│       └── plugin.js        # JS entry (required, path from "main")
+│       └── style.css        # optional — not auto-injected yet</code></pre>
+
+  <h2>What can plugins do?</h2>
+  <table>
+    <thead><tr><th>Capability</th><th>API</th></tr></thead>
+    <tbody>
+      <tr><td>Commands + keybindings</td><td><code>api.commands.register({ id, combo, handler })</code></td></tr>
+      <tr><td>Terminal lifecycle hooks</td><td><code>api.events.on('terminal:add' | …)</code></td></tr>
+      <tr><td>Context-menu items</td><td><code>api.menus.add('terminal' | 'workspace' | 'folder', item)</code></td></tr>
+      <tr><td>Custom themes</td><td><code>api.themes.register(name, theme)</code></td></tr>
+      <tr><td>Configurable settings</td><td><code>api.config.get/set</code> + manifest <code>settings</code></td></tr>
+      <tr><td>UI widgets (status bar / sidebar)</td><td><code>api.ui.addWidget({ id, position, el })</code></td></tr>
+      <tr><td>Read-only state access</td><td><code>api.state.getActiveTerminal()</code>, <code>getWorkspaces()</code>, …</td></tr>
+    </tbody>
+  </table>
+
+  <h2>How loading works</h2>
+  <ol>
+    <li>The Electron <strong>main process</strong> scans <code>~/.terminalvibe/plugins/</code> for <code>plugin.json</code> manifests and serves entry files over IPC (<code>config:listPlugins</code>, <code>config:readPluginFile</code>).</li>
+    <li>The <strong>renderer</strong> evaluates each enabled entry with <code>new Function('TerminalVibe', code)</code>, so plugins only touch the DOM + API — no Node access.</li>
+    <li>The entry calls <code>TerminalVibe.register({ id, activate, deactivate })</code>.</li>
+    <li>The app calls <code>activate(api)</code> and the plugin registers what it needs.</li>
+    <li>Enable/disable state is persisted in <code>state.json</code> under <code>pluginStates</code>; config values under <code>pluginConfigs</code>.</li>
+  </ol>
+  <p>Plugins load in <strong>both</strong> the main window and the Settings window, so config changes made in Settings apply live everywhere.</p>
+
+  <h2>Install a plugin</h2>
+  <pre><code># Copy the example plugin into the plugins directory
+cp -r examples/hello-terminalvibe ~/.terminalvibe/plugins/
+
+# Restart the app. Check the developer console for:
+#   [plugin:hello-terminalvibe] activated</code></pre>
+
+  <h2>Manage plugins</h2>
+  <p>The <strong>Settings → Plugins</strong> page lists every installed plugin with its status (Active/Disabled), an <strong>activate/deactivate toggle</strong>, and an <strong>open-folder</strong> button that reveals the plugin directory in your file manager. Plugins that declare <code>settings</code> get a <strong>configure</strong> button that opens that plugin's options page — the same page has a back button that returns to the list of all plugins. Changes apply immediately and persist to <code>state.json</code>.</p>
+
+  <h2>Quick start</h2>
+  <p>Create <code>~/.terminalvibe/plugins/hello/plugin.json</code>:</p>
+  <pre><code>{
+  "name": "Hello",
+  "version": "1.0.0",
+  "description": "My first plugin",
+  "author": "You",
+  "main": "plugin.js"
+}</code></pre>
+  <p>Create <code>~/.terminalvibe/plugins/hello/plugin.js</code>:</p>
+  <pre><code>TerminalVibe.register({
+  id: 'hello',
+  activate(api) {
+    api.log('hello world');
+    api.events.on('terminal:add', ({ termId, type }) => {
+      api.log('new ' + type + ' terminal:', termId);
+    });
+  },
+  deactivate() {}
+});</code></pre>
+  <p>Restart the app — the plugin logs on boot and whenever a terminal is added.</p>
+
+  <h2>Doc pages</h2>
+  <ul>
+    <li><a href="manifest.html">Manifest Reference</a> — every <code>plugin.json</code> field</li>
+    <li><a href="api-reference.html">API Reference</a> — the full <code>api</code> object</li>
+    <li><a href="tutorial.html">Tutorial</a> — build a real plugin step by step</li>
+    <li><a href="troubleshooting.html">Troubleshooting</a> — limitations, debugging, security</li>
+  </ul>
+
+  <div class="docs-footer">
+    <span></span>
+    <a class="next" href="manifest.html"><span>Next</span><br>Manifest (plugin.json) →</a>
+  </div>
+</main>
+</body>
+</html>

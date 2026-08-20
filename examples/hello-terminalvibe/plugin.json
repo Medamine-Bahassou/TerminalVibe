@@ -1,0 +1,38 @@
+{
+  "name": "Hello TerminalVibe",
+  "version": "1.0.0",
+  "description": "Example plugin demonstrating the TerminalVibe plugin API: commands, keybindings, lifecycle hooks, context menus, themes, configurable settings, and widgets.",
+  "author": "TerminalVibe",
+  "main": "plugin.js",
+  "settings": [
+    {
+      "key": "greeting",
+      "label": "Greeting",
+      "type": "text",
+      "default": "hello",
+      "description": "The word printed by the command shortcut."
+    },
+    {
+      "key": "style",
+      "label": "Greeting color",
+      "type": "select",
+      "default": "green",
+      "options": ["green", "yellow", "cyan"],
+      "description": "ANSI color used for the greeting."
+    },
+    {
+      "key": "showClock",
+      "label": "Show clock",
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the status-bar clock widget is shown."
+    },
+    {
+      "key": "interval",
+      "label": "Clock interval (s)",
+      "type": "number",
+      "default": 1,
+      "description": "How often the clock refreshes, in seconds."
+    }
+  ]
+}

@@ -73,6 +73,12 @@
       </div>
     </div>
 
+    <!-- Plugin widget dock (status bar) -->
+    <div id="statusbar">
+      <div id="statusbar-left"></div>
+      <div id="statusbar-right"></div>
+    </div>
+
   </div>
 </div>
 
@@ -153,6 +159,10 @@
         <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="theme-editor">
           <i class="ph ph-palette shrink-0"></i>
           <span>Theme Editor</span>
+        </div>
+        <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="plugins">
+          <i class="ph ph-puzzle-piece shrink-0"></i>
+          <span>Plugins</span>
         </div>
         <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="advanced">
           <i class="ph ph-faders-horizontal shrink-0"></i>
@@ -400,6 +410,19 @@
             <button class="theme-action-btn theme-action-primary" id="theme-btn-save">Save Theme</button>
           </div>
           <input type="file" id="theme-import-input" accept=".json" class="hidden">
+        </div>
+        <!-- Plugins -->
+        <div class="settings-section select-none" data-cat="plugins">
+          <div class="flex items-center justify-between mt-0 mb-1.5 ml-1">
+            <div id="plugins-title" class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)]">Plugins</div>
+            <button type="button" id="plugins-open-dir" class="plugin-icon-btn" title="Open the plugins directory">
+              <i class="ph ph-folder-open"></i>
+            </button>
+          </div>
+          <div id="plugins-list" class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] mb-3 flex flex-col"></div>
+          <div class="text-[11px] text-[var(--muted-text)] px-1 leading-relaxed">
+            Plugins live in <code>~/.terminalvibe/plugins/&lt;id&gt;/</code>. Drop a folder there, restart, then activate it here.
+          </div>
         </div>
         <!-- Advanced -->
         <div class="settings-section select-none" data-cat="advanced">

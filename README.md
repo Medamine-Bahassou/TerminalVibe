@@ -29,6 +29,7 @@
 - **Right-click copy/paste** - context menu on terminal body for copy and paste
 - **Directional pane navigation** - Alt+H/J/K/L to focus adjacent split panes
 - **Persistent state** - layout, themes, settings, and open browser URLs persist across sessions (auto-save every 30s)
+- **Plugin system** - drop a plugin folder into `~/.terminalvibe/plugins/` to add commands, keybindings, terminal lifecycle hooks, context-menu items, themes, settings sections, and UI widgets (see [docs/plugin-development.md](docs/plugin-development.md))
 - **Frameless window** - custom titlebar with logo, sidebar toggle, and window controls (minimize/maximize/close)
 - **Status bar** - shows active workspace, terminal name, terminal dimensions + font size, connection status, multi-select count, and real-time clock
 
@@ -73,6 +74,7 @@
 │   ├── main.js             # Main process: node-pty PTY, WebContentsView browser tabs
 │   └── preload.js          # contextBridge IPC API
 ├── vendor/                 # Vendored xterm.js addons, Coloris assets
+├── examples/               # Example plugins (see docs/plugin-development.md)
 ├── dist/                   # Build output
 └── ARCHITECTURE.md         # Detailed architecture docs
 ```

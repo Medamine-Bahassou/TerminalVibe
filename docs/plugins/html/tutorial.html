@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TerminalVibe Plugin Docs — Tutorial</title>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<nav class="docs-nav">
+  <div class="brand">
+    <svg viewBox="30 55 440 290" fill="currentColor" aria-hidden="true">
+      <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z"/>
+      <rect x="228" y="60" width="237" height="80"/>
+      <rect x="228" y="260" width="237" height="80"/>
+    </svg>
+    <div>
+      <div class="brand-name">TerminalVibe</div>
+      <div class="brand-sub">Plugin System Docs</div>
+    </div>
+  </div>
+  <div class="nav-section">Getting Started</div>
+  <a href="index.html">Overview</a>
+  <div class="nav-section">Reference</div>
+  <a href="manifest.html">Manifest (plugin.json)</a>
+  <a href="api-reference.html">API Reference</a>
+  <div class="nav-section">Guides</div>
+  <a href="tutorial.html" class="active">Tutorial</a>
+  <a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<main class="docs-main">
+  <h1>Building a Plugin</h1>
+  <p>This tutorial builds the plugin in <code>examples/hello-terminalvibe/</code>, which uses every extension point in the API. The result is a "hello" plugin that greets the active terminal, watches lifecycle events, adds a context-menu item, a theme, a Settings section, and a status-bar clock.</p>
+
+  <h2>1. Scaffold the folder</h2>
+  <pre><code>mkdir -p ~/.terminalvibe/plugins/hello-terminalvibe
+cd ~/.terminalvibe/plugins/hello-terminalvibe</code></pre>
+  <p>Create <code>plugin.json</code>:</p>
+  <pre><code>{
+  "name": "Hello TerminalVibe",
+  "version": "1.0.0",
+  "description": "Example plugin demonstrating the TerminalVibe plugin API.",
+  "author": "TerminalVibe",
+  "main": "plugin.js"
+}</code></pre>
+  <p>Create <code>plugin.js</code>:</p>
+  <pre><code>TerminalVibe.register({
+  id: 'hello-terminalvibe',
+  activate(api) { /* ... */ },
+  deactivate() { /* ... */ }
+});</code></pre>
+  <p>The <code>id</code> must match the folder name.</p>
+
+  <h2>2. Log and register a command</h2>
+  <pre><code>activate(api) {
+  api.log('activated');
+
+  api.commands.register({
+    id: 'hello-terminalvibe.greet',
+    label: 'Greet in active terminal',
+    combo: { ctrl: true, shift: true, key: 'H' },
+    handler() {
+      const term = api.state.getActiveTerminal();
+      if (!term) { api.log('no active terminal'); return; }
+      const text = '\r\n\x1b[32m[hello] Hi from ' + api.name + ' v' + api.version + '!\x1b[0m\r\n';
+      window.electronAPI.terminalWrite({ id: term.id, data: new TextEncoder().encode(text) });
+    }
+  });
+}</code></pre>
+  <ul>
+    <li><code>api.log</code> prefixes messages with <code>[plugin:hello-terminalvibe]</code>.</li>
+    <li>The command is bound to <strong>Ctrl+Shift+H</strong> (unused by the app). Built-in shortcuts take priority over plugin combos.</li>
+    <li><code>window.electronAPI.terminalWrite</code> sends bytes to the PTY. Wrap the string in <code>TextEncoder</code>.</li>
+  </ul>
+
+  <h2>3. Watch lifecycle events</h2>
+  <pre><code>api.events.on('terminal:add', ({ termId, type }) =&gt; api.log('terminal added:', termId, type));
+api.events.on('terminal:activate', ({ termId }) =&gt; api.log('terminal activated:', termId));
+api.events.on('terminal:remove', ({ termId }) =&gt; api.log('terminal removed:', termId));
+api.events.on('theme:changed', ({ name }) =&gt; api.log('theme changed:', name));</code></pre>
+
+  <h2>4. Add a context-menu item</h2>
+  <pre><code>api.menus.add('terminal', {
+  label: 'Hello from plugin',
+  icon: '&lt;i class="ph ph-hand-wave"&gt;&lt;/i&gt;',
+  handler(data) {
+    const term = api.state.getActiveTerminal();
+    if (!term) return;
+    window.electronAPI.terminalWrite({
+      id: term.id,
+      data: new TextEncoder().encode('\r\n\x1b[33m[hello] context menu clicked\x1b[0m\r\n')
+    });
+  }
+});</code></pre>
+  <p>Right-clicking any terminal tab or body now shows the item in its own section.</p>
+
+  <h2>5. Register a theme</h2>
+  <pre><code>api.themes.register('hello-theme', {
+  label: 'Hello Theme',
+  bg: '#1b1b2f',
+  fg: '#e0e0ff',
+  cursor: '#e0e0ff',
+  selection: '#353570',
+  swatches: ['#1b1b2f', '#e0e0ff'],
+  palette: [
+    '#1b1b2f', '#ff6b6b', '#51cf66', '#ffd43b',
+    '#4dabf7', '#cc5de8', '#22b8cf', '#f8f9fa',
+    '#495057', '#ff8787', '#8ce99a', '#ffe066',
+    '#74c0fc', '#da77f2', '#66d9e8', '#f1f3f5'
+  ],
+  ui: { accent: '#4dabf7' }
+});</code></pre>
+  <p>The theme appears in Settings → Appearance → Theme the next time the app boots.</p>
+
+  <h2>6. Add configurable options</h2>
+  <p>Declare options in <code>plugin.json</code> with a <code>settings</code> array:</p>
+  <pre><code>"settings": [
+  { "key": "greeting", "label": "Greeting", "type": "text", "default": "hello" },
+  { "key": "style", "label": "Greeting color", "type": "select",
+    "default": "green", "options": ["green", "yellow", "cyan"] },
+  { "key": "showClock", "label": "Show clock", "type": "boolean", "default": true }
+]</code></pre>
+  <p>Read them in the entry and react to edits:</p>
+  <pre><code>const greeting = api.config.get('greeting', 'hello');
+const style = api.config.get('style', 'green');
+const showClock = api.config.get('showClock', true);
+
+api.config.onChange(({ config }) =&gt; {
+  api.log('config changed →', JSON.stringify(config));
+});</code></pre>
+  <p>The user edits these values from <strong>Settings → Plugins → Hello TerminalVibe → Options</strong>. Changes apply immediately (every loaded window is notified through <code>onChange</code>) and persist in <code>state.json</code> under <code>pluginConfigs</code>.</p>
+
+  <h2>7. Add a status-bar widget</h2>
+  <pre><code>let interval = null;
+
+const clock = document.createElement('span');
+clock.style.fontVariantNumeric = 'tabular-nums';
+const tick = () =&gt; { clock.textContent = new Date().toLocaleTimeString(); };
+tick();
+interval = setInterval(tick, 1000);
+api.ui.addWidget({ id: 'clock', position: 'statusbar', el: clock });</code></pre>
+  <p>The status bar strip is hidden until the first widget is added.</p>
+
+  <h2>8. Clean up on deactivate</h2>
+  <pre><code>deactivate() {
+  if (interval) clearInterval(interval);
+}</code></pre>
+
+  <h2>9. Restart and verify</h2>
+  <pre><code># restart the app, then open the developer console (F12) and look for:
+#   [plugin:hello-terminalvibe] activated
+#   [plugin:hello-terminalvibe] ready — press Ctrl+Shift+H</code></pre>
+  <p>Now:</p>
+  <ul>
+    <li><strong>Ctrl+Shift+H</strong> writes a greeting into the active terminal.</li>
+    <li>Creating/activating/closing tabs logs lifecycle events.</li>
+    <li>Right-click a terminal → <strong>Hello from plugin</strong>.</li>
+    <li>Settings → Appearance → Theme lists <strong>Hello Theme</strong>.</li>
+    <li>Settings → Plugins → Hello TerminalVibe → <strong>Options</strong> edits the greeting, color, and clock settings — changes apply live.</li>
+    <li>The status bar shows a live clock.</li>
+  </ul>
+
+  <h2>Next steps</h2>
+  <ul>
+    <li>Read the <a href="api-reference.html">API Reference</a> for every available method.</li>
+    <li>See <a href="troubleshooting.html">Troubleshooting</a> for common gotchas.</li>
+  </ul>
+
+  <div class="docs-footer">
+    <a href="api-reference.html">← API Reference</a>
+    <a class="next" href="troubleshooting.html"><span>Next</span><br>Troubleshooting →</a>
+  </div>
+</main>
+</body>
+</html>
