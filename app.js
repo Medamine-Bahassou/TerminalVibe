@@ -1280,10 +1280,16 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   }
 
   function sendStdin(sid, data) {
+    const src = findTermById(sid);
+    if (src && src.term.locked) return; // locked terminal: swallow all input
     _sendStdinRaw(sid, data);
     if (_multiSelected.size > 1) {
       for (const otherId of _multiSelected) {
-        if (otherId !== sid) _sendStdinRaw(otherId, data);
+        if (otherId !== sid) {
+          const other = findTermById(otherId);
+          if (other && other.term.locked) continue; // never write into a locked pane
+          _sendStdinRaw(otherId, data);
+        }
       }
     }
   }
@@ -1831,6 +1837,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           else if (t.cwd) o.cwd = t.cwd;
           if (t.bgImage) o.bgImage = t.bgImage;
           if (t.dead) o.dead = true;
+          if (t.locked) o.locked = true;
           return o;
         })
       };
@@ -1868,6 +1875,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         if (tData.cwd) entry.cwd = tData.cwd;
         if (tData.bgImage) entry.bgImage = tData.bgImage;
         if (tData.dead) entry.dead = true;
+        if (tData.locked) entry.locked = true;
         group.terminals.push(entry);
       }
       return group;
@@ -2680,7 +2688,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       }
     });
 
-    const entry = { id, label, term, fit: fitAddon, search: searchAddon, el: null, opened: false, _bgTransparent: false };
+    const entry = { id, label, term, fit: fitAddon, search: searchAddon, el: null, opened: false, locked: false, _bgTransparent: false };
     return entry;
   }
 
@@ -5570,6 +5578,13 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       item(isMaximized ? '<i class="ph ph-corners-in"></i>' : '<i class="ph ph-corners-out"></i>', isMaximized ? 'Restore tab' : 'Maximize tab', '', () => toggleMaximizeTerminal(wsId, termId));
       item('<i class="ph ph-plus"></i>', 'New terminal', 'Ctrl+Shift+T', () => addTerminal(wsId));
       item('<i class="ph ph-pencil-simple"></i>', 'Edit tab', '', () => renameTerminal(wsId, termId));
+      {
+        const termEntry = findTermById(termId)?.term;
+        if (termEntry && termEntry.type !== 'browser') {
+          const locked = !!termEntry.locked;
+          item(`<i class="ph ph-lock${locked ? '-simple-open' : '-simple'}"></i>`, locked ? 'Unlock terminal' : 'Lock terminal', '', () => toggleTermLock(termEntry));
+        }
+      }
       if (backgroundMode === 'per-tab') {
         const termEntry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
         if (termEntry && termEntry.bgImage) {
