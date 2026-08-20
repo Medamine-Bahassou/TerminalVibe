@@ -85,6 +85,12 @@ body { display: flex; flex-direction: column; height: 100vh; }
   background-color: rgba(255, 255, 255, 0.25) !important;
 }
 
+/* xterm.css forces overflow-y: scroll, which paints a scrollbar on every
+   terminal even when idle. Only show it once there's something to scroll. */
+.xterm .xterm-viewport {
+  overflow-y: auto;
+}
+
 /* ──────────────────────────────────────────
  *   TITLEBAR (native overlay + drag strip)
  * ────────────────────────────────────────── */
@@ -1946,6 +1952,16 @@ body.detached #pane-area .term-slot .xterm { width: 100%; height: 100%; }
 }
 .plugin-icon-btn:hover { border-color: var(--accent); background: var(--accent-dim); color: var(--fg); }
 .plugin-icon-btn i { font-size: 13px; line-height: 1; }
+
+/* Icon-only back button: no border/background, hover only recolors the icon */
+.plugin-back-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex: none; padding: 0;
+  border: 0; background: transparent; border-radius: 6px;
+  color: var(--muted-text); font-size: 13px; cursor: pointer;
+}
+.plugin-back-btn:hover { color: var(--fg); background: transparent; }
+.plugin-back-btn i { font-size: 13px; line-height: 1; }
 
 /* Theme mode toggle */
 .theme-mode-btn {

@@ -81,10 +81,20 @@ Writing to a terminal from a command:
 handler() {
   const term = api.state.getActiveTerminal();
   if (!term) return;
-  const data = new TextEncoder().encode('\r\nhello from plugin!\r\n');
-  window.electronAPI.terminalWrite({ id: term.id, data });
+  api.terminal.write(term.id, '\r\nhello from plugin!\r\n');
 }
 ```
+
+## Terminal I/O
+
+| Member | Signature | Description |
+|--------|-----------|-------------|
+| `api.terminal.write` | `(id, data) => boolean` | Write directly to a terminal's **screen buffer** (xterm display). `data` is a string or `Uint8Array`. Returns `false` if the terminal is missing. |
+| `window.electronAPI.terminalWrite` | `({ id, data })` | Send bytes to the **PTY stdin** — i.e. as if typed by the user into the shell. Only use for real input/keystrokes. |
+
+Prefer `api.terminal.write` for messages/notifications: it renders on the
+screen and is never interpreted by the shell, so special characters
+(`[`, `*`, `!`, `$`, …) can't trigger glob errors or command execution.
 
 ## Context-menu items
 

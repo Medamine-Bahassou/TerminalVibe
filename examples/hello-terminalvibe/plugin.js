@@ -8,10 +8,23 @@
 (function () {
   let interval = null;
 
+  const ANSI_COLORS = { green: '32', yellow: '33', cyan: '36' };
+
   TerminalVibe.register({
     id: 'hello-terminalvibe',
     activate(api) {
       api.log('activated');
+
+      // Live config — edited in Settings → Plugins → Hello TerminalVibe → Options.
+      // api.config.onChange() keeps this object in sync instantly, so every
+      // handler below reads from it at call time instead of stale
+      // activation-time values.
+      const cfg = {
+        greeting: api.config.get('greeting', 'hello'),
+        style: api.config.get('style', 'green'),
+        showClock: api.config.get('showClock', true),
+        interval: api.config.get('interval', 1),
+      };
 
       // 1. Command with a keybinding (Ctrl+Shift+H). Built-in shortcuts win,
       //    so pick a combo the app does not already use.
@@ -22,9 +35,11 @@
         handler() {
           const term = api.state.getActiveTerminal();
           if (!term) { api.log('no active terminal'); return; }
-          const text = `\r\n\x1b[32m[hello] Hi from ${api.name} v${api.version}!\x1b[0m\r\n`;
-          const data = new TextEncoder().encode(text);
-          window.electronAPI.terminalWrite({ id: term.id, data });
+          const color = ANSI_COLORS[cfg.style] || '32';
+          const text = `\r\n\x1b[${color}m[hello] ${cfg.greeting} from ${api.name} v${api.version}!\x1b[0m\r\n`;
+          // Write to the terminal DISPLAY, not the shell — so this can never
+          // be interpreted as a command/glob by the shell.
+          api.terminal.write(term.id, text);
         }
       });
 
@@ -42,7 +57,7 @@
           const term = api.state.getActiveTerminal();
           if (!term) return;
           const text = '\r\n\x1b[33m[hello] context menu clicked\x1b[0m\r\n';
-          window.electronAPI.terminalWrite({ id: term.id, data: new TextEncoder().encode(text) });
+          api.terminal.write(term.id, text);
         }
       });
 
@@ -63,27 +78,27 @@
         ui: { accent: '#4dabf7' }
       });
 
-      // 5. Read the plugin's editable settings (see plugin.json "settings").
-      //    Values are edited from Settings → Plugins and persisted in state.json.
-      const greeting = api.config.get('greeting', 'hello');
-      const style = api.config.get('style', 'green');
-      const showClock = api.config.get('showClock', true);
-      api.log('config → greeting:', greeting, '| style:', style, '| showClock:', showClock);
-
-      // React live when the user edits settings in Settings → Plugins.
-      api.config.onChange(({ config }) => {
-        api.log('config changed →', JSON.stringify(config));
-      });
-
-      // 6. Status bar widget — a live clock
+      // 5. Status bar widget — a live clock
       const clock = document.createElement('span');
       clock.style.fontVariantNumeric = 'tabular-nums';
       const tick = () => {
-        clock.textContent = showClock ? new Date().toLocaleTimeString() : '';
+        clock.textContent = cfg.showClock ? new Date().toLocaleTimeString() : '';
       };
-      tick();
-      interval = setInterval(tick, 1000);
+      const startClock = () => {
+        if (interval) clearInterval(interval);
+        tick();
+        interval = setInterval(tick, Math.max(0.1, cfg.interval) * 1000);
+      };
+
+      // React live when the user edits settings in Settings → Plugins.
+      api.config.onChange(({ config }) => {
+        Object.assign(cfg, config);
+        api.log('config changed →', JSON.stringify(cfg));
+        startClock();
+      });
+
       api.ui.addWidget({ id: 'clock', position: 'statusbar', el: clock });
+      startClock();
 
       api.log('ready — press Ctrl+Shift+H');
     },

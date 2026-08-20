@@ -89,8 +89,12 @@ api.commands.run('my-plugin.greet');          // invoke by id
 
 `combo` fields: `{ ctrl, shift, alt, meta, key }`. `key` is a single character
 or a key/code string (e.g. `'F5'`, `'PageDown'`). Built-in app shortcuts take
-priority; plugins only fire when nothing else matched. To write to a terminal
-use `window.electronAPI.terminalWrite({ id, data })` with a `Uint8Array`.
+priority; plugins only fire when nothing else matched.
+
+To write a message that appears on the terminal **screen** (never fed to the
+shell) use `api.terminal.write(termId, stringOrUint8Array)`. To send real
+keystrokes/input into the PTY, use `window.electronAPI.terminalWrite({ id, data })`
+with a `Uint8Array`.
 
 ### Terminal lifecycle hooks
 

@@ -58,7 +58,7 @@ activate(api) {
       const term = api.state.getActiveTerminal();
       if (!term) { api.log('no active terminal'); return; }
       const text = '\r\n\x1b[32m[hello] Hi from ' + api.name + ' v' + api.version + '!\x1b[0m\r\n';
-      window.electronAPI.terminalWrite({ id: term.id, data: new TextEncoder().encode(text) });
+      api.terminal.write(term.id, text);
     }
   });
 }
@@ -67,8 +67,9 @@ activate(api) {
 - `api.log` prefixes messages with `[plugin:hello-terminalvibe]`.
 - The command is bound to **Ctrl+Shift+H** (unused by the app). Built-in
   shortcuts take priority over plugin combos.
-- `window.electronAPI.terminalWrite` sends bytes to the PTY. Wrap the string in
-  `TextEncoder`.
+- `api.terminal.write` renders the text on the terminal **screen**. It is never
+  fed to the shell, so it can't be misinterpreted as a command or glob. (Use
+  `window.electronAPI.terminalWrite` with a `Uint8Array` only for real input.)
 
 ## 3. Watch lifecycle events
 
@@ -88,10 +89,7 @@ api.menus.add('terminal', {
   handler(data) {
     const term = api.state.getActiveTerminal();
     if (!term) return;
-    window.electronAPI.terminalWrite({
-      id: term.id,
-      data: new TextEncoder().encode('\r\n\x1b[33m[hello] context menu clicked\x1b[0m\r\n')
-    });
+    api.terminal.write(term.id, '\r\n\x1b[33m[hello] context menu clicked\x1b[0m\r\n');
   }
 });
 ```

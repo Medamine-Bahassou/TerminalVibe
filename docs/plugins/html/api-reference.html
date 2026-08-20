@@ -91,9 +91,18 @@ api.events.on('theme:changed', ({ name }) => {
   <pre><code>handler() {
   const term = api.state.getActiveTerminal();
   if (!term) return;
-  const data = new TextEncoder().encode('\r\nhello from plugin!\r\n');
-  window.electronAPI.terminalWrite({ id: term.id, data });
+  api.terminal.write(term.id, '\r\nhello from plugin!\r\n');
 }</code></pre>
+
+  <h2>Terminal I/O</h2>
+  <table>
+    <thead><tr><th>Member</th><th>Signature</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.terminal.write</code></td><td><code>(id, data) =&gt; boolean</code></td><td>Write directly to a terminal's <strong>screen buffer</strong> (xterm display). <code>data</code> is a string or <code>Uint8Array</code>. Returns <code>false</code> if the terminal is missing.</td></tr>
+      <tr><td><code>window.electronAPI.terminalWrite</code></td><td><code>({ id, data })</code></td><td>Send bytes to the <strong>PTY stdin</strong> — i.e. as if typed by the user into the shell. Only use for real input/keystrokes.</td></tr>
+    </tbody>
+  </table>
+  <p>Prefer <code>api.terminal.write</code> for messages/notifications: it renders on the screen and is never interpreted by the shell, so special characters (<code>[</code>, <code>*</code>, <code>!</code>, <code>$</code>, …) can't trigger glob errors or command execution.</p>
 
   <h2>Context-menu items</h2>
   <table>

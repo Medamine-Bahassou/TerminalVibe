@@ -414,6 +414,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           if (i !== -1) { const [w] = _pluginWidgets.splice(i, 1); w.el.remove(); renderPluginWidgets(); }
         },
       },
+      
       // Plugin-declared settings (manifest.settings). Values are persisted in
       // state.json (pluginConfigs) and edited from Settings → Plugins.
       config: {
@@ -532,9 +533,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     for (const manifest of manifests) {
       const enabled = _pluginStates.get(manifest.id) !== false;
       const row = document.createElement('div');
-      row.className = 'flex items-center justify-between px-3 py-2.5 gap-3 border-b border-[var(--border)] last:border-b-0 hover:bg-white/[0.01]';
+      row.className = 'flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] first:border-t-0 hover:bg-white/[0.01]';
       const meta = document.createElement('div');
-      meta.className = 'flex flex-col gap-0.5 min-w-0';
+      meta.className = 'flex flex-col gap-1 min-w-0';
       const head = document.createElement('div');
       head.className = 'flex items-center gap-2 flex-wrap';
       const nameEl = document.createElement('span');
@@ -559,13 +560,13 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         meta.appendChild(desc);
       }
       const idEl = document.createElement('div');
-      idEl.className = 'text-[10px] text-[var(--dim-text)]';
+      idEl.className = 'text-[11px] text-[var(--muted-text)]';
       idEl.textContent = manifest.id + (manifest.author ? '  ·  ' + manifest.author : '');
       meta.appendChild(idEl);
       row.appendChild(meta);
 
       const controls = document.createElement('div');
-      controls.className = 'flex items-center gap-2 shrink-0';
+      controls.className = 'flex-1 flex items-center justify-end gap-3';
       const schema = Array.isArray(manifest.settings) ? manifest.settings : [];
       if (schema.length) {
         const cfgBtn = document.createElement('button');
@@ -614,16 +615,16 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   // button + name); list view restores the plain "Plugins" heading.
   function updatePluginsSectionTitle(manifests) {
     const titleEl = document.getElementById('plugins-title');
-    const openDirBtn = document.getElementById('plugins-open-dir');
+    const openDirRow = document.getElementById('plugins-open-dir-row');
     if (!titleEl) return;
     if (_pluginsView.mode === 'detail') {
       const manifest = (manifests || []).find(m => m.id === _pluginsView.id);
-      if (openDirBtn) openDirBtn.style.display = 'none';
-      titleEl.className = 'flex items-center gap-1.5 min-w-0';
+      if (openDirRow) openDirRow.style.display = 'none';
+      titleEl.className = 'flex items-center gap-1.5 min-w-0 mt-0 mb-1.5 ml-1';
       titleEl.textContent = '';
       const back = document.createElement('button');
       back.type = 'button';
-      back.className = 'plugin-icon-btn';
+      back.className = 'plugin-back-btn';
       back.title = 'Back to all plugins';
       back.innerHTML = '<i class="ph ph-arrow-left"></i>';
       back.addEventListener('click', () => {
@@ -632,12 +633,12 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       });
       titleEl.appendChild(back);
       const name = document.createElement('span');
-      name.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--fg)] truncate';
+      name.className = 'text-[12.5px] font-medium text-[var(--fg)] truncate';
       name.textContent = manifest ? (manifest.name || manifest.id) : 'Plugins';
       titleEl.appendChild(name);
     } else {
-      if (openDirBtn) openDirBtn.style.display = '';
-      titleEl.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)]';
+      if (openDirRow) openDirRow.style.display = '';
+      titleEl.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1';
       titleEl.textContent = 'Plugins';
     }
   }
@@ -654,34 +655,29 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       return;
     }
 
-    // Intro line
-    const intro = document.createElement('div');
-    intro.className = 'px-3 pt-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--dim-text)]';
-    intro.textContent = 'Options';
-    list.appendChild(intro);
-
     for (const s of schema) {
-      const wrap = document.createElement('div');
-      wrap.className = 'flex items-center justify-between gap-3 px-3 py-2.5 border-b border-[var(--border)] last:border-b-0';
-      wrap.appendChild(renderPluginConfigField(manifest, s));
-      list.appendChild(wrap);
+      const field = renderPluginConfigField(manifest, s);
+      list.appendChild(field);
+      field.querySelectorAll('.custom-dropdown').forEach(dd => {
+        if (typeof initCustomDropdown === 'function') initCustomDropdown(dd);
+      });
     }
   }
 
-  // Build an editable field for one manifest.settings entry: label/description
-  // on the left, the control on the right.
+  // Build one option row for a manifest.settings entry, matching the standard
+  // settings-row pattern: label/description on the left, control on the right.
   function renderPluginConfigField(manifest, s) {
     const wrap = document.createElement('div');
-    wrap.className = 'flex items-center justify-between gap-3 min-w-0 flex-1';
+    wrap.className = 'flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] first:border-t-0 hover:bg-white/[0.01]';
     const labelEl = document.createElement('div');
-    labelEl.className = 'flex flex-col gap-0.5 min-w-0';
+    labelEl.className = 'flex flex-col gap-1';
     const lab = document.createElement('div');
-    lab.className = 'text-[11px] text-[var(--fg)]';
+    lab.className = 'text-[12.5px] font-medium text-[var(--fg)]';
     lab.textContent = s.label || s.key;
     labelEl.appendChild(lab);
     if (s.description) {
       const d = document.createElement('div');
-      d.className = 'text-[10px] text-[var(--dim-text)] leading-tight';
+      d.className = 'text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]';
       d.textContent = s.description;
       labelEl.appendChild(d);
     }
@@ -691,6 +687,11 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     const value = current !== undefined ? current : s.default;
 
     const commit = (v) => { setPluginConfigValue(manifest.id, s.key, v); };
+
+    const controlWrap = document.createElement('div');
+    controlWrap.className = 'flex-1 flex items-center justify-end gap-3';
+
+    const inputCls = 'bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none';
 
     let control;
     if (s.type === 'boolean') {
@@ -707,8 +708,12 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       lbl.appendChild(knob);
       control = lbl;
     } else if (s.type === 'select') {
+      // Use the app's custom dropdown component (hidden native select +
+      // .custom-dropdown) so it matches every other settings dropdown.
+      const selId = 'plugin-cfg-' + String(manifest.id).replace(/[^a-zA-Z0-9_-]/g, '') + '-' + String(s.key).replace(/[^a-zA-Z0-9_-]/g, '');
       const sel = document.createElement('select');
-      sel.className = 'bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2 py-1 text-[11px] max-w-[160px] focus:border-[var(--accent)] focus:outline-none';
+      sel.id = selId;
+      sel.className = 'native-select-hidden';
       for (const opt of (s.options || [])) {
         const o = document.createElement('option');
         o.value = opt;
@@ -717,12 +722,19 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         sel.appendChild(o);
       }
       sel.addEventListener('change', () => commit(sel.value));
-      control = sel;
+      const dd = document.createElement('div');
+      dd.className = 'custom-dropdown';
+      dd.dataset.for = selId;
+      const box = document.createElement('div');
+      box.className = 'flex items-center gap-3';
+      box.appendChild(sel);
+      box.appendChild(dd);
+      control = box;
     } else if (s.type === 'number') {
       const inp = document.createElement('input');
       inp.type = 'number';
       inp.value = value !== undefined ? value : '';
-      inp.className = 'bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2 py-1 text-[11px] w-[90px] focus:border-[var(--accent)] focus:outline-none';
+      inp.className = inputCls.replace('w-[200px]', 'w-[90px]');
       inp.addEventListener('change', () => {
         const n = parseFloat(inp.value);
         commit(Number.isFinite(n) ? n : s.default);
@@ -732,11 +744,12 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       const inp = document.createElement('input');
       inp.type = 'text';
       inp.value = value !== undefined ? value : '';
-      inp.className = 'bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2 py-1 text-[11px] w-[180px] focus:border-[var(--accent)] focus:outline-none';
+      inp.className = inputCls;
       inp.addEventListener('change', () => commit(inp.value));
       control = inp;
     }
-    wrap.appendChild(control);
+    controlWrap.appendChild(control);
+    wrap.appendChild(controlWrap);
     return wrap;
   }
 

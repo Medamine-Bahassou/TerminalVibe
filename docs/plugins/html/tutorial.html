@@ -63,14 +63,14 @@ cd ~/.terminalvibe/plugins/hello-terminalvibe</code></pre>
       const term = api.state.getActiveTerminal();
       if (!term) { api.log('no active terminal'); return; }
       const text = '\r\n\x1b[32m[hello] Hi from ' + api.name + ' v' + api.version + '!\x1b[0m\r\n';
-      window.electronAPI.terminalWrite({ id: term.id, data: new TextEncoder().encode(text) });
+      api.terminal.write(term.id, text);
     }
   });
 }</code></pre>
   <ul>
     <li><code>api.log</code> prefixes messages with <code>[plugin:hello-terminalvibe]</code>.</li>
     <li>The command is bound to <strong>Ctrl+Shift+H</strong> (unused by the app). Built-in shortcuts take priority over plugin combos.</li>
-    <li><code>window.electronAPI.terminalWrite</code> sends bytes to the PTY. Wrap the string in <code>TextEncoder</code>.</li>
+    <li><code>api.terminal.write</code> renders the text on the terminal <strong>screen</strong> — never fed to the shell, so it can't be interpreted as a command or glob.</li>
   </ul>
 
   <h2>3. Watch lifecycle events</h2>
@@ -86,10 +86,7 @@ api.events.on('theme:changed', ({ name }) =&gt; api.log('theme changed:', name))
   handler(data) {
     const term = api.state.getActiveTerminal();
     if (!term) return;
-    window.electronAPI.terminalWrite({
-      id: term.id,
-      data: new TextEncoder().encode('\r\n\x1b[33m[hello] context menu clicked\x1b[0m\r\n')
-    });
+    api.terminal.write(term.id, '\r\n\x1b[33m[hello] context menu clicked\x1b[0m\r\n');
   }
 });</code></pre>
   <p>Right-clicking any terminal tab or body now shows the item in its own section.</p>
