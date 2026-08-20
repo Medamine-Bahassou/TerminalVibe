@@ -2512,7 +2512,19 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       updateFocusedGroup();
       syncBrowserSlots();
     }));
-    setTimeout(() => syncBrowserSlots(), 120);
+    setTimeout(() => {
+      syncBrowserSlots();
+      const all = getWorkspaceTerminals(wsp);
+      all.forEach(fitTerm);
+    }, 120);
+    // Fallback: _termFitObserver catches most flex settles, but a forced
+    // second pass handles cases where the slot was observed while still at
+    // zero size (cache restore, nested splits).
+    setTimeout(() => {
+      const all = getWorkspaceTerminals(wsp);
+      all.forEach(fitTerm);
+      syncBrowserSlots();
+    }, 350);
   }
 
   // Workspace ids in the sidebar's visual order: pinned items first (in their
@@ -2900,6 +2912,12 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   }
 
   function getSlotDimensions(entry) {
+    if (entry && entry.fit && typeof entry.fit.proposeDimensions === 'function') {
+      try {
+        const d = entry.fit.proposeDimensions();
+        if (d && d.cols && d.rows) return { cols: d.cols, rows: d.rows };
+      } catch {}
+    }
     if (entry.el) {
       const w = entry.el.offsetWidth - 16;
       const h = entry.el.offsetHeight - 12;
@@ -2977,7 +2995,16 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         if (t.type === 'browser') {
           // handled after syncBrowserSlots positions the container
         } else {
-          setTimeout(() => { t.term.focus(); fitTerm(t); }, 20);
+          // Use double RAF to let flex layout settle, then fit.
+          // The 20ms timeout was too short for nested splits; RAF waits for paint.
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              if (t.term && !t.dead && t.el && t.el.offsetParent !== null) {
+                t.term.focus();
+                fitTerm(t);
+              }
+            });
+          });
         }
       }
     }
@@ -3251,7 +3278,16 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       if (entry.browserContainer) { entry.browserContainer.remove(); entry.browserContainer = null; }
       if (entry._viewCreated && window.electronAPI) { window.electronAPI.browserDestroy(entry.id); browserEventHooks.delete(entry.id); }
     }
-    if (entry.el) entry.el.remove();
+    if (entry.el) {
+      try { _termFitObserver.unobserve(entry.el); } catch {}
+      if (entry.term) {
+        if (entry.term._fitObserverRaf) cancelAnimationFrame(entry.term._fitObserverRaf);
+        delete entry.term._fitObserverRaf;
+        delete entry.term._lastFitW;
+        delete entry.term._lastFitH;
+      }
+      entry.el.remove();
+    }
 
     group.terminals.splice(idx, 1);
 
@@ -3434,6 +3470,10 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     // slot becomes visible (activateTerminal / syncBrowserSlots path) picks
     // the correct size up.
     if (entry.el.style.display === 'none' || entry.el.offsetParent === null) return;
+    // Guard against zero-size slots (flex not settled yet) — FitAddon would
+    // measure 0x0 and resize the terminal to 1x1, corrupting the buffer.
+    const rect = entry.el.getBoundingClientRect();
+    if (rect.width < 20 || rect.height < 20) return;
     try {
       // Frontend fits instantly for snappy visual feedback
       entry.fit.fit();
@@ -3449,6 +3489,35 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
 
     } catch {}
   }
+
+  // Auto-fit each terminal when its slot actually changes size (split
+  // creation, flex settling, sidebar toggle, etc.). The previous
+  // pane-area-only ResizeObserver never saw internal flex changes, so
+  // terminals kept a stale cols/rows until the sash drag forced a manual
+  // fit. Observing the slot itself catches every layout change.
+  const _termFitObserver = new ResizeObserver(entries => {
+    if (_suppressResize) return;
+    for (const en of entries) {
+      const slot = en.target;
+      if (!slot || !slot.id || !slot.id.startsWith('slot-')) continue;
+      const id = slot.id.slice(5);
+      const found = findTermById(id);
+      if (!found || !found.term || found.term.type === 'browser') continue;
+      if (found.term.el && (found.term.el.style.display === 'none' || found.term.el.offsetParent === null)) continue;
+      // Skip zero-size transients (flex not yet settled)
+      if (en.contentRect.width < 20 || en.contentRect.height < 20) continue;
+      // Dedupe: only fit when pixel size actually changed
+      const w = Math.round(en.contentRect.width);
+      const h = Math.round(en.contentRect.height);
+      if (found.term._lastFitW === w && found.term._lastFitH === h) continue;
+      found.term._lastFitW = w; found.term._lastFitH = h;
+      if (found.term._fitObserverRaf) cancelAnimationFrame(found.term._fitObserverRaf);
+      found.term._fitObserverRaf = requestAnimationFrame(() => {
+        found.term._fitObserverRaf = null;
+        fitTerm(found.term);
+      });
+    }
+  });
 
   /* ═══════════════════════════════════════════════════════════════
    S P*LIT MANAGEMENT (VS Code recursive logic)
@@ -3518,6 +3587,11 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd });
       requestAnimationFrame(() => fitTerm(newEntry));
     }, 80);
+    // The pane-area observer + _termFitObserver will refit after flex
+    // settles, but a trailing pass guarantees the pre-existing pane (shrunk
+    // to 50%) is also corrected even if its slot didn't fire.
+    setTimeout(() => { for (const t of getWorkspaceTerminals(wsp)) fitTerm(t); }, 180);
+    setTimeout(() => { for (const t of getWorkspaceTerminals(wsp)) fitTerm(t); }, 400);
   }
 
   function splitGroupNodeInTree(root, destGroupId, newGroup, direction, isFirst) {
@@ -4242,6 +4316,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   function getOrCreateSlot(entry, wsp, parentEl) {
     if (entry.opened && entry.el) {
       if (entry.el.parentNode) entry.el.remove();
+      // Re-ensure observed after cache re-attach (idempotent)
+      try { if (entry.type !== 'browser') _termFitObserver.observe(entry.el); } catch {}
       return entry.el;
     }
 
@@ -4665,7 +4741,18 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     entry.el = slot;
     entry.term.open(wrap);
     entry.opened = true;
+    try { _termFitObserver.observe(slot); } catch {}
     applyTermBgImage(entry);
+    // Initial fit: ensure terminal fills its slot immediately on first open.
+    // Use RAF to let flex layout settle, then fit if slot has non-zero size.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (entry.term && !entry.dead && entry.el && entry.el.offsetParent !== null) {
+          const rect = entry.el.getBoundingClientRect();
+          if (rect.width >= 20 && rect.height >= 20) fitTerm(entry);
+        }
+      });
+    });
 
     slot.addEventListener('mousedown', (e) => {
       // Ctrl+Alt+LeftClick toggles multi-select (skip browser tabs)
@@ -5374,7 +5461,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     const total = names.length;
     const shown = total > 3 ? names.slice(0, 2) : names.slice(0, 3);
     const extra = total - shown.length;
-    let html = shown.map(n => `<div class="ws-proc">${escHtml(n)}</div>`).join('');
+    let html = shown.map(n => `<div class="ws-proc">- ${escHtml(n)}</div>`).join('');
     if (extra > 0) html += `<div class="ws-proc ws-proc-more">+${extra}</div>`;
     procsEl.innerHTML = html;
   }
@@ -5486,12 +5573,12 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       if (backgroundMode === 'per-tab') {
         const termEntry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
         if (termEntry && termEntry.bgImage) {
-          item('🖼', 'Clear background image', '', () => {
+          item('<i class="ph ph-image"></i>', 'Clear background image', '', () => {
             setTermBackgroundImage(termEntry, '');
             applyBackground();
           });
         } else {
-          item('🖼', 'Set background image…', '', () => {
+          item('<i class="ph ph-image"></i>', 'Set background image…', '', () => {
             const input = document.createElement('input');
             input.type = 'file';
             input.accept = 'image/*';
@@ -5508,14 +5595,14 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         }
       } else if (backgroundMode === 'per-workspace' && wsp) {
         if (wsp.bgImage) {
-          item('🖼', 'Clear workspace background', '', () => {
+          item('<i class="ph ph-image"></i>', 'Clear workspace background', '', () => {
             wsp.bgImage = '';
             delete wsp.bgOpacity;
             applyBackground();
             saveState();
           });
         } else {
-          item('🖼', 'Set workspace background…', '', () => {
+          item('<i class="ph ph-image"></i>', 'Set workspace background…', '', () => {
             const input = document.createElement('input');
             input.type = 'file';
             input.accept = 'image/*';

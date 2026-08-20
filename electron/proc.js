@@ -8,6 +8,7 @@
  * assume a process is running so we never kill a session silently.
  */
 const fs = require('fs');
+const path = require('path');
 
 function readProc(p) {
   try {
@@ -28,6 +29,26 @@ function procStatFields(pid) {
 }
 
 const SHELL_RE = /^(bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|pwsh|nu)$/;
+const INTERP_RE = /^(node|nodejs|python|python3|python2|ruby|perl|php|deno|bun|lua)$/;
+const SCRIPT_EXT_RE = /\.(js|mjs|cjs|ts|py|rb|pl|lua|php|sh)$/i;
+
+// Resolve a display-friendly process name from argv when /proc/<pid>/comm
+// only reveals the interpreter ("node", "python" etc). Reads cmdline to
+// find the script/module the user actually ran.
+function processDisplayName(pid, comm) {
+  if (!INTERP_RE.test(comm)) return comm;
+  const cmdline = readProc(`/proc/${pid}/cmdline`);
+  if (!cmdline) return comm;
+  const argv = cmdline.split('\0').filter(Boolean);
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-m' && argv[i + 1]) return argv[i + 1]; // python -m module
+    if (a === '-e' || a === '-c' || a.startsWith('-')) continue;
+    const name = path.basename(a).replace(SCRIPT_EXT_RE, '');
+    if (name) return name;
+  }
+  return comm;
+}
 
 /**
  * @param {number} pid PID of the PTY's direct child (node-pty's pid).
@@ -52,7 +73,7 @@ function runningProcessInfo(pid) {
   if (!SHELL_RE.test(comm)) {
     // The PTY's direct child is not a shell (e.g. `exec vim`, a direct
     // command or an app) — a process is definitely running.
-    return { running: true, name: comm };
+    return { running: true, name: processDisplayName(pid, comm) };
   }
   const fields = procStatFields(pid);
   if (!fields) return { running: true, name: null };
@@ -63,7 +84,7 @@ function runningProcessInfo(pid) {
   const tpgid = parseInt(fields[5], 10);
   if (tpgid !== 0 && tpgid !== pgrp) {
     const jobComm = readProc(`/proc/${tpgid}/comm`);
-    return { running: true, name: jobComm ? jobComm.trim() : null };
+    return { running: true, name: jobComm ? processDisplayName(tpgid, jobComm.trim()) : null };
   }
   return { running: false, name: null };
 }
