@@ -1010,6 +1010,14 @@ isolation: isolate;
 .tg-tab:hover .tg-tab-close { opacity: 1; }
 .tg-tab-close:hover { background: #f38ba8; color: #1e1e2e !important; opacity: 1 !important; }
 
+.tg-tab-lock {
+  font-size: 11px;
+  color: var(--accent, #89b4fa);
+  opacity: 0.7;
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
 .tg-tab.drop-left { box-shadow: inset 2px 0 0 var(--accent); }
 .tg-tab.drop-right { box-shadow: inset -2px 0 0 var(--accent); }
 .tg-tab.dragging { opacity: 0.4; }
@@ -1144,6 +1152,29 @@ isolation: isolate;
   position: absolute;
   inset: 0;
   z-index: 1;
+}
+
+/* Locked-terminal badge: full-width strip across the top of the pane */
+.term-lock-badge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 62;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #89b4fa);
+  background: color-mix(in srgb, var(--bg, #1e1e2e) 88%, var(--accent, #89b4fa) 12%);
+  border: 1px solid color-mix(in srgb, var(--accent, #89b4fa) 45%, transparent);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Terminal Background Layers ──

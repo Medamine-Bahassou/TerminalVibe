@@ -3200,6 +3200,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   }
 
   const _processCheckPending = new Set(); // termIds with an in-flight running-process check
+  const _closeLockConfirmed = new Set();  // locked termIds whose close was already confirmed
 
   function removeTerminal(wsId, termId, skipRender, skipPtyClose, confirmed, checked) {
     const wsp = findWs(wsId);
@@ -3227,6 +3228,24 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           'closebrowser');
         return;
       }
+      // Locked terminal — confirm before proceeding
+      if (entry.locked && !_closeLockConfirmed.has(termId)) {
+        if (dontAskAgain('closelocked')) {
+          _closeLockConfirmed.add(termId);
+          removeTerminal(wsId, termId, skipRender, skipPtyClose, false, false);
+          return;
+        }
+        const closesWorkspace = getWorkspaceTerminals(wsp).length <= 1;
+        showDangerConfirm('Locked terminal',
+          `<span class="cc-label">${escHtml(entry.label)}</span> is locked.` +
+          (closesWorkspace ? ' Closing it will close the tab and remove the workspace.' : ' Closing it will close the tab.'),
+          'Close Tab',
+          () => { _closeLockConfirmed.add(termId); removeTerminal(wsId, termId, skipRender, skipPtyClose, false, false); },
+          () => {},
+          'closelocked');
+        return;
+      }
+
       if (isLiveTerminal(entry)) {
         if (_processCheckPending.has(termId)) return;
         _processCheckPending.add(termId);
@@ -3240,7 +3259,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
             const closesWorkspace = getWorkspaceTerminals(wsp).length <= 1;
             showCloseConfirm(entry.label, closesWorkspace,
               () => removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true),
-              () => {});
+              () => _closeLockConfirmed.delete(termId));
           } else {
             removeTerminal(wsId, termId, skipRender, skipPtyClose, false, true);
           }
@@ -3409,6 +3428,43 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
 
   function renameTerminal(wsId, termId) {
     renameTerminalInGroup(wsId, termId);
+  }
+
+  // Lock/unlock a terminal tab: locked panes swallow all keyboard/paste input
+  // (enforced at the sendStdin chokepoint) and show a badge across the top.
+  function toggleTermLock(entry) {
+    entry.locked = !entry.locked;
+    updateTermLockBadge(entry);
+    // Refresh the tab's lock icon
+    const tab = document.querySelector(`.tg-tab[data-termid="${entry.id}"]`);
+    if (tab) {
+      let icon = tab.querySelector('.tg-tab-lock');
+      if (entry.locked && !icon) {
+        icon = document.createElement('i');
+        icon.className = 'ph ph-lock-simple tg-tab-lock';
+        tab.insertBefore(icon, tab.querySelector('.tg-tab-name'));
+      } else if (!entry.locked && icon) {
+        icon.remove();
+      }
+    }
+    saveState();
+  }
+
+  function updateTermLockBadge(entry) {
+    if (!entry) return;
+    const slot = entry.el;
+    if (!slot) return;
+    let badge = slot.querySelector('.term-lock-badge');
+    if (entry.locked) {
+      if (!badge) {
+        badge = document.createElement('div');
+        badge.className = 'term-lock-badge';
+        slot.appendChild(badge);
+      }
+      badge.innerHTML = '<i class="ph ph-lock-simple"></i><span>Terminal locked — typing is disabled</span>';
+    } else if (badge) {
+      badge.remove();
+    }
   }
 
   function renameTerminalInGroup(wsId, termId) {
@@ -3953,7 +4009,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
 
         tab.innerHTML = `
         <span class="tg-tab-dot${t.type === 'browser' ? ' tg-tab-icon' : ''}">${t.type === 'browser' ? '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg>' : ''}</span>
-        <span class="tg-tab-name">${escHtml(t.label)}</span>
+        ${t.locked ? '<i class="ph ph-lock-simple tg-tab-lock"></i>' : ''}<span class="tg-tab-name">${escHtml(t.label)}</span>
         <span class="tg-tab-close" title="Close">✕</span>
         `;
         tab.title = t.label;
@@ -4751,6 +4807,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     entry.opened = true;
     try { _termFitObserver.observe(slot); } catch {}
     applyTermBgImage(entry);
+    updateTermLockBadge(entry);
     // Initial fit: ensure terminal fills its slot immediately on first open.
     // Use RAF to let flex layout settle, then fit if slot has non-zero size.
     requestAnimationFrame(() => {
