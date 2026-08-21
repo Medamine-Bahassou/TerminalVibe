@@ -372,6 +372,18 @@ ipcMain.handle('profiles:switch', (_e, id) => {
   return true;
 });
 
+// In-place variant: flip the pointer + write meta.active but do NOT reload —
+// the renderer tears down and rebuilds its own workspaces from the new state.
+ipcMain.handle('profiles:switchInPlace', (_e, id) => {
+  const fp = profileStatePath(id);
+  if (!fp) return false;
+  _activeProfileId = id;
+  const meta = readProfilesMeta();
+  meta.active = id;
+  writeConfigFile(CONFIG_PROFILES_META, meta);
+  return true;
+});
+
 // Backgrounds and workspace icons are stored as files in ~/.terminalvibe/images/
 // instead of base64 data URLs crammed into state.json. Each image id is a
 // content-hashed filename, so identical images dedupe and re-saves are no-ops.

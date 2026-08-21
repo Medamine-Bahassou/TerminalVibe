@@ -2015,6 +2015,10 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   }
 
   function saveState() {
+    // During an in-place profile switch the old profile's final state was
+    // already persisted before teardown; suppress any mid-teardown save so the
+    // half-torn-down (emptying) state never overwrites it.
+    if (_profileSwitching) return;
     // In the settings window we must NOT clobber the main window's live
     // workspaces/folders/sideOrder. Only merge the settings fields into the
     // shared state and ping the main window to re-apply them.
@@ -2335,11 +2339,6 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     const res = await initActiveProfile();
     if (!res) return; // no profile system (plain browser)
     const { meta, current } = res;
-    // An in-session switch reloads every window; don't re-prompt on that boot.
-    if (sessionStorage.getItem('tv-profile-switched')) {
-      sessionStorage.removeItem('tv-profile-switched');
-      return;
-    }
     // Auto-open the active profile at boot — no picker. If none is active yet,
     // fall back to the first (default) profile. Switching only happens via the
     // titlebar picker from here on.
@@ -2351,14 +2350,39 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     }
   }
 
+  // Destroy every workspace/terminal/browser view in place and reset global
+  // state so restoreState() can rebuild from the next profile's state. Reuses
+  // _removeWorkspace, which closes ptys, disposes xterm instances, destroys
+  // browser WebContentsViews (browserDestroy) and drops _wsDomCache entries.
+  function teardownAllWorkspaces() {
+    const ids = workspaces.map(w => w.id);
+    for (const id of ids) { try { _removeWorkspace(id); } catch (e) { console.error('teardown ws', id, e); } }
+    workspaces = []; folders = []; sideOrder = []; activeWsId = null; _wsDomCache = {};
+    _pluginStates.clear(); _pluginConfigs.clear(); // restoreState only adds keys; drop stale ones
+  }
+
   function apiProfilesSwitch(p) {
     applyProfileKey(p);
-    _profileSwitching = true; // beforeunload on reload must not flush old state to the new profile
-    // Cover the old profile synchronously so it doesn't flash before the reload's splash paints.
+    _profileSwitching = true; // block any accidental saveState flush mid-transition
+    // Cover the old profile synchronously so it doesn't flash during the swap.
     const splash = document.getElementById('splash');
     if (splash) { splash.style.transition = 'none'; splash.classList.remove('hide'); }
-    try { sessionStorage.setItem('tv-profile-switched', '1'); } catch {}
-    return configApi().profilesSwitch(p.id);
+    teardownAllWorkspaces();
+    return configApi().profilesSwitchInPlace(p.id).then(async ok => {
+      if (!ok) return;
+      // Custom themes + plugins are global (already loaded at boot) — do NOT
+      // re-fetch them here; that async IPC round-trip was the switch bottleneck.
+      await restoreState();          // per-profile state (settings + workspaces)
+      restoreOrCreateInitial();      // spawn PTYs for the freshly-restored terminals
+      applyTheme(currentThemeName);  // renders sidebar + pane + background
+      applySidebarMode();
+      applyWsProcsSetting();
+      _profileSwitching = false;
+      if (splash) splash.classList.add('hide');
+      // Plugin enabled-state is per-profile; re-sync after the visible switch so
+      // it never blocks the splash. Non-blocking.
+      syncPlugins();
+    });
   }
 
   function openProfilePicker() {
@@ -8371,17 +8395,18 @@ function buildColorItem(key, label) {
         (async () => {
           // Profile gate: with multiple profiles, block boot behind the picker
           // until one is chosen (profilesSwitch reloads the window).
-          if (!SETTINGS_ONLY && !DETACHED_ONLY) await profileGate();
+          if (!SETTINGS_ONLY && !DETACHED_ONLY) { await profileGate(); }
           await loadCustomThemes();
           const restored = await restoreState();
-          await loadPlugins();
           applyTheme(currentThemeName);
           applySidebarMode();
           applyWsProcsSetting();
 
-        // Hide splash screen after app is ready
+        // Hide splash screen as soon as the core terminal UI is rendered;
+        // plugins are add-ons and load in the background (do NOT gate boot on them).
         const splash = document.getElementById('splash');
         if (splash) splash.classList.add('hide');
+        if (!SETTINGS_ONLY) loadPlugins(); // deferred, non-blocking
 
         // Apply initial background & opacity
         applyBackground();
