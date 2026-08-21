@@ -64,6 +64,14 @@
     maximizeTab: 'Maximize / restore tab', quitApp: 'Quit application',
   };
 
+  // Alt+N → jump to the workspace at sidebar position N (top-to-bottom order,
+  // matching the collapsed-sidebar number). Each is individually rebindable in
+  // Settings → Keyboard Shortcuts.
+  for (let i = 1; i <= 9; i++) {
+    DEFAULT_SHORTCUTS['switchWs' + i] = { alt: true, key: String(i), label: 'Alt+' + i };
+    SHORTCUT_LABELS['switchWs' + i] = 'Switch to workspace ' + i;
+  }
+
   let customShortcuts = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS));
 
   function matchShortcut(e, action) {
@@ -2579,6 +2587,13 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     activateWorkspace(ids[(idx - 1 + ids.length) % ids.length]);
   }
 
+  // Alt+N workspace switching: 1-based index into the sidebar's visual order.
+  function switchWsByNumber(n) {
+    const ids = getOrderedWorkspaceIds();
+    if (n < 1 || n > ids.length) return;
+    activateWorkspace(ids[n - 1]);
+  }
+
   const _closingWs = new Set();
 
   function removeWorkspace(id) {
@@ -3434,6 +3449,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   // (enforced at the sendStdin chokepoint) and show a badge across the top.
   function toggleTermLock(entry) {
     entry.locked = !entry.locked;
+    if (entry.locked) entry._lockBadgeDismissed = false; // fresh lock → show badge again
     updateTermLockBadge(entry);
     // Refresh the tab's lock icon
     const tab = document.querySelector(`.tg-tab[data-termid="${entry.id}"]`);
@@ -3455,13 +3471,18 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     const slot = entry.el;
     if (!slot) return;
     let badge = slot.querySelector('.term-lock-badge');
-    if (entry.locked) {
+    if (entry.locked && !entry._lockBadgeDismissed) {
       if (!badge) {
         badge = document.createElement('div');
         badge.className = 'term-lock-badge';
         slot.appendChild(badge);
       }
-      badge.innerHTML = '<i class="ph ph-lock-simple"></i><span>Terminal locked — typing is disabled</span>';
+      badge.innerHTML = '<i class="ph ph-lock-simple"></i><span>Terminal locked — typing is disabled</span><button class="term-lock-close" title="Dismiss"><i class="ph ph-x"></i></button>';
+      badge.querySelector('.term-lock-close').onclick = (e) => {
+        e.stopPropagation();
+        entry._lockBadgeDismissed = true; // dismiss the badge only — the lock stays on
+        updateTermLockBadge(entry);
+      };
     } else if (badge) {
       badge.remove();
     }
@@ -5204,6 +5225,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
 
     // ── Workspace button builder (shared by root list and folders) ──
     // slot is the sideOrder index for top-level buttons (undefined for folder children)
+    // wsSeq numbers each workspace button in top-to-bottom display order (used as the
+    // collapsed-sidebar title, e.g. "3").
+    let wsSeq = 0;
     const buildWsBtn = (wsp, folderKey, slot) => {
       const btn = document.createElement('div');
       const isActive = wsp.id === activeWsId;
@@ -5211,12 +5235,12 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       btn.draggable = true;
       btn.dataset.wsid = wsp.id;
       if (slot !== undefined) btn.dataset.slot = String(slot);
-      const abbr = wsp.label.substring(0,3).toUpperCase();
+      const wsNum = ++wsSeq;
       const tabCount = getWorkspaceTerminals(wsp).length;
       const isInFolder = folderKey != null;
       const labelHtml = wsp.icon
         ? `<img class="ws-icon" src="${escHtml(wsp.icon)}" alt="" draggable="false">`
-        : `<span class="ws-label">${abbr}</span>`;
+        : `<span class="ws-label">${wsNum}</span>`;
       btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<div class="ws-info"><span class="ws-name">${escHtml(wsp.label)}</span><div class="ws-procs"></div></div><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
       if (wsp.pinned) btn.classList.add('pinned');
       btn.title = wsp.label;
@@ -7170,6 +7194,14 @@ function buildColorItem(key, label) {
           // Workspace switching
           if (matchShortcut(e, 'nextWorkspace')) { e.preventDefault(); e.stopPropagation(); nextWorkspace(); return; }
           if (matchShortcut(e, 'prevWorkspace')) { e.preventDefault(); e.stopPropagation(); prevWorkspace(); return; }
+          // Alt+N → workspace at sidebar position N
+          for (let i = 1; i <= 9; i++) {
+            if (matchShortcut(e, 'switchWs' + i)) {
+              e.preventDefault(); e.stopPropagation();
+              switchWsByNumber(i);
+              return;
+            }
+          }
           // Ctrl+Tab / Ctrl+Shift+Tab
           if (e.ctrlKey && e.code === 'Tab') {
             e.preventDefault(); e.stopPropagation();

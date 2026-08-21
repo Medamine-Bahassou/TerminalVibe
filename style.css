@@ -1177,6 +1177,27 @@ isolation: isolate;
   text-overflow: ellipsis;
 }
 
+.term-lock-badge .term-lock-close {
+  pointer-events: auto;
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.term-lock-badge .term-lock-close:hover {
+  opacity: 1;
+}
+
 /* ── Terminal Background Layers ──
  * Painted bottom-to-top inside a panel:
  *   1. .term-slot background-color   → the theme background, fully opaque,
