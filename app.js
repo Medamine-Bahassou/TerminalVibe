@@ -293,7 +293,7 @@
   }
 
   // Single paste chokepoint: text first; if the clipboard holds an image,
-  // save it to ~/.terminalvibe/pasted/ and paste the file path.
+  // save it to the OS temp dir and paste the file path.
   function doPaste(entry) {
     if (!entry || !entry.term || entry.type === 'browser') return;
     const pasteText = text => { if (text) entry.term.paste(text); };

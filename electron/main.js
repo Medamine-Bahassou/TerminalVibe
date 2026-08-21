@@ -248,15 +248,13 @@ ipcMain.handle('shell:open-external', (_e, url) => {
 ipcMain.handle('clipboard:write-text', (_e, text) => clipboard.writeText(String(text ?? '')));
 ipcMain.handle('clipboard:read-text', () => clipboard.readText());
 
-// Pasting an image in a terminal: write it to ~/.terminalvibe/pasted/ and
+// Pasting an image in a terminal: write it to the OS temp dir and
 // type the file path (the terminal can't render images inline).
 ipcMain.handle('clipboard:paste-image', () => {
   try {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;
-    const dir = path.join(CONFIG_DIR, 'pasted');
-    fs.mkdirSync(dir, { recursive: true });
-    const fp = path.join(dir, `clipboard-${Date.now()}.png`);
+    const fp = path.join(require('os').tmpdir(), `terminalvibe-${Date.now()}.png`);
     fs.writeFileSync(fp, img.toPNG());
     return fp;
   } catch (err) { console.error('[clipboard] paste-image failed:', err); return null; }
