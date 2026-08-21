@@ -292,29 +292,30 @@
     }
   }
 
+  // Single paste chokepoint: text first; if the clipboard holds an image,
+  // save it to ~/.terminalvibe/pasted/ and paste the file path.
   function doPaste(entry) {
-    if (!entry || !entry.term) return;
-    if (isDesktop() && window.electronAPI) {
+    if (!entry || !entry.term || entry.type === 'browser') return;
+    const pasteText = text => { if (text) entry.term.paste(text); };
+    if (isDesktop() && window.electronAPI?.clipboardPasteImage) {
       window.electronAPI.clipboardRead().then(text => {
-        if (text) sendStdin(entry.id, new TextEncoder().encode(text));
-      }).catch(err => console.warn('Paste failed:', err));
-    } else {
-      navigator.clipboard.readText().then(text => {
-        if (text) sendStdin(entry.id, new TextEncoder().encode(text));
+        if (text) return pasteText(text);
+        return window.electronAPI.clipboardPasteImage().then(path => {
+          if (path) pasteText(path.includes(' ') ? `'${path}'` : path);
+        });
       }).catch(() => {});
+    } else {
+      navigator.clipboard.readText().then(pasteText).catch(() => {});
     }
   }
 
-  // Fallback paste handler for native Ctrl+V
+  // Fallback paste handler for native paste (middle-click, OS context menu)
   document.addEventListener('paste', e => {
     if (Date.now() < _suppressPasteUntil) { e.preventDefault(); e.stopPropagation(); return; }
     const t = activeTerminal();
     if (!t || t.type === 'browser') return;
-    const text = e.clipboardData?.getData('text/plain');
-    if (text) {
-      e.preventDefault();
-      t.term.paste(text);
-    }
+    e.preventDefault();
+    doPaste(t);
   }, true);
 
   /* ═══════════════════════════════════════════════════════════════
@@ -5731,15 +5732,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         });
         item('<i class="ph ph-clipboard-text"></i>', 'Paste', 'Ctrl+Shift+V', () => {
           const t = findTermById(termId);
-          if (t && t.term.type !== 'browser') {
-            if (isDesktop() && window.electronAPI) {
-              window.electronAPI.clipboardRead()
-              .then(text => { if (text) t.term.term.paste(text); }).catch(() => {});
-            } else {
-              navigator.clipboard.readText()
-              .then(text => { if (text) t.term.term.paste(text); }).catch(() => {});
-            }
-          }
+          if (t && t.term.type !== 'browser') doPaste(t.term);
         });
       }
       sep();
@@ -7176,8 +7169,7 @@ function buildColorItem(key, label) {
             const t = activeTerminal();
             if (t && t.type !== 'browser') {
               e.preventDefault(); e.stopPropagation();
-              navigator.clipboard.readText()
-              .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              doPaste(t);
             }
             return;
           }
@@ -7186,8 +7178,7 @@ function buildColorItem(key, label) {
             const t = activeTerminal();
             if (t && t.type !== 'browser') {
               e.preventDefault(); e.stopPropagation();
-              navigator.clipboard.readText()
-              .then(text => { if (text) t.term.paste(text); }).catch(() => {});
+              doPaste(t);
             }
             return;
           }

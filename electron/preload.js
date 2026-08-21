@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Clipboard
   clipboardWrite: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   clipboardRead: () => ipcRenderer.invoke('clipboard:read-text'),
+  clipboardPasteImage: () => ipcRenderer.invoke('clipboard:paste-image'),
 
   // Local file path resolution
   resolveLocalPath: (p) => ipcRenderer.invoke('file:resolve', p),
