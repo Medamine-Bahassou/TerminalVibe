@@ -2,7 +2,7 @@
 
 /* ── Splash screen ── */
 #splash {
-  position: fixed; inset: 0; z-index: 99999;
+  position: fixed; inset: 0; z-index: 9999;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   background: var(--bg, #1e1e2e);
   transition: opacity 0.4s ease, visibility 0.4s ease;
@@ -153,6 +153,16 @@ user-select: none;
 }
 
 #titlebar.active { display: flex; }
+
+.titlebar-spacer { flex: 1; -webkit-app-region: drag; }
+.titlebar-btn i { font-size: 15px; pointer-events: none; }
+/* Reserves the exact width of the native window-control overlay so the
+   profiles button sits immediately left of the tweak buttons. */
+.titlebar-overlay-gap {
+  /* Exact width of the native window-control overlay (min/max/close) */
+  width: calc(100vw - env(titlebar-area-width, 100vw));
+  -webkit-app-region: drag;
+}
 
 .titlebar-logo {
   height: 13px;
@@ -1340,7 +1350,7 @@ border: 1px solid var(--border);
 border-radius: 8px;
 padding: 4px;
 min-width: 170px;
-z-index: 9999;
+z-index: 10010;
 box-shadow: 0 8px 24px rgba(0,0,0,0.5);
 display: none;
 font-size: 11px;
@@ -2407,3 +2417,33 @@ body.roundless .slider::-webkit-slider-thumb,
 body.roundless .slider::-moz-range-thumb {
   border-radius: 0 !important;
 }
+
+/* ── Profile picker ── */
+#profile-picker {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg, #1e1e2e);
+}
+.pp-inner { display: flex; flex-direction: column; align-items: center; gap: 24px; }
+.pp-title { font-size: 15px; font-weight: 600; color: var(--fg); letter-spacing: 0.5px; }
+#pp-grid { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; max-width: 80vw; }
+.pp-box {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px;
+  width: 140px; padding: 18px 12px 14px; cursor: pointer;
+  border: 1px solid var(--border); background: rgba(255,255,255,0.02);
+}
+.pp-box .pp-edit {
+  position: absolute; top: 6px; right: 6px; width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; color: var(--muted-text); cursor: pointer;
+  background: none; border: none;
+}
+.pp-box .pp-edit:hover { color: var(--fg); }
+.pp-box:hover { border-color: var(--accent); background: var(--accent-dim); }
+.pp-box.current { border-color: var(--accent); }
+.pp-box img, .pp-avatar-ph {
+  width: 72px; height: 72px; object-fit: cover; border-radius: 50%;
+  background: rgba(255,255,255,0.06);
+}
+.pp-avatar-ph { display: flex; align-items: center; justify-content: center; font-size: 34px; color: var(--muted-text); }
+.pp-name { font-size: 12.5px; color: var(--fg); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

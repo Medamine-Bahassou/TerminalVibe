@@ -105,6 +105,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Config directory (~/.terminalvibe/)
   configGetPath: () => ipcRenderer.invoke('config:getPath'),
+
+  // Profiles
+  profilesList: () => ipcRenderer.invoke('profiles:list'),
+  profilesCreate: (o) => ipcRenderer.invoke('profiles:create', o),
+  profilesUpdate: (o) => ipcRenderer.invoke('profiles:update', o),
+  profilesDelete: (id) => ipcRenderer.invoke('profiles:delete', id),
+  profilesSwitch: (id) => ipcRenderer.invoke('profiles:switch', id),
   configReadState: () => ipcRenderer.invoke('config:readState'),
   configWriteState: (state) => ipcRenderer.invoke('config:writeState', state),
   configReadCustomThemes: () => ipcRenderer.invoke('config:readCustomThemes'),

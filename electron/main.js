@@ -15,6 +15,11 @@ const CONFIG_THEMES_DIR = path.join(CONFIG_DIR, 'themes');
 const CONFIG_IMAGES_DIR = path.join(CONFIG_DIR, 'images');
 const CONFIG_PLUGINS_DIR = path.join(CONFIG_DIR, 'plugins');
 const CONFIG_STATE_FILE = path.join(CONFIG_DIR, 'state.json');
+// Profiles: ~/.terminalvibe/profiles/<id>.json holds a full per-profile state;
+// profiles.json is the meta index ({ active, profiles: [{id, name, avatar}] }).
+const CONFIG_PROFILES_DIR = path.join(CONFIG_DIR, 'profiles');
+const CONFIG_PROFILES_META = path.join(CONFIG_DIR, 'profiles.json');
+let _activeProfileId = null; // null → legacy single state.json (pre-profiles)
 const CONFIG_CUSTOM_THEMES_FILE = path.join(CONFIG_DIR, 'custom-themes.json');
 
 function ensureConfigDir() {
@@ -23,6 +28,7 @@ function ensureConfigDir() {
     if (!fs.existsSync(CONFIG_THEMES_DIR)) fs.mkdirSync(CONFIG_THEMES_DIR, { recursive: true });
     if (!fs.existsSync(CONFIG_IMAGES_DIR)) fs.mkdirSync(CONFIG_IMAGES_DIR, { recursive: true });
     if (!fs.existsSync(CONFIG_PLUGINS_DIR)) fs.mkdirSync(CONFIG_PLUGINS_DIR, { recursive: true });
+    if (!fs.existsSync(CONFIG_PROFILES_DIR)) fs.mkdirSync(CONFIG_PROFILES_DIR, { recursive: true });
   } catch (err) {
     console.error('[config] failed to create config dir:', err);
   }
@@ -271,7 +277,100 @@ ipcMain.handle('file:resolve', (_e, p) => {
 // ── IPC: config directory (~/.terminalvibe/) ──
 ipcMain.handle('config:getPath', () => CONFIG_DIR);
 
-ipcMain.handle('config:readState', () => readConfigFile(CONFIG_STATE_FILE));
+// On boot, resolve the active profile so state reads/writes route to its file.
+// Runs before any renderer loads (called from app.whenReady path below).
+function initActiveProfile() {
+  const meta = readProfilesMeta();
+  if (meta.active && profileStatePath(meta.active)) _activeProfileId = meta.active;
+}
+
+// State file routing: once a profile is active, its file is THE state.
+function currentStatePath() {
+  if (_activeProfileId) {
+    const fp = profileStatePath(_activeProfileId);
+    if (fp) return fp;
+  }
+  return CONFIG_STATE_FILE;
+}
+
+ipcMain.handle('config:readState', () => readConfigFile(currentStatePath()));
+
+// ── Profiles ──
+// Each profile is a full state.json-shaped file. The active profile's file IS
+// the state the renderer reads/writes via config:readState/config:writeState,
+// so all existing save/restore code stays per-profile with no changes.
+function profileStatePath(id) {
+  const safe = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safe || safe !== id) return null;
+  return path.join(CONFIG_PROFILES_DIR, `${safe}.json`);
+}
+function readProfilesMeta() {
+  const meta = readConfigFile(CONFIG_PROFILES_META);
+  if (meta && Array.isArray(meta.profiles)) return meta;
+  return { active: null, profiles: [] };
+}
+
+ipcMain.handle('profiles:list', () => {
+  const meta = readProfilesMeta();
+  // First run: adopt the existing single-user state as the default profile.
+  if (!meta.profiles.length) {
+    const p = { id: 'default', name: 'Default', avatar: '' };
+    meta.profiles = [p];
+    meta.active = 'default';
+    // Migrate the legacy state into the profile file so nothing is lost.
+    if (fs.existsSync(CONFIG_STATE_FILE)) {
+      try { fs.copyFileSync(CONFIG_STATE_FILE, path.join(CONFIG_PROFILES_DIR, 'default.json')); } catch {}
+    }
+    writeConfigFile(CONFIG_PROFILES_META, meta);
+  }
+  return meta;
+});
+
+ipcMain.handle('profiles:create', (_e, { name, avatar }) => {
+  const id = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const meta = readProfilesMeta();
+  meta.profiles.push({ id, name: String(name || 'Profile').slice(0, 40), avatar: typeof avatar === 'string' ? avatar : '' });
+  writeConfigFile(path.join(CONFIG_PROFILES_DIR, `${id}.json`), {});
+  writeConfigFile(CONFIG_PROFILES_META, meta);
+  return meta;
+});
+
+ipcMain.handle('profiles:update', (_e, { id, name, avatar }) => {
+  const meta = readProfilesMeta();
+  const p = meta.profiles.find(x => x.id === id);
+  if (!p) return meta;
+  if (name !== undefined) p.name = String(name).slice(0, 40);
+  if (avatar !== undefined) p.avatar = avatar;
+  writeConfigFile(CONFIG_PROFILES_META, meta);
+  return meta;
+});
+
+ipcMain.handle('profiles:delete', (_e, id) => {
+  const meta = readProfilesMeta();
+  if (meta.profiles.length <= 1) return meta; // never delete the last profile
+  meta.profiles = meta.profiles.filter(p => p.id !== id);
+  if (meta.active === id) meta.active = meta.profiles[0].id;
+  const fp = profileStatePath(id);
+  if (fp) { try { fs.unlinkSync(fp); } catch {} }
+  writeConfigFile(CONFIG_PROFILES_META, meta);
+  return meta;
+});
+
+// Switching profiles: persist nothing here (renderer already saved), just
+// point config:readState/writeState at the new profile file and tell windows
+// to reload so they re-read their state.
+ipcMain.handle('profiles:switch', (_e, id) => {
+  const fp = profileStatePath(id);
+  if (!fp) return false;
+  _activeProfileId = id;
+  const meta = readProfilesMeta();
+  meta.active = id;
+  writeConfigFile(CONFIG_PROFILES_META, meta);
+  for (const win of BrowserWindow.getAllWindows()) {
+    try { win.webContents.reload(); } catch {}
+  }
+  return true;
+});
 
 // Backgrounds and workspace icons are stored as files in ~/.terminalvibe/images/
 // instead of base64 data URLs crammed into state.json. Each image id is a
@@ -302,7 +401,7 @@ ipcMain.handle('config:writeImages', (_e, images) => {
   // Remove files no longer referenced by this save or by the state on disk.
   const keep = new Set(referenced);
   try {
-    const diskState = readConfigFile(CONFIG_STATE_FILE);
+    const diskState = readConfigFile(currentStatePath());
     const collectRefs = (obj) => {
       if (!obj || typeof obj !== 'object') return;
       if (typeof obj.image === 'string' && Object.keys(obj).length === 1) { keep.add(obj.image); return; }
@@ -336,7 +435,7 @@ ipcMain.handle('config:readImage', (_e, id) => {
   } catch { return null; }
 });
 
-ipcMain.handle('config:writeState', (_e, state) => writeConfigFile(CONFIG_STATE_FILE, state));
+ipcMain.handle('config:writeState', (_e, state) => writeConfigFile(currentStatePath(), state));
 
 ipcMain.handle('config:readCustomThemes', () => readConfigFile(CONFIG_CUSTOM_THEMES_FILE));
 
@@ -854,6 +953,7 @@ ipcMain.on('browser:destroy', (_e, id) => {
 // ── App lifecycle ──
 app.whenReady().then(() => {
   ensureConfigDir();
+  initActiveProfile();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

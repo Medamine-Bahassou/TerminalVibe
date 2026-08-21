@@ -1776,7 +1776,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   const WS_ICON_SIZE = 64;
 
   function optimizeIconImage(dataUrl, callback) {
-    if (!dataUrl || dataUrl.startsWith('data:image/gif') || dataUrl.startsWith('data:image/svg')) {
+    if (!dataUrl || dataUrl.startsWith('data:image/gif') || dataUrl.startsWith('data:image/webp') || dataUrl.startsWith('data:image/svg')) {
       callback(dataUrl);
       return;
     }
@@ -1814,7 +1814,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   /* ═══════════════════════════════════════════════════════════════
    S T*ATE PERSISTENCE
    ═══════════════════════════════════════════════════════════════ */
-  const STATE_KEY = 'ghostterm-state-v2';
+  // Per-profile suffix appended once the active profile is known (desktop only).
+  let STATE_KEY = 'ghostterm-state-v2';
   // Per-window key: each detached window gets a unique winId from the main
   // process (electron/main.js terminal:detach), so multiple detached windows
   // never clobber each other's saved state and never restore stale workspaces
@@ -2207,6 +2208,168 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       activeWsId = state.activeWsId || workspaces[0]?.id;
       return true;
     } catch { return false; }
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+   P R*OFILES
+   Each profile owns its own full state (settings + workspaces). On desktop
+   the main process routes config:readState/writeState to the active
+   profile's file; here we only namespace the localStorage mirror and draw
+   the boot-time picker.
+   ═══════════════════════════════════════════════════════════════ */
+  let _activeProfile = null; // { id, name, avatar } | null
+  let _profileSwitching = false; // suppress beforeunload save during a profile switch
+
+  // Namespaces every localStorage key used by state persistence so profiles
+  // never collide in plain-browser mode either.
+  function applyProfileKey(p) {
+    _activeProfile = p;
+    if (p) STATE_KEY = 'ghostterm-state-v2:' + p.id;
+  }
+
+  async function initActiveProfile() {
+    const api = configApi();
+    if (!api || !api.profilesList) return null; // plain browser: single implicit profile
+    try {
+      const meta = await api.profilesList();
+      const p = meta.profiles.find(x => x.id === meta.active) || null;
+      applyProfileKey(p);
+      return { meta, current: p };
+    } catch { return null; }
+  }
+
+  function editProfile(p) {
+    showPrompt('Edit profile', p.name, { icon: p.avatar || '' }, async (name, _color, avatar) => {
+      if (!name) return;
+      const api = configApi();
+      if (!api || !api.profilesUpdate) return;
+      const meta = await api.profilesUpdate({ id: p.id, name, avatar });
+      const updated = meta.profiles.find(x => x.id === p.id);
+      if (updated) _activeProfile = updated;
+      // Re-render the picker if still open, otherwise just stay on this profile
+      const wrap = document.getElementById('profile-picker');
+      if (wrap && wrap.style.display !== 'none') {
+        renderProfilePicker(meta, _activeProfile, (np) => { saveState(); apiProfilesSwitch(np); });
+      }
+    });
+  }
+
+  function deleteProfile(p) {
+    showConfirm(`Delete profile "${p.name}"?`, async () => {
+      const api = configApi();
+      if (!api || !api.profilesDelete) return;
+      const meta = await api.profilesDelete(p.id);
+      // Deleting the active profile moved the active pointer server-side; a
+      // reload picks up the new active profile and fresh state. Otherwise
+      // just re-render the grid.
+      if (_activeProfile && _activeProfile.id === p.id) { location.reload(); return; }
+      renderProfilePicker(meta, _activeProfile, (np) => { saveState(); apiProfilesSwitch(np); });
+    });
+  }
+
+  function renderProfilePicker(meta, current, onPick) {
+    const wrap = document.getElementById('profile-picker');
+    const grid = document.getElementById('pp-grid');
+    if (!wrap || !grid) return;
+    grid.innerHTML = '';
+    for (const p of meta.profiles) {
+      const box = document.createElement('div');
+      box.className = 'pp-box' + (current && p.id === current.id ? ' current' : '');
+      if (p.avatar) {
+        const img = document.createElement('img');
+        img.src = p.avatar; img.alt = ''; img.draggable = false;
+        box.appendChild(img);
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'pp-avatar-ph';
+        ph.innerHTML = '<i class="ph ph-user"></i>';
+        box.appendChild(ph);
+      }
+      const name = document.createElement('div');
+      name.className = 'pp-name';
+      name.textContent = p.name;
+      box.appendChild(name);
+      const menu = document.createElement('div');
+      menu.className = 'pp-edit';
+      menu.title = 'Profile options';
+      menu.innerHTML = '<i class="ph ph-dots-three-vertical"></i>';
+      menu.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (ctxEl.classList.contains('open') && ctxEl._ppKebab) { hideCtxMenu(); return; }
+        const r = menu.getBoundingClientRect();
+        showCtxMenu({ pageX: r.left + r.width, pageY: r.bottom + 4 }, 'profile', p);
+        ctxEl._ppKebab = true; // remember this open came from a kebab so it can toggle-close
+        // Open leftward, right-aligned to the kebab's right edge
+        ctxEl.style.left = Math.max(0, r.right - ctxEl.offsetWidth - 4) + 'px';
+      });
+      box.appendChild(menu);
+      box.addEventListener('click', () => { wrap.style.display = 'none'; onPick(p); });
+      box.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        showCtxMenu(e, 'profile', p);
+      });
+      grid.appendChild(box);
+    }
+    // New-profile box
+    const add = document.createElement('div');
+    add.className = 'pp-box pp-add';
+    add.innerHTML = '<div class="pp-avatar-ph"><i class="ph ph-plus"></i></div><div class="pp-name">New profile</div>';
+    add.addEventListener('click', () => {
+      showPrompt('Profile name', '', { icon: '' }, async (name, _color, avatar) => {
+        if (!name) return;
+        const api = configApi();
+        const meta = await api.profilesCreate({ name, avatar });
+        const created = meta.profiles[meta.profiles.length - 1];
+        wrap.style.display = 'none';
+        saveState(); // flush current profile before the reload flips the pointer
+        apiProfilesSwitch(created);
+      });
+    });
+    grid.appendChild(add);
+    wrap.style.display = '';
+  }
+
+  // Boot gate: >1 profile → always show the picker and wait for a choice.
+  // Single profile (or legacy state.json) auto-activates with no UI.
+  async function profileGate() {
+    const res = await initActiveProfile();
+    if (!res) return; // no profile system (plain browser)
+    const { meta, current } = res;
+    // An in-session switch reloads every window; don't re-prompt on that boot.
+    if (sessionStorage.getItem('tv-profile-switched')) {
+      sessionStorage.removeItem('tv-profile-switched');
+      return;
+    }
+    // Auto-open the active profile at boot — no picker. If none is active yet,
+    // fall back to the first (default) profile. Switching only happens via the
+    // titlebar picker from here on.
+    if (!current) {
+      const target = meta.profiles[0];
+      if (!target) return;
+      applyProfileKey(target);
+      await configApi().profilesSwitch(target.id);
+    }
+  }
+
+  function apiProfilesSwitch(p) {
+    applyProfileKey(p);
+    _profileSwitching = true; // beforeunload on reload must not flush old state to the new profile
+    // Cover the old profile synchronously so it doesn't flash before the reload's splash paints.
+    const splash = document.getElementById('splash');
+    if (splash) { splash.style.transition = 'none'; splash.classList.remove('hide'); }
+    try { sessionStorage.setItem('tv-profile-switched', '1'); } catch {}
+    return configApi().profilesSwitch(p.id);
+  }
+
+  function openProfilePicker() {
+    const api = configApi();
+    if (!api || !api.profilesList) return;
+    api.profilesList().then(meta => {
+      renderProfilePicker(meta, _activeProfile, (p) => {
+        saveState(); // flush current profile before the reload flips the pointer
+        apiProfilesSwitch(p);
+      });
+    });
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -5653,6 +5816,27 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       item('<i class="ph ph-pencil-simple"></i>', 'Edit folder', '', () => renameFolder(folderId));
       sep();
       item('<i class="ph ph-x"></i>', 'Delete folder', '', () => removeFolder(folderId), true);
+    } else if (type === 'profile') {
+      const p = data;
+      item('<i class="ph ph-pencil-simple"></i>', 'Edit profile', '', () => editProfile(p));
+      if (p.avatar) item('<i class="ph ph-image"></i>', 'Remove picture', '', async () => {
+        const api = configApi();
+        if (!api || !api.profilesUpdate) return;
+        const meta = await api.profilesUpdate({ id: p.id, avatar: '' });
+        const updated = meta.profiles.find(x => x.id === p.id);
+        if (updated) _activeProfile = updated;
+        const wrap = document.getElementById('profile-picker');
+        if (wrap && wrap.style.display !== 'none') renderProfilePicker(meta, _activeProfile, (np) => { saveState(); apiProfilesSwitch(np); });
+      });
+      if (p.id && (typeof p === 'object')) {
+        sep();
+        item('<i class="ph ph-trash"></i>', 'Delete profile', '', () => {
+          configApi().profilesList().then(m => {
+            if (m.profiles.length <= 1) return; // never delete the last profile
+            deleteProfile(p);
+          });
+        }, true);
+      }
     } else if (type === 'terminal') {
       const { wsId, termId } = data;
       const wsp = findWs(wsId);
@@ -7471,6 +7655,8 @@ function buildColorItem(key, label) {
 
       // Open/close
       document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
+      const btnProfiles = document.getElementById('btn-profiles');
+      if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
       document.getElementById('settings-close').addEventListener('click', closeSettings);
       settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
       document.addEventListener('keydown', e => {
@@ -8183,6 +8369,9 @@ function buildColorItem(key, label) {
          B O*OT
          ═══════════════════════════════════════════════════════════════ */
         (async () => {
+          // Profile gate: with multiple profiles, block boot behind the picker
+          // until one is chosen (profilesSwitch reloads the window).
+          if (!SETTINGS_ONLY && !DETACHED_ONLY) await profileGate();
           await loadCustomThemes();
           const restored = await restoreState();
           await loadPlugins();
@@ -8286,6 +8475,7 @@ function buildColorItem(key, label) {
 
         // Save on close (browser)
         window.addEventListener('beforeunload', (e) => {
+          if (_profileSwitching) return;
           saveState();
           if (!isDesktop()) {
             const hasLiveTerms = workspaces.some(ws => getWorkspaceTerminals(ws).some(t => !t.dead));
@@ -8295,7 +8485,7 @@ function buildColorItem(key, label) {
 
         // Save on window close (Electron)
         if (isDesktop() && window.electronAPI) {
-          window.addEventListener('beforeunload', () => saveState());
+          window.addEventListener('beforeunload', () => { if (_profileSwitching) return; saveState(); });
         }
 
         // Robust Cross-Origin & Local Asset Iframe Focus Tracker. Also watches the
