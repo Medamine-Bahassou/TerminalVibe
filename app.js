@@ -76,7 +76,7 @@
 
   function matchShortcut(e, action) {
     const s = customShortcuts[action];
-    if (!s) return false;
+    if (!s || !s.key) return false;
     const keyMatch = s.key.length === 1
     ? e.key.toLowerCase() === s.key.toLowerCase()
     : e.key === s.key || e.code === s.key;
@@ -89,7 +89,7 @@
 
   function matchShortcutMouse(e, action) {
     const s = customShortcuts[action];
-    if (!s) return false;
+    if (!s || !s.key) return false;
     return s.key === 'Click' && e.button === 0
     && !!e.ctrlKey === !!s.ctrl
     && !!e.shiftKey === !!s.shift
@@ -98,6 +98,7 @@
   }
 
   function formatKeyCombo(s) {
+    if (!s || !s.key) return 'Not set';
     const parts = [];
     if (s.ctrl) parts.push('Ctrl');
     if (s.alt) parts.push('Alt');
@@ -1166,7 +1167,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           for (const t of terms) {
             if (t.pending) {
               const slot = getSlotDimensions(t);
-              sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null });
+              sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null, argv: t.argv || [] });
               t.pending = false;
             }
           }
@@ -1396,7 +1397,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         for (const t of terms) {
           if (t.pending) {
             const slot = getSlotDimensions(t);
-            sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null });
+            sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null, argv: t.argv || [] });
             t.pending = false;
           }
         }
@@ -1883,6 +1884,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         }
         if (tData.color) entry.color = tData.color;
         if (tData.cwd) entry.cwd = tData.cwd;
+        if (tData.argv) entry.argv = tData.argv;
         if (tData.bgImage) entry.bgImage = tData.bgImage;
         if (tData.dead) entry.dead = true;
         if (tData.locked) entry.locked = true;
@@ -2002,16 +2004,22 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   function persistStateToStorage(state, key) {
     const api = configApi();
     const images = (api && api.configWriteImages) ? collectStateImages(state) : [];
+    // Resolves once the disk write is confirmed so callers that switch profiles
+    // (or reload) right after saving can await it — otherwise the write is
+    // routed by _activeProfileId and a deferred commit lands on the NEW profile.
     const commit = () => {
-      if (!DETACHED_ONLY && api && api.configWriteState) api.configWriteState(state);
+      const write = (!DETACHED_ONLY && api && api.configWriteState)
+        ? api.configWriteState(state)
+        : Promise.resolve();
       try {
         localStorage.setItem(key, JSON.stringify(state));
       } catch (err) {
         console.warn('[state] localStorage write failed (disk copy saved):', err);
       }
+      return write;
     };
-    if (images.length) api.configWriteImages(images).then(commit).catch(commit);
-    else commit();
+    if (images.length) return api.configWriteImages(images).then(commit).catch(commit);
+    return commit();
   }
 
   function saveState() {
@@ -2054,8 +2062,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       } catch {}
       persistStateToStorage(merged, STATE_KEY);
       if (window.electronAPI && window.electronAPI.settingsChanged) window.electronAPI.settingsChanged();
-      return;
+      return persistStateToStorage(merged, STATE_KEY);
     }
+
 
     const key = DETACHED_ONLY ? DETACHED_STATE_KEY : STATE_KEY;
     const state = {
@@ -2101,7 +2110,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
      return o;
    }),
     };
-    persistStateToStorage(state, key);
+    return persistStateToStorage(state, key);
   }
 
   async function restoreState() {
@@ -2253,7 +2262,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       // Re-render the picker if still open, otherwise just stay on this profile
       const wrap = document.getElementById('profile-picker');
       if (wrap && wrap.style.display !== 'none') {
-        renderProfilePicker(meta, _activeProfile, (np) => { saveState(); apiProfilesSwitch(np); });
+        renderProfilePicker(meta, _activeProfile, (np) => { confirmProfileSwitch(np); });
       }
     });
   }
@@ -2267,7 +2276,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       // reload picks up the new active profile and fresh state. Otherwise
       // just re-render the grid.
       if (_activeProfile && _activeProfile.id === p.id) { location.reload(); return; }
-      renderProfilePicker(meta, _activeProfile, (np) => { saveState(); apiProfilesSwitch(np); });
+      renderProfilePicker(meta, _activeProfile, (np) => { confirmProfileSwitch(np); });
     });
   }
 
@@ -2325,8 +2334,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         const meta = await api.profilesCreate({ name, avatar });
         const created = meta.profiles[meta.profiles.length - 1];
         wrap.style.display = 'none';
-        saveState(); // flush current profile before the reload flips the pointer
-        apiProfilesSwitch(created);
+        confirmProfileSwitch(created);
       });
     });
     grid.appendChild(add);
@@ -2369,19 +2377,27 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     if (splash) { splash.style.transition = 'none'; splash.classList.remove('hide'); }
     teardownAllWorkspaces();
     return configApi().profilesSwitchInPlace(p.id).then(async ok => {
-      if (!ok) return;
-      // Custom themes + plugins are global (already loaded at boot) — do NOT
-      // re-fetch them here; that async IPC round-trip was the switch bottleneck.
-      await restoreState();          // per-profile state (settings + workspaces)
-      restoreOrCreateInitial();      // spawn PTYs for the freshly-restored terminals
-      applyTheme(currentThemeName);  // renders sidebar + pane + background
-      applySidebarMode();
-      applyWsProcsSetting();
+      try {
+        if (ok) {
+          // Custom themes + plugins are global (already loaded at boot) — do NOT
+          // re-fetch them here; that async IPC round-trip was the switch bottleneck.
+          await restoreState();          // per-profile state (settings + workspaces)
+          applyTheme(currentThemeName);  // builds the pane DOM (renderPaneArea) + sidebar
+          applySidebarMode();
+          applyWsProcsSetting();
+          restoreOrCreateInitial();      // spawn PTYs into the now-existing DOM
+          // Plugin enabled-state is per-profile; non-blocking, after the splash.
+          syncPlugins();
+        }
+      } finally {
+        // Always release the transition lock + hide the splash, even if the
+        // target profile has no state or restore throws — never strand the app.
+        _profileSwitching = false;
+        if (splash) splash.classList.add('hide');
+      }
+    }).catch(() => {
       _profileSwitching = false;
       if (splash) splash.classList.add('hide');
-      // Plugin enabled-state is per-profile; re-sync after the visible switch so
-      // it never blocks the splash. Non-blocking.
-      syncPlugins();
     });
   }
 
@@ -2390,11 +2406,20 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     if (!api || !api.profilesList) return;
     api.profilesList().then(meta => {
       renderProfilePicker(meta, _activeProfile, (p) => {
-        saveState(); // flush current profile before the reload flips the pointer
-        apiProfilesSwitch(p);
+        confirmProfileSwitch(p);
       });
     });
   }
+
+  // Escape closes the profile picker, staying on the current profile
+  document.addEventListener('keydown', e => {
+    if (e.code !== 'Escape') return;
+    const wrap = document.getElementById('profile-picker');
+    if (wrap && wrap.style.display !== 'none') {
+      wrap.style.display = 'none';
+      e.stopPropagation();
+    }
+  });
 
   /* ═══════════════════════════════════════════════════════════════
    W O*RKSPACE MANAGEMENT
@@ -2881,7 +2906,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       const terms = getWorkspaceTerminals(wsp);
       const t = terms.find(x => x.id === id);
       if (t) {
-        t.label = shortTitle(title) || t.label;
+        // CLI-spawned terminals carry an explicit command + label from the
+        // tab spec — pin that label; don't let the shell title clobber it.
+        if (!t.argv) t.label = shortTitle(title) || t.label;
         // Lightweight update: just change the tab label in the DOM
         const tabEl = document.querySelector(`.tg-tab[data-termid="${id}"] .tg-tab-name`);
         if (tabEl) tabEl.textContent = t.label;
@@ -3001,7 +3028,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
 
     setTimeout(() => {
       const slot = getSlotDimensions(entry);
-      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd });
+      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd, argv: entry.argv || [] });
       // Fit again after PTY is connected
       requestAnimationFrame(() => fitTerm(entry));
     }, 80);
@@ -3857,7 +3884,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
 
     setTimeout(() => {
       const slot = getSlotDimensions(newEntry);
-      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd });
+      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd, argv: newEntry.argv || [] });
       requestAnimationFrame(() => fitTerm(newEntry));
     }, 80);
     // The pane-area observer + _termFitObserver will refit after flex
@@ -5850,7 +5877,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         const updated = meta.profiles.find(x => x.id === p.id);
         if (updated) _activeProfile = updated;
         const wrap = document.getElementById('profile-picker');
-        if (wrap && wrap.style.display !== 'none') renderProfilePicker(meta, _activeProfile, (np) => { saveState(); apiProfilesSwitch(np); });
+        if (wrap && wrap.style.display !== 'none') renderProfilePicker(meta, _activeProfile, (np) => { confirmProfileSwitch(np); });
       });
       if (p.id && (typeof p === 'object')) {
         sep();
@@ -6226,9 +6253,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     document.addEventListener('keydown', onKey, true);
   }
 
-  // Count live terminals with a running process (excluding idle shells)
-  // across all workspaces, then ask for confirmation before quitting.
-  function confirmQuitApp() {
+  // Live terminals with a running process (excluding idle shells), across all
+  // workspaces. Resolves to [{label, name}] with the process name per tab.
+  function gatherRunningProcesses() {
     const pending = [];
     for (const wsp of workspaces) {
       for (const t of getWorkspaceTerminals(wsp)) {
@@ -6237,13 +6264,21 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         }
       }
     }
-    Promise.all(pending).then(results => {
-      const running = results.filter(Boolean);
-      const msg = running.length > 0
-        ? `There ${running.length > 1 ? 'are' : 'is'} ${running.length} terminal${running.length > 1 ? 's' : ''} with running processes: ` +
-          running.map(r => `<span class="cc-label">${escHtml(r.label)}</span> (${escHtml(r.name)})`).join(', ') +
-          '. Quitting will terminate them.'
-        : 'All terminals are idle.';
+    return Promise.all(pending).then(results => results.filter(Boolean));
+  }
+
+  function runningMsg(running, action) {
+    return running.length > 0
+      ? `There ${running.length > 1 ? 'are' : 'is'} ${running.length} terminal${running.length > 1 ? 's' : ''} with running processes: ` +
+        running.map(r => `<span class="cc-label">${escHtml(r.label)}</span> (${escHtml(r.name)})`).join(', ') +
+        `. ${action}`
+      : 'All terminals are idle.';
+  }
+
+  // Count live terminals with a running process (excluding idle shells)
+  // across all workspaces, then ask for confirmation before quitting.
+  function confirmQuitApp() {
+    gatherRunningProcesses().then(running => {
       const quit = () => {
         // Desktop: tell main to release the close it intercepted from the OS
         // button (window.close() would just re-trigger the intercepted close).
@@ -6253,7 +6288,22 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           window.close();
         }
       };
-      showDangerConfirm('Quit TerminalVibe?', msg, 'Quit', quit);
+      showDangerConfirm('Quit TerminalVibe?', runningMsg(running, 'Quitting will terminate them.'), 'Quit', quit);
+    });
+  }
+
+  // Switching profiles tears down every workspace (closing PTYs), so ask for
+  // confirmation first if any terminal still has a process running inside it.
+  function confirmProfileSwitch(p) {
+    // No-op when re-selecting the already-active profile
+    if (_activeProfile && p.id === _activeProfile.id) return;
+    // Await the disk write: config:writeState is routed by _activeProfileId,
+    // so switching before the commit resolves lands the old profile's state in
+    // the NEW profile's file (all profiles end up showing the default content).
+    const doSwitch = () => saveState().then(() => apiProfilesSwitch(p));
+    gatherRunningProcesses().then(running => {
+      if (running.length === 0) { doSwitch(); return; }
+      showDangerConfirm('Switch profile?', runningMsg(running, 'Switching profiles will terminate them.'), 'Switch', doSwitch);
     });
   }
 
@@ -7053,11 +7103,27 @@ function buildColorItem(key, label) {
           const labelEl = document.createElement('span');
           labelEl.textContent = label;
           const key = document.createElement('span');
-          key.className = 'shortcut-key';
+          key.className = 'shortcut-key' + (!sc.key ? ' empty' : '');
           key.textContent = combo;
           key.addEventListener('click', () => startRecording(item, key, action));
+          const resetBtn = document.createElement('span');
+          resetBtn.className = 'shortcut-reset';
+          resetBtn.title = 'Reset to default';
+          resetBtn.innerHTML = '<i class="ph ph-arrow-u-up-left"></i>';
+          const defaultSc = DEFAULT_SHORTCUTS[action];
+          resetBtn.addEventListener('click', () => {
+            if (defaultSc) {
+              customShortcuts[action] = JSON.parse(JSON.stringify(defaultSc));
+              saveState();
+              renderShortcutsList();
+            }
+          });
+          const keys = document.createElement('div');
+          keys.className = 'shortcut-keys';
+          keys.appendChild(key);
+          keys.appendChild(resetBtn);
           item.appendChild(labelEl);
-          item.appendChild(key);
+          item.appendChild(keys);
           list.appendChild(item);
         }
         if (!shown) {
@@ -7120,12 +7186,14 @@ function buildColorItem(key, label) {
           e.preventDefault();
           e.stopPropagation();
 
-          // Escape cancels
+          // Escape clears the shortcut (empty = disabled)
           if (e.code === 'Escape') {
             cancelled = true;
             cleanup();
             keyEl.classList.remove('recording');
-            keyEl.textContent = formatKeyCombo(customShortcuts[action]);
+            customShortcuts[action] = { ctrl: false, shift: false, alt: false, meta: false, key: null };
+            saveState();
+            renderShortcutsList();
             return;
           }
 

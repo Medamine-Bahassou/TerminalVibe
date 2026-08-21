@@ -2,6 +2,7 @@ const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen }
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
+const yaml = require('js-yaml');
 const { hasRunningProcess, runningProcessInfo } = require('./proc');
 
 // ── Helpers ──
@@ -59,6 +60,214 @@ function writeConfigFile(filePath, data) {
     console.error('[config] write failed:', filePath, err);
     return false;
   }
+}
+
+// ── CLI subcommand grammar ──
+// `terminalvibe new|create|list|close|attach` subcommands with tab specs
+// `name:type:cmd_or_url` and split flags. See CLI_USAGE below.
+const CLI_USAGE = `Usage: terminalvibe <command> [options]
+
+Commands:
+  new NAME [-t S] [-s v|h S] [--split-back] [--workspace NAME ...] [--profile ID] [--cwd DIR]
+  create -f FILE|- [-w NAME ...] [--profile ID] [--cwd DIR]
+  list [--profile ID]
+  close NAME [--profile ID]
+  attach NAME [--profile ID]
+
+Tab spec S = name:type:cmd_or_url
+  type: terminal (default) or browser
+  Examples:
+    "code:terminal:nvim ."
+    "web:browser:https://example.com"
+    "logs:terminal:tail -f /var/log/syslog"
+
+Options:
+  -t, --tab S              Add a tab to the current workspace
+  -s, --split v|h S        Split the current pane and add S in the new pane
+  --split-back             Move the cursor up one split level
+  --workspace NAME         Start a new workspace segment
+  -f, --file FILE          YAML file (or '-' for stdin)
+  -w, --workspace NAME     Filter to named workspace(s) from YAML
+  --profile ID             Use an existing profile instead of a temp one
+  --cwd DIR                Starting directory for all terminals
+  --help                   Show this help and exit
+
+Examples:
+  terminalvibe new Fullstack -t "editor:terminal:nvim ." -s v "backend:terminal:python runserver"
+  terminalvibe new Dev -t "web:browser:https://localhost:3000" -t "logs:terminal:tail -f log.txt"
+  terminalvibe create -f workspaces.yaml
+  terminalvibe list
+  terminalvibe close "My Workspace"
+  terminalvibe attach "My Workspace"
+`;
+
+function cliId(prefix) {
+  return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+// Quote-aware argument splitter for per-tab commands.
+function splitArgs(str) {
+  const out = [];
+  let cur = '', inS = null;
+  for (const ch of String(str || '')) {
+    if (inS) { if (ch === inS) inS = null; else cur += ch; }
+    else if (ch === '"' || ch === "'") inS = ch;
+    else if (ch === ' ' || ch === '\t') { if (cur) { out.push(cur); cur = ''; } }
+    else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+// Parse a tab spec: "name" | "name:type" | "name:type:cmd_or_url"
+function parseTabSpec(s) {
+  s = String(s);
+  const m = /^([^:]+):(terminal|browser)(?::(.*))?$/.exec(s);
+  if (!m) return { label: s, type: 'terminal', cmd: null, url: null };
+  const [, label, type, rest] = m;
+  if (type === 'browser') return { label, type, url: rest || 'about:blank', cmd: null };
+  return { label, type, cmd: rest || null, url: null };
+}
+
+function entryFromSpec(spec, o) {
+  const p = parseTabSpec(spec);
+  if (p.type === 'browser') {
+    return { id: cliId('br'), label: p.label, type: 'browser', url: p.url || 'about:blank' };
+  }
+  const e = { id: cliId('tm'), label: p.label, type: 'terminal', pending: true };
+  if (p.cmd && p.cmd.trim()) e.argv = splitArgs(p.cmd);
+  if (o.cwd) e.cwd = o.cwd;
+  return e;
+}
+
+// Recursive layout tree builder. ops = array of {type:'tab'|'split'|'back'}.
+function buildWorkspaceLayout(ops, o) {
+  let root = null, cur = null;
+  const path = []; // {parent, idx} ancestors from root down to cur's container
+  for (const op of ops) {
+    if (op.type === 'tab') {
+      const entry = entryFromSpec(op.spec, o);
+      if (!cur) {
+        cur = { type: 'group', id: cliId('g'), activeTermId: entry.id, _history: [], terminals: [entry] };
+        root = cur;
+      } else {
+        cur.terminals.push(entry);
+      }
+    } else if (op.type === 'split') {
+      const entry = entryFromSpec(op.spec, o);
+      const G = { type: 'group', id: cliId('g'), activeTermId: entry.id, _history: [], terminals: [entry] };
+      const S = { type: 'split', id: cliId('sp'), direction: op.direction, sizes: [50, 50], children: [cur, G] };
+      if (path.length) {
+        const { parent, idx } = path[path.length - 1];
+        parent.children[idx] = S;
+      } else {
+        root = S;
+      }
+      path.push({ parent: S, idx: 1 });
+      cur = G;
+    } else if (op.type === 'back') {
+      if (path.length) {
+        const { parent } = path.pop();
+        cur = parent;
+      }
+    }
+  }
+  return root;
+}
+
+function firstTermId(node) {
+  if (!node) return null;
+  if (node.type === 'group') return node.terminals[0] ? node.terminals[0].id : null;
+  return firstTermId(node.children[0]);
+}
+
+// Build a state.json-shaped object from parsed CLI command workspaces.
+function generateCliState(o) {
+  const workspaces = [];
+  const sideOrder = [];
+  for (let i = 0; i < o.workspaces.length; i++) {
+    const wsId = cliId('ws');
+    const w = o.workspaces[i];
+    // `new` builds from ops; `create` (YAML) supplies a prebuilt layout.
+    const layout = w.layout || buildWorkspaceLayout(w.ops, o);
+    if (!layout) continue;
+    const label = w.name || ('Workspace ' + (i + 1));
+    const atId = firstTermId(layout);
+    workspaces.push({ id: wsId, label, activeTermId: atId, layout });
+    sideOrder.push({ t: 'ws', id: wsId });
+  }
+  return { theme: 'catppuccin-mocha', workspaces, folders: [], sideOrder, activeWsId: workspaces[0] ? workspaces[0].id : null };
+}
+
+// Parse process.argv into a command descriptor.
+function parseCli() {
+  const argv = process.argv.slice(2); // skip executable + entry (electron main.js | terminalvibe)
+  const hasHelp = argv.includes('--help') || argv.includes('-h');
+  let cmd = null, rest = [];
+  for (const a of argv) {
+    if (!a.startsWith('-') && cmd === null) { cmd = a; continue; }
+    rest.push(a);
+  }
+  if (!cmd) return { cmd: null, help: hasHelp };
+  if (hasHelp) return { cmd: 'help' };
+
+  const common = { profile: null, cwd: null };
+  const eatCommon = (i) => {
+    const f = rest[i];
+    if (f === '--profile') { common.profile = rest[i + 1] || null; return 2; }
+    if (f === '--cwd') { common.cwd = rest[i + 1] || null; return 2; }
+    return 0;
+  };
+
+  if (cmd === 'new') {
+    const workspaces = [];
+    let cur = null;
+    const startWs = (name) => { cur = { name: name || null, ops: [] }; workspaces.push(cur); };
+    for (let i = 0; i < rest.length;) {
+      const f = rest[i];
+      const cj = eatCommon(i);
+      if (cj) { i += cj; continue; }
+      if (f === '--workspace') { startWs(rest[i + 1] || null); i += 2; continue; }
+      if (f === '-t' || f === '--tab') {
+        if (!cur) startWs(null);
+        if (rest[i + 1]) cur.ops.push({ type: 'tab', spec: rest[i + 1] });
+        i += 2; continue;
+      }
+      if (f === '-s' || f === '--split') {
+        if (!cur) startWs(null);
+        const dir = (rest[i + 1] || 'v')[0];
+        if (rest[i + 2]) cur.ops.push({ type: 'split', direction: dir === 'h' ? 'row' : 'column', spec: rest[i + 2] });
+        i += 3; continue;
+      }
+      if (f === '--split-back') { if (cur) cur.ops.push({ type: 'back' }); i += 1; continue; }
+      if (!f.startsWith('-') && !cur) { startWs(f); i += 1; continue; }
+      i += 1;
+    }
+    return { cmd: 'new', ...common, workspaces };
+  }
+
+  if (cmd === 'create') {
+    let file = null, filters = [];
+    for (let i = 0; i < rest.length;) {
+      const f = rest[i];
+      const cj = eatCommon(i);
+      if (cj) { i += cj; continue; }
+      if (f === '-f' || f === '--file') { file = rest[i + 1] || null; i += 2; continue; }
+      if (f === '-w' || f === '--workspace') { filters.push(rest[i + 1] || null); i += 2; continue; }
+      i += 1;
+    }
+    return { cmd: 'create', ...common, file, filters };
+  }
+
+  if (cmd === 'list') {
+    for (let i = 0; i < rest.length;) { i += eatCommon(i) || 1; }
+    return { cmd: 'list', ...common };
+  }
+
+  // close / attach — NAME is first positional
+  const name = rest.find(a => !a.startsWith('-')) || null;
+  for (let i = 0; i < rest.length;) { i += eatCommon(i) || 1; }
+  return { cmd, ...common, name };
 }
 
 // ── Window ──
@@ -282,6 +491,151 @@ ipcMain.handle('config:getPath', () => CONFIG_DIR);
 function initActiveProfile() {
   const meta = readProfilesMeta();
   if (meta.active && profileStatePath(meta.active)) _activeProfileId = meta.active;
+}
+
+let _cliTempProfile = null; // set when a CLI layout flag creates a temp profile
+
+// Called from whenReady (after ensureConfigDir + initActiveProfile) when a
+// launch subcommand (new/create) is present. Creates a temp profile (or uses
+// --profile), writes the synthetic state, so createWindow proceeds normally.
+function setupCliLaunch(opts) {
+  if (opts.profile) {
+    const meta = readProfilesMeta();
+    if (meta.profiles.find(p => p.id === opts.profile)) {
+      _activeProfileId = opts.profile;
+      meta.active = opts.profile;
+      writeConfigFile(CONFIG_PROFILES_META, meta);
+    } else {
+      console.warn('[cli] profile not found:', opts.profile);
+      opts.profile = null; // fall through to temp profile
+    }
+  }
+  if (!opts.profile) {
+    // Disposable temp profile: set _activeProfileId so state routes to a
+    // temp file, but never add it to meta.profiles — the picker would show it
+    // and it must not persist. Renderer loads state via currentStatePath()
+    // (keyed off _activeProfileId), independent of the profiles list.
+    const id = '_cli_' + Date.now().toString(36);
+    _cliTempProfile = id;
+    _activeProfileId = id;
+  }
+  const state = opts.cmd === 'create' && !opts.workspaces
+    ? buildStateFromYaml(opts)
+    : generateCliState(opts);
+  writeConfigFile(currentStatePath(), state);
+}
+
+// Resolve which state file a management command (list/close/attach) targets:
+// the named --profile if given, else the active real profile.
+function managementStatePath(opts) {
+  if (opts.profile) {
+    const meta = readProfilesMeta();
+    if (meta.profiles.find(p => p.id === opts.profile)) _activeProfileId = opts.profile;
+  } else {
+    const meta = readProfilesMeta();
+    _activeProfileId = meta.active || null;
+  }
+  return currentStatePath();
+}
+
+// ── create -f YAML ──
+function entryFromYaml(tab, cwd) {
+  if (tab.type === 'browser') {
+    return { id: cliId('br'), label: tab.name || 'browser', type: 'browser', url: tab.url || 'about:blank' };
+  }
+  const e = { id: cliId('tm'), label: tab.name || 'term', type: 'terminal', pending: true };
+  const cmd = tab.command || tab.cmd;
+  if (cmd && cmd.trim()) e.argv = splitArgs(cmd);
+  if (cwd) e.cwd = cwd;
+  return e;
+}
+
+// A YAML tab may carry a nested split → recursive layout node.
+function layoutFromYaml(tab, cwd) {
+  if (tab.split) {
+    const panes = Array.isArray(tab.split.panes) ? tab.split.panes : [];
+    const children = [layoutFromYaml({ ...tab, split: null }, cwd), ...panes.map(p => layoutFromYaml(p, cwd))];
+    return {
+      type: 'split', id: cliId('sp'),
+      direction: tab.split.direction === 'horizontal' ? 'row' : 'column',
+      sizes: children.map(() => 100 / children.length),
+      children,
+    };
+  }
+  const entry = entryFromYaml(tab, cwd);
+  return { type: 'group', id: cliId('g'), activeTermId: entry.id, _history: [], terminals: [entry] };
+}
+
+function buildStateFromYaml(opts) {
+  let text;
+  if (opts.file === '-') text = fs.readFileSync(0, 'utf-8');
+  else text = fs.readFileSync(opts.file, 'utf-8');
+  const data = yaml.load(text);
+  const list = (data && Array.isArray(data.workspaces)) ? data.workspaces : (Array.isArray(data) ? data : []);
+  const workspaces = [];
+  const sideOrder = [];
+  let i = 0;
+  for (const w of list) {
+    if (opts.filters.length && !opts.filters.includes(w.name)) continue;
+    const tabs = Array.isArray(w.tabs) ? w.tabs : [];
+    let layout = null;
+    for (const t of tabs) {
+      const node = layoutFromYaml(t, opts.cwd);
+      if (!layout) { layout = node; continue; }
+      if (layout.type === 'group' && node.type === 'group') layout.terminals.push(...node.terminals);
+      else layout = { type: 'split', id: cliId('sp'), direction: 'column', sizes: [50, 50], children: [layout, node] };
+    }
+    if (!layout) continue;
+    const wsId = cliId('ws');
+    const label = w.name || ('Workspace ' + (i + 1));
+    workspaces.push({ id: wsId, label, activeTermId: firstTermId(layout), layout });
+    sideOrder.push({ t: 'ws', id: wsId });
+    i++;
+  }
+  return { theme: 'catppuccin-mocha', workspaces, folders: [], sideOrder, activeWsId: workspaces[0] ? workspaces[0].id : null };
+}
+
+// ── headless management commands (list / close / attach) ──
+function headlessList(opts) {
+  const state = readConfigFile(managementStatePath(opts));
+  if (!state || !Array.isArray(state.workspaces) || !state.workspaces.length) {
+    console.log('No workspaces.');
+    return;
+  }
+  for (const ws of state.workspaces) {
+    const names = [];
+    const walk = (n) => {
+      if (!n) return;
+      if (n.type === 'group') n.terminals.forEach(t => names.push(t.label + (t.type === 'browser' ? ' (browser)' : '')));
+      else n.children.forEach(walk);
+    };
+    walk(ws.layout);
+    console.log(`${ws.label}${names.length ? ' — ' + names.join(', ') : ''}`);
+  }
+}
+
+function headlessClose(opts) {
+  const fp = managementStatePath(opts);
+  const state = readConfigFile(fp);
+  if (!state || !Array.isArray(state.workspaces)) { console.log('No state.'); return; }
+  const idx = state.workspaces.findIndex(w => w.label === opts.name);
+  if (idx === -1) { console.log(`Workspace "${opts.name}" not found.`); return; }
+  const removed = state.workspaces.splice(idx, 1)[0];
+  if (state.activeWsId === removed.id) state.activeWsId = state.workspaces[0] ? state.workspaces[0].id : null;
+  state.sideOrder = (state.sideOrder || []).filter(s => s.id !== removed.id);
+  writeConfigFile(fp, state);
+  console.log(`Closed "${opts.name}".`);
+}
+
+function headlessAttach(opts) {
+  const fp = managementStatePath(opts);
+  const state = readConfigFile(fp);
+  if (!state || !Array.isArray(state.workspaces)) { console.log('No state.'); return false; }
+  const ws = state.workspaces.find(w => w.label === opts.name);
+  if (!ws) { console.log(`Workspace "${opts.name}" not found.`); return false; }
+  state.activeWsId = ws.id;
+  writeConfigFile(fp, state);
+  return true;
 }
 
 // State file routing: once a profile is active, its file is THE state.
@@ -577,7 +931,7 @@ const sendToRenderer = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
 
-ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd }) => {
+ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
   try {
     if (ptys.has(id)) {
       // Replace old PTY — remove exit listener first to avoid sending
@@ -587,7 +941,7 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd }) => {
       ptys.delete(id);
     }
     const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
-    const t = pty.spawn(shell, [], {
+    const t = pty.spawn(shell, argv && argv.length ? argv : [], {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
@@ -963,9 +1317,29 @@ ipcMain.on('browser:destroy', (_e, id) => {
 });
 
 // ── App lifecycle ──
+const cliArgs = parseCli();
+
 app.whenReady().then(() => {
+  if (cliArgs.cmd === 'help') { console.log(CLI_USAGE); app.quit(); return; }
   ensureConfigDir();
   initActiveProfile();
+  if (cliArgs.cmd === 'list') {
+    try { headlessList(cliArgs); } catch (err) { console.error('[cli] list:', err.message); }
+    app.quit();
+    return;
+  }
+  if (cliArgs.cmd === 'close') {
+    try { headlessClose(cliArgs); } catch (err) { console.error('[cli] close:', err.message); }
+    app.quit();
+    return;
+  }
+  if (cliArgs.cmd === 'attach') {
+    if (headlessAttach(cliArgs)) createWindow();
+    else app.quit();
+    return;
+  }
+  // new / create / no-subcommand → open the GUI (new/create pre-build state)
+  if (cliArgs.cmd === 'new' || cliArgs.cmd === 'create') setupCliLaunch(cliArgs);
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -986,5 +1360,16 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('will-quit', () => ipcMain.emit('terminal:kill-all'));
+app.on('will-quit', () => {
+  ipcMain.emit('terminal:kill-all');
+  if (_cliTempProfile) {
+    const meta = readProfilesMeta();
+    meta.profiles = meta.profiles.filter(p => p.id !== _cliTempProfile);
+    if (meta.active === _cliTempProfile) meta.active = meta.profiles[0] ? meta.profiles[0].id : null;
+    writeConfigFile(CONFIG_PROFILES_META, meta);
+    const fp = profileStatePath(_cliTempProfile);
+    if (fp) { try { fs.unlinkSync(fp); } catch {} }
+    _cliTempProfile = null;
+  }
+});
 process.on('exit', () => ipcMain.emit('terminal:kill-all'));

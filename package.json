@@ -10,6 +10,7 @@
     "dev": "node electron/dev-server.js & node server.js & wait",
     "electron": "electron .",
     "electron:dev": "node electron/dev-server.js & electron .",
+    "test": "node scripts/test-cli.js",
     "build": "node scripts/build-dist.js && electron-builder --linux dir",
     "build:appimage": "node scripts/build-dist.js && electron-builder --linux AppImage",
     "dist": "node scripts/build-dist.js && electron-builder --linux dir",
@@ -17,6 +18,7 @@
   },
   "dependencies": {
     "@melloware/coloris": "^0.25.0",
+    "js-yaml": "^5.3.0",
     "node-pty": "^1.0.0",
     "puppeteer-core": "^24.43.1",
     "simple-icons": "^16.28.0",
