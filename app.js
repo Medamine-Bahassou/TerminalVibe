@@ -36,6 +36,7 @@
     splitH:         { ctrl: true, shift: true, key: 'D', label: 'Ctrl+Shift+D' },
     splitV:         { ctrl: true, shift: true, key: 'E', label: 'Ctrl+Shift+E' },
     search:         { ctrl: true, shift: true, key: 'F', label: 'Ctrl+Shift+F' },
+    tabSearch:      { ctrl: true, shift: true, key: 'O', label: 'Ctrl+Shift+O' },
     browserTab:     { ctrl: true, shift: true, key: 'B', label: 'Ctrl+Shift+B' },
     copy:           { ctrl: true, shift: true, key: 'C', label: 'Ctrl+Shift+C' },
     paste:          { ctrl: true, shift: true, key: 'V', label: 'Ctrl+Shift+V' },
@@ -49,19 +50,21 @@
     prevWorkspace:  { ctrl: true, shift: true, key: 'PageUp', label: 'Ctrl+Shift+PageUp' },
     multiSelect:    { ctrl: true, alt: true, key: 'Click', label: 'Ctrl+Alt+Click' },
     maximizeTab:    { ctrl: true, shift: true, key: 'M', label: 'Ctrl+Shift+M' },
+    profiles:       { ctrl: true, shift: true, key: 'P', label: 'Ctrl+Shift+P' },
+    toggleSidebar:  { ctrl: true, shift: true, key: 'S', label: 'Ctrl+Shift+S' },
     quitApp:        { ctrl: true, shift: true, key: 'Q', label: 'Ctrl+Shift+Q' },
   };
 
   const SHORTCUT_LABELS = {
     newTerminal: 'New terminal', closeTerminal: 'Close terminal',
     splitH: 'Split horizontal', splitV: 'Split vertical',
-    search: 'Search', browserTab: 'New browser tab',
+    search: 'Search', tabSearch: 'Search tabs', browserTab: 'New browser tab',
     copy: 'Copy selection', paste: 'Paste',
     nextTab: 'Next tab', prevTab: 'Previous tab',
     focusLeft: 'Focus left pane', focusDown: 'Focus down pane',
     focusUp: 'Focus up pane', focusRight: 'Focus right pane',
     nextWorkspace: 'Next workspace', prevWorkspace: 'Previous workspace',
-    maximizeTab: 'Maximize / restore tab', quitApp: 'Quit application',
+    maximizeTab: 'Maximize / restore tab', profiles: 'Profiles', toggleSidebar: 'Toggle sidebar', quitApp: 'Quit application',
   };
 
   // Alt+N → jump to the workspace at sidebar position N (top-to-bottom order,
@@ -2161,6 +2164,10 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
         }
+        // Seed any new defaults not in saved state (e.g. tabSearch added later)
+        for (const k of Object.keys(DEFAULT_SHORTCUTS)) {
+          if (!(k in customShortcuts)) customShortcuts[k] = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS[k]));
+        }
       }
       if (state.pluginStates) {
         for (const [k, v] of Object.entries(state.pluginStates)) _pluginStates.set(k, !!v);
@@ -2868,6 +2875,24 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   /* ═══════════════════════════════════════════════════════════════
    T E*RMINAL MANAGEMENT
    ═══════════════════════════════════════════════════════════════ */
+  // Attach WebGL renderer only to terminals that are on screen, dispose it from
+  // hidden ones. Bounds live WebGL contexts to the few visible terminals, so
+  // rapid/many tab creation can't exhaust Chromium's context pool and blank the
+  // newest canvases. WebGL is a pure rendering optimization — DOM fallback is
+  // xterm's default and works fine for hidden slots.
+  function _syncWebgl(entry, visible) {
+    if (!entry || entry.type === 'browser' || !entry.term) return;
+    const term = entry.term;
+    if (visible) {
+      if (term._webglAddon) return;
+      try { term._webglAddon = new WebglAddon.WebglAddon(); term.loadAddon(term._webglAddon); } catch (e) { term._webglAddon = null; }
+    } else {
+      if (!term._webglAddon) return;
+      try { term._webglAddon.dispose(); } catch (e) {}
+      term._webglAddon = null;
+    }
+  }
+
   function _createTermEntry(wsp, id, label) {
     const term = new Terminal({
       theme: makeXtermTheme(currentTheme),
@@ -2892,7 +2917,10 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
     term.loadAddon(webLinksAddon);
-    try { term._webglAddon = new WebglAddon.WebglAddon(); term.loadAddon(term._webglAddon); } catch (e) { /* canvas fallback */ }
+    // WebGL attached lazily via _syncWebgl only while the terminal is VISIBLE.
+    // Chromium caps concurrent WebGL contexts (~16); giving every terminal its
+    // own context at creation exhausted the pool when many tabs were added
+    // quickly, leaving the newest canvases blank (white page + dead icon).
 
     term.onData(data => { if (wsReady) sendStdin(id, new TextEncoder().encode(data)); });
     term.onBinary(data => {
@@ -2999,9 +3027,14 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
             // Create and add the slot
             const slot = getOrCreateSlot(entry, wsp, body);
             clearSlotFocus();
-            body.querySelectorAll('.term-slot').forEach(s => { s.style.display = 'none'; });
+            body.querySelectorAll('.term-slot').forEach(s => {
+              s.style.display = 'none';
+              const hid = findTermById(s.id.startsWith('slot-') ? s.id.slice(5) : '');
+              if (hid) _syncWebgl(hid.term, false);
+            });
             slot.style.display = entry.type === 'browser' ? 'flex' : 'block';
             body.appendChild(slot);
+            if (entry.type !== 'browser') _syncWebgl(entry, true);
             focusSlot(entry);
             // Double RAF ensures DOM has rendered and canvas is ready
             requestAnimationFrame(() => {
@@ -3209,6 +3242,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
             const isActive = t.id === termId;
             const showAs = t.type === 'browser' ? 'flex' : 'block';
             slot.style.display = isActive ? showAs : 'none';
+            if (t.type !== 'browser') _syncWebgl(t, isActive);
             if (t.type === 'browser') {
               if (isActive) resumeBrowserTab(t);
               else {
@@ -5042,6 +5076,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     entry.term.open(wrap);
     entry.opened = true;
     try { _termFitObserver.observe(slot); } catch {}
+    // Attach WebGL only if the slot is actually on screen (renderPaneArea opens
+    // hidden terminals too; their contexts get attached later on activate).
+    _syncWebgl(entry, slot.offsetParent !== null && slot.style.display !== 'none');
     applyTermBgImage(entry);
     updateTermLockBadge(entry);
     // Initial fit: ensure terminal fills its slot immediately on first open.
@@ -6457,6 +6494,113 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       document.getElementById('search-close').addEventListener('click', closeSearch);
 
       /* ═══════════════════════════════════════════════════════════════
+       T A*B SEARCH (Ctrl+Shift+O)
+       ═══════════════════════════════════════════════════════════════ */
+      const tabSearchEl = document.getElementById('tab-search');
+      const tsInput = document.getElementById('ts-input');
+      const tsResults = document.getElementById('ts-results');
+      let tsSelected = -1;
+      let tsItems = [];
+
+      // Subsequence fuzzy match: all query chars must appear in order. Lower
+      // score is better; matches at word starts / consecutive runs rank higher.
+      function fuzzyScore(query, text) {
+        if (!query) return 0;
+        query = query.toLowerCase(); text = text.toLowerCase();
+        let qi = 0, score = 0, run = 0;
+        for (let ti = 0; ti < text.length && qi < query.length; ti++) {
+          if (text[ti] === query[qi]) {
+            qi++;
+            const wordStart = ti === 0 || text[ti - 1] === ' ';
+            score += wordStart ? 0 : (run ? 1 : 3);
+            run = run + 1;
+          } else run = 0;
+        }
+        return qi === query.length ? score : Infinity;
+      }
+
+      function collectTabItems() {
+        const items = [];
+        for (const ws of workspaces) {
+          for (const t of getWorkspaceTerminals(ws)) {
+            items.push({ id: t.id, wsId: ws.id, label: t.label, type: t.type, wsLabel: ws.label });
+          }
+        }
+        return items;
+      }
+
+      function renderTabSearch() {
+        const q = tsInput.value;
+        const scored = tsItems
+          .map(it => ({ it, score: fuzzyScore(q, it.label) }))
+          .filter(x => x.score !== Infinity)
+          .sort((a, b) => a.score - b.score || a.it.label.localeCompare(b.it.label));
+        tsResults.innerHTML = '';
+        if (!scored.length) {
+          const empty = document.createElement('div');
+          empty.className = 'ts-empty';
+          empty.textContent = 'No tabs match';
+          tsResults.appendChild(empty);
+          tsSelected = -1;
+          return;
+        }
+        scored.forEach(({ it }, i) => {
+          const row = document.createElement('div');
+          row.className = 'ts-item';
+          row.innerHTML = `<i class="ph ${it.type === 'browser' ? 'ph-globe-hemisphere-west' : 'ph-terminal-window'}"></i>
+            <span class="ts-label"></span>
+            <span class="ts-ws">${it.wsLabel}</span>
+            <span class="ts-type">${it.type}</span>`;
+          row.querySelector('.ts-label').textContent = it.label;
+          row.dataset.idx = i;
+          row.addEventListener('mousedown', e => { e.preventDefault(); tsPick(i); });
+          row.addEventListener('mouseenter', () => setTsSelected(i));
+          tsResults.appendChild(row);
+        });
+        setTsSelected(0);
+      }
+
+      function setTsSelected(i) {
+        if (i < 0 || i >= tsResults.children.length) return;
+        tsSelected = i;
+        tsResults.querySelectorAll('.ts-item').forEach((el, idx) => el.classList.toggle('selected', idx === i));
+        tsResults.children[i].scrollIntoView({ block: 'nearest' });
+      }
+
+      function tsPick(i) {
+        if (i < 0 || i >= tsItems.length) return;
+        const item = tsItems[i];
+        closeTabSearch();
+        activateTerminal(item.wsId, item.id);
+        activateWorkspace(item.wsId);
+      }
+
+      function openTabSearch() {
+        if (!tabSearchEl || tsResults.contains(document.activeElement)) return;
+        tsItems = collectTabItems();
+        tabSearchEl.style.display = 'flex';
+        tsInput.value = '';
+        renderTabSearch();
+        tsInput.focus();
+      }
+
+      function closeTabSearch() {
+        if (!tabSearchEl) return;
+        tabSearchEl.style.display = 'none';
+        const t = activeTerminal();
+        if (t && t.type !== 'browser' && t.term) t.term.focus();
+      }
+
+      tsInput.addEventListener('input', renderTabSearch);
+      tsInput.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { e.stopPropagation(); closeTabSearch(); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); setTsSelected(Math.min(tsSelected + 1, tsResults.children.length - 1)); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); setTsSelected(Math.max(tsSelected - 1, 0)); }
+        else if (e.key === 'Enter') { e.preventDefault(); tsPick(tsSelected); }
+      });
+      tabSearchEl.addEventListener('mousedown', e => { if (e.target === tabSearchEl) closeTabSearch(); });
+
+      /* ═══════════════════════════════════════════════════════════════
        T O*OLBAR BUTTONS
        ═══════════════════════════════════════════════════════════════ */
 
@@ -7501,6 +7645,7 @@ function buildColorItem(key, label) {
             return;
           }
           if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
+          if (matchShortcut(e, 'tabSearch')) { e.preventDefault(); e.stopPropagation(); openTabSearch(); return; }
           if (matchShortcut(e, 'browserTab')) {
             e.preventDefault();
             const wsp = activeWs();
@@ -7522,6 +7667,8 @@ function buildColorItem(key, label) {
             if (wsp && wsp.activeTermId) toggleMaximizeTerminal(wsp.id, wsp.activeTermId);
             return;
           }
+          if (matchShortcut(e, 'profiles')) { e.preventDefault(); e.stopPropagation(); openProfilePicker(); return; }
+          if (matchShortcut(e, 'toggleSidebar')) { e.preventDefault(); e.stopPropagation(); toggleSidebar(); return; }
           // Arrow key tab switching (legacy)
           if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
             if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
@@ -8200,7 +8347,9 @@ function buildColorItem(key, label) {
 
         applySidebarMode();
 
-        document.getElementById('btn-sidebar-toggle').addEventListener('click', () => {
+        document.getElementById('btn-sidebar-toggle').addEventListener('click', toggleSidebar);
+
+        function toggleSidebar() {
           const sb = document.getElementById('sidebar');
           if (sidebarMode === 'hidden') {
             sbTempVisible = !sbTempVisible;
@@ -8227,7 +8376,7 @@ function buildColorItem(key, label) {
           }
           sbFit();
           saveState();
-        });
+        }
 
 /* ═══════════════════════════════════════════════════════════════
          D I*RECTIONAL PANE NAVIGATION (Alt + H/J/K/L)
