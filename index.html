@@ -464,6 +464,18 @@
                 <input type="text" id="set-shell" spellcheck="false" autocomplete="off" placeholder="e.g. /bin/zsh" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
               </div>
             </div>
+            <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+              <div class="flex flex-col gap-1">
+                <span class="text-[12.5px] font-medium text-[var(--fg)]">Notify when a command finishes</span>
+                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Desktop notification when a terminal command ends while the app isn't focused</span>
+              </div>
+              <div class="flex-1 flex items-center justify-end gap-3">
+                <label class="inline-flex items-center cursor-pointer">
+                  <input type="checkbox" class="sr-only peer" id="set-notify-finish">
+                  <div class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]"></div>
+                </label>
+              </div>
+            </div>
             <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
               <div class="flex flex-col gap-1">
                 <span class="text-[12.5px] font-medium text-[var(--fg)]">Search Engine</span>

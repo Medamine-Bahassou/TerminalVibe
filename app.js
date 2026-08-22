@@ -954,6 +954,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   let pinnedCollapsed = false; // "Pinned" section collapsed state
   let sidebarMode = 'normal'; // 'normal' | 'hover' | 'hidden'
   let showWsProcs = true;     // show running processes in workspace buttons
+  let notifyOnCommandFinish = true; // desktop notify when a command finishes
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
@@ -2048,6 +2049,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       pinnedCollapsed,
       sidebarMode,
       showWsProcs,
+      notifyOnCommandFinish,
       backgroundMode,
       globalBackgroundImage,
         backgroundOpacity,
@@ -2084,6 +2086,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       pinnedCollapsed,
       sidebarMode,
       showWsProcs,
+      notifyOnCommandFinish,
       backgroundMode,
       globalBackgroundImage,
       backgroundOpacity,
@@ -2155,6 +2158,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
       if (state.sidebarMode) sidebarMode = state.sidebarMode;
       if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
+      if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -7148,6 +7152,16 @@ function buildColorItem(key, label) {
         const sbModeDD = document.querySelector('.custom-dropdown[data-for="set-sidebar-mode"]');
         if (sbModeDD) initCustomDropdown(sbModeDD);
 
+        // Notify when a command finishes
+        const notifyFinishToggle = document.getElementById('set-notify-finish');
+        if (notifyFinishToggle) {
+          notifyFinishToggle.checked = notifyOnCommandFinish;
+          notifyFinishToggle.onchange = e => {
+            notifyOnCommandFinish = e.target.checked;
+            saveState();
+          };
+        }
+
         // Workspace process details
         const wsProcsToggle = document.getElementById('set-wsprocs');
         if (wsProcsToggle) {
@@ -7517,6 +7531,7 @@ function buildColorItem(key, label) {
             }
           }
           if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
+          if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
           if (state.backgroundMode) backgroundMode = state.backgroundMode;
           if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
           if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;

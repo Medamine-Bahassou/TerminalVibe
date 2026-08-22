@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, Notification } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
@@ -1008,6 +1008,44 @@ ipcMain.on('terminal:kill-all', () => {
   detachedWindows.clear();
   detachedPending.clear();
 });
+
+// ── Notify when a terminal command finishes ──
+// Reuses runningProcessInfo() (proc.js): a terminal is "busy" while a real
+// process owns the foreground group, "idle" when back at the shell prompt.
+// Fires a desktop notification on the busy→idle transition, only when no app
+// window is focused (you're looking elsewhere). Opt-in via the Settings →
+// Advanced "Notify when a command finishes" toggle (state.json).
+const notifyBusy = new Map(); // termId -> { wasBusy:boolean, name:string|null }
+function anyAppFocused() {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()) return true;
+  for (const [, dw] of detachedWindows) {
+    if (!dw.isDestroyed() && dw.isFocused()) return true;
+  }
+  return false;
+}
+setInterval(() => {
+  const state = readConfigFile(currentStatePath());
+  // Default ON to match the Settings toggle (absent key ≠ disabled).
+  if (!state || state.notifyOnCommandFinish === false) return;
+  for (const [id, t] of ptys) {
+    const info = runningProcessInfo(t.pid);
+    const cur = notifyBusy.get(id) || { wasBusy: false, name: null };
+    if (info.running) {
+      cur.wasBusy = true;
+      if (info.name) cur.name = info.name;
+      notifyBusy.set(id, cur);
+    } else if (cur.wasBusy) {
+      notifyBusy.set(id, { wasBusy: false, name: null });
+      if (anyAppFocused()) continue;
+      try {
+        new Notification({
+          title: 'TerminalVibe',
+          body: cur.name ? `Command finished: ${cur.name}` : 'A command finished',
+        }).show();
+      } catch {}
+    }
+  }
+}, 1000);
 
 // ── IPC: detach terminal into a new window ──
 ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
