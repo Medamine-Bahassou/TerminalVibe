@@ -660,8 +660,13 @@ function profileStatePath(id) {
 }
 function readProfilesMeta() {
   const meta = readConfigFile(CONFIG_PROFILES_META);
-  if (meta && Array.isArray(meta.profiles)) return meta;
-  return { active: null, profiles: [] };
+  if (!meta || !Array.isArray(meta.profiles)) return { active: null, default: null, profiles: [] };
+  // Invariant: exactly one default, and it must be a real profile.
+  if (meta.profiles.length && !meta.profiles.find(x => x.id === meta.default)) {
+    meta.default = meta.profiles[0].id;
+    writeConfigFile(CONFIG_PROFILES_META, meta);
+  }
+  return meta;
 }
 
 ipcMain.handle('profiles:list', () => {
@@ -671,6 +676,7 @@ ipcMain.handle('profiles:list', () => {
     const p = { id: 'default', name: 'Default', avatar: '' };
     meta.profiles = [p];
     meta.active = 'default';
+    meta.default = 'default';
     // Migrate the legacy state into the profile file so nothing is lost.
     if (fs.existsSync(CONFIG_STATE_FILE)) {
       try { fs.copyFileSync(CONFIG_STATE_FILE, path.join(CONFIG_PROFILES_DIR, 'default.json')); } catch {}
@@ -704,8 +710,17 @@ ipcMain.handle('profiles:delete', (_e, id) => {
   if (meta.profiles.length <= 1) return meta; // never delete the last profile
   meta.profiles = meta.profiles.filter(p => p.id !== id);
   if (meta.active === id) meta.active = meta.profiles[0].id;
+  if (meta.default === id) meta.default = meta.profiles[0].id;
   const fp = profileStatePath(id);
   if (fp) { try { fs.unlinkSync(fp); } catch {} }
+  writeConfigFile(CONFIG_PROFILES_META, meta);
+  return meta;
+});
+
+ipcMain.handle('profiles:setDefault', (_e, id) => {
+  const meta = readProfilesMeta();
+  if (!meta.profiles.find(x => x.id === id)) return meta;
+  meta.default = id;
   writeConfigFile(CONFIG_PROFILES_META, meta);
   return meta;
 });

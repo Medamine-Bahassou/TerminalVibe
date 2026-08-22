@@ -111,6 +111,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   profilesCreate: (o) => ipcRenderer.invoke('profiles:create', o),
   profilesUpdate: (o) => ipcRenderer.invoke('profiles:update', o),
   profilesDelete: (id) => ipcRenderer.invoke('profiles:delete', id),
+  profilesSetDefault: (id) => ipcRenderer.invoke('profiles:setDefault', id),
   profilesSwitch: (id) => ipcRenderer.invoke('profiles:switch', id),
   profilesSwitchInPlace: (id) => ipcRenderer.invoke('profiles:switchInPlace', id),
   configReadState: () => ipcRenderer.invoke('config:readState'),

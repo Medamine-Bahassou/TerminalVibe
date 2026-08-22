@@ -2292,6 +2292,15 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     });
   }
 
+  function setDefaultProfile(p) {
+    const api = configApi();
+    if (!api || !api.profilesSetDefault) return;
+    api.profilesSetDefault(p.id).then(meta => {
+      const wrap = document.getElementById('profile-picker');
+      if (wrap && wrap.style.display !== 'none') renderProfilePicker(meta, _activeProfile, (np) => { confirmProfileSwitch(np); });
+    });
+  }
+
   function renderProfilePicker(meta, current, onPick) {
     const wrap = document.getElementById('profile-picker');
     const grid = document.getElementById('pp-grid');
@@ -2301,6 +2310,13 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       const box = document.createElement('div');
       box.className = 'pp-box' + (current && p.id === current.id ? ' current' : '');
       box.tabIndex = -1; // keyboard-focusable so arrows land on a box when the picker opens
+      if (p.id === meta.default) {
+        const badge = document.createElement('div');
+        badge.className = 'pp-badge';
+        badge.title = 'Default profile';
+        badge.textContent = 'DEFAULT';
+        box.appendChild(badge);
+      }
       if (p.avatar) {
         const img = document.createElement('img');
         img.src = p.avatar; img.alt = ''; img.draggable = false;
@@ -2323,7 +2339,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         e.stopPropagation();
         if (ctxEl.classList.contains('open') && ctxEl._ppKebab) { hideCtxMenu(); return; }
         const r = menu.getBoundingClientRect();
-        showCtxMenu({ pageX: r.left + r.width, pageY: r.bottom + 4 }, 'profile', p);
+        showCtxMenu({ pageX: r.left + r.width, pageY: r.bottom + 4 }, 'profile', { p, defaultId: meta.default });
         ctxEl._ppKebab = true; // remember this open came from a kebab so it can toggle-close
         // Open leftward, right-aligned to the kebab's right edge
         ctxEl.style.left = Math.max(0, r.right - ctxEl.offsetWidth - 4) + 'px';
@@ -2332,7 +2348,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       box.addEventListener('click', () => { wrap.style.display = 'none'; onPick(p); });
       box.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
-        showCtxMenu(e, 'profile', p);
+        showCtxMenu(e, 'profile', { p, defaultId: meta.default });
       });
       grid.appendChild(box);
     }
@@ -2392,7 +2408,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     // fall back to the first (default) profile. Switching only happens via the
     // titlebar picker from here on.
     if (!current) {
-      const target = meta.profiles[0];
+      const target = meta.profiles.find(x => x.id === meta.default) || meta.profiles[0];
       if (!target) return;
       applyProfileKey(target);
       await configApi().profilesSwitch(target.id);
@@ -5939,8 +5955,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       sep();
       item('<i class="ph ph-x"></i>', 'Delete folder', '', () => removeFolder(folderId), true);
     } else if (type === 'profile') {
-      const p = data;
+      const { p, defaultId } = data;
       item('<i class="ph ph-pencil-simple"></i>', 'Edit profile', '', () => editProfile(p));
+      if (p.id !== defaultId) item('<i class="ph ph-star"></i>', 'Set as default profile', '', () => setDefaultProfile(p));
       if (p.avatar) item('<i class="ph ph-image"></i>', 'Remove picture', '', async () => {
         const api = configApi();
         if (!api || !api.profilesUpdate) return;
