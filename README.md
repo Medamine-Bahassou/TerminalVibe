@@ -32,6 +32,7 @@
 - **Plugin system** - drop a plugin folder into `~/.terminalvibe/plugins/` to add commands, keybindings, terminal lifecycle hooks, context-menu items, themes, settings sections, and UI widgets (see [docs/plugin-development.md](docs/plugin-development.md))
 - **Frameless window** - custom titlebar with logo, sidebar toggle, and window controls (minimize/maximize/close)
 - **Status bar** - shows active workspace, terminal name, terminal dimensions + font size, connection status, multi-select count, and real-time clock
+- **Command line** - launch workspaces and build terminal/browser layouts from the terminal: `new`, `create` (YAML), `list`, `close`, `attach` (see [docs/cli.md](docs/cli.md))
 
 ## Screenshots
 

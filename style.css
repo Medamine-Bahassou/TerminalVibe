@@ -740,6 +740,28 @@ overflow: hidden;
 min-width: 0;
 }
 
+/* Right sidebar (toggleable from title bar) */
+#sidebar-right {
+width: 220px;
+flex: none;
+background: color-mix(in srgb, var(--bg) 80%, #000 20%);
+overflow-y: auto;
+}
+#sash-right {
+width: var(--sash-w);
+flex: none;
+cursor: col-resize;
+background: var(--border);
+transition: background 0.15s;
+}
+#sash-right:hover, #sash-right.dragging {
+background: var(--accent);
+}
+body.sb-right-hidden #sidebar-right,
+body.sb-right-hidden #sash-right {
+display: none;
+}
+
 /* Sidebar action buttons (search, theme) */
 .sidebar-actions {
   display: flex;

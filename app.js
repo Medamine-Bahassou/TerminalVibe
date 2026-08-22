@@ -7896,6 +7896,8 @@ function buildColorItem(key, label) {
       document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
       const btnProfiles = document.getElementById('btn-profiles');
       if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
+      const btnSidebarRight = document.getElementById('btn-sidebar-right');
+      if (btnSidebarRight) btnSidebarRight.addEventListener('click', () => document.body.classList.toggle('sb-right-hidden'));
       document.getElementById('settings-close').addEventListener('click', closeSettings);
       settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
       document.addEventListener('keydown', e => {
@@ -7997,6 +7999,22 @@ function buildColorItem(key, label) {
       document.getElementById('set-custom-search-url').addEventListener('input', e => {
         customSearchUrl = e.target.value;
         saveState();
+      });
+
+      // ── CLI doc fuzzy search ──
+      const cliPre = document.getElementById('cli-doc-pre');
+      const cliLines = cliPre ? cliPre.textContent.split('\n') : [];
+      document.getElementById('cli-doc-search')?.addEventListener('input', e => {
+        const q = e.target.value.trim().toLowerCase();
+        if (!q) { cliPre.textContent = cliLines.join('\n'); return; }
+        cliPre.textContent = cliLines.map(line => {
+          const l = line.toLowerCase();
+          let qi = 0;
+          for (let i = 0; i < l.length && qi < q.length; i++) {
+            if (l[i] === q[qi]) qi++;
+          }
+          return qi === q.length ? line : '';
+        }).join('\n');
       });
 
       // ── Background Image Settings ──
@@ -8297,6 +8315,37 @@ function buildColorItem(key, label) {
         }
 
         initSidebarSplit();
+
+        // ── Right sidebar resize (custom sash, like terminal splits) ──
+        (function initRightSidebarResize() {
+          const sash = document.getElementById('sash-right');
+          if (!sash) return;
+          const panel = document.getElementById('sidebar-right');
+          const MIN = 160, MAX = 260;
+          sash.addEventListener('mousedown', e => {
+            e.preventDefault();
+            sash.classList.add('dragging');
+            const startX = e.clientX;
+            const startW = panel.offsetWidth;
+            _suppressResize = true;
+            startResizing();
+            const onMove = ev => {
+              panel.style.width = Math.max(MIN, Math.min(startW + (startX - ev.clientX), MAX)) + 'px';
+            };
+            const onUp = () => {
+              sash.classList.remove('dragging');
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+              _suppressResize = false;
+              const wsp = activeWs();
+              if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+              saveState();
+              stopResizing();
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+          });
+        })();
 
         // ── Sidebar display modes: 'normal' | 'hover' | 'hidden' ──
         let hoverPinned = false;   // expanded via toggle button while in hover mode
