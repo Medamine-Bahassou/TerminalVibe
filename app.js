@@ -2243,6 +2243,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
    ═══════════════════════════════════════════════════════════════ */
   let _activeProfile = null; // { id, name, avatar } | null
   let _profileSwitching = false; // suppress beforeunload save during a profile switch
+  let ppNavHandler = null; // single live keydown handler for the profile picker
 
   // Namespaces every localStorage key used by state persistence so profiles
   // never collide in plain-browser mode either.
@@ -2299,6 +2300,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     for (const p of meta.profiles) {
       const box = document.createElement('div');
       box.className = 'pp-box' + (current && p.id === current.id ? ' current' : '');
+      box.tabIndex = -1; // keyboard-focusable so arrows land on a box when the picker opens
       if (p.avatar) {
         const img = document.createElement('img');
         img.src = p.avatar; img.alt = ''; img.draggable = false;
@@ -2337,6 +2339,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     // New-profile box
     const add = document.createElement('div');
     add.className = 'pp-box pp-add';
+    add.tabIndex = -1;
     add.innerHTML = '<div class="pp-avatar-ph"><i class="ph ph-plus"></i></div><div class="pp-name">New profile</div>';
     add.addEventListener('click', () => {
       showPrompt('Profile name', '', { icon: '' }, async (name, _color, avatar) => {
@@ -2350,6 +2353,33 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     });
     grid.appendChild(add);
     wrap.style.display = '';
+    // Keyboard navigation: arrows move a selection highlight, Enter/Space picks.
+    const boxes = [...grid.querySelectorAll('.pp-box')];
+    let sel = Math.max(0, boxes.findIndex(b => b.classList.contains('current')));
+
+    function paint() {
+      boxes.forEach((b, i) => b.classList.toggle('sel', i === sel));
+      boxes[sel] && boxes[sel].scrollIntoView({ block: 'nearest' });
+      boxes[sel] && boxes[sel].focus({ preventScroll: true }); // focus follows the selection
+    }
+    const cols = () => Math.max(1, Math.floor((grid.clientWidth + 20) / 160));
+    const nav = (e) => {
+      if (!wrap || wrap.style.display === 'none') { document.removeEventListener('keydown', nav); return; }
+      if (e.code === 'ArrowRight' || e.code === 'ArrowLeft' || e.code === 'ArrowDown' || e.code === 'ArrowUp') {
+        e.preventDefault(); e.stopPropagation();
+        const step = (e.code === 'ArrowRight' || e.code === 'ArrowLeft') ? 1 : cols();
+        const dir = (e.code === 'ArrowRight' || e.code === 'ArrowDown') ? 1 : -1;
+        sel = (sel + dir * step + boxes.length) % boxes.length;
+        paint();
+      } else if (e.code === 'Enter' || e.code === ' ') {
+        e.preventDefault(); e.stopPropagation();
+        boxes[sel] && boxes[sel].click();
+      }
+    };
+    if (ppNavHandler) document.removeEventListener('keydown', ppNavHandler);
+    ppNavHandler = nav; // single live listener; re-renders must not stack duplicates
+    document.addEventListener('keydown', nav);
+    paint();
   }
 
   // Boot gate: >1 profile → always show the picker and wait for a choice.

@@ -2469,6 +2469,7 @@ body.roundless .slider::-moz-range-thumb {
 .pp-box .pp-edit:hover { color: var(--fg); }
 .pp-box:hover { border-color: var(--accent); background: var(--accent-dim); }
 .pp-box.current { border-color: var(--accent); }
+.pp-box.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
 .pp-box img, .pp-avatar-ph {
   width: 72px; height: 72px; object-fit: cover; border-radius: 50%;
   background: rgba(255,255,255,0.06);
