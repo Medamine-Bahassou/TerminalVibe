@@ -12,6 +12,9 @@
 
 ## Features
 
+- **Profiles** - isolated per-profile state with a launch picker, default profile badge, and in-place switching (`Ctrl+Shift+P`)
+- **Right sidebar** - resizable panel with a clipboard history widget, toggled from the titlebar
+- **Tab search & maximize** - `Ctrl+Shift+O` to jump to any tab, `Ctrl+Shift+M` to maximize/restore a tab
 - **Multi-workspace** - switch between independent workspace contexts via sidebar, with drag-and-drop reordering and color customization
 - **Split panes** - recursive horizontal and vertical splits with drag-and-drop terminal reordering between panes
 - **Tabbed groups** - each pane holds a tab bar for terminals or browser sessions
@@ -36,26 +39,80 @@
 
 ## Screenshots
 
+### Workspaces, split panes and tabs
+<p align="center">
+  <img src="screenshots/splits.png" alt="TerminalVibe - Split panes and workspaces" width="800">
+</p>
 
+### Running AI coding agents
 <p align="center">
   <img src="screenshots/claude.png" alt="TerminalVibe - Running Claude Code in the terminal" width="800">
 </p>
 
+### Built-in browser
+Browser tabs live next to terminals in the same pane.
+
 <p align="center">
-  <img src="screenshots/splits.png" alt="TerminalVibe - Split panes and workspaces" width="800">
+  <img src="screenshots/browser.png" alt="TerminalVibe - Terminals and a browser tab in split panes" width="800">
 </p>
 
 <p align="center">
   <img src="screenshots/youtube.png" alt="TerminalVibe - Built-in browser playing YouTube" width="800">
 </p>
 
+### Right sidebar with clipboard history
+<p align="center">
+  <img src="screenshots/right-sidebar.png" alt="TerminalVibe - Right sidebar panel" width="800">
+</p>
+
+### Profiles
+<p align="center">
+  <img src="screenshots/profiles.png" alt="TerminalVibe - Profile picker" width="800">
+</p>
+
+### Settings
+Sections: Appearance, Terminal, Shortcuts, Theme Editor, Plugins, Advanced.
+
 <p align="center">
   <img src="screenshots/settings.png" alt="TerminalVibe - Settings" width="800">
 </p>
 
+### Rebindable keyboard shortcuts
 <p align="center">
-  <img src="screenshots/background.png" alt="TerminalVibe - Settings" width="800">
+  <img src="screenshots/shortcuts.png" alt="TerminalVibe - Keyboard shortcuts settings" width="800">
 </p>
+
+### Theme editor
+<p align="center">
+  <img src="screenshots/theme-editor.png" alt="TerminalVibe - Theme editor" width="800">
+</p>
+
+### Background images
+<p align="center">
+  <img src="screenshots/background.png" alt="TerminalVibe - Terminal background image" width="800">
+</p>
+
+## Default Keyboard Shortcuts
+
+All shortcuts are rebindable in Settings → Shortcuts.
+
+| Action | Shortcut |
+|--------|----------|
+| New terminal / close terminal | `Ctrl+Shift+T` / `Ctrl+Shift+W` |
+| Split horizontal / vertical | `Ctrl+Shift+D` / `Ctrl+Shift+E` |
+| New browser tab | `Ctrl+Shift+B` |
+| Search in terminal / search tabs | `Ctrl+Shift+F` / `Ctrl+Shift+O` |
+| Copy / paste | `Ctrl+Shift+C` / `Ctrl+Shift+V` |
+| Next / previous tab | `Ctrl+PageDown` / `Ctrl+PageUp` |
+| Next / previous workspace | `Ctrl+Shift+PageDown` / `Ctrl+Shift+PageUp` |
+| Jump to workspace N | `Alt+1` … `Alt+9` |
+| Focus adjacent pane | `Alt+H/J/K/L` |
+| Multi-select terminals | `Ctrl+Alt+Click` |
+| Maximize / restore tab | `Ctrl+Shift+M` |
+| Profiles | `Ctrl+Shift+P` |
+| Toggle sidebar | `Ctrl+Shift+S` |
+| Quit | `Ctrl+Shift+Q` |
+
 ## Tech Stack
 
 | Layer | Technology |
