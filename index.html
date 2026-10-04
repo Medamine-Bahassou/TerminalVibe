@@ -106,7 +106,23 @@
 
   </div>
   <div id="sash-right"></div>
-  <aside id="sidebar-right"></aside>
+  <aside id="sidebar-right">
+    <div id="sbr-main" class="sbr-page">
+      <div class="sbr-header">
+        <span class="sbr-title">Panel</span>
+      </div>
+      <div class="sbr-body">
+        <button class="sbr-big-btn" id="sbr-open-clipboard" title="Clipboard"><i class="ph ph-clipboard-text"></i><span>Clipboard</span></button>
+      </div>
+    </div>
+    <div id="sbr-clipboard" class="sbr-page" style="display:none">
+      <div class="sbr-header">
+        <button class="sbr-btn" id="sbr-clipboard-back" title="Back"><i class="ph ph-arrow-left"></i></button>
+        <span class="sbr-title">Clipboard</span>
+      </div>
+      <div id="sbr-clipboard-content" class="sbr-clipboard-content"></div>
+    </div>
+  </aside>
 </div>
 
 <!-- Context menu -->

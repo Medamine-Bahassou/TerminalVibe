@@ -2483,10 +2483,12 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
    ═══════════════════════════════════════════════════════════════ */
   let wsCount = 0;
 
-  function createWorkspace(label, folderId) {
+  function createWorkspace(label, folderId, details) {
     wsCount++;
     const id = uuid();
     const ws = { id, label: label || ('Workspace ' + (workspaces.length + 1)), layout: null, activeTermId: null, folderId: folderId || undefined };
+    if (details && details.color) ws.color = details.color;
+    if (details && details.icon) ws.icon = details.icon;
     workspaces.push(ws);
     if (!folderId) sideOrder.push({ type: 'ws', id });
     else rebuildWorkspaces();
@@ -2925,22 +2927,33 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   /* ═══════════════════════════════════════════════════════════════
    T E*RMINAL MANAGEMENT
    ═══════════════════════════════════════════════════════════════ */
-  // Attach WebGL renderer only to terminals that are on screen, dispose it from
-  // hidden ones. Bounds live WebGL contexts to the few visible terminals, so
-  // rapid/many tab creation can't exhaust Chromium's context pool and blank the
-  // newest canvases. WebGL is a pure rendering optimization — DOM fallback is
-  // xterm's default and works fine for hidden slots.
+  // Below Chromium's ~16 context cap; keeps WebGL available to the active and
+  // recently-active terminals without ever exhausting the pool (blank canvas).
+  const _WEBGL_MAX = 8;
+  // Attach WebGL on first show and KEEP it while hidden (dispose+recreate on
+  // every tab switch paid a full context/shaders rebuild each time and stalled
+  // switching). Contexts are only released when the live count hits _WEBGL_MAX,
+  // evicting the least-recently-used terminal. Closing a terminal releases its
+  // addon via xterm's dispose, so the count self-heals (we scan, not count).
   function _syncWebgl(entry, visible) {
     if (!entry || entry.type === 'browser' || !entry.term) return;
     const term = entry.term;
-    if (visible) {
-      if (term._webglAddon) return;
-      try { term._webglAddon = new WebglAddon.WebglAddon(); term.loadAddon(term._webglAddon); } catch (e) { term._webglAddon = null; }
-    } else {
-      if (!term._webglAddon) return;
-      try { term._webglAddon.dispose(); } catch (e) {}
-      term._webglAddon = null;
+    if (!visible) return; // keep alive: switching back is instant
+    if (term._webglAddon) { entry._webglLastUse = performance.now(); return; }
+    let live = 0, oldest = null, oldestT = Infinity;
+    for (const wsp of workspaces) {
+      for (const t of getWorkspaceTerminals(wsp)) {
+        if (!t.term || !t.term._webglAddon) continue;
+        live++;
+        const lt = t._webglLastUse || 0;
+        if (lt < oldestT) { oldestT = lt; oldest = t; }
+      }
     }
+    if (live >= _WEBGL_MAX && oldest && oldest.term._webglAddon) {
+      try { oldest.term._webglAddon.dispose(); } catch (e) {}
+      oldest.term._webglAddon = null;
+    }
+    try { term._webglAddon = new WebglAddon.WebglAddon(); term.loadAddon(term._webglAddon); entry._webglLastUse = performance.now(); } catch (e) { term._webglAddon = null; }
   }
 
   function _createTermEntry(wsp, id, label) {
@@ -2997,6 +3010,45 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     });
 
     const entry = { id, label, term, fit: fitAddon, search: searchAddon, el: null, opened: false, locked: false, _bgTransparent: false };
+
+    // The grid only fits whole character cells, so a sub-cell strip is left at the
+    // right/bottom edge showing the panel background. Tint the panel with the
+    // background colour of the bottom-right cell so the strip blends in with
+    // whatever the running program paints (works for any TUI, not one app).
+    const ANSI_KEYS = ['black','red','green','yellow','blue','magenta','cyan','white',
+      'brightBlack','brightRed','brightGreen','brightYellow','brightBlue','brightMagenta','brightCyan','brightWhite'];
+    const paletteToCss = n => {
+      if (n < 16) return term.options.theme?.[ANSI_KEYS[n]] || null;
+      if (n < 232) {
+        const i = n - 16, lv = v => (v ? 55 + v * 40 : 0);
+        return `rgb(${lv(Math.floor(i / 36))},${lv(Math.floor(i / 6) % 6)},${lv(i % 6)})`;
+      }
+      const g = 8 + (n - 232) * 10;
+      return `rgb(${g},${g},${g})`;
+    };
+    let edgeTimer = null;
+    const syncEdgeBg = () => {
+      edgeTimer = null;
+      const slot = entry.el;
+      if (!slot || !slot.style) return;
+      if (slot.closest('.has-global-bg, .has-ws-bg')) { slot.style.backgroundColor = ''; return; }
+      try {
+        const buf = term.buffer.active;
+        const line = buf.getLine(buf.baseY + term.rows - 1);
+        const cell = line && line.getCell(term.cols - 1);
+        let css = '';
+        if (cell) {
+          if (cell.isBgRGB()) {
+            const c = cell.getBgColor();
+            css = `rgb(${(c >> 16) & 255},${(c >> 8) & 255},${c & 255})`;
+          } else if (cell.isBgPalette()) {
+            css = paletteToCss(cell.getBgColor()) || '';
+          }
+        }
+        slot.style.backgroundColor = css;
+      } catch {}
+    };
+    term.onWriteParsed(() => { if (!edgeTimer) edgeTimer = setTimeout(syncEdgeBg, 150); });
     return entry;
   }
 
@@ -5494,7 +5546,13 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     addBtn.className = 'ws-add';
     addBtn.title = 'New workspace';
     addBtn.innerHTML = '<i class="ph ph-plus"></i>';
-    addBtn.addEventListener('click', () => createWorkspace());
+    addBtn.addEventListener('click', () => {
+      showPrompt('New workspace', 'Workspace ' + (workspaces.length + 1), { color: '', icon: '' }, (value, color, icon) => {
+        createWorkspace(value.trim() || undefined, undefined, { color, icon });
+        renderSidebar();
+        saveState();
+      });
+    });
     // Drop on ws-add = move to the front of the top-level flow
     addBtn.addEventListener('dragover', e => {
       if (!window.draggedWsId && !window.draggedFolderId) return;
@@ -7960,6 +8018,62 @@ function buildColorItem(key, label) {
       if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
       const btnSidebarRight = document.getElementById('btn-sidebar-right');
       if (btnSidebarRight) btnSidebarRight.addEventListener('click', () => document.body.classList.toggle('sb-right-hidden'));
+
+      // Right sidebar pages (main / clipboard)
+      const sbrOpen = document.getElementById('sbr-open-clipboard');
+      const sbrBack = document.getElementById('sbr-clipboard-back');
+      const sbrMain = document.getElementById('sbr-main');
+      const sbrClip = document.getElementById('sbr-clipboard');
+      const sbrClipContent = document.getElementById('sbr-clipboard-content');
+      if (sbrOpen && sbrBack && sbrMain && sbrClip) {
+        const CLIP_KEY = 'terminalvibe.clipboardHistory';
+        const CLIP_MAX = 200;
+        let clipHistory = [];
+        try { clipHistory = JSON.parse(localStorage.getItem(CLIP_KEY) || '[]'); } catch { clipHistory = []; }
+        if (!Array.isArray(clipHistory)) clipHistory = [];
+        const readClip = async () => (isDesktop() && window.electronAPI?.clipboardRead)
+          ? window.electronAPI.clipboardRead()
+          : navigator.clipboard.readText();
+        const renderClipHistory = () => {
+          sbrClipContent.textContent = '';
+          if (!clipHistory.length) { sbrClipContent.textContent = '(clipboard history is empty)'; return; }
+          clipHistory.forEach(text => {
+            const el = document.createElement('div');
+            el.className = 'sbr-clip-item';
+            el.textContent = text;
+            el.title = 'Click to paste';
+            el.addEventListener('click', () => {
+              if (isDesktop() && window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text);
+              else navigator.clipboard.writeText(text).catch(() => {});
+              const t = activeTerminal();
+              if (t && t.term && t.type !== 'browser') { t.term.paste(text); t.term.focus?.(); }
+            });
+            sbrClipContent.appendChild(el);
+          });
+        };
+        const captureClip = async () => {
+          try {
+            const text = await readClip();
+            if (!text || !text.trim() || clipHistory[0] === text) return;
+            clipHistory = [text, ...clipHistory.filter(t => t !== text)].slice(0, CLIP_MAX);
+            localStorage.setItem(CLIP_KEY, JSON.stringify(clipHistory));
+            if (sbrClip.style.display !== 'none') renderClipHistory();
+          } catch {}
+        };
+        captureClip();
+        setInterval(captureClip, 1000);
+        const showClipboardPage = async () => {
+          sbrMain.style.display = 'none';
+          sbrClip.style.display = 'flex';
+          await captureClip();
+          renderClipHistory();
+        };
+        sbrOpen.addEventListener('click', showClipboardPage);
+        sbrBack.addEventListener('click', () => {
+          sbrClip.style.display = 'none';
+          sbrMain.style.display = 'flex';
+        });
+      }
       document.getElementById('settings-close').addEventListener('click', closeSettings);
       settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
       document.addEventListener('keydown', e => {

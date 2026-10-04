@@ -762,6 +762,41 @@ body.sb-right-hidden #sash-right {
 display: none;
 }
 
+/* Right sidebar pages */
+.sbr-page { display: flex; flex-direction: column; height: 100%; }
+.sbr-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sbr-title { font-size: 12.5px; font-weight: 500; color: var(--fg); flex: 1; }
+.sbr-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border: none; border-radius: 5px;
+  background: transparent; color: var(--muted-text); cursor: pointer;
+  font-size: 14px; flex-shrink: 0;
+}
+.sbr-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
+.sbr-body { padding: 10px; }
+.sbr-big-btn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  width: 50%; padding: 12px 8px; border: 1px solid var(--border); border-radius: 8px;
+  background: color-mix(in srgb, var(--fg) 5%, transparent); color: var(--fg);
+  font-size: 10px; cursor: pointer;
+}
+.sbr-big-btn i { font-size: 22px; }
+.sbr-big-btn:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+.sbr-clipboard-content {
+  padding: 10px; font-size: 12px; color: var(--fg);
+  white-space: pre-wrap; word-break: break-word; overflow-y: auto;
+  user-select: text;
+}
+.sbr-clip-item {
+  padding: 6px 8px; margin-bottom: 6px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); max-height: 120px; overflow: hidden;
+}
+.sbr-clip-item:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+
 /* Sidebar action buttons (search, theme) */
 .sidebar-actions {
   display: flex;
