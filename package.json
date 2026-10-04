@@ -13,6 +13,7 @@
     "test": "node scripts/test-cli.js",
     "build": "node scripts/build-dist.js && electron-builder --linux dir",
     "build:appimage": "node scripts/build-dist.js && electron-builder --linux AppImage",
+    "build:win": "node scripts/build-dist.js && electron-builder --win",
     "dist": "node scripts/build-dist.js && electron-builder --linux dir",
     "electron:install": "node node_modules/electron/install.js"
   },
@@ -40,6 +41,10 @@
     "appId": "com.terminalvibe.app",
     "productName": "TerminalVibe",
     "asar": true,
+    "npmRebuild": true,
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
     "files": [
       "electron/**/*",
       "dist/**/*",
@@ -61,6 +66,13 @@
         "dir"
       ],
       "category": "Utility",
+      "icon": "electron/icon.png"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "electron/icon.png"
     },
     "directories": {
