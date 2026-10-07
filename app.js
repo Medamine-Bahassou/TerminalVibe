@@ -1,4 +1,4 @@
-(function() {
+(function () {
   'use strict';
 
   // The settings UI can live in a separate Electron window (index.html?mode=settings)
@@ -31,28 +31,28 @@
    K E*YBOARD SHORTCUTS
    ═══════════════════════════════════════════════════════════════ */
   const DEFAULT_SHORTCUTS = {
-    newTerminal:    { ctrl: true, shift: true, key: 'T', label: 'Ctrl+Shift+T' },
-    closeTerminal:  { ctrl: true, shift: true, key: 'W', label: 'Ctrl+Shift+W' },
-    splitH:         { ctrl: true, shift: true, key: 'D', label: 'Ctrl+Shift+D' },
-    splitV:         { ctrl: true, shift: true, key: 'E', label: 'Ctrl+Shift+E' },
-    search:         { ctrl: true, shift: true, key: 'F', label: 'Ctrl+Shift+F' },
-    tabSearch:      { ctrl: true, shift: true, key: 'O', label: 'Ctrl+Shift+O' },
-    browserTab:     { ctrl: true, shift: true, key: 'B', label: 'Ctrl+Shift+B' },
-    copy:           { ctrl: true, shift: true, key: 'C', label: 'Ctrl+Shift+C' },
-    paste:          { ctrl: true, shift: true, key: 'V', label: 'Ctrl+Shift+V' },
-    nextTab:        { ctrl: true, shift: false, key: 'PageDown', label: 'Ctrl+PageDown' },
-    prevTab:        { ctrl: true, shift: false, key: 'PageUp', label: 'Ctrl+PageUp' },
-    focusLeft:      { alt: true, key: 'h', label: 'Alt+H' },
-    focusDown:      { alt: true, key: 'j', label: 'Alt+J' },
-    focusUp:        { alt: true, key: 'k', label: 'Alt+K' },
-    focusRight:     { alt: true, key: 'l', label: 'Alt+L' },
-    nextWorkspace:  { ctrl: true, shift: true, key: 'PageDown', label: 'Ctrl+Shift+PageDown' },
-    prevWorkspace:  { ctrl: true, shift: true, key: 'PageUp', label: 'Ctrl+Shift+PageUp' },
-    multiSelect:    { ctrl: true, alt: true, key: 'Click', label: 'Ctrl+Alt+Click' },
-    maximizeTab:    { ctrl: true, shift: true, key: 'M', label: 'Ctrl+Shift+M' },
-    profiles:       { ctrl: true, shift: true, key: 'P', label: 'Ctrl+Shift+P' },
-    toggleSidebar:  { ctrl: true, shift: true, key: 'S', label: 'Ctrl+Shift+S' },
-    quitApp:        { ctrl: true, shift: true, key: 'Q', label: 'Ctrl+Shift+Q' },
+    newTerminal: { ctrl: true, shift: true, key: 'T', label: 'Ctrl+Shift+T' },
+    closeTerminal: { ctrl: true, shift: true, key: 'W', label: 'Ctrl+Shift+W' },
+    splitH: { ctrl: true, shift: true, key: 'D', label: 'Ctrl+Shift+D' },
+    splitV: { ctrl: true, shift: true, key: 'E', label: 'Ctrl+Shift+E' },
+    search: { ctrl: true, shift: true, key: 'F', label: 'Ctrl+Shift+F' },
+    tabSearch: { ctrl: true, shift: true, key: 'O', label: 'Ctrl+Shift+O' },
+    browserTab: { ctrl: true, shift: true, key: 'B', label: 'Ctrl+Shift+B' },
+    copy: { ctrl: true, shift: true, key: 'C', label: 'Ctrl+Shift+C' },
+    paste: { ctrl: true, shift: true, key: 'V', label: 'Ctrl+Shift+V' },
+    nextTab: { ctrl: true, shift: false, key: 'PageDown', label: 'Ctrl+PageDown' },
+    prevTab: { ctrl: true, shift: false, key: 'PageUp', label: 'Ctrl+PageUp' },
+    focusLeft: { alt: true, key: 'h', label: 'Alt+H' },
+    focusDown: { alt: true, key: 'j', label: 'Alt+J' },
+    focusUp: { alt: true, key: 'k', label: 'Alt+K' },
+    focusRight: { alt: true, key: 'l', label: 'Alt+L' },
+    nextWorkspace: { ctrl: true, shift: true, key: 'PageDown', label: 'Ctrl+Shift+PageDown' },
+    prevWorkspace: { ctrl: true, shift: true, key: 'PageUp', label: 'Ctrl+Shift+PageUp' },
+    multiSelect: { ctrl: true, alt: true, key: 'Click', label: 'Ctrl+Alt+Click' },
+    maximizeTab: { ctrl: true, shift: true, key: 'M', label: 'Ctrl+Shift+M' },
+    profiles: { ctrl: true, shift: true, key: 'P', label: 'Ctrl+Shift+P' },
+    toggleSidebar: { ctrl: true, shift: true, key: 'S', label: 'Ctrl+Shift+S' },
+    quitApp: { ctrl: true, shift: true, key: 'Q', label: 'Ctrl+Shift+Q' },
   };
 
   const SHORTCUT_LABELS = {
@@ -81,23 +81,23 @@
     const s = customShortcuts[action];
     if (!s || !s.key) return false;
     const keyMatch = s.key.length === 1
-    ? e.key.toLowerCase() === s.key.toLowerCase()
-    : e.key === s.key || e.code === s.key;
+      ? e.key.toLowerCase() === s.key.toLowerCase()
+      : e.key === s.key || e.code === s.key;
     return keyMatch
-    && !!e.ctrlKey === !!s.ctrl
-    && !!e.shiftKey === !!s.shift
-    && !!e.altKey === !!s.alt
-    && !!e.metaKey === !!s.meta;
+      && !!e.ctrlKey === !!s.ctrl
+      && !!e.shiftKey === !!s.shift
+      && !!e.altKey === !!s.alt
+      && !!e.metaKey === !!s.meta;
   }
 
   function matchShortcutMouse(e, action) {
     const s = customShortcuts[action];
     if (!s || !s.key) return false;
     return s.key === 'Click' && e.button === 0
-    && !!e.ctrlKey === !!s.ctrl
-    && !!e.shiftKey === !!s.shift
-    && !!e.altKey === !!s.alt
-    && !!e.metaKey === !!s.meta;
+      && !!e.ctrlKey === !!s.ctrl
+      && !!e.shiftKey === !!s.shift
+      && !!e.altKey === !!s.alt
+      && !!e.metaKey === !!s.meta;
   }
 
   function formatKeyCombo(s) {
@@ -125,23 +125,23 @@
     'catppuccin-mocha': {
       label: 'Catppuccin Mocha',
       bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#585b70',
-      swatches: ['#1e1e2e','#cdd6f4','#f5e0dc'],
+      swatches: ['#1e1e2e', '#cdd6f4', '#f5e0dc'],
       palette: [
-        '#1e1e2e','#f38ba8','#a6e3a1','#f9e2af',
-        '#89b4fa','#f5c2e7','#94e2d5','#cdd6f4',
-        '#585b70','#eba0ac','#a6e3a1','#f9e2af',
-        '#89b4fa','#f5c2e7','#94e2d5','#bac2de',
+        '#1e1e2e', '#f38ba8', '#a6e3a1', '#f9e2af',
+        '#89b4fa', '#f5c2e7', '#94e2d5', '#cdd6f4',
+        '#585b70', '#eba0ac', '#a6e3a1', '#f9e2af',
+        '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de',
       ],
     },
     'catppuccin-latte': {
       label: 'Catppuccin Latte',
       bg: '#2a2a2a', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#45475a',
-      swatches: ['#2a2a2a','#cdd6f4','#f5e0dc'],
+      swatches: ['#2a2a2a', '#cdd6f4', '#f5e0dc'],
       palette: [
-        '#2a2a2a','#f38ba8','#a6e3a1','#f9e2af',
-        '#89b4fa','#f5c2e7','#94e2d5','#bac2de',
-        '#585b70','#f38ba8','#a6e3a1','#f9e2af',
-        '#89b4fa','#f5c2e7','#94e2d5','#a6adc8',
+        '#2a2a2a', '#f38ba8', '#a6e3a1', '#f9e2af',
+        '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de',
+        '#585b70', '#f38ba8', '#a6e3a1', '#f9e2af',
+        '#89b4fa', '#f5c2e7', '#94e2d5', '#a6adc8',
       ],
       ui: {
         accent: '#89b4fa',
@@ -155,67 +155,67 @@
     'dracula': {
       label: 'Dracula',
       bg: '#282a36', fg: '#f8f8f2', cursor: '#f8f8f2', selection: '#44475a',
-      swatches: ['#282a36','#f8f8f2','#bd93f9'],
+      swatches: ['#282a36', '#f8f8f2', '#bd93f9'],
       palette: [
-        '#21222c','#ff5555','#50fa7b','#f1fa8c',
-        '#bd93f9','#ff79c6','#8be9fd','#f8f8f2',
-        '#6272a4','#ff6e6e','#69ff94','#ffffa5',
-        '#d6acff','#ff92df','#a4ffff','#ffffff',
+        '#21222c', '#ff5555', '#50fa7b', '#f1fa8c',
+        '#bd93f9', '#ff79c6', '#8be9fd', '#f8f8f2',
+        '#6272a4', '#ff6e6e', '#69ff94', '#ffffa5',
+        '#d6acff', '#ff92df', '#a4ffff', '#ffffff',
       ],
     },
     'gruvbox': {
       label: 'Gruvbox',
       bg: '#282828', fg: '#ebdbb2', cursor: '#ebdbb2', selection: '#504945',
-      swatches: ['#282828','#ebdbb2','#d79921'],
+      swatches: ['#282828', '#ebdbb2', '#d79921'],
       palette: [
-        '#282828','#cc241d','#98971a','#d79921',
-        '#458588','#b16286','#689d6a','#a89984',
-        '#928374','#fb4934','#b8bb26','#fabd2f',
-        '#83a598','#d3869b','#8ec07c','#ebdbb2',
+        '#282828', '#cc241d', '#98971a', '#d79921',
+        '#458588', '#b16286', '#689d6a', '#a89984',
+        '#928374', '#fb4934', '#b8bb26', '#fabd2f',
+        '#83a598', '#d3869b', '#8ec07c', '#ebdbb2',
       ],
     },
     'tokyo-night': {
       label: 'Tokyo Night',
       bg: '#1a1b26', fg: '#c0caf5', cursor: '#c0caf5', selection: '#33467c',
-      swatches: ['#1a1b26','#c0caf5','#7aa2f7'],
+      swatches: ['#1a1b26', '#c0caf5', '#7aa2f7'],
       palette: [
-        '#15161e','#f7768e','#9ece6a','#e0af68',
-        '#7aa2f7','#bb9af7','#7dcfff','#a9b1d6',
-        '#414868','#f7768e','#9ece6a','#e0af68',
-        '#7aa2f7','#bb9af7','#7dcfff','#c0caf5',
+        '#15161e', '#f7768e', '#9ece6a', '#e0af68',
+        '#7aa2f7', '#bb9af7', '#7dcfff', '#a9b1d6',
+        '#414868', '#f7768e', '#9ece6a', '#e0af68',
+        '#7aa2f7', '#bb9af7', '#7dcfff', '#c0caf5',
       ],
     },
     'nord': {
       label: 'Nord',
       bg: '#2e3440', fg: '#d8dee9', cursor: '#d8dee9', selection: '#434c5e',
-      swatches: ['#2e3440','#d8dee9','#81a1c1'],
+      swatches: ['#2e3440', '#d8dee9', '#81a1c1'],
       palette: [
-        '#3b4252','#bf616a','#a3be8c','#ebcb8b',
-        '#81a1c1','#b48ead','#88c0d0','#e5e9f0',
-        '#4c566a','#bf616a','#a3be8c','#ebcb8b',
-        '#81a1c1','#b48ead','#8fbcbb','#eceff4',
+        '#3b4252', '#bf616a', '#a3be8c', '#ebcb8b',
+        '#81a1c1', '#b48ead', '#88c0d0', '#e5e9f0',
+        '#4c566a', '#bf616a', '#a3be8c', '#ebcb8b',
+        '#81a1c1', '#b48ead', '#8fbcbb', '#eceff4',
       ],
     },
     'solarized-dark': {
       label: 'Solarized Dark',
       bg: '#002b36', fg: '#839496', cursor: '#839496', selection: '#073642',
-      swatches: ['#002b36','#839496','#268bd2'],
+      swatches: ['#002b36', '#839496', '#268bd2'],
       palette: [
-        '#073642','#dc322f','#859900','#b58900',
-        '#268bd2','#d33682','#2aa198','#eee8d5',
-        '#586e75','#cb4b16','#586e75','#657b83',
-        '#839496','#6c71c4','#93a1a1','#fdf6e3',
+        '#073642', '#dc322f', '#859900', '#b58900',
+        '#268bd2', '#d33682', '#2aa198', '#eee8d5',
+        '#586e75', '#cb4b16', '#586e75', '#657b83',
+        '#839496', '#6c71c4', '#93a1a1', '#fdf6e3',
       ],
     },
     'monochrome': {
       label: 'Monochrome',
       bg: '#000000', fg: '#ffffff', cursor: '#ffffff', selection: '#333333',
-      swatches: ['#000000','#ffffff','#888888'],
+      swatches: ['#000000', '#ffffff', '#888888'],
       palette: [
-        '#000000','#808080','#a0a0a0','#c0c0c0',
-        '#d0d0d0','#e0e0e0','#f0f0f0','#ffffff',
-        '#404040','#606060','#909090','#b0b0b0',
-        '#c8c8c8','#d8d8d8','#e8e8e8','#f8f8f8',
+        '#000000', '#808080', '#a0a0a0', '#c0c0c0',
+        '#d0d0d0', '#e0e0e0', '#f0f0f0', '#ffffff',
+        '#404040', '#606060', '#909090', '#b0b0b0',
+        '#c8c8c8', '#d8d8d8', '#e8e8e8', '#f8f8f8',
       ],
     },
   };
@@ -244,7 +244,7 @@
           if (!BUILTIN_THEME_KEYS.has(name)) THEMES[name] = theme;
         }
       }
-    } catch {}
+    } catch { }
   }
 
   async function saveCustomThemes(customs) {
@@ -254,7 +254,7 @@
         await api.configWriteCustomThemes(customs);
       }
       localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(customs));
-    } catch {}
+    } catch { }
     for (const [name, theme] of Object.entries(customs)) {
       if (!BUILTIN_THEME_KEYS.has(name)) THEMES[name] = theme;
     }
@@ -307,9 +307,9 @@
         return window.electronAPI.clipboardPasteImage().then(path => {
           if (path) pasteText(path.includes(' ') ? `'${path}'` : path);
         });
-      }).catch(() => {});
+      }).catch(() => { });
     } else {
-      navigator.clipboard.readText().then(pasteText).catch(() => {});
+      navigator.clipboard.readText().then(pasteText).catch(() => { });
     }
   }
 
@@ -332,24 +332,24 @@
    `api` object (commands, events, menus, themes, settings sections, UI
    widgets). Enable/disable state persists in state.json (pluginStates).
    ═══════════════════════════════════════════════════════════════ */
-const _pluginRegistry = new Map();   // id -> { activate, deactivate }
-   const _pluginStates = new Map();     // id -> true/false (from state.json)
-   const _pluginManifests = new Map();  // id -> manifest (for config resolution)
-   const _pluginConfigs = new Map();    // id -> { key: value } persisted config
-   const _pluginConfigCbs = new Map();  // id -> Set<cb> config onChange handlers
-   const _pluginConfigLast = new Map(); // id -> JSON snapshot of last delivered config
-   const _pluginCommands = new Map();   // id -> { pluginId, label, combo, handler }
-   const _pluginMenuItems = { terminal: [], workspace: [], folder: [] };
-   const _pluginThemes = new Map();     // themeName -> { pluginId, theme }
-   const _pluginWidgets = [];           // { pluginId, id, position, el }
-   const _pluginBus = new Map();        // event -> Set<{ pluginId, cb }>
-   let _pluginsView = { mode: 'list' }; // { mode: 'list' } | { mode: 'detail', id }
+  const _pluginRegistry = new Map();   // id -> { activate, deactivate }
+  const _pluginStates = new Map();     // id -> true/false (from state.json)
+  const _pluginManifests = new Map();  // id -> manifest (for config resolution)
+  const _pluginConfigs = new Map();    // id -> { key: value } persisted config
+  const _pluginConfigCbs = new Map();  // id -> Set<cb> config onChange handlers
+  const _pluginConfigLast = new Map(); // id -> JSON snapshot of last delivered config
+  const _pluginCommands = new Map();   // id -> { pluginId, label, combo, handler }
+  const _pluginMenuItems = { terminal: [], workspace: [], folder: [] };
+  const _pluginThemes = new Map();     // themeName -> { pluginId, theme }
+  const _pluginWidgets = [];           // { pluginId, id, position, el }
+  const _pluginBus = new Map();        // event -> Set<{ pluginId, cb }>
+  let _pluginsView = { mode: 'list' }; // { mode: 'list' } | { mode: 'detail', id }
 
-   function pluginEmit(event, data) {
-     const set = _pluginBus.get(event);
-     if (!set) return;
-     for (const h of [...set]) { try { h.cb(data); } catch (e) { console.error('[plugin] handler for', event, 'failed:', e); } }
-   }
+  function pluginEmit(event, data) {
+    const set = _pluginBus.get(event);
+    if (!set) return;
+    for (const h of [...set]) { try { h.cb(data); } catch (e) { console.error('[plugin] handler for', event, 'failed:', e); } }
+  }
 
   function _pluginComboMatches(combo, e) {
     if (!combo || !combo.key) return false;
@@ -427,7 +427,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           if (i !== -1) { const [w] = _pluginWidgets.splice(i, 1); w.el.remove(); renderPluginWidgets(); }
         },
       },
-      
+
       // Plugin-declared settings (manifest.settings). Values are persisted in
       // state.json (pluginConfigs) and edited from Settings → Plugins.
       config: {
@@ -833,7 +833,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       }
     }
     const removedWidgets = _pluginWidgets.filter(w => w.pluginId === id);
-    for (const w of removedWidgets) { try { w.el.remove(); } catch {} }
+    for (const w of removedWidgets) { try { w.el.remove(); } catch { } }
     _pluginWidgets.splice(0, _pluginWidgets.length, ..._pluginWidgets.filter(w => w.pluginId !== id));
     renderPluginWidgets();
     for (const [ev, set] of _pluginBus) {
@@ -929,6 +929,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   let currentCursorStyle = 'block';
   let currentCursorBlink = true;
   let currentScrollback = 10000;
+  let defaultTerminalPath = '';      // default working directory for new terminals
   let backgroundMode = 'none';       // 'none' | 'per-tab' | 'per-workspace' | 'global'
   let globalBackgroundImage = '';    // data URL for global bg
   let backgroundOpacity = 0.85;       // 0..1
@@ -936,16 +937,16 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   let searchEngine = 'google';        // 'google' | 'duckduckgo' | 'brave' | 'bing' | 'yahoo' | 'startpage' | 'custom'
   let customSearchUrl = '';           // custom search URL with %s placeholder
   const SEARCH_ENGINES = {
-    google:     'https://www.google.com/search?igu=1&q=%s',
+    google: 'https://www.google.com/search?igu=1&q=%s',
     duckduckgo: 'https://duckduckgo.com/?q=%s',
-    brave:      'https://search.brave.com/search?q=%s',
-    startpage:  'https://www.startpage.com/do/search?q=%s',
+    brave: 'https://search.brave.com/search?q=%s',
+    startpage: 'https://www.startpage.com/do/search?q=%s',
   };
   const SEARCH_ENGINE_ICONS = {
-    google:     'M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z',
+    google: 'M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z',
     duckduckgo: 'M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm0 .984C18.083.984 23.016 5.916 23.016 12S18.084 23.016 12 23.016.984 18.084.984 12C.984 5.917 5.916.984 12 .984zm0 .938C6.434 1.922 1.922 6.434 1.922 12c0 4.437 2.867 8.205 6.85 9.55-.237-.82-.776-2.753-1.6-6.052-1.184-4.741-2.064-8.606 2.379-9.813.047-.011.064-.064.03-.093-.514-.467-1.382-.548-2.233-.38a.06.06 0 0 1-.07-.058c0-.011 0-.023.011-.035.205-.286.572-.507.822-.64a1.843 1.843 0 0 0-.607-.335c-.059-.022-.059-.12-.006-.144.006-.006.012-.012.024-.012 1.749-.233 3.586.292 4.49 1.448.011.011.023.017.035.023 2.968.635 3.509 4.837 3.328 5.998a9.607 9.607 0 0 0 2.346-.576c.746-.286 1.008-.222 1.101-.053.1.193-.018.513-.28.81-.496.567-1.393 1.01-2.974 1.137-.546.044-1.029.024-1.445.006-.789-.035-1.339-.059-1.633.39-.192.298-.041.998 1.487 1.22 1.09.157 2.078.047 2.798-.034.643-.07 1.073-.118 1.172.069.21.402-.996 1.207-3.066 1.224-.158 0-.315-.006-.467-.011-1.283-.065-2.227-.414-2.816-.735a.094.094 0 0 1-.035-.017c-.105-.059-.31.045-.188.267.07.134.444.478 1.004.776-.058.466.087 1.184.338 2l.088-.016c.041-.009.087-.019.134-.025.507-.082.775.012.926.175.717-.536 1.913-1.294 2.03-1.154.583.694.66 2.332.53 2.99-.004.012-.017.024-.04.035-.274.117-1.783-.296-1.783-.511-.059-1.075-.26-1.173-.493-1.225h-.156c.006.006.012.018.018.03l.052.12c.093.257.24 1.063.13 1.26-.112.199-.835.297-1.284.303-.443.006-.543-.158-.637-.408-.07-.204-.103-.675-.103-.95a.857.857 0 0 1 .012-.216c-.134.058-.333.193-.397.281-.017.262-.017.682.123 1.149.07.221-1.518 1.164-1.74.99-.227-.181-.634-1.952-.459-2.67-.187.017-.338.075-.42.191-.367.508.093 2.933.582 3.248.257.169 1.54-.553 2.176-1.095.105.145.305.158.553.158.326-.012.782-.06 1.103-.158.192.45.423.972.613 1.388 4.47-1.032 7.803-5.037 7.803-9.82 0-5.566-4.512-10.078-10.078-10.078zm1.791 5.646c-.42 0-.678.146-.795.332-.023.047.047.094.094.07.14-.075.357-.161.701-.156.328.006.516.09.67.159l.023.01c.041.017.088-.03.059-.065-.134-.18-.332-.35-.752-.35zm-5.078.198a1.24 1.24 0 0 0-.522.082c-.454.169-.67.526-.67.76 0 .051.112.057.141.011.081-.123.21-.31.617-.478.408-.17.73-.146.951-.094.047.012.083-.041.041-.07a.989.989 0 0 0-.558-.211zm5.434 1.423a.651.651 0 0 0-.655.647.652.652 0 0 0 1.307 0 .646.646 0 0 0-.652-.647zm.283.262h.008a.17.17 0 0 1 .17.17c0 .093-.077.17-.17.17a.17.17 0 0 1-.17-.17c0-.09.072-.165.162-.17zm-5.358.076a.752.752 0 0 0-.758.758c0 .42.338.758.758.758s.758-.337.758-.758a.756.756 0 0 0-.758-.758zm.328.303h.01c.112 0 .2.089.2.2 0 .11-.088.197-.2.197a.195.195 0 0 1-.197-.198c0-.107.082-.194.187-.199z',
-    brave:      'M15.68 0l2.096 2.38s1.84-.512 2.709.358c.868.87 1.584 1.638 1.584 1.638l-.562 1.381.715 2.047s-2.104 7.98-2.35 8.955c-.486 1.919-.818 2.66-2.198 3.633-1.38.972-3.884 2.66-4.293 2.916-.409.256-.92.692-1.38.692-.46 0-.97-.436-1.38-.692a185.796 185.796 0 01-4.293-2.916c-1.38-.973-1.712-1.714-2.197-3.633-.247-.975-2.351-8.955-2.351-8.955l.715-2.047-.562-1.381s.716-.768 1.585-1.638c.868-.87 2.708-.358 2.708-.358L8.321 0h7.36zm-3.679 14.936c-.14 0-1.038.317-1.758.69-.72.373-1.242.637-1.409.742-.167.104-.065.301.087.409.152.107 2.194 1.69 2.393 1.866.198.175.489.464.687.464.198 0 .49-.29.688-.464.198-.175 2.24-1.759 2.392-1.866.152-.108.254-.305.087-.41-.167-.104-.689-.368-1.41-.741-.72-.373-1.617-.69-1.757-.69zm0-11.278s-.409.001-1.022.206-1.278.46-1.584.46c-.307 0-2.581-.434-2.581-.434S4.119 7.152 4.119 7.849c0 .697.339.881.68 1.243l2.02 2.149c.192.203.59.511.356 1.066-.235.555-.58 1.26-.196 1.977.384.716 1.042 1.194 1.464 1.115.421-.08 1.412-.598 1.776-.834.364-.237 1.518-1.19 1.518-1.554 0-.365-1.193-1.02-1.413-1.168-.22-.15-1.226-.725-1.247-.95-.02-.227-.012-.293.284-.851.297-.559.831-1.304.742-1.8-.089-.495-.95-.753-1.565-.986-.615-.232-1.799-.671-1.947-.74-.148-.068-.11-.133.339-.175.448-.043 1.719-.212 2.292-.052.573.16 1.552.403 1.632.532.079.13.149.134.067.579-.081.445-.5 2.581-.541 2.96-.04.38-.12.63.288.724.409.094 1.097.256 1.333.256s.924-.162 1.333-.256c.408-.093.329-.344.288-.723-.04-.38-.46-2.516-.541-2.961-.082-.445-.012-.45.067-.579.08-.129 1.059-.372 1.632-.532.573-.16 1.845.009 2.292.052.449.042.487.107.339.175-.148.069-1.332.508-1.947.74-.615.233-1.476.49-1.565.986-.09.496.445 1.241.742 1.8.297.558.304.624.284.85-.02.226-1.026.802-1.247.95-.22.15-1.413.804-1.413 1.169 0 .364 1.154 1.317 1.518 1.554.364.236 1.355.755 1.776.834.422.079 1.08-.4 1.464-1.115.384-.716.039-1.422-.195-1.977-.235-.555.163-.863.355-1.066l2.02-2.149c.341-.362.68-.546.68-1.243 0-.697-2.695-3.96-2.695-3.96s-2.274.436-2.58.436c-.307 0-.972-.256-1.585-.461-.613-.205-1.022-.206-1.022-.206z',
-    startpage:  'm16.885 14.254.04-.06a8.723 8.723 0 0 0 1.851-4.309c-1.334 0-2.648 0-3.982.04a4.901 4.901 0 0 1-4.758 3.696 4.948 4.948 0 0 1-4.56-3.044 89.632 89.632 0 0 0-3.941.514c1.035 3.697 4.46 6.405 8.501 6.405a8.76 8.76 0 0 0 3.743-.83l.06-.02.04.04 5.455 6.603c.378.454.916.711 1.513.711.458 0 .896-.158 1.234-.435.399-.336.657-.79.697-1.304.04-.514-.1-1.009-.438-1.424zM5.118 8.56c.1-2.59 2.27-4.685 4.918-4.685a4.911 4.911 0 0 1 4.898 4.389c1.314.02 2.608.04 3.922.099C18.616 3.717 14.754 0 10.036 0c-4.858 0-8.82 3.934-8.82 8.758v.178a86.7 86.7 0 0 1 3.902-.376z',
+    brave: 'M15.68 0l2.096 2.38s1.84-.512 2.709.358c.868.87 1.584 1.638 1.584 1.638l-.562 1.381.715 2.047s-2.104 7.98-2.35 8.955c-.486 1.919-.818 2.66-2.198 3.633-1.38.972-3.884 2.66-4.293 2.916-.409.256-.92.692-1.38.692-.46 0-.97-.436-1.38-.692a185.796 185.796 0 01-4.293-2.916c-1.38-.973-1.712-1.714-2.197-3.633-.247-.975-2.351-8.955-2.351-8.955l.715-2.047-.562-1.381s.716-.768 1.585-1.638c.868-.87 2.708-.358 2.708-.358L8.321 0h7.36zm-3.679 14.936c-.14 0-1.038.317-1.758.69-.72.373-1.242.637-1.409.742-.167.104-.065.301.087.409.152.107 2.194 1.69 2.393 1.866.198.175.489.464.687.464.198 0 .49-.29.688-.464.198-.175 2.24-1.759 2.392-1.866.152-.108.254-.305.087-.41-.167-.104-.689-.368-1.41-.741-.72-.373-1.617-.69-1.757-.69zm0-11.278s-.409.001-1.022.206-1.278.46-1.584.46c-.307 0-2.581-.434-2.581-.434S4.119 7.152 4.119 7.849c0 .697.339.881.68 1.243l2.02 2.149c.192.203.59.511.356 1.066-.235.555-.58 1.26-.196 1.977.384.716 1.042 1.194 1.464 1.115.421-.08 1.412-.598 1.776-.834.364-.237 1.518-1.19 1.518-1.554 0-.365-1.193-1.02-1.413-1.168-.22-.15-1.226-.725-1.247-.95-.02-.227-.012-.293.284-.851.297-.559.831-1.304.742-1.8-.089-.495-.95-.753-1.565-.986-.615-.232-1.799-.671-1.947-.74-.148-.068-.11-.133.339-.175.448-.043 1.719-.212 2.292-.052.573.16 1.552.403 1.632.532.079.13.149.134.067.579-.081.445-.5 2.581-.541 2.96-.04.38-.12.63.288.724.409.094 1.097.256 1.333.256s.924-.162 1.333-.256c.408-.093.329-.344.288-.723-.04-.38-.46-2.516-.541-2.961-.082-.445-.012-.45.067-.579.08-.129 1.059-.372 1.632-.532.573-.16 1.845.009 2.292.052.449.042.487.107.339.175-.148.069-1.332.508-1.947.74-.615.233-1.476.49-1.565.986-.09.496.445 1.241.742 1.8.297.558.304.624.284.85-.02.226-1.026.802-1.247.95-.22.15-1.413.804-1.413 1.169 0 .364 1.154 1.317 1.518 1.554.364.236 1.355.755 1.776.834.422.079 1.08-.4 1.464-1.115.384-.716.039-1.422-.195-1.977-.235-.555.163-.863.355-1.066l2.02-2.149c.341-.362.68-.546.68-1.243 0-.697-2.695-3.96-2.695-3.96s-2.274.436-2.58.436c-.307 0-.972-.256-1.585-.461-.613-.205-1.022-.206-1.022-.206z',
+    startpage: 'm16.885 14.254.04-.06a8.723 8.723 0 0 0 1.851-4.309c-1.334 0-2.648 0-3.982.04a4.901 4.901 0 0 1-4.758 3.696 4.948 4.948 0 0 1-4.56-3.044 89.632 89.632 0 0 0-3.941.514c1.035 3.697 4.46 6.405 8.501 6.405a8.76 8.76 0 0 0 3.743-.83l.06-.02.04.04 5.455 6.603c.378.454.916.711 1.513.711.458 0 .896-.158 1.234-.435.399-.336.657-.79.697-1.304.04-.514-.1-1.009-.438-1.424zM5.118 8.56c.1-2.59 2.27-4.685 4.918-4.685a4.911 4.911 0 0 1 4.898 4.389c1.314.02 2.608.04 3.922.099C18.616 3.717 14.754 0 10.036 0c-4.858 0-8.82 3.934-8.82 8.758v.178a86.7 86.7 0 0 1 3.902-.376z',
   };
 
   let workspaces = [];       // [{id, label, activeTermId, layout: (Node), folderId?}]
@@ -1200,8 +1201,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
             if (msg.port) { WS_PORT = msg.port; }
           } else if (msg.type === 'exit') handleExit(msg.id, msg.code);
           else if (msg.type === 'error') handleError(msg.id, msg.msg);
-          else if (msg.type === 'pong') {}
-        } catch {}
+          else if (msg.type === 'pong') { }
+        } catch { }
       }
     };
 
@@ -1229,7 +1230,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           else pathPart = '/' + pathPart;
         }
         return decodeURIComponent(pathPart);
-      } catch {}
+      } catch { }
     }
     return null;
   }
@@ -1247,7 +1248,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           else pathPart = '/' + pathPart;
         }
         return decodeURIComponent(pathPart);
-      } catch {}
+      } catch { }
     }
     return null;
   }
@@ -1357,6 +1358,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       // how many tabs remain so main can decide whether to close a window.
       if (api.onTabDragComplete) {
         api.onTabDragComplete(({ id }) => {
+          window._tabMovedAway = window._tabMovedAway || new Set();
+          window._tabMovedAway.add(id);
           let ready = { id, remaining: 0 };
           try {
             for (const wsp of workspaces) {
@@ -1372,7 +1375,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
               ready.remaining = getWorkspaceTerminals(wsp).length;
               break;
             }
-          } catch {}
+          } catch { }
           if (api.tabDragReady) api.tabDragReady(ready);
         });
       }
@@ -1381,7 +1384,22 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       // id is how the main window recognizes the cross-window drop.
       if (api.onTabDragActive) {
         api.onTabDragActive(({ id }) => {
-          window.externalDragTermId = id || null;
+          if (id) {
+            window.externalDragTermId = id;
+            window.lastExternalDragTermId = id;
+            startResizing();
+            if (window._clearExternalDragTimer) {
+              clearTimeout(window._clearExternalDragTimer);
+              window._clearExternalDragTimer = null;
+            }
+          } else {
+            window.externalDragTermId = null;
+            stopResizing();
+            if (window._clearExternalDragTimer) clearTimeout(window._clearExternalDragTimer);
+            window._clearExternalDragTimer = setTimeout(() => {
+              window.lastExternalDragTermId = null;
+            }, 1500);
+          }
         });
       }
 
@@ -1615,20 +1633,20 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     return {
       background: transparentBg ? '#00000000' : theme.bg,
       foreground: theme.fg,
-        cursor: theme.cursor,
-        cursorAccent: theme.bg,
-        selectionBackground: theme.selection,
-        black:        p[0],  red:         p[1],  green:   p[2],  yellow:  p[3],
-        blue:         p[4],  magenta:     p[5],  cyan:    p[6],  white:   p[7],
-        brightBlack:  p[8],  brightRed:   p[9],  brightGreen: p[10], brightYellow: p[11],
-        brightBlue:   p[12], brightMagenta: p[13], brightCyan: p[14], brightWhite: p[15],
+      cursor: theme.cursor,
+      cursorAccent: theme.bg,
+      selectionBackground: theme.selection,
+      black: p[0], red: p[1], green: p[2], yellow: p[3],
+      blue: p[4], magenta: p[5], cyan: p[6], white: p[7],
+      brightBlack: p[8], brightRed: p[9], brightGreen: p[10], brightYellow: p[11],
+      brightBlue: p[12], brightMagenta: p[13], brightCyan: p[14], brightWhite: p[15],
     };
   }
 
   function hexToRgba(hex, a) {
-    const r = parseInt(hex.slice(1,3),16);
-    const g = parseInt(hex.slice(3,5),16);
-    const b = parseInt(hex.slice(5,7),16);
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
     return `rgba(${r},${g},${b},${a})`;
   }
 
@@ -1638,10 +1656,10 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   /* The opacity slider is "terminal background opacity": 100% = fully solid
      terminal, 0% = image fully visible. The image layer therefore renders at
      the complement, on top of the solid theme colour that fills the panel. */
-	  function bgImageAlpha(wsp) {
-	    const opacity = (wsp && wsp.bgOpacity != null) ? wsp.bgOpacity : backgroundOpacity;
-	    return Math.max(0, Math.min(1, 1 - opacity));
-	  }
+  function bgImageAlpha(wsp) {
+    const opacity = (wsp && wsp.bgOpacity != null) ? wsp.bgOpacity : backgroundOpacity;
+    return Math.max(0, Math.min(1, 1 - opacity));
+  }
 
   function cssUrl(dataUrl) {
     return 'url("' + String(dataUrl).replace(/["\\]/g, '\\$&') + '")';
@@ -1760,7 +1778,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           const re = canvas.toDataURL('image/webp', 0.85);
           if (re && re !== 'data:,' && re.length < out.length) out = re;
         }
-      } catch {}
+      } catch { }
       callback(out);
     };
     img.onerror = () => callback(dataUrl);
@@ -1797,7 +1815,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         let re = canvas.toDataURL('image/webp', 0.9);
         if (!re || re === 'data:,' || re.length > out.length) re = canvas.toDataURL('image/png');
         if (re && re !== 'data:,' && re.length < out.length) out = re;
-      } catch {}
+      } catch { }
       callback(out);
     };
     img.onerror = () => callback(dataUrl);
@@ -2045,17 +2063,18 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         cursorStyle: currentCursorStyle,
         cursorBlink: currentCursorBlink,
         scrollback: currentScrollback,
-      settingsCategory,
-      pinnedCollapsed,
-      sidebarMode,
-      showWsProcs,
-      notifyOnCommandFinish,
-      backgroundMode,
-      globalBackgroundImage,
+        settingsCategory,
+        pinnedCollapsed,
+        sidebarMode,
+        showWsProcs,
+        notifyOnCommandFinish,
+        backgroundMode,
+        globalBackgroundImage,
         backgroundOpacity,
         shortcuts: customShortcuts,
         searchEngine,
         customSearchUrl,
+        defaultTerminalPath,
         pluginStates: Object.fromEntries(_pluginStates),
         pluginConfigs: Object.fromEntries(_pluginConfigs),
       };
@@ -2064,7 +2083,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       let merged = settings;
       try {
         merged = Object.assign(JSON.parse(localStorage.getItem(STATE_KEY) || '{}'), settings);
-      } catch {}
+      } catch { }
       persistStateToStorage(merged, STATE_KEY);
       if (window.electronAPI && window.electronAPI.settingsChanged) window.electronAPI.settingsChanged();
       return persistStateToStorage(merged, STATE_KEY);
@@ -2092,29 +2111,30 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       backgroundOpacity,
       searchEngine,
       customSearchUrl,
+      defaultTerminalPath,
       sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
-  sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
-  shortcuts: customShortcuts,
-  pluginStates: Object.fromEntries(_pluginStates),
-  pluginConfigs: Object.fromEntries(_pluginConfigs),
-  activeWsId,
-   folders: folders.map(f => {
-      const o = { id: f.id, label: f.label, collapsed: f.collapsed };
-      if (f.color) o.color = f.color;
-      if (f.pinned) o.pinned = true;
-      return o;
-    }),
-    sideOrder: sideOrder.map(e => ({ t: e.type, id: e.id })),
-    workspaces: workspaces.map(ws => {
-     const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
-     if (ws.color) o.color = ws.color;
-     if (ws.icon) o.icon = ws.icon;
-     if (ws.folderId) o.folderId = ws.folderId;
-     if (ws.pinned) o.pinned = true;
-     if (ws.bgImage) o.bgImage = ws.bgImage;
-     if (ws.bgOpacity != null) o.bgOpacity = ws.bgOpacity;
-     return o;
-   }),
+      sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
+      shortcuts: customShortcuts,
+      pluginStates: Object.fromEntries(_pluginStates),
+      pluginConfigs: Object.fromEntries(_pluginConfigs),
+      activeWsId,
+      folders: folders.map(f => {
+        const o = { id: f.id, label: f.label, collapsed: f.collapsed };
+        if (f.color) o.color = f.color;
+        if (f.pinned) o.pinned = true;
+        return o;
+      }),
+      sideOrder: sideOrder.map(e => ({ t: e.type, id: e.id })),
+      workspaces: workspaces.map(ws => {
+        const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
+        if (ws.color) o.color = ws.color;
+        if (ws.icon) o.icon = ws.icon;
+        if (ws.folderId) o.folderId = ws.folderId;
+        if (ws.pinned) o.pinned = true;
+        if (ws.bgImage) o.bgImage = ws.bgImage;
+        if (ws.bgOpacity != null) o.bgOpacity = ws.bgOpacity;
+        return o;
+      }),
     };
     return persistStateToStorage(state, key);
   }
@@ -2164,6 +2184,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
       if (state.searchEngine) searchEngine = state.searchEngine;
       if (state.customSearchUrl) customSearchUrl = state.customSearchUrl;
+      if (state.defaultTerminalPath !== undefined) defaultTerminalPath = state.defaultTerminalPath;
       if (state.shortcuts) {
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
@@ -2656,8 +2677,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     if (!f) return;
     const inFolder = getGroupList(id).length;
     const msg = inFolder > 0
-    ? `Remove folder "${f.label}"? Its ${inFolder} workspace${inFolder > 1 ? 's' : ''} will move to the top level.`
-    : `Remove folder "${f.label}"?`;
+      ? `Remove folder "${f.label}"? Its ${inFolder} workspace${inFolder > 1 ? 's' : ''} will move to the top level.`
+      : `Remove folder "${f.label}"?`;
     showConfirm(msg, () => {
       const children = getGroupList(id);
       const entryIdx = sideOrder.findIndex(e => e.type === 'folder' && e.id === id);
@@ -2874,8 +2895,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     _closingWs.add(id);
     const termCount = getWorkspaceTerminals(ws).length;
     const msg = termCount > 0
-    ? `Close "${ws.label}" with ${termCount} terminal${termCount > 1 ? 's' : ''}?`
-    : `Close "${ws.label}"?`;
+      ? `Close "${ws.label}" with ${termCount} terminal${termCount > 1 ? 's' : ''}?`
+      : `Close "${ws.label}"?`;
     showConfirm(msg,
       () => { try { _removeWorkspace(id); } finally { _closingWs.delete(id); } },
       () => _closingWs.delete(id));
@@ -2895,7 +2916,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     const soIdx = sideOrder.findIndex(e => e.type === 'ws' && e.id === id);
     if (soIdx !== -1) sideOrder.splice(soIdx, 1);
     if (activeWsId === id) {
-      if (workspaces.length) { activateWorkspace(workspaces[Math.max(0, idx-1)].id); renderSidebar(); }
+      if (workspaces.length) { activateWorkspace(workspaces[Math.max(0, idx - 1)].id); renderSidebar(); }
       else { activeWsId = null; renderSidebar(); renderPaneArea(); }
     } else {
       renderSidebar();
@@ -2950,7 +2971,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       }
     }
     if (live >= _WEBGL_MAX && oldest && oldest.term._webglAddon) {
-      try { oldest.term._webglAddon.dispose(); } catch (e) {}
+      try { oldest.term._webglAddon.dispose(); } catch (e) { }
       oldest.term._webglAddon = null;
     }
     try { term._webglAddon = new WebglAddon.WebglAddon(); term.loadAddon(term._webglAddon); entry._webglLastUse = performance.now(); } catch (e) { term._webglAddon = null; }
@@ -2959,24 +2980,24 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   function _createTermEntry(wsp, id, label) {
     const term = new Terminal({
       theme: makeXtermTheme(currentTheme),
-                              fontFamily: currentFontFamily,
-                              fontSize: currentFontSize,
-                              lineHeight: currentLineHeight,
-                              cursorBlink: currentCursorBlink,
-                              cursorStyle: currentCursorStyle,
-                              scrollback: currentScrollback,
-                              allowTransparency: true,
-                              allowProposedApi: true,
-                              macOptionIsMeta: true,
-                              drawBoldTextInBrightColors: true,
-                              minimumContrastRatio: 1,
-                              drawWideChars: true,
+      fontFamily: currentFontFamily,
+      fontSize: currentFontSize,
+      lineHeight: currentLineHeight,
+      cursorBlink: currentCursorBlink,
+      cursorStyle: currentCursorStyle,
+      scrollback: currentScrollback,
+      allowTransparency: true,
+      allowProposedApi: true,
+      macOptionIsMeta: true,
+      drawBoldTextInBrightColors: true,
+      minimumContrastRatio: 1,
+      drawWideChars: true,
     });
 
     const fitAddon = new FitAddon.FitAddon();
     const searchAddon = new SearchAddon.SearchAddon();
     const webLinksAddon = new WebLinksAddon.WebLinksAddon((e, uri) => openExternalUrl(uri));
-    try { const u11 = new Unicode11Addon.Unicode11Addon(); term.loadAddon(u11); term.unicode.activeVersion = '11'; } catch {}
+    try { const u11 = new Unicode11Addon.Unicode11Addon(); term.loadAddon(u11); term.unicode.activeVersion = '11'; } catch { }
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
     term.loadAddon(webLinksAddon);
@@ -3015,8 +3036,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     // right/bottom edge showing the panel background. Tint the panel with the
     // background colour of the bottom-right cell so the strip blends in with
     // whatever the running program paints (works for any TUI, not one app).
-    const ANSI_KEYS = ['black','red','green','yellow','blue','magenta','cyan','white',
-      'brightBlack','brightRed','brightGreen','brightYellow','brightBlue','brightMagenta','brightCyan','brightWhite'];
+    const ANSI_KEYS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+      'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'];
     const paletteToCss = n => {
       if (n < 16) return term.options.theme?.[ANSI_KEYS[n]] || null;
       if (n < 232) {
@@ -3046,7 +3067,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           }
         }
         slot.style.backgroundColor = css;
-      } catch {}
+      } catch { }
     };
     term.onWriteParsed(() => { if (!edgeTimer) edgeTimer = setTimeout(syncEdgeBg, 150); });
     return entry;
@@ -3056,7 +3077,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
 
-    const cwd = _getFocusedCwd();
+    const cwd = (defaultTerminalPath && defaultTerminalPath.trim())
+      ? defaultTerminalPath.trim().replace(/^["']|["']$/g, '')
+      : _getFocusedCwd();
     const id = uuid();
     const allTerms = getWorkspaceTerminals(wsp);
     const label = activeTerminal()?.label || `bash ${allTerms.length + 1}`;
@@ -3067,8 +3090,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       wsp.layout = {
         type: 'group',
         id: 'group-' + uuid(),
- terminals: [entry],
- activeTermId: id
+        terminals: [entry],
+        activeTermId: id
       };
       renderPaneArea();
       activateTerminal(wsp.id, id);
@@ -3120,9 +3143,67 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
             // Drag & drop
             tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
             tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
-            tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
+            tab.addEventListener('dragover', e => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+              const r = tab.getBoundingClientRect();
+              const isLeft = e.clientX < r.left + r.width / 2;
+              tab.classList.add(isLeft ? 'drop-left' : 'drop-right');
+              const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
+              if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
+                let beforeTabId = null;
+                if (isLeft) {
+                  beforeTabId = entry.id;
+                } else {
+                  const curIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
+                  beforeTabId = (curIdx !== -1 && curIdx + 1 < targetGroup.terminals.length) ? targetGroup.terminals[curIdx + 1].id : null;
+                }
+                window.electronAPI.tabDragHover({
+                  id: activeDragId,
+                  targetGroupId: targetGroup.id,
+                  zone: 'center',
+                  beforeTabId,
+                });
+              }
+            });
             tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
-            tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || window.externalDragTermId || e.dataTransfer.getData('text/plain'); if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) { const api = window.electronAPI; if (api && api.tabDragDrop) { const r = tab.getBoundingClientRect(); api.tabDragDrop({ id: draggedId, targetGroupId: targetGroup.id, zone: 'center', beforeTabId: e.clientX < r.left + r.width / 2 ? entry.id : null }); } window.externalDragTermId = null; return; } if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+            tab.addEventListener('drop', e => {
+              e.preventDefault();
+              const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+              if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) {
+                const api = window.electronAPI;
+                if (api && api.tabDragDrop) {
+                  const r = tab.getBoundingClientRect();
+                  const isLeft = e.clientX < r.left + r.width / 2;
+                  let beforeTabId = null;
+                  if (isLeft) {
+                    beforeTabId = entry.id;
+                  } else {
+                    const curIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
+                    beforeTabId = (curIdx !== -1 && curIdx + 1 < targetGroup.terminals.length) ? targetGroup.terminals[curIdx + 1].id : null;
+                  }
+                  api.tabDragDrop({ id: draggedId, targetGroupId: targetGroup.id, zone: 'center', beforeTabId });
+                }
+                window.externalDragTermId = null;
+                tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+                return;
+              }
+              if (draggedId && draggedId !== entry.id) {
+                const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId);
+                let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
+                if (fromIdx !== -1 && toIdx !== -1) {
+                  const [moved] = targetGroup.terminals.splice(fromIdx, 1);
+                  toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
+                  const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1;
+                  targetGroup.terminals.splice(insertIdx, 0, moved);
+                  targetGroup.activeTermId = draggedId;
+                }
+                renderPaneArea();
+                activateTerminal(wsp.id, draggedId);
+              }
+              tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+            });
             tabsContainer.appendChild(tab);
             updateTabBarOverflow(groupEl);
             scrollTabIntoView(groupEl, entry.id);
@@ -3186,8 +3267,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       wsp.layout = {
         type: 'group',
         id: 'group-' + uuid(),
- terminals: [entry],
- activeTermId: id
+        terminals: [entry],
+        activeTermId: id
       };
       renderPaneArea();
       activateTerminal(wsp.id, id);
@@ -3235,9 +3316,67 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
             tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
             tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
-            tab.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); const r = tab.getBoundingClientRect(); tab.classList.add(e.clientX < r.left + r.width / 2 ? 'drop-left' : 'drop-right'); });
+            tab.addEventListener('dragover', e => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+              const r = tab.getBoundingClientRect();
+              const isLeft = e.clientX < r.left + r.width / 2;
+              tab.classList.add(isLeft ? 'drop-left' : 'drop-right');
+              const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
+              if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
+                let beforeTabId = null;
+                if (isLeft) {
+                  beforeTabId = entry.id;
+                } else {
+                  const curIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
+                  beforeTabId = (curIdx !== -1 && curIdx + 1 < targetGroup.terminals.length) ? targetGroup.terminals[curIdx + 1].id : null;
+                }
+                window.electronAPI.tabDragHover({
+                  id: activeDragId,
+                  targetGroupId: targetGroup.id,
+                  zone: 'center',
+                  beforeTabId,
+                });
+              }
+            });
             tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
-            tab.addEventListener('drop', e => { e.preventDefault(); const draggedId = window.draggedTermId || window.externalDragTermId || e.dataTransfer.getData('text/plain'); if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) { const api = window.electronAPI; if (api && api.tabDragDrop) { const r = tab.getBoundingClientRect(); api.tabDragDrop({ id: draggedId, targetGroupId: targetGroup.id, zone: 'center', beforeTabId: e.clientX < r.left + r.width / 2 ? entry.id : null }); } window.externalDragTermId = null; return; } if (draggedId && draggedId !== entry.id) { const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId); let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); if (fromIdx !== -1 && toIdx !== -1) { const [moved] = targetGroup.terminals.splice(fromIdx, 1); toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id); const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1; targetGroup.terminals.splice(insertIdx, 0, moved); targetGroup.activeTermId = draggedId; } renderPaneArea(); activateTerminal(wsp.id, draggedId); } tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); });
+            tab.addEventListener('drop', e => {
+              e.preventDefault();
+              const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+              if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) {
+                const api = window.electronAPI;
+                if (api && api.tabDragDrop) {
+                  const r = tab.getBoundingClientRect();
+                  const isLeft = e.clientX < r.left + r.width / 2;
+                  let beforeTabId = null;
+                  if (isLeft) {
+                    beforeTabId = entry.id;
+                  } else {
+                    const curIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
+                    beforeTabId = (curIdx !== -1 && curIdx + 1 < targetGroup.terminals.length) ? targetGroup.terminals[curIdx + 1].id : null;
+                  }
+                  api.tabDragDrop({ id: draggedId, targetGroupId: targetGroup.id, zone: 'center', beforeTabId });
+                }
+                window.externalDragTermId = null;
+                tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+                return;
+              }
+              if (draggedId && draggedId !== entry.id) {
+                const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId);
+                let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
+                if (fromIdx !== -1 && toIdx !== -1) {
+                  const [moved] = targetGroup.terminals.splice(fromIdx, 1);
+                  toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
+                  const insertIdx = e.clientX < tab.getBoundingClientRect().left + tab.getBoundingClientRect().width / 2 ? toIdx : toIdx + 1;
+                  targetGroup.terminals.splice(insertIdx, 0, moved);
+                  targetGroup.activeTermId = draggedId;
+                }
+                renderPaneArea();
+                activateTerminal(wsp.id, draggedId);
+              }
+              tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+            });
             tabsContainer.appendChild(tab);
             updateTabBarOverflow(groupEl);
             scrollTabIntoView(groupEl, entry.id);
@@ -3289,13 +3428,13 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       try {
         const d = entry.fit.proposeDimensions();
         if (d && d.cols && d.rows) return { cols: d.cols, rows: d.rows };
-      } catch {}
+      } catch { }
     }
     if (entry.el) {
       const w = entry.el.offsetWidth - 16;
       const h = entry.el.offsetHeight - 12;
       const cw = 8; const ch = 17;
-      return { cols: Math.max(1, Math.floor(w/cw)), rows: Math.max(1, Math.floor(h/ch)) };
+      return { cols: Math.max(1, Math.floor(w / cw)), rows: Math.max(1, Math.floor(h / ch)) };
     }
     return { cols: 80, rows: 24 };
   }
@@ -3424,10 +3563,10 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     try {
       const payload = serializeTermBuffer(entry);
       if (payload) localStorage.setItem(DETACH_BUFFER_KEY(termId), JSON.stringify(payload));
-    } catch {}
+    } catch { }
 
     window.electronAPI.terminalDetach({ id: termId, cols: slot.cols, rows: slot.rows, cwd }).then(ok => {
-      if (!ok) { try { localStorage.removeItem(DETACH_BUFFER_KEY(termId)); } catch {} return; }
+      if (!ok) { try { localStorage.removeItem(DETACH_BUFFER_KEY(termId)); } catch { } return; }
       // Detach succeeded — remove the terminal from this workspace without
       // killing the PTY. The detached window attaches to the SAME running PTY.
       removeTerminal(wsId, termId, false, true);
@@ -3477,7 +3616,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       const maxViewport = Math.max(0, buf.length - term.rows);
       const target = Math.min(maxViewport, payload.viewportY ?? maxViewport);
       if (target < maxViewport) term.scrollLines(target - maxViewport);
-    } catch {}
+    } catch { }
   }
 
   // Reverse of detachTerminal: the detached window was closed by dragging its
@@ -3505,7 +3644,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
       localStorage.removeItem(DETACH_BUFFER_KEY(termId));
       if (raw) stash = JSON.parse(raw);
-    } catch {}
+    } catch { }
 
     const entry = _createTermEntry(wsp, termId, (stash && stash.label) || 'terminal');
     entry.cwd = cwd;
@@ -3517,35 +3656,44 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         || (activeTerminal() && findGroupContainingTerm(wsp.layout, activeTerminal().id))
         || findFirstGroup(wsp.layout);
       if (!targetGroup) return;
-      targetGroup.terminals.push(entry);
-      if (!targetGroup._history) targetGroup._history = [];
-      if (targetGroup.activeTermId) targetGroup._history.push(targetGroup.activeTermId);
-      targetGroup.activeTermId = termId;
-      // Dropped on a specific tab — place it at that position in the bar.
-      if (placement && placement.beforeTabId) {
-        const idx = targetGroup.terminals.findIndex(x => x.id === placement.beforeTabId);
-        if (idx !== -1) {
-          targetGroup.terminals.splice(targetGroup.terminals.indexOf(entry), 1);
-          targetGroup.terminals.splice(idx, 0, entry);
+
+      if (placement && placement.zone && placement.zone !== 'center' && targetGroup.terminals.length > 0) {
+        // Direct split placement: create new group and split the layout tree directly
+        const newGroup = {
+          type: 'group',
+          id: 'group-' + uuid(),
+          terminals: [entry],
+          activeTermId: termId
+        };
+        const direction = (placement.zone === 'left' || placement.zone === 'right') ? 'row' : 'column';
+        const isFirst = (placement.zone === 'left' || placement.zone === 'top');
+        if (wsp._maximizedGroupId) wsp._maximizedGroupId = null;
+        wsp.layout = splitGroupNodeInTree(wsp.layout, targetGroup.id, newGroup, direction, isFirst);
+        wsp.layout = removeEmptyGroups(wsp.layout);
+      } else {
+        targetGroup.terminals.push(entry);
+        if (!targetGroup._history) targetGroup._history = [];
+        if (targetGroup.activeTermId) targetGroup._history.push(targetGroup.activeTermId);
+        targetGroup.activeTermId = termId;
+        // Dropped on a specific tab — place it at that position in the bar.
+        if (placement && placement.beforeTabId) {
+          const idx = targetGroup.terminals.findIndex(x => x.id === placement.beforeTabId);
+          if (idx !== -1) {
+            targetGroup.terminals.splice(targetGroup.terminals.indexOf(entry), 1);
+            targetGroup.terminals.splice(idx, 0, entry);
+          }
         }
       }
     }
     wsp.activeTermId = termId;
-
-    if (placement && placement.zone && placement.zone !== 'center' && findGroupById(wsp.layout, placement.targetGroupId)) {
-      // Split placement: route through the normal drop handler so the same
-      // guards (maximized, min size) and split logic apply.
-      handleTerminalDrop(termId, placement.targetGroupId, placement.zone, wsp);
-    } else {
-      renderPaneArea();
-      activateTerminal(wsp.id, termId);
-    }
+    renderPaneArea();
+    activateTerminal(wsp.id, termId);
 
     // Open at the size the PTY is running at so replayed lines don't wrap,
     // replay the stashed screen/scrollback, then announce the attach so main
     // flushes output buffered while the detached window was closing.
-    try { entry.term.resize(cols || 80, rows || 24); } catch {}
-    if (stash) { try { restoreTermBuffer(entry, stash); } catch {} }
+    try { entry.term.resize(cols || 80, rows || 24); } catch { }
+    if (stash) { try { restoreTermBuffer(entry, stash); } catch { } }
     if (window.electronAPI && window.electronAPI.terminalAttached) {
       window.electronAPI.terminalAttached(termId);
     }
@@ -3557,8 +3705,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         if (entry.term && window.electronAPI && window.electronAPI.terminalResize) {
           window.electronAPI.terminalResize({ id: termId, cols: entry.term.cols, rows: entry.term.rows });
         }
-      } catch {}
-      try { entry.term && entry.term.focus(); } catch {}
+      } catch { }
+      try { entry.term && entry.term.focus(); } catch { }
     }, 80);
 
     renderSidebar();
@@ -3590,7 +3738,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           (closesWorkspace ? ' Closing it will close the tab and remove the workspace.' : ' Closing it will close the tab and lose its page.'),
           'Close Tab',
           () => removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true),
-          () => {},
+          () => { },
           'closebrowser');
         return;
       }
@@ -3607,7 +3755,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           (closesWorkspace ? ' Closing it will close the tab and remove the workspace.' : ' Closing it will close the tab.'),
           'Close Tab',
           () => { _closeLockConfirmed.add(termId); removeTerminal(wsId, termId, skipRender, skipPtyClose, false, false); },
-          () => {},
+          () => { },
           'closelocked');
         return;
       }
@@ -3662,7 +3810,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     if (entry.type !== 'browser') {
       if (!skipPtyClose) {
         sendControl({ type: 'close', id: termId });
-        try { if (entry.term) entry.term.dispose(); } catch {}
+        try { if (entry.term) entry.term.dispose(); } catch { }
       }
     } else {
       if (entry._msgCleanup) entry._msgCleanup();
@@ -3672,7 +3820,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       if (entry._viewCreated && window.electronAPI) { window.electronAPI.browserDestroy(entry.id); browserEventHooks.delete(entry.id); }
     }
     if (entry.el) {
-      try { _termFitObserver.unobserve(entry.el); } catch {}
+      try { _termFitObserver.unobserve(entry.el); } catch { }
       if (entry.term) {
         if (entry.term._fitObserverRaf) cancelAnimationFrame(entry.term._fitObserverRaf);
         delete entry.term._fitObserverRaf;
@@ -3914,8 +4062,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       // Frontend fits instantly for snappy visual feedback
       entry.fit.fit();
       const dims = entry.term.rows && entry.term.cols
-      ? { cols: entry.term.cols, rows: entry.term.rows }
-      : { cols: 80, rows: 24 };
+        ? { cols: entry.term.cols, rows: entry.term.rows }
+        : { cols: 80, rows: 24 };
 
       // Debounce the backend PTY resize to prevent freezing the socket/app during continuous resizes
       if (entry._resizeTimeout) clearTimeout(entry._resizeTimeout);
@@ -3923,7 +4071,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         sendControl({ type: 'resize', id: entry.id, cols: dims.cols, rows: dims.rows });
       }, 80);
 
-    } catch {}
+    } catch { }
   }
 
   // Auto-fit each terminal when its slot actually changes size (split
@@ -3963,7 +4111,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     const wsp = findWs(wsId);
     if (!wsp || !wsp.layout) return;
 
-    const cwd = _getFocusedCwd();
+    const cwd = _getFocusedCwd() || ((defaultTerminalPath && defaultTerminalPath.trim()) ? defaultTerminalPath.trim().replace(/^["']|["']$/g, '') : null);
 
     // Prevent split if the workspace is maximized
     if (wsp._maximizedGroupId) {
@@ -4035,9 +4183,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       return {
         type: 'split',
         id: 'split-' + uuid(),
- direction,
- children: isFirst ? [newGroup, root] : [root, newGroup],
- sizes: [50, 50]
+        direction,
+        children: isFirst ? [newGroup, root] : [root, newGroup],
+        sizes: [50, 50]
       };
     }
 
@@ -4055,9 +4203,9 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
             node.children[idx] = {
               type: 'split',
               id: 'split-' + uuid(),
- direction,
- children: isFirst ? [newGroup, destNode] : [destNode, newGroup],
- sizes: [50, 50]
+              direction,
+              children: isFirst ? [newGroup, destNode] : [destNode, newGroup],
+              sizes: [50, 50]
             };
           }
           return true;
@@ -4128,7 +4276,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     // Update maximize button icons in all groups
     const MAXIMIZE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
     const RESTORE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
-    
+
     container.querySelectorAll('.term-group').forEach(el => {
       const maxBtn = el.querySelector('[data-action="maximize"]');
       if (maxBtn) {
@@ -4262,80 +4410,94 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       tabsContainer.className = 'term-group-tabs';
       tabsContainer.addEventListener('scroll', () => updateTabBarOverflow(groupEl));
 
-      // Container-level drop handling for gaps between tabs and edges
-      tabsContainer.addEventListener('dragover', (e) => {
-        if (!window.draggedTermId) {
-          // Cross-window drag (tab from a detached window): accept it.
-          if (e.target !== tabsContainer) return;
-          if (!window.externalDragTermId && !e.dataTransfer.types.includes('text/plain')) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
-          return;
-        }
-        if (e.target !== tabsContainer) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
+      // Unified drop target calculation for the tab bar area
+      const getTabBarDropTarget = (cx) => {
         const tabs = Array.from(tabsContainer.querySelectorAll('.tg-tab'))
           .filter(el => !el.classList.contains('dragging'));
-        if (!tabs.length) return;
+        if (!tabs.length) return null;
         let closest = tabs[0];
         let bestDist = Infinity;
-        const cx = e.clientX;
         for (const t of tabs) {
           const r = t.getBoundingClientRect();
           const dist = Math.abs(cx - (r.left + r.width / 2));
           if (dist < bestDist) { bestDist = dist; closest = t; }
         }
-        tabs.forEach(t => t.classList.remove('drop-left', 'drop-right'));
         const r = closest.getBoundingClientRect();
-        if (cx < r.left + r.width / 2) {
-          closest.classList.add('drop-left');
-        } else {
-          closest.classList.add('drop-right');
+        const insertBefore = cx < (r.left + r.width / 2);
+        return { closest, insertBefore };
+      };
+
+      const handleTabBarDragOver = (e) => {
+        const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
+        if (!window.draggedTermId && !hasExternal) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+        const hit = getTabBarDropTarget(e.clientX);
+        let beforeTabId = null;
+        if (hit && hit.closest) {
+          hit.closest.classList.add(hit.insertBefore ? 'drop-left' : 'drop-right');
+          const targetId = hit.closest.dataset.termid;
+          if (hit.insertBefore) {
+            beforeTabId = targetId;
+          } else {
+            const curIdx = node.terminals.findIndex(x => x.id === targetId);
+            beforeTabId = (curIdx !== -1 && curIdx + 1 < node.terminals.length) ? node.terminals[curIdx + 1].id : null;
+          }
         }
-      });
-      tabsContainer.addEventListener('dragleave', (e) => {
-        if (!e.relatedTarget || !tabsContainer.contains(e.relatedTarget)) {
-          tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
-            el.classList.remove('drop-left', 'drop-right');
+        const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
+        if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
+          window.electronAPI.tabDragHover({
+            id: activeDragId,
+            targetGroupId: node.id,
+            zone: 'center',
+            beforeTabId,
           });
         }
-      });
-      tabsContainer.addEventListener('drop', (e) => {
-        // Cross-window drag (tab from a detached window): attach into this group.
+      };
+
+      const handleTabBarDrop = (e) => {
+        tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+        const extId = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+
+        // Cross-window drag (tab from a detached window): attach into this group
         if (!window.draggedTermId) {
-          if (e.target !== tabsContainer) return;
+          if (!extId) return;
           e.preventDefault();
           e.stopPropagation();
-          const extId = window.externalDragTermId || e.dataTransfer.getData('text/plain');
-          if (extId && !findGroupContainingTerm(wsp.layout, extId)) {
+          let beforeTabId = null;
+          const hit = getTabBarDropTarget(e.clientX);
+          if (hit && hit.closest) {
+            const targetId = hit.closest.dataset.termid;
+            if (hit.insertBefore) {
+              beforeTabId = targetId;
+            } else {
+              const curIdx = node.terminals.findIndex(x => x.id === targetId);
+              beforeTabId = (curIdx !== -1 && curIdx + 1 < node.terminals.length) ? node.terminals[curIdx + 1].id : null;
+            }
+          }
+          if (!findGroupContainingTerm(wsp.layout, extId)) {
             const api = window.electronAPI;
             if (api && api.tabDragDrop) {
-              api.tabDragDrop({ id: extId, targetGroupId: node.id, zone: 'center' });
+              api.tabDragDrop({ id: extId, targetGroupId: node.id, zone: 'center', beforeTabId });
             }
           }
           window.externalDragTermId = null;
           return;
         }
-        if (e.target !== tabsContainer) return;
+
+        // Local drag
         e.preventDefault();
         e.stopPropagation();
-        const tabs = Array.from(tabsContainer.querySelectorAll('.tg-tab'))
-          .filter(el => !el.classList.contains('dragging'));
-        if (!tabs.length) return;
-        let closest = tabs[0];
-        let bestDist = Infinity;
-        const cx = e.clientX;
-        for (const t of tabs) {
-          const r = t.getBoundingClientRect();
-          const dist = Math.abs(cx - (r.left + r.width / 2));
-          if (dist < bestDist) { bestDist = dist; closest = t; }
-        }
         const draggedId = window.draggedTermId;
-        const targetTermId = closest.dataset.termid;
-        const r = closest.getBoundingClientRect();
-        const insertBefore = cx < r.left + r.width / 2;
-        tabs.forEach(t => t.classList.remove('drop-left', 'drop-right'));
+        const hit = getTabBarDropTarget(e.clientX);
+        if (!hit || !hit.closest) {
+          window.draggedTermId = null;
+          window.dragSourceGroupId = null;
+          return;
+        }
+        const targetTermId = hit.closest.dataset.termid;
+        const insertBefore = hit.insertBefore;
         if (window.dragSourceGroupId === node.id) {
           const fromIdx = node.terminals.findIndex(x => x.id === draggedId);
           let toIdx = node.terminals.findIndex(x => x.id === targetTermId);
@@ -4352,7 +4514,17 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         }
         window.draggedTermId = null;
         window.dragSourceGroupId = null;
+      };
+
+      tabsContainer.addEventListener('dragover', handleTabBarDragOver);
+      tabsContainer.addEventListener('dragleave', (e) => {
+        if (!e.relatedTarget || !tabsContainer.contains(e.relatedTarget)) {
+          tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
+            el.classList.remove('drop-left', 'drop-right');
+          });
+        }
       });
+      tabsContainer.addEventListener('drop', handleTabBarDrop);
 
       // VSCode-style edge paging chevrons, shown only while the bar overflows
       const tabsWrap = document.createElement('div');
@@ -4371,6 +4543,27 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       tabsWrap.appendChild(tabsContainer);
       tabsWrap.appendChild(chevLeft);
       tabsWrap.appendChild(chevRight);
+      tabsWrap.addEventListener('dragover', handleTabBarDragOver);
+      tabsWrap.addEventListener('dragleave', (e) => {
+        if (!e.relatedTarget || !tabsWrap.contains(e.relatedTarget)) {
+          tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+        }
+      });
+      tabsWrap.addEventListener('drop', handleTabBarDrop);
+
+      header.addEventListener('dragover', (e) => {
+        if (e.target.closest('.tg-actions')) return;
+        handleTabBarDragOver(e);
+      });
+      header.addEventListener('dragleave', (e) => {
+        if (!e.relatedTarget || !header.contains(e.relatedTarget)) {
+          tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
+        }
+      });
+      header.addEventListener('drop', (e) => {
+        if (e.target.closest('.tg-actions')) return;
+        handleTabBarDrop(e);
+      });
 
       node.terminals.forEach(t => {
         const tab = document.createElement('div');
@@ -4427,17 +4620,21 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
             el.classList.remove('drop-left', 'drop-right');
           });
           stopResizing();
-          // Main window: releasing a terminal tab where no tab bar accepted
-          // the drop (dropEffect 'none' — i.e. outside the app, or away from
-          // any drop target) detaches it into its own window.
+          // Main window: releasing a terminal tab where no window accepted the drop
+          // detaches it into its own window.
           if (!DETACHED_ONLY && t.type !== 'browser' && t.term
-              && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) {
-            detachTerminal(wsp.id, t.id);
+            && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) {
+            setTimeout(() => {
+              if (window._tabMovedAway && window._tabMovedAway.has(t.id)) {
+                window._tabMovedAway.delete(t.id);
+                return;
+              }
+              const g = findGroupContainingTerm(wsp.layout, t.id);
+              if (!g) return;
+              detachTerminal(wsp.id, t.id);
+            }, 80);
           }
           if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) {
-            // Ends the active-drag broadcast. The detach above (if any) is an
-            // independent flow; this message is cancelled so main won't move
-            // the terminal a second time.
             window.electronAPI.tabDragEnd({ id: t.id, cancelled: true });
           }
         });
@@ -4464,7 +4661,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
             try {
               const payload = serializeTermBuffer(t);
               if (payload) localStorage.setItem(DETACH_BUFFER_KEY(t.id), JSON.stringify(payload));
-            } catch {}
+            } catch { }
           });
           tab.addEventListener('dragend', e => {
             const api = window.electronAPI;
@@ -4493,32 +4690,37 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         }
 
         tab.addEventListener('dragover', e => {
-          if (!window.draggedTermId) {
-            // Cross-window drag (tab from a detached window): accept the drop
-            // and show the insertion hint using the broadcast drag id.
-            if (!window.externalDragTermId && !e.dataTransfer.types.includes('text/plain')) return;
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            if (window.externalDragTermId) {
-              tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
-                el.classList.remove('drop-left', 'drop-right');
-              });
-              const rect = tab.getBoundingClientRect();
-              tab.classList.add(e.clientX < rect.left + rect.width / 2 ? 'drop-left' : 'drop-right');
-            }
-            return;
-          }
+          const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
+          if (!window.draggedTermId && !hasExternal) return;
           e.preventDefault();
+          e.stopPropagation();
           e.dataTransfer.dropEffect = 'move';
-          const rect = tab.getBoundingClientRect();
-          const midX = rect.left + rect.width / 2;
           tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
             el.classList.remove('drop-left', 'drop-right');
           });
-          if (e.clientX < midX) {
+          const rect = tab.getBoundingClientRect();
+          const midX = rect.left + rect.width / 2;
+          const isLeft = e.clientX < midX;
+          if (isLeft) {
             tab.classList.add('drop-left');
           } else {
             tab.classList.add('drop-right');
+          }
+          const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
+          if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
+            let beforeTabId = null;
+            if (isLeft) {
+              beforeTabId = t.id;
+            } else {
+              const curIdx = node.terminals.findIndex(x => x.id === t.id);
+              beforeTabId = (curIdx !== -1 && curIdx + 1 < node.terminals.length) ? node.terminals[curIdx + 1].id : null;
+            }
+            window.electronAPI.tabDragHover({
+              id: activeDragId,
+              targetGroupId: node.id,
+              zone: 'center',
+              beforeTabId,
+            });
           }
         });
         tab.addEventListener('dragleave', (e) => {
@@ -4529,17 +4731,28 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
         tab.addEventListener('drop', e => {
           e.preventDefault();
           e.stopPropagation();
+          tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
+            el.classList.remove('drop-left', 'drop-right');
+          });
           // Cross-window drag (tab from a detached window): attach it into
           // this group, at the release position relative to this tab.
           if (!window.draggedTermId) {
-            const extId = window.externalDragTermId || e.dataTransfer.getData('text/plain');
+            const extId = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
             if (extId && !findGroupContainingTerm(wsp.layout, extId)) {
               const api = window.electronAPI;
               if (api && api.tabDragDrop) {
                 const rect0 = tab.getBoundingClientRect();
+                const isLeft = e.clientX < rect0.left + rect0.width / 2;
+                let beforeTabId = null;
+                if (isLeft) {
+                  beforeTabId = t.id;
+                } else {
+                  const curIdx = node.terminals.findIndex(x => x.id === t.id);
+                  beforeTabId = (curIdx !== -1 && curIdx + 1 < node.terminals.length) ? node.terminals[curIdx + 1].id : null;
+                }
                 api.tabDragDrop({
                   id: extId, targetGroupId: node.id, zone: 'center',
-                  beforeTabId: e.clientX < rect0.left + rect0.width / 2 ? t.id : null,
+                  beforeTabId,
                 });
               }
             }
@@ -4624,8 +4837,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       maxBtn.dataset.action = 'maximize';
       maxBtn.title = isMax ? 'Restore' : 'Maximize';
       maxBtn.innerHTML = isMax
-      ? '<i class="ph ph-corners-in"></i>'
-      : '<i class="ph ph-corners-out"></i>';
+        ? '<i class="ph ph-corners-in"></i>'
+        : '<i class="ph ph-corners-out"></i>';
       maxBtn.onclick = () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); };
 
       actions.appendChild(addTabBtn);
@@ -4753,7 +4966,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     if (entry.opened && entry.el) {
       if (entry.el.parentNode) entry.el.remove();
       // Re-ensure observed after cache re-attach (idempotent)
-      try { if (entry.type !== 'browser') _termFitObserver.observe(entry.el); } catch {}
+      try { if (entry.type !== 'browser') _termFitObserver.observe(entry.el); } catch { }
       return entry.el;
     }
 
@@ -4923,7 +5136,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
               try {
                 const sr = surface.shadowRoot;
                 if (sr) { const f = sr.querySelector('iframe'); if (f) { f.style.height = '100%'; return true; } }
-              } catch {}
+              } catch { }
               return false;
             };
             if (!pinIframe()) {
@@ -4968,7 +5181,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
                 try {
                   const sr = surface.shadowRoot;
                   if (sr) { const f = sr.querySelector('iframe'); if (f) f.style.height = '100%'; }
-                } catch {}
+                } catch { }
               };
               // Watch for the shadow root to appear (fires instantly, no flash)
               new MutationObserver(pinShadowIframe).observe(surface, { childList: true, subtree: true });
@@ -5177,7 +5390,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     entry.el = slot;
     entry.term.open(wrap);
     entry.opened = true;
-    try { _termFitObserver.observe(slot); } catch {}
+    try { _termFitObserver.observe(slot); } catch { }
     // Attach WebGL only if the slot is actually on screen (renderPaneArea opens
     // hidden terminals too; their contexts get attached later on activate).
     _syncWebgl(entry, slot.offsetParent !== null && slot.style.display !== 'none');
@@ -5276,12 +5489,12 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
           if (isRow) p.style.width = '';
           else p.style.height = '';
         });
-          const wsp = activeWs();
-          if (wsp) {
-            for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-          }
-          saveState();
-          stopResizing();
+        const wsp = activeWs();
+        if (wsp) {
+          for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+        }
+        saveState();
+        stopResizing();
       };
 
       document.addEventListener('mousemove', onMove);
@@ -5295,28 +5508,41 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   function setupGroupDragAndDrop(bodyEl, groupNode, wsp, overlay) {
     let dragDepth = 0;
 
+    const getZoneFromPoint = (cx, cy) => {
+      const rect = bodyEl.getBoundingClientRect();
+      const x = cx - rect.left;
+      const y = cy - rect.top;
+      const w = Math.max(1, rect.width);
+      const h = Math.max(1, rect.height);
+
+      const distLeft = x / w;
+      const distRight = (w - x) / w;
+      const distTop = y / h;
+      const distBottom = (h - y) / h;
+      const minDist = Math.min(distLeft, distRight, distTop, distBottom);
+
+      if (minDist === distLeft) return 'left';
+      if (minDist === distRight) return 'right';
+      if (minDist === distTop) return 'top';
+      return 'bottom';
+    };
+
     bodyEl.addEventListener('dragenter', e => {
+      const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
+      if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
       dragDepth++;
       overlay.classList.add('active');
     });
 
     bodyEl.addEventListener('dragover', e => {
+      const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
+      if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
-      const draggedId = window.draggedTermId || window.externalDragTermId || e.dataTransfer.getData('text/plain');
-      if (!draggedId) return;
+      e.dataTransfer.dropEffect = 'move';
+      overlay.classList.add('active');
 
-      const rect = bodyEl.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const w = rect.width;
-      const h = rect.height;
-
-      let zone = 'center';
-      if (x < w * 0.25) zone = 'left';
-      else if (x > w * 0.75) zone = 'right';
-      else if (y < h * 0.25) zone = 'top';
-      else if (y > h * 0.75) zone = 'bottom';
+      const zone = getZoneFromPoint(e.clientX, e.clientY);
 
       if (zone === 'left') {
         overlay.style.left = '0'; overlay.style.top = '0';
@@ -5327,42 +5553,46 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       } else if (zone === 'top') {
         overlay.style.left = '0'; overlay.style.top = '0';
         overlay.style.width = '100%'; overlay.style.height = '50%';
-      } else if (zone === 'bottom') {
+      } else {
         overlay.style.left = '0'; overlay.style.top = '50%';
         overlay.style.width = '100%'; overlay.style.height = '50%';
-      } else {
-        overlay.style.left = '0'; overlay.style.top = '0';
-        overlay.style.width = '100%'; overlay.style.height = '100%';
+      }
+
+      const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
+      if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
+        window.electronAPI.tabDragHover({
+          id: activeDragId,
+          targetGroupId: groupNode.id,
+          zone,
+          beforeTabId: null,
+        });
       }
     });
 
-    bodyEl.addEventListener('dragleave', () => {
+    bodyEl.addEventListener('dragleave', (e) => {
       dragDepth--;
-      if (dragDepth <= 0) {
+      if (dragDepth <= 0 || !e.relatedTarget || !bodyEl.contains(e.relatedTarget)) {
         dragDepth = 0;
         overlay.classList.remove('active');
+        if (window.electronAPI && window.electronAPI.tabDragHover) {
+          window.electronAPI.tabDragHover({ id: null });
+        }
       }
     });
 
     bodyEl.addEventListener('drop', e => {
       e.preventDefault();
+      e.stopPropagation();
       dragDepth = 0;
       overlay.classList.remove('active');
+      if (window.electronAPI && window.electronAPI.tabDragHover) {
+        window.electronAPI.tabDragHover({ id: null });
+      }
 
-      const draggedId = window.draggedTermId || window.externalDragTermId || e.dataTransfer.getData('text/plain');
+      const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
       if (!draggedId) return;
 
-      const rect = bodyEl.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const w = rect.width;
-      const h = rect.height;
-
-      let zone = 'center';
-      if (x < w * 0.25) zone = 'left';
-      else if (x > w * 0.75) zone = 'right';
-      else if (y < h * 0.25) zone = 'top';
-      else if (y > h * 0.75) zone = 'bottom';
+      const zone = getZoneFromPoint(e.clientX, e.clientY);
 
       // Cross-window drag: the terminal lives in a detached window, not in
       // this layout — ask main to re-attach it here (splitting per zone)
@@ -5402,18 +5632,20 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     // Prevent split on drag/drop if maximized or not enough space
     if (zone !== 'center') {
       if (wsp._maximizedGroupId) {
-        if (typeof zoomBadge === 'function') zoomBadge("Cannot split while maximized");
-        zone = 'center';
-      } else {
-        const groupEl = document.getElementById('group-' + targetGroupId);
-        if (groupEl) {
-          const dir = (zone === 'left' || zone === 'right') ? 'row' : 'column';
-          const currentSize = dir === 'row' ? groupEl.offsetWidth : groupEl.offsetHeight;
-          const MIN_REQUIRED = SPLIT_MIN_PX * 2;
-          if (currentSize < MIN_REQUIRED) {
-            if (typeof zoomBadge === 'function') zoomBadge("Not enough space");
-            zone = 'center';
-          }
+        const maxTerm = activeTerminal();
+        if (maxTerm) toggleMaximizeTerminal(wsp.id, maxTerm.id);
+        else wsp._maximizedGroupId = null;
+      }
+      const groupEl = document.getElementById('group-' + targetGroupId)
+        || document.getElementById(targetGroupId)
+        || document.querySelector(`[data-group-id="${targetGroupId}"]`);
+      if (groupEl) {
+        const dir = (zone === 'left' || zone === 'right') ? 'row' : 'column';
+        const currentSize = dir === 'row' ? groupEl.offsetWidth : groupEl.offsetHeight;
+        const MIN_REQUIRED = 100;
+        if (currentSize < MIN_REQUIRED) {
+          if (typeof zoomBadge === 'function') zoomBadge("Not enough space");
+          zone = 'center';
         }
       }
     }
@@ -5425,8 +5657,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       const newGroup = {
         type: 'group',
         id: 'group-' + uuid(),
- terminals: [draggedTerm],
- activeTermId: draggedId
+        terminals: [draggedTerm],
+        activeTermId: draggedId
       };
       const direction = (zone === 'left' || zone === 'right') ? 'row' : 'column';
       const isFirst = (zone === 'left' || zone === 'top');
@@ -6257,7 +6489,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       // Dismiss a still-open Coloris popup and drop its temp input
       if (colorisInput) {
         const ci = colorisInput;
-        try { if (document.querySelector('#clr-picker.clr-open')) Coloris.close(); } catch {}
+        try { if (document.querySelector('#clr-picker.clr-open')) Coloris.close(); } catch { }
         ci.remove();
         colorisInput = null;
       }
@@ -6285,11 +6517,11 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       if (e.key === 'Enter') submit();
       if (e.key === 'Escape') close();
     };
-      promptOverlay.onclick = e => { if (e.target === promptOverlay) close(); };
+    promptOverlay.onclick = e => { if (e.target === promptOverlay) close(); };
   }
 
   function showConfirm(message, callback, onCancel) {
-    onCancel = onCancel || (() => {});
+    onCancel = onCancel || (() => { });
     promptLabel.textContent = message;
     promptInput.style.display = 'none';
     promptColors.style.display = 'none';
@@ -6323,10 +6555,10 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       if (e.key === 'Escape') cancel();
     };
 
-      promptOk.onclick = submit;
-      promptCancel.onclick = cancel;
-      promptOverlay.onclick = e => { if (e.target === promptOverlay) cancel(); };
-      document.addEventListener('keydown', onKey, true);
+    promptOk.onclick = submit;
+    promptCancel.onclick = cancel;
+    promptOverlay.onclick = e => { if (e.target === promptOverlay) cancel(); };
+    document.addEventListener('keydown', onKey, true);
   }
 
   const closeConfirmOverlay = document.getElementById('close-confirm-overlay');
@@ -6342,7 +6574,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     try { return localStorage.getItem('tv-dontask-' + key) === '1'; } catch { return false; }
   }
   function setDontAskAgain(key) {
-    try { localStorage.setItem('tv-dontask-' + key, '1'); } catch {}
+    try { localStorage.setItem('tv-dontask-' + key, '1'); } catch { }
   }
 
   function showCloseConfirm(label, closesWorkspace, callback, onCancel) {
@@ -6356,7 +6588,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   // `key` optionally enables a "Don't ask again" checkbox; when the user
   // confirms with it checked, future confirmations of that type are skipped.
   function showDangerConfirm(title, messageHTML, okLabel, callback, onCancel, key) {
-    onCancel = onCancel || (() => {});
+    onCancel = onCancel || (() => { });
     closeConfirmTitle.textContent = title;
     closeConfirmMessage.innerHTML = messageHTML;
     closeConfirmOk.textContent = okLabel;
@@ -6416,8 +6648,8 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   function runningMsg(running, action) {
     return running.length > 0
       ? `There ${running.length > 1 ? 'are' : 'is'} ${running.length} terminal${running.length > 1 ? 's' : ''} with running processes: ` +
-        running.map(r => `<span class="cc-label">${escHtml(r.label)}</span> (${escHtml(r.name)})`).join(', ') +
-        `. ${action}`
+      running.map(r => `<span class="cc-label">${escHtml(r.label)}</span> (${escHtml(r.name)})`).join(', ') +
+      `. ${action}`
       : 'All terminals are idle.';
   }
 
@@ -6490,7 +6722,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
               ws.removeEventListener('message', onMsg);
               resolve(msg.running ? (msg.name || 'unknown') : null);
             }
-          } catch {}
+          } catch { }
         };
         const timer = setTimeout(() => {
           ws.removeEventListener('message', onMsg);
@@ -6511,7 +6743,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   const FONT_MAX = 32;
 
   /* ── Zoom badge ── */
-  const zoomBadge = (function() {
+  const zoomBadge = (function () {
     const el = document.createElement('div');
     el.id = 'zoom-badge';
     document.body.appendChild(el);
@@ -6520,7 +6752,7 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
       el.textContent = text;
       el.classList.add('visible');
       clearTimeout(timer);
-      timer = setTimeout(function() { el.classList.remove('visible'); }, 800);
+      timer = setTimeout(function () { el.classList.remove('visible'); }, 800);
     };
   })();
 
@@ -6596,2397 +6828,2446 @@ const _pluginRegistry = new Map();   // id -> { activate, deactivate }
     const t = activeTerminal();
     if (t && searchInput.value) t.search.findPrevious(searchInput.value);
   });
-    document.getElementById('search-next').addEventListener('click', () => {
-      const t = activeTerminal();
-      if (t && searchInput.value) t.search.findNext(searchInput.value);
-    });
-      document.getElementById('search-close').addEventListener('click', closeSearch);
+  document.getElementById('search-next').addEventListener('click', () => {
+    const t = activeTerminal();
+    if (t && searchInput.value) t.search.findNext(searchInput.value);
+  });
+  document.getElementById('search-close').addEventListener('click', closeSearch);
 
-      /* ═══════════════════════════════════════════════════════════════
-       T A*B SEARCH (Ctrl+Shift+O)
-       ═══════════════════════════════════════════════════════════════ */
-      const tabSearchEl = document.getElementById('tab-search');
-      const tsInput = document.getElementById('ts-input');
-      const tsResults = document.getElementById('ts-results');
-      let tsSelected = -1;
-      let tsItems = [];
+  /* ═══════════════════════════════════════════════════════════════
+   T A*B SEARCH (Ctrl+Shift+O)
+   ═══════════════════════════════════════════════════════════════ */
+  const tabSearchEl = document.getElementById('tab-search');
+  const tsInput = document.getElementById('ts-input');
+  const tsResults = document.getElementById('ts-results');
+  let tsSelected = -1;
+  let tsItems = [];
 
-      // Subsequence fuzzy match: all query chars must appear in order. Lower
-      // score is better; matches at word starts / consecutive runs rank higher.
-      function fuzzyScore(query, text) {
-        if (!query) return 0;
-        query = query.toLowerCase(); text = text.toLowerCase();
-        let qi = 0, score = 0, run = 0;
-        for (let ti = 0; ti < text.length && qi < query.length; ti++) {
-          if (text[ti] === query[qi]) {
-            qi++;
-            const wordStart = ti === 0 || text[ti - 1] === ' ';
-            score += wordStart ? 0 : (run ? 1 : 3);
-            run = run + 1;
-          } else run = 0;
-        }
-        return qi === query.length ? score : Infinity;
+  // Subsequence fuzzy match: all query chars must appear in order. Lower
+  // score is better; matches at word starts / consecutive runs rank higher.
+  function fuzzyScore(query, text) {
+    if (!query) return 0;
+    query = query.toLowerCase(); text = text.toLowerCase();
+    let qi = 0, score = 0, run = 0;
+    for (let ti = 0; ti < text.length && qi < query.length; ti++) {
+      if (text[ti] === query[qi]) {
+        qi++;
+        const wordStart = ti === 0 || text[ti - 1] === ' ';
+        score += wordStart ? 0 : (run ? 1 : 3);
+        run = run + 1;
+      } else run = 0;
+    }
+    return qi === query.length ? score : Infinity;
+  }
+
+  function collectTabItems() {
+    const items = [];
+    for (const ws of workspaces) {
+      for (const t of getWorkspaceTerminals(ws)) {
+        items.push({ id: t.id, wsId: ws.id, label: t.label, type: t.type, wsLabel: ws.label });
       }
+    }
+    return items;
+  }
 
-      function collectTabItems() {
-        const items = [];
-        for (const ws of workspaces) {
-          for (const t of getWorkspaceTerminals(ws)) {
-            items.push({ id: t.id, wsId: ws.id, label: t.label, type: t.type, wsLabel: ws.label });
-          }
-        }
-        return items;
-      }
-
-      function renderTabSearch() {
-        const q = tsInput.value;
-        const scored = tsItems
-          .map(it => ({ it, score: fuzzyScore(q, it.label) }))
-          .filter(x => x.score !== Infinity)
-          .sort((a, b) => a.score - b.score || a.it.label.localeCompare(b.it.label));
-        tsResults.innerHTML = '';
-        if (!scored.length) {
-          const empty = document.createElement('div');
-          empty.className = 'ts-empty';
-          empty.textContent = 'No tabs match';
-          tsResults.appendChild(empty);
-          tsSelected = -1;
-          return;
-        }
-        scored.forEach(({ it }, i) => {
-          const row = document.createElement('div');
-          row.className = 'ts-item';
-          row.innerHTML = `<i class="ph ${it.type === 'browser' ? 'ph-globe-hemisphere-west' : 'ph-terminal-window'}"></i>
+  function renderTabSearch() {
+    const q = tsInput.value;
+    const scored = tsItems
+      .map(it => ({ it, score: fuzzyScore(q, it.label) }))
+      .filter(x => x.score !== Infinity)
+      .sort((a, b) => a.score - b.score || a.it.label.localeCompare(b.it.label));
+    tsResults.innerHTML = '';
+    if (!scored.length) {
+      const empty = document.createElement('div');
+      empty.className = 'ts-empty';
+      empty.textContent = 'No tabs match';
+      tsResults.appendChild(empty);
+      tsSelected = -1;
+      return;
+    }
+    scored.forEach(({ it }, i) => {
+      const row = document.createElement('div');
+      row.className = 'ts-item';
+      row.innerHTML = `<i class="ph ${it.type === 'browser' ? 'ph-globe-hemisphere-west' : 'ph-terminal-window'}"></i>
             <span class="ts-label"></span>
             <span class="ts-ws">${it.wsLabel}</span>
             <span class="ts-type">${it.type}</span>`;
-          row.querySelector('.ts-label').textContent = it.label;
-          row.dataset.idx = i;
-          row.addEventListener('mousedown', e => { e.preventDefault(); tsPick(i); });
-          row.addEventListener('mouseenter', () => setTsSelected(i));
-          tsResults.appendChild(row);
-        });
-        setTsSelected(0);
-      }
+      row.querySelector('.ts-label').textContent = it.label;
+      row.dataset.idx = i;
+      row.addEventListener('mousedown', e => { e.preventDefault(); tsPick(i); });
+      row.addEventListener('mouseenter', () => setTsSelected(i));
+      tsResults.appendChild(row);
+    });
+    setTsSelected(0);
+  }
 
-      function setTsSelected(i) {
-        if (i < 0 || i >= tsResults.children.length) return;
-        tsSelected = i;
-        tsResults.querySelectorAll('.ts-item').forEach((el, idx) => el.classList.toggle('selected', idx === i));
-        tsResults.children[i].scrollIntoView({ block: 'nearest' });
-      }
+  function setTsSelected(i) {
+    if (i < 0 || i >= tsResults.children.length) return;
+    tsSelected = i;
+    tsResults.querySelectorAll('.ts-item').forEach((el, idx) => el.classList.toggle('selected', idx === i));
+    tsResults.children[i].scrollIntoView({ block: 'nearest' });
+  }
 
-      function tsPick(i) {
-        if (i < 0 || i >= tsItems.length) return;
-        const item = tsItems[i];
-        closeTabSearch();
-        activateTerminal(item.wsId, item.id);
-        activateWorkspace(item.wsId);
-      }
+  function tsPick(i) {
+    if (i < 0 || i >= tsItems.length) return;
+    const item = tsItems[i];
+    closeTabSearch();
+    activateTerminal(item.wsId, item.id);
+    activateWorkspace(item.wsId);
+  }
 
-      function openTabSearch() {
-        if (!tabSearchEl || tsResults.contains(document.activeElement)) return;
-        tsItems = collectTabItems();
-        tabSearchEl.style.display = 'flex';
-        tsInput.value = '';
-        renderTabSearch();
-        tsInput.focus();
-      }
+  function openTabSearch() {
+    if (!tabSearchEl || tsResults.contains(document.activeElement)) return;
+    tsItems = collectTabItems();
+    tabSearchEl.style.display = 'flex';
+    tsInput.value = '';
+    renderTabSearch();
+    tsInput.focus();
+  }
 
-      function closeTabSearch() {
-        if (!tabSearchEl) return;
-        tabSearchEl.style.display = 'none';
-        const t = activeTerminal();
-        if (t && t.type !== 'browser' && t.term) t.term.focus();
-      }
+  function closeTabSearch() {
+    if (!tabSearchEl) return;
+    tabSearchEl.style.display = 'none';
+    const t = activeTerminal();
+    if (t && t.type !== 'browser' && t.term) t.term.focus();
+  }
 
-      tsInput.addEventListener('input', renderTabSearch);
-      tsInput.addEventListener('keydown', e => {
-        if (e.key === 'Escape') { e.stopPropagation(); closeTabSearch(); }
-        else if (e.key === 'ArrowDown') { e.preventDefault(); setTsSelected(Math.min(tsSelected + 1, tsResults.children.length - 1)); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); setTsSelected(Math.max(tsSelected - 1, 0)); }
-        else if (e.key === 'Enter') { e.preventDefault(); tsPick(tsSelected); }
-      });
-      tabSearchEl.addEventListener('mousedown', e => { if (e.target === tabSearchEl) closeTabSearch(); });
+  tsInput.addEventListener('input', renderTabSearch);
+  tsInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); closeTabSearch(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setTsSelected(Math.min(tsSelected + 1, tsResults.children.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setTsSelected(Math.max(tsSelected - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); tsPick(tsSelected); }
+  });
+  tabSearchEl.addEventListener('mousedown', e => { if (e.target === tabSearchEl) closeTabSearch(); });
 
-      /* ═══════════════════════════════════════════════════════════════
-       T O*OLBAR BUTTONS
-       ═══════════════════════════════════════════════════════════════ */
+  /* ═══════════════════════════════════════════════════════════════
+   T O*OLBAR BUTTONS
+   ═══════════════════════════════════════════════════════════════ */
 
-      /* ═══════════════════════════════════════════════════════════════
-       C U*STOM DROPDOWN
-       ═══════════════════════════════════════════════════════════════ */
-      function customFontFamily(name) {
-        const safe = String(name).replace(/['"]/g, '').trim();
-        return `'${safe}', monospace`;
-      }
+  /* ═══════════════════════════════════════════════════════════════
+   C U*STOM DROPDOWN
+   ═══════════════════════════════════════════════════════════════ */
+  function customFontFamily(name) {
+    const safe = String(name).replace(/['"]/g, '').trim();
+    return `'${safe}', monospace`;
+  }
 
-      function fontFormatFromName(fileName) {
-        const ext = (fileName.split('.').pop() || '').toLowerCase();
-        return { ttf: 'truetype', otf: 'opentype', woff: 'woff', woff2: 'woff2' }[ext] || null;
-      }
+  function fontFormatFromName(fileName) {
+    const ext = (fileName.split('.').pop() || '').toLowerCase();
+    return { ttf: 'truetype', otf: 'opentype', woff: 'woff', woff2: 'woff2' }[ext] || null;
+  }
 
-      function injectCustomFonts() {
-        let styleEl = document.getElementById('tv-custom-fonts-style');
-        if (!styleEl) {
-          styleEl = document.createElement('style');
-          styleEl.id = 'tv-custom-fonts-style';
-          document.head.appendChild(styleEl);
-        }
-        let css = '';
-        for (const [name, f] of Object.entries(customFonts)) {
-          const safe = String(name).replace(/['"]/g, '').trim();
-          css += `@font-face{font-family:'${safe}';src:url(${f.dataUrl}) format('${f.format}');font-display:swap;}\n`;
-        }
-        styleEl.textContent = css;
-      }
+  function injectCustomFonts() {
+    let styleEl = document.getElementById('tv-custom-fonts-style');
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = 'tv-custom-fonts-style';
+      document.head.appendChild(styleEl);
+    }
+    let css = '';
+    for (const [name, f] of Object.entries(customFonts)) {
+      const safe = String(name).replace(/['"]/g, '').trim();
+      css += `@font-face{font-family:'${safe}';src:url(${f.dataUrl}) format('${f.format}');font-display:swap;}\n`;
+    }
+    styleEl.textContent = css;
+  }
 
-      function importFontFiles(files) {
-        for (const file of files) {
-          const format = fontFormatFromName(file.name);
-          if (!format) continue;
-          const reader = new FileReader();
-          reader.onload = () => {
-            const base = file.name.replace(/\.[^.]+$/, '');
-            customFonts[base] = { name: base, dataUrl: reader.result, format };
-            injectCustomFonts();
-            saveState();
-            refreshFontPresetUI();
-            renderCustomFontsList();
-          };
-          reader.readAsDataURL(file);
-        }
-      }
-
-      function removeCustomFont(name) {
-        delete customFonts[name];
+  function importFontFiles(files) {
+    for (const file of files) {
+      const format = fontFormatFromName(file.name);
+      if (!format) continue;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base = file.name.replace(/\.[^.]+$/, '');
+        customFonts[base] = { name: base, dataUrl: reader.result, format };
         injectCustomFonts();
-        if (currentFontFamily === customFontFamily(name)) {
-          currentFontFamily = PRESET_FONTS[0].family;
-        }
         saveState();
         refreshFontPresetUI();
         renderCustomFontsList();
-        applySettings();
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  function removeCustomFont(name) {
+    delete customFonts[name];
+    injectCustomFonts();
+    if (currentFontFamily === customFontFamily(name)) {
+      currentFontFamily = PRESET_FONTS[0].family;
+    }
+    saveState();
+    refreshFontPresetUI();
+    renderCustomFontsList();
+    applySettings();
+  }
+
+  function renderCustomFontsList() {
+    const list = document.getElementById('custom-fonts-list');
+    if (!list) return;
+    list.innerHTML = '';
+    const names = Object.keys(customFonts);
+    if (!names.length) {
+      const empty = document.createElement('div');
+      empty.className = 'text-[11px] text-[var(--dim-text)]';
+      empty.textContent = 'No custom fonts imported yet.';
+      list.appendChild(empty);
+      return;
+    }
+    for (const name of names) {
+      const row = document.createElement('div');
+      row.className = 'flex items-center justify-between gap-3 px-2.5 py-1.5 rounded bg-black/20 border border-[var(--border)]';
+      const label = document.createElement('span');
+      label.className = 'text-[12px] text-[var(--fg)] truncate max-w-[220px]';
+      label.style.fontFamily = customFontFamily(name);
+      label.textContent = name;
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'text-[11px] text-[#e55] hover:text-[#f77] cursor-pointer bg-transparent border-0 shrink-0';
+      rm.textContent = 'Remove';
+      rm.addEventListener('click', () => removeCustomFont(name));
+      row.appendChild(label);
+      row.appendChild(rm);
+      list.appendChild(row);
+    }
+  }
+
+  function refreshFontPresetUI() {
+    const select = document.getElementById('set-fontpreset');
+    const customRow = document.getElementById('fontfamily-custom-row');
+    if (!select || !customRow) return;
+    select.innerHTML = '';
+
+    const addOpt = (value, label, selected) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      if (selected) opt.selected = true;
+      select.appendChild(opt);
+    };
+
+    for (const p of PRESET_FONTS) {
+      addOpt(p.family, p.name, currentFontFamily === p.family);
+    }
+
+    const customNames = Object.keys(customFonts);
+    if (customNames.length) {
+      const g = document.createElement('optgroup');
+      g.label = 'Imported';
+      for (const name of customNames) {
+        addOpt(customFontFamily(name), name, currentFontFamily === customFontFamily(name));
+      }
+      select.appendChild(g);
+    }
+
+    addOpt('__custom__', 'Custom CSS font-family…', false);
+
+    const matchesPreset = PRESET_FONTS.some(p => p.family === currentFontFamily);
+    const matchesCustom = customNames.some(n => currentFontFamily === customFontFamily(n));
+    const useCustom = !matchesPreset && !matchesCustom;
+
+    if (useCustom) {
+      select.value = '__custom__';
+      customRow.classList.remove('hidden');
+      customRow.classList.add('flex');
+      document.getElementById('set-fontfamily').value = currentFontFamily;
+    } else {
+      customRow.classList.add('hidden');
+      customRow.classList.remove('flex');
+      if (matchesPreset) select.value = currentFontFamily;
+      if (matchesCustom) select.value = customFontFamily(customNames.find(n => currentFontFamily === customFontFamily(n)));
+    }
+
+    const dd = document.querySelector('.custom-dropdown[data-for="set-fontpreset"]');
+    if (dd) initCustomDropdown(dd);
+  }
+
+  function initCustomDropdown(dd) {
+    const selectId = dd.dataset.for;
+    const select = document.getElementById(selectId);
+    if (!select) return;
+
+    dd.innerHTML = '';
+    const btn = document.createElement('div');
+    btn.className = 'custom-dropdown-btn';
+    btn.innerHTML = `<span class="custom-dropdown-label"></span><i class="ph ph-caret-down dropdown-arrow"></i>`;
+    const menu = document.createElement('div');
+    menu.className = 'custom-dropdown-menu';
+    dd.appendChild(btn);
+    dd.appendChild(menu);
+
+    function buildOptions() {
+      menu.innerHTML = '';
+      [...select.options].forEach(opt => {
+        const el = document.createElement('div');
+        el.className = 'custom-dropdown-option' + (opt.selected ? ' selected' : '');
+        el.dataset.value = opt.value;
+        let content = '';
+        if (opt.dataset.icon) {
+          content += `<svg class="dropdown-icon" viewBox="0 0 24 24" width="16" height="16"><path d="${opt.dataset.icon}"/></svg>`;
+        }
+        // Support theme swatches via data-swatches attribute
+        if (opt.dataset.swatches) {
+          const swatches = opt.dataset.swatches.split(',');
+          content += `<span class="theme-swatch">${swatches.map(c => `<span style="background:${c}"></span>`).join('')}</span>`;
+        }
+        content += `<span>${opt.textContent}</span>`;
+        el.innerHTML = content;
+        el.addEventListener('click', () => {
+          select.value = opt.value;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+          refresh();
+          close();
+        });
+        menu.appendChild(el);
+      });
+    }
+
+    function refresh() {
+      const sel = select.options[select.selectedIndex];
+      const label = btn.querySelector('.custom-dropdown-label');
+      let html = '';
+      if (sel && sel.dataset.icon) {
+        html += `<svg class="dropdown-icon" viewBox="0 0 24 24" width="14" height="14"><path d="${sel.dataset.icon}"/></svg>`;
+      }
+      html += sel ? sel.textContent : '';
+      label.innerHTML = html;
+      menu.querySelectorAll('.custom-dropdown-option').forEach(el => {
+        el.classList.toggle('selected', el.dataset.value === select.value);
+      });
+    }
+
+    function close() {
+      btn.classList.remove('open');
+      menu.classList.remove('open');
+      const arrow = btn.querySelector('.dropdown-arrow');
+      if (arrow) { arrow.classList.remove('ph-caret-up'); arrow.classList.add('ph-caret-down'); }
+    }
+
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const isOpen = menu.classList.contains('open');
+      // Close all other dropdowns
+      document.querySelectorAll('.custom-dropdown-menu.open').forEach(m => m.classList.remove('open'));
+      document.querySelectorAll('.custom-dropdown-btn.open').forEach(b => {
+        b.classList.remove('open');
+        const a = b.querySelector('.dropdown-arrow');
+        if (a) { a.classList.remove('ph-caret-up'); a.classList.add('ph-caret-down'); }
+      });
+      if (!isOpen) {
+        buildOptions();
+        btn.classList.add('open');
+        menu.classList.add('open');
+        const arrow = btn.querySelector('.dropdown-arrow');
+        if (arrow) { arrow.classList.remove('ph-caret-down'); arrow.classList.add('ph-caret-up'); }
+      }
+    });
+
+    // Close on outside click
+    document.addEventListener('click', e => {
+      if (!dd.contains(e.target)) close();
+    });
+
+    // Sync when select changes externally
+    select.addEventListener('change', refresh);
+
+    // Initial build
+    buildOptions();
+    refresh();
+  }
+
+  // Init all custom dropdowns
+  document.querySelectorAll('.custom-dropdown').forEach(initCustomDropdown);
+
+  /* ═══════════════════════════════════════════════════════════════
+   T H E M E   E D I T O R
+   ═══════════════════════════════════════════════════════════════ */
+  const THEME_COLOR_GROUPS = {
+    'Core': {
+      bg: 'Background', fg: 'Foreground', cursor: 'Cursor', selection: 'Selection',
+    },
+    'UI Colors': {
+      accent: 'Accent', border: 'Border', multiSelect: 'Multi-select',
+      tabActiveBg: 'Tab Active BG', tabHoverBg: 'Tab Hover BG',
+      dimText: 'Dim Text', mutedText: 'Muted Text',
+    },
+    'Terminal Palette': {
+      p0: 'Black', p1: 'Red', p2: 'Green', p3: 'Yellow',
+      p4: 'Blue', p5: 'Magenta', p6: 'Cyan', p7: 'White',
+      p8: 'Bright Black', p9: 'Bright Red', p10: 'Bright Green', p11: 'Bright Yellow',
+      p12: 'Bright Blue', p13: 'Bright Magenta', p14: 'Bright Cyan', p15: 'Bright White',
+    },
+  };
+
+  const DEFAULT_PALETTE = ['#1e1e2e', '#f38ba8', '#a6e3a1', '#f9e2af', '#89b4fa', '#f5c2e7', '#94e2d5', '#cdd6f4', '#585b70', '#eba0ac', '#a6e3a1', '#f9e2af', '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de'];
+
+  let editingTheme = null;
+
+  function initEditingTheme(name) {
+    const src = THEMES[name];
+    if (src) {
+      editingTheme = {
+        label: src.label || name,
+        bg: src.bg, fg: src.fg, cursor: src.cursor, selection: src.selection,
+        swatches: src.swatches ? [...src.swatches] : [src.bg, src.fg, src.palette ? src.palette[4] : src.fg],
+        palette: src.palette ? [...src.palette] : [],
+        ui: src.ui ? { ...src.ui } : {},
+      };
+    } else {
+      editingTheme = {
+        label: '', bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#585b70',
+        swatches: ['#1e1e2e', '#cdd6f4', '#89b4fa'],
+        palette: [
+          '#1e1e2e', '#f38ba8', '#a6e3a1', '#f9e2af',
+          '#89b4fa', '#f5c2e7', '#94e2d5', '#cdd6f4',
+          '#585b70', '#eba0ac', '#a6e3a1', '#f9e2af',
+          '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de',
+        ],
+        ui: {},
+      };
+    }
+  }
+
+  const UI_DEFAULTS = {
+    border: '#ffffff14',
+    tabActiveBg: '#ffffff12',
+    tabHoverBg: '#ffffff0a',
+    dimText: '#ffffff4d',
+    mutedText: '#ffffff80',
+  };
+
+  function getThemeColor(key) {
+    if (!editingTheme) return '#000000';
+    if (key === 'bg') return editingTheme.bg;
+    if (key === 'fg') return editingTheme.fg;
+    if (key === 'cursor') return editingTheme.cursor;
+    if (key === 'selection') return editingTheme.selection;
+    if (key === 'accent') return editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa';
+    if (key === 'multiSelect') return editingTheme.ui.multiSelect || editingTheme.palette[3] || '#f9e2af';
+    if (UI_DEFAULTS[key]) return editingTheme.ui[key] || UI_DEFAULTS[key];
+    if (key.startsWith('p')) return editingTheme.palette[parseInt(key.slice(1))] || '#000000';
+    return '#000000';
+  }
+
+  function setThemeColor(key, val) {
+    if (!editingTheme) return;
+    if (key === 'bg') editingTheme.bg = val;
+    else if (key === 'fg') editingTheme.fg = val;
+    else if (key === 'cursor') editingTheme.cursor = val;
+    else if (key === 'selection') editingTheme.selection = val;
+    else if (key === 'accent') editingTheme.ui.accent = val;
+    else if (key === 'border') editingTheme.ui.border = val || undefined;
+    else if (key === 'tabActiveBg') editingTheme.ui.tabActiveBg = val || undefined;
+    else if (key === 'tabHoverBg') editingTheme.ui.tabHoverBg = val || undefined;
+    else if (key === 'dimText') editingTheme.ui.dimText = val || undefined;
+    else if (key === 'mutedText') editingTheme.ui.mutedText = val || undefined;
+    else if (key === 'multiSelect') editingTheme.ui.multiSelect = val || undefined;
+    else if (key.startsWith('p')) editingTheme.palette[parseInt(key.slice(1))] = val;
+    editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
+  }
+
+  function openColorisForSwatch(swatchEl, currentColor, themeKey) {
+    const tempInput = document.createElement('input');
+    tempInput.type = 'text';
+    tempInput.value = currentColor || '#000000';
+    tempInput.style.position = 'fixed';
+    tempInput.style.opacity = '0';
+    tempInput.style.pointerEvents = 'none';
+    // Anchor the popup next to the swatch (Coloris positions from the input's rect)
+    const r = swatchEl.getBoundingClientRect();
+    tempInput.style.left = Math.max(8, Math.min(window.innerWidth - 210, r.left - 85)) + 'px';
+    tempInput.style.top = r.bottom + 6 + 'px';
+    tempInput.style.width = '1px';
+    tempInput.style.height = '1px';
+    tempInput.setAttribute('data-coloris', '');
+    document.body.appendChild(tempInput);
+
+    // This Coloris build exposes no .open()/.on(): a click on a
+    // [data-coloris] input opens the picker via its own delegation, and
+    // picked values arrive as 'input' events on that input.
+    tempInput.addEventListener('input', () => {
+      setThemeColor(themeKey, tempInput.value);
+      swatchEl.style.background = tempInput.value;
+      previewTheme();
+    });
+    tempInput.addEventListener('close', () => tempInput.remove());
+    setTimeout(() => tempInput.click(), 0);
+  }
+
+  function previewTheme() {
+    if (!editingTheme) return;
+    const r = document.documentElement.style;
+    r.setProperty('--bg', editingTheme.bg);
+    r.setProperty('--fg', editingTheme.fg);
+    r.setProperty('--cursor', editingTheme.cursor);
+    r.setProperty('--selection', editingTheme.selection);
+    const accent = editingTheme.ui.accent || editingTheme.palette[4] || editingTheme.fg;
+    r.setProperty('--accent', accent);
+    r.setProperty('--ws-active-strip', accent);
+    r.setProperty('--accent-dim', hexToRgba(accent, 0.15));
+    const uiMap = { border: '--border', tabActiveBg: '--tab-active-bg', tabHoverBg: '--tab-hover-bg', dimText: '--dim-text', mutedText: '--muted-text' };
+    for (const [prop, cssVar] of Object.entries(uiMap)) {
+      r.setProperty(cssVar, editingTheme.ui[prop] || UI_DEFAULTS[prop]);
+    }
+  }
+
+  function renderThemeEditor() {
+    const container = document.getElementById('theme-editor-groups');
+    if (!container) return;
+    container.innerHTML = '';
+
+    function buildColorItem(key, label) {
+      const item = document.createElement('div');
+      item.className = 'theme-color-item';
+      const val = getThemeColor(key);
+
+      const lbl = document.createElement('span');
+      lbl.className = 'theme-color-label';
+      lbl.textContent = label;
+
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.className = 'theme-color-input';
+      inp.setAttribute('data-coloris', '');
+      inp.value = val;
+      inp.spellcheck = false;
+
+      const swatch = document.createElement('span');
+      swatch.className = 'theme-color-swatch';
+      swatch.style.background = val;
+      swatch.title = label;
+
+      inp.addEventListener('input', () => {
+        let v = inp.value.trim();
+        if (/^#?[0-9a-fA-F]{3,8}$/.test(v)) {
+          if (!v.startsWith('#')) v = '#' + v;
+          setThemeColor(key, v);
+          swatch.style.background = v;
+          previewTheme();
+        }
+      });
+
+      item.appendChild(lbl);
+      item.appendChild(inp);
+      item.appendChild(swatch);
+      return item;
+    }
+
+    // Colors title
+    const colorsTitle = document.createElement('div');
+    colorsTitle.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
+    colorsTitle.textContent = 'Colors';
+    container.appendChild(colorsTitle);
+
+    // Core + UI Colors in one card
+    const colorsCard = document.createElement('div');
+    colorsCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
+    for (const [groupName, fields] of Object.entries(THEME_COLOR_GROUPS)) {
+      if (groupName === 'Terminal Palette') continue;
+      if (groupName === 'UI Colors') {
+        const sep = document.createElement('div');
+        sep.className = 'border-t border-[var(--border)] my-3';
+        colorsCard.appendChild(sep);
+      }
+      const title = document.createElement('div');
+      title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
+      title.textContent = groupName;
+      colorsCard.appendChild(title);
+      const grid = document.createElement('div');
+      grid.className = 'theme-color-grid';
+      for (const [key, label] of Object.entries(fields)) {
+        grid.appendChild(buildColorItem(key, label));
+      }
+      colorsCard.appendChild(grid);
+    }
+    container.appendChild(colorsCard);
+
+    // Terminal Palette — its own card
+    const paletteCard = document.createElement('div');
+    paletteCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
+
+    // Title row inside card (with toggle)
+    const title = document.createElement('div');
+    title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] flex justify-between items-center mb-2 ml-1';
+    const titleText = document.createElement('span');
+    titleText.textContent = 'Terminal Palette';
+    title.appendChild(titleText);
+
+    const toggleLabel = document.createElement('label');
+    toggleLabel.className = 'inline-flex items-center cursor-pointer shrink-0';
+    const toggleInput = document.createElement('input');
+    toggleInput.type = 'checkbox';
+    toggleInput.className = 'sr-only peer';
+    const toggleTrack = document.createElement('div');
+    toggleTrack.className = 'relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[""] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]';
+    toggleLabel.appendChild(toggleInput);
+    toggleLabel.appendChild(toggleTrack);
+    title.appendChild(toggleLabel);
+    paletteCard.appendChild(title);
+
+    const paletteGrid = document.createElement('div');
+    paletteGrid.className = 'theme-color-grid';
+    paletteGrid.style.display = 'none';
+
+    for (const [key, label] of Object.entries(THEME_COLOR_GROUPS['Terminal Palette'])) {
+      paletteGrid.appendChild(buildColorItem(key, label));
+    }
+
+    // Reset palette link
+    const resetBtn = document.createElement('div');
+    resetBtn.className = 'text-[11px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline text-right pt-2 border-t border-[var(--border)] mt-1';
+    resetBtn.textContent = 'Reset palette';
+    resetBtn.addEventListener('click', () => {
+      DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
+      editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
+      paletteGrid.querySelectorAll('.theme-color-item').forEach((item, i) => {
+        if (i < 16) {
+          const v = editingTheme.palette[i];
+          const s = item.querySelector('span:nth-child(2)');
+          if (s) s.style.background = v;
+        }
+      });
+      previewTheme();
+    });
+    paletteGrid.appendChild(resetBtn);
+    paletteCard.appendChild(paletteGrid);
+
+    // Toggle handler
+    toggleInput.addEventListener('change', () => {
+      const isOn = toggleInput.checked;
+      paletteGrid.style.display = isOn ? '' : 'none';
+      if (!isOn) {
+        DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
+        editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
+        previewTheme();
+      }
+    });
+
+    container.appendChild(paletteCard);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+   S E*TTINGS MODAL
+   ═══════════════════════════════════════════════════════════════ */
+  const settingsOverlay = document.getElementById('settings-overlay');
+
+  function openSettings(cat) {
+    // Populate theme select
+    const themeSelect = document.getElementById('set-theme');
+    themeSelect.innerHTML = '';
+    for (const [key, t] of Object.entries(THEMES)) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = t.label;
+      opt.dataset.swatches = t.swatches.join(',');
+      if (key === currentThemeName) opt.selected = true;
+      themeSelect.appendChild(opt);
+    }
+    // Rebuild custom dropdown for theme
+    const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
+    if (themeDD) initCustomDropdown(themeDD);
+
+    // Corner style
+    const cornerSelect = document.getElementById('set-corner-style');
+    cornerSelect.value = cornerStyle;
+    cornerSelect.onchange = e => {
+      cornerStyle = e.target.value;
+      applyCornerStyle();
+      saveState();
+    };
+    const cornerDD = document.querySelector('.custom-dropdown[data-for="set-corner-style"]');
+    if (cornerDD) initCustomDropdown(cornerDD);
+
+    // Sidebar style
+    const sbModeSelect = document.getElementById('set-sidebar-mode');
+    sbModeSelect.value = sidebarMode;
+    sbModeSelect.onchange = e => {
+      sidebarMode = e.target.value;
+      applySidebarMode();
+      saveState();
+    };
+    const sbModeDD = document.querySelector('.custom-dropdown[data-for="set-sidebar-mode"]');
+    if (sbModeDD) initCustomDropdown(sbModeDD);
+
+    // Notify when a command finishes
+    const notifyFinishToggle = document.getElementById('set-notify-finish');
+    if (notifyFinishToggle) {
+      notifyFinishToggle.checked = notifyOnCommandFinish;
+      notifyFinishToggle.onchange = e => {
+        notifyOnCommandFinish = e.target.checked;
+        saveState();
+      };
+    }
+
+    // Workspace process details
+    const wsProcsToggle = document.getElementById('set-wsprocs');
+    if (wsProcsToggle) {
+      wsProcsToggle.checked = showWsProcs;
+      wsProcsToggle.onchange = e => {
+        showWsProcs = e.target.checked;
+        applyWsProcsSetting();
+        renderSidebar();
+        saveState();
+      };
+    }
+
+    // Font size
+    document.getElementById('set-fontsize').value = currentFontSize;
+    document.getElementById('set-fontsize-val').textContent = currentFontSize + 'px';
+
+    // Font family
+    refreshFontPresetUI();
+    renderCustomFontsList();
+
+    // Line height
+    document.getElementById('set-lineheight').value = currentLineHeight;
+    document.getElementById('set-lineheight-val').textContent = currentLineHeight.toFixed(1);
+
+    // Cursor style
+    document.getElementById('set-cursor').value = currentCursorStyle;
+
+    // Cursor blink
+    const blinkToggle = document.getElementById('set-cursorblink');
+    blinkToggle.checked = currentCursorBlink;
+
+    // Scrollback
+    document.getElementById('set-scrollback').value = currentScrollback;
+    document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
+
+    // Default path
+    const defaultPathInput = document.getElementById('set-default-path');
+    if (defaultPathInput) defaultPathInput.value = defaultTerminalPath || '';
+    const defaultPathBrowse = document.getElementById('set-default-path-browse');
+    if (defaultPathBrowse) {
+      defaultPathBrowse.style.display = (isDesktop() && window.electronAPI?.selectDirectory) ? 'inline-flex' : 'none';
+    }
+
+    // Search engine
+    const searchSelect = document.getElementById('set-search-engine');
+    searchSelect.value = searchEngine;
+    for (const opt of searchSelect.options) {
+      if (SEARCH_ENGINE_ICONS[opt.value]) opt.dataset.icon = SEARCH_ENGINE_ICONS[opt.value];
+    }
+    const searchDD = document.querySelector('.custom-dropdown[data-for="set-search-engine"]');
+    if (searchDD) initCustomDropdown(searchDD);
+    document.getElementById('set-custom-search-row').classList.toggle('hidden', searchEngine !== 'custom');
+    document.getElementById('set-custom-search-row').classList.toggle('flex', searchEngine === 'custom');
+    document.getElementById('set-custom-search-url').value = customSearchUrl;
+
+    // Background
+    refreshBgSettingsUI();
+
+    // Shortcuts
+    renderShortcutsList();
+
+    // Always open on the first category (Appearance) unless deep-linked
+    switchSettingsCat(typeof cat === 'string' ? cat : 'appearance');
+    settingsOverlay.classList.add('open');
+    document.activeElement?.blur();
+
+    // Init theme editor in "New Theme" mode
+    document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === 'new'));
+    document.querySelector('.theme-name-row')?.classList.remove('hidden');
+    document.querySelector('.theme-name-row')?.classList.add('flex');
+    document.querySelector('.theme-edit-row')?.classList.add('hidden');
+    document.querySelector('.theme-edit-row')?.classList.remove('flex');
+    initEditingTheme(currentThemeName);
+    editingTheme.label = '';
+    document.getElementById('set-theme-name').value = '';
+    renderThemeEditor();
+    refreshThemeCustomSelect();
+    settingsOverlay.focus({ preventScroll: true });
+    syncBrowserSlots();
+    if (cat === 'plugins') renderPluginsSettings();
+  }
+
+  function closeSettings() {
+    applyTheme(currentThemeName);
+    settingsOverlay.classList.remove('open');
+    syncBrowserSlots();
+    // In the Electron settings window, closing the overlay closes the window
+    if (SETTINGS_ONLY && window.electronAPI && window.electronAPI.settingsClose) window.electronAPI.settingsClose();
+  }
+
+  function renderShortcutsList() {
+    const list = document.getElementById('shortcuts-list');
+    if (!list) return;
+    const searchInput = document.getElementById('shortcuts-search');
+    const query = (searchInput?.value || '').trim().toLowerCase();
+    list.innerHTML = '';
+    let shown = 0;
+    for (const [action, sc] of Object.entries(customShortcuts)) {
+      const label = SHORTCUT_LABELS[action] || action;
+      const combo = formatKeyCombo(sc);
+      if (query && !label.toLowerCase().includes(query) && !combo.toLowerCase().includes(query)) continue;
+      shown++;
+      const item = document.createElement('div');
+      item.className = 'shortcut-item';
+      const labelEl = document.createElement('span');
+      labelEl.textContent = label;
+      const key = document.createElement('span');
+      key.className = 'shortcut-key' + (!sc.key ? ' empty' : '');
+      key.textContent = combo;
+      key.addEventListener('click', () => startRecording(item, key, action));
+      const resetBtn = document.createElement('span');
+      resetBtn.className = 'shortcut-reset';
+      resetBtn.title = 'Reset to default';
+      resetBtn.innerHTML = '<i class="ph ph-arrow-u-up-left"></i>';
+      const defaultSc = DEFAULT_SHORTCUTS[action];
+      resetBtn.addEventListener('click', () => {
+        if (defaultSc) {
+          customShortcuts[action] = JSON.parse(JSON.stringify(defaultSc));
+          saveState();
+          renderShortcutsList();
+        }
+      });
+      const keys = document.createElement('div');
+      keys.className = 'shortcut-keys';
+      keys.appendChild(key);
+      keys.appendChild(resetBtn);
+      item.appendChild(labelEl);
+      item.appendChild(keys);
+      list.appendChild(item);
+    }
+    if (!shown) {
+      const empty = document.createElement('div');
+      empty.className = 'shortcuts-empty';
+      empty.textContent = 'No shortcuts match your search';
+      list.appendChild(empty);
+    }
+  }
+
+  document.addEventListener('input', e => {
+    if (e.target && e.target.id === 'shortcuts-search') renderShortcutsList();
+  });
+
+  function startRecording(item, keyEl, action) {
+    // Cancel any existing recording
+    document.querySelectorAll('.shortcut-key.recording').forEach(el => el.classList.remove('recording'));
+    keyEl.classList.add('recording');
+    keyEl.textContent = 'Press a key...';
+
+    const isClickAction = customShortcuts[action]?.key === 'Click' || DEFAULT_SHORTCUTS[action]?.key === 'Click';
+    let pressed = {};      // track held keys by code
+    let mainKey = null;     // the non-modifier key
+    let modState = { ctrl: false, shift: false, alt: false, meta: false };
+    let cancelled = false;
+
+    function cleanup() {
+      document.removeEventListener('keydown', onDown, true);
+      document.removeEventListener('keyup', onUp, true);
+    }
+
+    function apply(combo) {
+      cleanup();
+      keyEl.classList.remove('recording');
+
+      // Need at least one modifier
+      if (!combo.ctrl && !combo.alt && !combo.meta) {
+        keyEl.textContent = formatKeyCombo(customShortcuts[action]);
+        return;
       }
 
-      function renderCustomFontsList() {
-        const list = document.getElementById('custom-fonts-list');
-        if (!list) return;
-        list.innerHTML = '';
-        const names = Object.keys(customFonts);
-        if (!names.length) {
-          const empty = document.createElement('div');
-          empty.className = 'text-[11px] text-[var(--dim-text)]';
-          empty.textContent = 'No custom fonts imported yet.';
-          list.appendChild(empty);
+      // Check for conflicts — swap if needed
+      for (const [otherAction, otherSc] of Object.entries(customShortcuts)) {
+        if (otherAction === action) continue;
+        if (otherSc.key === combo.key && !!otherSc.ctrl === !!combo.ctrl
+          && !!otherSc.shift === !!combo.shift && !!otherSc.alt === !!combo.alt
+          && !!otherSc.meta === !!combo.meta) {
+          customShortcuts[otherAction] = customShortcuts[action];
+          break;
+        }
+      }
+
+      combo.label = formatKeyCombo(combo);
+      customShortcuts[action] = combo;
+      saveState();
+      renderShortcutsList();
+    }
+
+    function onDown(e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Escape clears the shortcut (empty = disabled)
+      if (e.code === 'Escape') {
+        cancelled = true;
+        cleanup();
+        keyEl.classList.remove('recording');
+        customShortcuts[action] = { ctrl: false, shift: false, alt: false, meta: false, key: null };
+        saveState();
+        renderShortcutsList();
+        return;
+      }
+
+      pressed[e.code] = true;
+
+      // Track modifier state from keydown (reliable)
+      modState.ctrl = e.ctrlKey;
+      modState.shift = e.shiftKey;
+      modState.alt = e.altKey;
+      modState.meta = e.metaKey;
+
+      // Track non-modifier key (use e.key for correct layout mapping, e.g. AZERTY)
+      const isMod = e.code.startsWith('Control') || e.code.startsWith('Shift')
+        || e.code.startsWith('Alt') || e.code.startsWith('Meta');
+      if (!isMod) mainKey = e.key;
+
+      // Show live preview
+      if (isClickAction && !mainKey && (modState.ctrl || modState.alt || modState.meta)) {
+        keyEl.textContent = formatKeyCombo({ ...modState, key: 'Click' });
+      } else if (mainKey) {
+        keyEl.textContent = formatKeyCombo({ ...modState, key: mainKey });
+      }
+    }
+
+    function onUp(e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      delete pressed[e.code];
+
+      // If cancelled or no main key yet, keep waiting
+      if (cancelled) return;
+
+      // All keys released — finalize
+      if (Object.keys(pressed).length === 0 && mainKey) {
+        apply({ ...modState, key: mainKey });
+      } else if (Object.keys(pressed).length === 0 && !mainKey) {
+        // For click shortcuts: finalize with modifier-only combo
+        if (isClickAction && (modState.ctrl || modState.alt || modState.meta)) {
+          apply({ ...modState, key: 'Click' });
+        } else {
+          keyEl.textContent = 'Press a key...';
+          modState = { ctrl: false, shift: false, alt: false, meta: false };
+        }
+      }
+    }
+
+    document.addEventListener('keydown', onDown, true);
+    document.addEventListener('keyup', onUp, true);
+  }
+
+  // Reset shortcuts to defaults
+  document.addEventListener('click', e => {
+    if (e.target.id === 'shortcuts-reset') {
+      customShortcuts = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS));
+      saveState();
+      renderShortcutsList();
+    }
+  });
+
+  function switchSettingsCat(cat) {
+    const prevCat = document.querySelector('.settings-cat-btn.active')?.dataset.cat;
+    document.querySelectorAll('.settings-cat-btn').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
+    document.querySelectorAll('.settings-section[data-cat]').forEach(s => s.classList.toggle('active', s.dataset.cat === cat));
+    // Leaving theme editor → revert live preview to applied theme
+    if (prevCat === 'theme-editor' && cat !== 'theme-editor') {
+      applyTheme(currentThemeName);
+    }
+    // Reset scroll to top of the new section
+    document.querySelector('.settings-section')?.parentElement?.scrollTo({ top: 0 });
+    settingsCategory = cat;
+    saveState();
+    if (cat === 'plugins') renderPluginsSettings();
+    if (prevCat === 'plugins' && cat !== 'plugins') _pluginsView = { mode: 'list' };
+  }
+
+  // Track theme editor mode so it persists across category switches
+  let themeEditorMode = 'new';
+  let themeEditorEditKey = '';
+
+  function restoreThemeEditorState() {
+    // Re-init editing theme (we reverted preview on exit)
+    if (themeEditorMode === 'new') {
+      initEditingTheme(currentThemeName);
+    } else if (themeEditorEditKey) {
+      initEditingTheme(themeEditorEditKey);
+    } else {
+      initEditingTheme(currentThemeName);
+    }
+    previewTheme();
+    // Restore mode toggle
+    document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === themeEditorMode));
+    const nameRow = document.querySelector('.theme-name-row');
+    const editRow = document.querySelector('.theme-edit-row');
+    if (themeEditorMode === 'new') {
+      nameRow?.classList.remove('hidden'); nameRow?.classList.add('flex');
+      editRow?.classList.add('hidden'); editRow?.classList.remove('flex');
+    } else {
+      nameRow?.classList.add('hidden'); nameRow?.classList.remove('flex');
+      editRow?.classList.remove('hidden'); editRow?.classList.add('flex');
+      refreshThemeCustomSelect();
+      // Restore dropdown selection
+      const sel = document.getElementById('set-theme-custom-select');
+      if (sel && themeEditorEditKey) { sel.value = themeEditorEditKey; }
+      const dd = document.querySelector('.custom-dropdown[data-for="set-theme-custom-select"]');
+      if (dd) initCustomDropdown(dd);
+    }
+    // Restore name input
+    document.getElementById('set-theme-name').value = editingTheme?.label || '';
+    renderThemeEditor();
+  }
+
+  // Category button click handlers
+  document.querySelectorAll('.settings-cat-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      switchSettingsCat(btn.dataset.cat);
+      if (btn.dataset.cat === 'theme-editor') restoreThemeEditorState();
+    });
+  });
+
+  function applySettings() {
+    document.documentElement.style.setProperty('--app-font', currentFontFamily);
+    const wsp = activeWs();
+    if (!wsp) return;
+    const terms = getWorkspaceTerminals(wsp);
+    for (const t of terms) {
+      if (t.type === 'browser') continue;
+      t._customFontSize = currentFontSize; // Reset temporary zoom on global change
+      t.term.options.fontSize = currentFontSize;
+      t.term.options.fontFamily = currentFontFamily;
+      t.term.options.lineHeight = currentLineHeight;
+      t.term.options.cursorStyle = currentCursorStyle;
+      t.term.options.cursorBlink = currentCursorBlink;
+      t.term.options.scrollback = currentScrollback;
+      fitTerm(t);
+    }
+    saveState();
+  }
+
+  // Apply only the settings fields from shared storage (never touches
+  // workspaces/folders/sideOrder) — used by the settings window on boot and
+  // by the main window when the settings window pushes changes.
+  async function restoreSettingsOnly() {
+    try {
+      let state = {};
+      const api = configApi();
+      if (api && api.configReadState) {
+        const diskState = await api.configReadState();
+        if (diskState) state = diskState;
+      }
+      if (!state.theme) {
+        const raw = localStorage.getItem(STATE_KEY);
+        if (raw) state = JSON.parse(raw);
+      }
+      await resolveStateImages(state);
+      if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
+      if (state.fontSize) currentFontSize = state.fontSize;
+      if (state.fontFamily) currentFontFamily = state.fontFamily;
+      if (state.customFonts) {
+        customFonts = {};
+        for (const [k, v] of Object.entries(state.customFonts)) {
+          if (v && v.dataUrl) customFonts[k] = { name: v.name || k, dataUrl: v.dataUrl, format: v.format || 'truetype' };
+        }
+        injectCustomFonts();
+      }
+      if (state.lineHeight) currentLineHeight = state.lineHeight;
+      if (state.cornerStyle) cornerStyle = state.cornerStyle;
+      if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
+      if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
+      if (state.scrollback) currentScrollback = state.scrollback;
+      if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
+      if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
+      if (state.sidebarMode) {
+        if (sidebarMode !== state.sidebarMode) {
+          sidebarMode = state.sidebarMode;
+          applySidebarMode();
+        }
+      }
+      if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
+      if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
+      if (state.backgroundMode) backgroundMode = state.backgroundMode;
+      if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
+      if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
+      if (state.searchEngine) searchEngine = state.searchEngine;
+      if (state.customSearchUrl) customSearchUrl = state.customSearchUrl;
+      if (state.defaultTerminalPath !== undefined) defaultTerminalPath = state.defaultTerminalPath;
+      if (state.shortcuts) {
+        for (const [k, v] of Object.entries(state.shortcuts)) {
+          if (customShortcuts[k]) customShortcuts[k] = v;
+        }
+      }
+      if (state.pluginStates) {
+        for (const [k, v] of Object.entries(state.pluginStates)) _pluginStates.set(k, !!v);
+      }
+      if (state.pluginConfigs) {
+        for (const [k, v] of Object.entries(state.pluginConfigs)) {
+          if (v && typeof v === 'object') _pluginConfigs.set(k, Object.assign({}, v));
+        }
+      }
+    } catch { }
+  }
+
+  // Browser tabs are DOM <webview>s now, so the in-window overlay covers
+  // them — same technique as the reference preview panel. No separate window.
+  function openSettingsGlobal(cat) {
+    openSettings(cat);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+   K E*YBOARD SHORTCUTS
+   ═══════════════════════════════════════════════════════════════ */
+  // Capture-phase — intercepts before xterm.js
+  document.addEventListener('keydown', e => {
+    // Escape clears multi-select mode (skip when settings is open)
+    if (e.key === 'Escape' && isInMultiMode() && !settingsOverlay.classList.contains('open')) {
+      e.preventDefault(); e.stopPropagation();
+      clearMultiSelect();
+      return;
+    }
+    // Focus adjacent pane
+    for (const dir of ['Left', 'Down', 'Up', 'Right']) {
+      const action = 'focus' + dir.charAt(0).toUpperCase() + dir.slice(1).toLowerCase();
+      if (matchShortcut(e, action)) {
+        e.preventDefault(); e.stopPropagation();
+        focusAdjacentGroup(dir.toLowerCase());
+        return;
+      }
+    }
+    // Tab switching
+    if (matchShortcut(e, 'prevTab')) { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
+    if (matchShortcut(e, 'nextTab')) { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
+    // Close terminal
+    if (matchShortcut(e, 'closeTerminal')) {
+      e.preventDefault(); e.stopPropagation();
+      const wsp = activeWs();
+      if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
+      return;
+    }
+    // Copy
+    if (matchShortcut(e, 'copy')) {
+      const t = activeTerminal();
+      if (t && t.type !== 'browser' && t.term.hasSelection()) {
+        e.preventDefault(); e.stopPropagation();
+        const text = t.term.getSelection();
+        navigator.clipboard.writeText(text);
+      }
+      return;
+    }
+    // Paste
+    if (matchShortcut(e, 'paste')) {
+      const t = activeTerminal();
+      if (t && t.type !== 'browser') {
+        e.preventDefault(); e.stopPropagation();
+        doPaste(t);
+      }
+      return;
+    }
+    // Ctrl+V paste (non-shift variant)
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') {
+      const t = activeTerminal();
+      if (t && t.type !== 'browser') {
+        e.preventDefault(); e.stopPropagation();
+        doPaste(t);
+      }
+      return;
+    }
+    // Workspace switching
+    if (matchShortcut(e, 'nextWorkspace')) { e.preventDefault(); e.stopPropagation(); nextWorkspace(); return; }
+    if (matchShortcut(e, 'prevWorkspace')) { e.preventDefault(); e.stopPropagation(); prevWorkspace(); return; }
+    // Alt+N → workspace at sidebar position N
+    for (let i = 1; i <= 9; i++) {
+      if (matchShortcut(e, 'switchWs' + i)) {
+        e.preventDefault(); e.stopPropagation();
+        switchWsByNumber(i);
+        return;
+      }
+    }
+    // Ctrl+Tab / Ctrl+Shift+Tab
+    if (e.ctrlKey && e.code === 'Tab') {
+      e.preventDefault(); e.stopPropagation();
+      e.shiftKey ? prevTab() : nextTab();
+      return;
+    }
+  }, true);
+
+  // Bubble-phase shortcuts
+  document.addEventListener('keydown', e => {
+    if (matchShortcut(e, 'newTerminal')) { e.preventDefault(); addTerminal(); return; }
+    if (matchShortcut(e, 'splitH')) {
+      e.preventDefault();
+      const wsp = activeWs();
+      const active = activeTerminal();
+      if (wsp && active) {
+        const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
+        if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'row');
+      }
+      return;
+    }
+    if (matchShortcut(e, 'splitV')) {
+      e.preventDefault();
+      const wsp = activeWs();
+      const active = activeTerminal();
+      if (wsp && active) {
+        const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
+        if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'column');
+      }
+      return;
+    }
+    if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
+    if (matchShortcut(e, 'tabSearch')) { e.preventDefault(); e.stopPropagation(); openTabSearch(); return; }
+    if (matchShortcut(e, 'browserTab')) {
+      e.preventDefault();
+      const wsp = activeWs();
+      const active = activeTerminal();
+      if (wsp) {
+        const activeGroup = active ? findGroupContainingTerm(wsp.layout, active.id) : findFirstGroup(wsp.layout);
+        if (activeGroup) addBrowserTab(wsp.id, activeGroup.id);
+      }
+      return;
+    }
+    if (matchShortcut(e, 'quitApp')) {
+      e.preventDefault(); e.stopPropagation();
+      confirmQuitApp();
+      return;
+    }
+    if (matchShortcut(e, 'maximizeTab')) {
+      e.preventDefault(); e.stopPropagation();
+      const wsp = activeWs();
+      if (wsp && wsp.activeTermId) toggleMaximizeTerminal(wsp.id, wsp.activeTermId);
+      return;
+    }
+    if (matchShortcut(e, 'profiles')) { e.preventDefault(); e.stopPropagation(); openProfilePicker(); return; }
+    if (matchShortcut(e, 'toggleSidebar')) { e.preventDefault(); e.stopPropagation(); toggleSidebar(); return; }
+    // Arrow key tab switching (legacy)
+    if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
+      if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
+      if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
+    }
+    // Plugin command combos (last, so built-in shortcuts win)
+    if (dispatchPluginKeydown(e)) return;
+  });
+
+  // Settings-window bootstrap: skip the entire terminal/browser layer.
+  async function settingsOnlyBoot() {
+    await loadCustomThemes();
+    await restoreSettingsOnly();
+    await loadPlugins();
+    applyTheme(currentThemeName);
+    document.body.classList.add('settings-only');
+    const splash = document.getElementById('splash');
+    if (splash) splash.classList.add('hide');
+    openSettings('appearance');
+  }
+
+  async function detachedOnlyBoot() {
+    await loadCustomThemes();
+    // Restore only theme/font settings (not workspaces) for the detached window
+    try {
+      let raw = null;
+      const api = configApi();
+      if (api && api.configReadState) {
+        const diskState = await api.configReadState();
+        if (diskState) raw = JSON.stringify(diskState);
+      }
+      if (!raw) raw = localStorage.getItem(STATE_KEY);
+      if (raw) {
+        const state = JSON.parse(raw);
+        if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
+        if (state.fontSize) currentFontSize = state.fontSize;
+        if (state.fontFamily) currentFontFamily = state.fontFamily;
+        if (state.customFonts) {
+          customFonts = {};
+          for (const [k, v] of Object.entries(state.customFonts)) {
+            if (v && v.dataUrl) customFonts[k] = { name: v.name || k, dataUrl: v.dataUrl, format: v.format || 'truetype' };
+          }
+          injectCustomFonts();
+        }
+        if (state.lineHeight) currentLineHeight = state.lineHeight;
+        if (state.cornerStyle) cornerStyle = state.cornerStyle;
+        if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
+        if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
+        if (state.scrollback !== undefined) currentScrollback = state.scrollback;
+      }
+    } catch { }
+    applyTheme(currentThemeName);
+    document.body.classList.add('detached');
+
+    // Hide splash screen (normal init hides it at line ~6017, after the detached return)
+    const splash = document.getElementById('splash');
+    if (splash) splash.classList.add('hide');
+
+    // Show the titlebar so the window is draggable
+    const tb = document.getElementById('titlebar');
+    if (tb) tb.classList.add('active');
+
+    // Hide sidebar
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) sidebar.style.display = 'none';
+
+    // Wire up Electron PTY bridge (same as normal init)
+    if (isDesktop() && window.electronAPI) {
+      const api = window.electronAPI;
+      wsReady = true;
+      nativePtyReady = true;
+      api.onTerminalData(({ id, data }) => {
+        const result = findTermById(id);
+        if (result && result.term && result.term.type !== 'browser') {
+          result.term.term.write(data);
+        }
+      });
+      api.onTerminalExit(({ id, code }) => {
+        const result = findTermById(id);
+        if (result) {
+          result.dead = true;
+          result.term = null;
+        }
+        window.close();
+      });
+      // Main process accepted a cross-window move for a tab living in
+      // THIS window — snapshot its buffer, remove the tab locally, and
+      // report how many tabs remain (main closes this window at 0).
+      if (api.onTabDragComplete) {
+        api.onTabDragComplete(({ id }) => {
+          let ready = { id, remaining: 0 };
+          try {
+            const wsp = workspaces[0];
+            const group = wsp && findGroupContainingTerm(wsp.layout, id);
+            const entry = group && group.terminals.find(x => x.id === id);
+            if (entry && entry.term) {
+              const payload = serializeTermBuffer(entry);
+              if (payload) localStorage.setItem(DETACH_BUFFER_KEY(id), JSON.stringify(payload));
+              ready = { id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd, label: entry.label, remaining: 0 };
+            }
+            if (group) {
+              group.terminals = group.terminals.filter(x => x.id !== id);
+              if (group.activeTermId === id) group.activeTermId = group.terminals[0]?.id || null;
+              wsp.layout = removeEmptyGroups(wsp.layout);
+              ready.remaining = getWorkspaceTerminals(wsp).length;
+              if (ready.remaining > 0) {
+                renderPaneArea();
+                const nt = activeTerminal();
+                if (nt) activateTerminal(wsp.id, nt.id);
+                saveState();
+              }
+            }
+          } catch { }
+          if (api.tabDragReady) api.tabDragReady(ready);
+        });
+      }
+      // A terminal dragged from another window (main or a sibling
+      // detached window) and dropped here — re-create the tab attached
+      // to the same PTY, placed like a normal tab drop.
+      if (api.onTerminalReattach) {
+        api.onTerminalReattach(({ id, cols, rows, cwd, placement }) => {
+          try { reattachTerminal(id, cols, rows, cwd, placement); } catch (e) { console.error('[reattach] failed:', e); }
+        });
+      }
+      // Which terminal another window is currently dragging — used by the
+      // shared tab-bar/pane drop handlers to route the cross-window drop.
+      if (api.onTabDragActive) {
+        api.onTabDragActive(({ id }) => {
+          if (id) {
+            window.externalDragTermId = id;
+            window.lastExternalDragTermId = id;
+            startResizing();
+            if (window._clearExternalDragTimer) {
+              clearTimeout(window._clearExternalDragTimer);
+              window._clearExternalDragTimer = null;
+            }
+          } else {
+            window.externalDragTermId = null;
+            stopResizing();
+            if (window._clearExternalDragTimer) clearTimeout(window._clearExternalDragTimer);
+            window._clearExternalDragTimer = setTimeout(() => {
+              window.lastExternalDragTermId = null;
+            }, 1500);
+          }
+        });
+      }
+    }
+
+    // Read detached params
+    const termId = DETACHED_PARAMS.get('termId');
+    const cols = parseInt(DETACHED_PARAMS.get('cols')) || 80;
+    const rows = parseInt(DETACHED_PARAMS.get('rows')) || 24;
+    const cwd = DETACHED_PARAMS.get('cwd') || undefined;
+
+    if (!termId) return;
+
+    let restored = false;
+    let detachedBuffer = null; // stashed screen/scrollback (with tab label)
+    try { restored = await restoreState(); } catch { }
+
+    if (!restored) {
+      // Create a minimal workspace to hold the terminal
+      const wsId = 'detached-ws';
+      const wsp = {
+        id: wsId,
+        label: 'Detached',
+        layout: { type: 'group', id: 'group-detached', terminals: [], activeTermId: null },
+      };
+      workspaces = [wsp];
+      activeWsId = wsId;
+      sideOrder = [{ type: 'ws', id: wsId }];
+
+      // Read the stashed buffer now so the tab keeps its original name
+      try {
+        const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
+        if (raw) detachedBuffer = JSON.parse(raw);
+      } catch { }
+
+      // Create the terminal entry
+      const entry = _createTermEntry(wsp, termId, (detachedBuffer && detachedBuffer.label) || 'terminal');
+      entry.cwd = cwd;
+      wsp.layout.terminals = [entry];
+      wsp.layout.activeTermId = termId;
+    }
+
+    // Render the pane area (creates the DOM and opens the xterm)
+    const empty = document.getElementById('empty-state');
+    if (empty) empty.style.display = 'none';
+    renderPaneArea();
+
+    // The PTY for this terminal is already running in the main process (it
+    // was never killed on detach), so we do NOT send terminal:create — that
+    // would kill the session and spawn a fresh shell. Instead, replay the
+    // captured screen/scrollback and then let live output stream in.
+    const active = activeTerminal();
+    if (active && active.type !== 'browser') {
+      // Open at the size the PTY was running at so the replayed lines
+      // don't wrap, then fit to the actual window size after layout.
+      try { active.term.resize(cols, rows); } catch { }
+      if (!detachedBuffer) {
+        // restored-from-state path: the stash wasn't read above
+        try {
+          const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
+          detachedBuffer = raw ? JSON.parse(raw) : null;
+        } catch { }
+      }
+      try { localStorage.removeItem(DETACH_BUFFER_KEY(termId)); } catch { }
+      if (detachedBuffer) restoreTermBuffer(active, detachedBuffer);
+    }
+
+    // Tell main we're ready so it flushes any output produced while the
+    // window was booting (it buffers PTY data for detached terminals).
+    if (window.electronAPI && window.electronAPI.terminalAttached) {
+      window.electronAPI.terminalAttached(termId);
+    }
+
+    // Fit after DOM is laid out
+    setTimeout(() => {
+      const t = activeTerminal();
+      if (t && t.type !== 'browser') fitTerm(t);
+    }, 80);
+  }
+
+  // Background image settings controls (declared here so the settings-window
+  // bootstrap can read them before the wiring below runs — TDZ guard).
+  const bgModeSelect = document.getElementById('set-bg-mode');
+  const bgOpacitySlider = document.getElementById('set-bg-opacity');
+  const bgOpacityVal = document.getElementById('set-bg-opacity-val');
+  const bgUploadArea = document.getElementById('set-bg-image-area');
+  const bgFileInput = document.getElementById('set-bg-image-input');
+  const bgPreview = bgUploadArea.querySelector('.bg-upload-preview');
+  const bgClearBtn = document.getElementById('bg-image-clear');
+  const bgPerTabNote = document.getElementById('bg-per-tab-note');
+  const bgControlsRow = document.getElementById('bg-image-controls');
+
+  // Settings-window bootstrap: skip the entire terminal/browser layer.
+  if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
+
+  // Detached-terminal bootstrap: minimal terminal-only window.
+  if (DETACHED_ONLY) { detachedOnlyBoot(); return; }
+
+  // Open/close
+  document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
+  const btnProfiles = document.getElementById('btn-profiles');
+  if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
+  const btnSidebarRight = document.getElementById('btn-sidebar-right');
+  if (btnSidebarRight) btnSidebarRight.addEventListener('click', () => document.body.classList.toggle('sb-right-hidden'));
+
+  // Right sidebar pages (main / clipboard)
+  const sbrOpen = document.getElementById('sbr-open-clipboard');
+  const sbrBack = document.getElementById('sbr-clipboard-back');
+  const sbrMain = document.getElementById('sbr-main');
+  const sbrClip = document.getElementById('sbr-clipboard');
+  const sbrClipContent = document.getElementById('sbr-clipboard-content');
+  if (sbrOpen && sbrBack && sbrMain && sbrClip) {
+    const CLIP_KEY = 'terminalvibe.clipboardHistory';
+    const CLIP_MAX = 200;
+    let clipHistory = [];
+    try { clipHistory = JSON.parse(localStorage.getItem(CLIP_KEY) || '[]'); } catch { clipHistory = []; }
+    if (!Array.isArray(clipHistory)) clipHistory = [];
+    const readClip = async () => (isDesktop() && window.electronAPI?.clipboardRead)
+      ? window.electronAPI.clipboardRead()
+      : navigator.clipboard.readText();
+    const renderClipHistory = () => {
+      sbrClipContent.textContent = '';
+      if (!clipHistory.length) { sbrClipContent.textContent = '(clipboard history is empty)'; return; }
+      clipHistory.forEach(text => {
+        const el = document.createElement('div');
+        el.className = 'sbr-clip-item';
+        el.textContent = text;
+        el.title = 'Click to paste';
+        el.addEventListener('click', () => {
+          if (isDesktop() && window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text);
+          else navigator.clipboard.writeText(text).catch(() => { });
+          const t = activeTerminal();
+          if (t && t.term && t.type !== 'browser') { t.term.paste(text); t.term.focus?.(); }
+        });
+        sbrClipContent.appendChild(el);
+      });
+    };
+    const captureClip = async () => {
+      try {
+        const text = await readClip();
+        if (!text || !text.trim() || clipHistory[0] === text) return;
+        clipHistory = [text, ...clipHistory.filter(t => t !== text)].slice(0, CLIP_MAX);
+        localStorage.setItem(CLIP_KEY, JSON.stringify(clipHistory));
+        if (sbrClip.style.display !== 'none') renderClipHistory();
+      } catch { }
+    };
+    captureClip();
+    setInterval(captureClip, 1000);
+    const showClipboardPage = async () => {
+      sbrMain.style.display = 'none';
+      sbrClip.style.display = 'flex';
+      await captureClip();
+      renderClipHistory();
+    };
+    sbrOpen.addEventListener('click', showClipboardPage);
+    sbrBack.addEventListener('click', () => {
+      sbrClip.style.display = 'none';
+      sbrMain.style.display = 'flex';
+    });
+  }
+  document.getElementById('settings-close').addEventListener('click', closeSettings);
+  settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) { closeSettings(); e.stopPropagation(); }
+    if (e.ctrlKey && e.key === ',' && !e.metaKey && !e.altKey) { e.preventDefault(); openSettingsGlobal(); }
+  });
+  // Deep-link API: e.g. openSettings('appearance')
+  window.openSettings = openSettingsGlobal;
+  window.closeSettings = closeSettings;
+
+  // Plugins: open the plugins directory in the OS file manager
+  const pluginsOpenDir = document.getElementById('plugins-open-dir');
+  if (pluginsOpenDir) {
+    pluginsOpenDir.addEventListener('click', () => {
+      const api = configApi();
+      if (api && api.configOpenPluginsDir) api.configOpenPluginsDir();
+    });
+  }
+
+  // Theme change
+  document.getElementById('set-theme').addEventListener('change', e => {
+    applyTheme(e.target.value);
+    saveState();
+  });
+
+  // Font size
+  document.getElementById('set-fontsize').addEventListener('input', e => {
+    currentFontSize = parseInt(e.target.value);
+    document.getElementById('set-fontsize-val').textContent = currentFontSize + 'px';
+    applySettings();
+  });
+
+  // Font family preset
+  document.getElementById('set-fontpreset').addEventListener('change', e => {
+    const v = e.target.value;
+    const customRow = document.getElementById('fontfamily-custom-row');
+    if (v === '__custom__') {
+      customRow.classList.remove('hidden');
+      customRow.classList.add('flex');
+      return;
+    }
+    currentFontFamily = v;
+    customRow.classList.add('hidden');
+    customRow.classList.remove('flex');
+    applySettings();
+  });
+
+  // Font family (custom CSS stack)
+  document.getElementById('set-fontfamily').addEventListener('change', e => {
+    currentFontFamily = e.target.value;
+    applySettings();
+  });
+
+  // Font import
+  document.getElementById('font-import-btn').addEventListener('click', () => {
+    document.getElementById('font-import-input').click();
+  });
+  document.getElementById('font-import-input').addEventListener('change', e => {
+    importFontFiles(e.target.files);
+    e.target.value = '';
+  });
+
+  // Line height
+  document.getElementById('set-lineheight').addEventListener('input', e => {
+    currentLineHeight = parseFloat(e.target.value);
+    document.getElementById('set-lineheight-val').textContent = currentLineHeight.toFixed(1);
+    applySettings();
+  });
+
+  // Cursor style
+  document.getElementById('set-cursor').addEventListener('change', e => {
+    currentCursorStyle = e.target.value;
+    applySettings();
+  });
+
+  // Cursor blink toggle
+  document.getElementById('set-cursorblink').addEventListener('change', () => {
+    currentCursorBlink = document.getElementById('set-cursorblink').checked;
+    applySettings();
+  });
+
+  // Status bar toggle
+
+  // Scrollback
+  document.getElementById('set-scrollback').addEventListener('input', e => {
+    currentScrollback = parseInt(e.target.value);
+    document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
+    applySettings();
+  });
+
+  // Default working directory
+  const defaultPathInput = document.getElementById('set-default-path');
+  if (defaultPathInput) {
+    defaultPathInput.addEventListener('input', e => {
+      defaultTerminalPath = e.target.value.trim().replace(/^["']|["']$/g, '');
+      saveState();
+    });
+  }
+  const defaultPathBrowse = document.getElementById('set-default-path-browse');
+  if (defaultPathBrowse) {
+    defaultPathBrowse.addEventListener('click', async () => {
+      if (window.electronAPI && window.electronAPI.selectDirectory) {
+        const chosen = await window.electronAPI.selectDirectory(defaultTerminalPath || undefined);
+        if (chosen) {
+          defaultTerminalPath = chosen;
+          if (defaultPathInput) defaultPathInput.value = chosen;
+          saveState();
+        }
+      }
+    });
+  }
+
+  // Search engine
+  document.getElementById('set-search-engine').addEventListener('change', e => {
+    searchEngine = e.target.value;
+    const row = document.getElementById('set-custom-search-row');
+    row.classList.toggle('hidden', searchEngine !== 'custom');
+    row.classList.toggle('flex', searchEngine === 'custom');
+    saveState();
+  });
+  document.getElementById('set-custom-search-url').addEventListener('input', e => {
+    customSearchUrl = e.target.value;
+    saveState();
+  });
+
+  // ── CLI doc fuzzy search ──
+  const cliPre = document.getElementById('cli-doc-pre');
+  const cliLines = cliPre ? cliPre.textContent.split('\n') : [];
+  document.getElementById('cli-doc-search')?.addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { cliPre.textContent = cliLines.join('\n'); return; }
+    cliPre.textContent = cliLines.map(line => {
+      const l = line.toLowerCase();
+      let qi = 0;
+      for (let i = 0; i < l.length && qi < q.length; i++) {
+        if (l[i] === q[qi]) qi++;
+      }
+      return qi === q.length ? line : '';
+    }).join('\n');
+  });
+
+  // ── Background Image Settings ──
+  function updateBgUploadPreview() {
+    const hasImage = backgroundMode === 'global' && !!globalBackgroundImage;
+    bgUploadArea.classList.toggle('has-image', hasImage);
+    if (hasImage) {
+      bgPreview.src = globalBackgroundImage;
+    }
+  }
+
+  function refreshBgSettingsUI() {
+    bgModeSelect.value = backgroundMode;
+    const dd = document.querySelector('.custom-dropdown[data-for="set-bg-mode"]');
+    if (dd) initCustomDropdown(dd);
+
+    bgControlsRow.style.display = backgroundMode === 'none' ? 'none' : '';
+    bgUploadArea.style.display = backgroundMode === 'global' ? '' : 'none';
+    bgPerTabNote.style.display = (backgroundMode === 'per-tab' || backgroundMode === 'per-workspace') ? '' : 'none';
+    bgOpacitySlider.value = Math.round(backgroundOpacity * 100);
+    bgOpacityVal.textContent = Math.round(backgroundOpacity * 100) + '%';
+    updateBgUploadPreview();
+  }
+
+  // Background mode change
+  bgModeSelect.addEventListener('change', () => {
+    backgroundMode = bgModeSelect.value;
+    refreshBgSettingsUI();
+    applyBackground();
+    saveState();
+  });
+
+  // Opacity
+  bgOpacitySlider.addEventListener('input', () => {
+    backgroundOpacity = parseInt(bgOpacitySlider.value) / 100;
+    bgOpacityVal.textContent = Math.round(backgroundOpacity * 100) + '%';
+    applyBackground();
+    saveState();
+  });
+
+  // File upload
+  bgUploadArea.addEventListener('click', (e) => {
+    if (e.target.closest('.bg-clear-btn')) return;
+    if (backgroundMode === 'none') return;
+    bgFileInput.click();
+  });
+
+  bgFileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    loadBgImageFromFile(file, (dataUrl) => {
+      if (backgroundMode === 'global') {
+        setGlobalBackgroundImage(dataUrl);
+      }
+      refreshBgSettingsUI();
+    });
+    e.target.value = '';
+  });
+
+  bgClearBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (backgroundMode === 'global') {
+      setGlobalBackgroundImage('');
+    }
+    refreshBgSettingsUI();
+  });
+
+  // Theme editor — Save
+  document.getElementById('theme-btn-save').addEventListener('click', async () => {
+    const nameInput = document.getElementById('set-theme-name');
+    const name = nameInput.value.trim();
+    if (!name) { nameInput.focus(); return; }
+    if (BUILTIN_THEME_KEYS.has(name)) { alert('Cannot overwrite a built-in theme.'); return; }
+    editingTheme.label = name;
+    const customs = await getCustomThemes();
+    customs[name] = { ...editingTheme, _custom: true };
+    await saveCustomThemes(customs);
+    applyTheme(name);
+    saveState();
+    refreshThemeDropdown();
+  });
+
+  // Theme editor — Delete
+  document.getElementById('theme-btn-delete').addEventListener('click', async () => {
+    const nameInput = document.getElementById('set-theme-name');
+    const name = nameInput.value.trim();
+    if (!name || BUILTIN_THEME_KEYS.has(name)) return;
+    if (!(await getCustomThemes())[name]) return;
+    await deleteCustomTheme(name);
+    initEditingTheme(currentThemeName);
+    nameInput.value = editingTheme.label || '';
+    renderThemeEditor();
+    saveState();
+    refreshThemeDropdown();
+  });
+
+  // Theme editor — Reset
+  document.getElementById('theme-btn-import').addEventListener('click', () => {
+    document.getElementById('theme-import-input').click();
+  });
+  document.getElementById('theme-import-input').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!data.bg || !data.fg || !data.palette || !Array.isArray(data.palette) || data.palette.length < 16) {
+          alert('Invalid theme JSON: missing bg, fg, or palette[16].');
           return;
         }
-        for (const name of names) {
-          const row = document.createElement('div');
-          row.className = 'flex items-center justify-between gap-3 px-2.5 py-1.5 rounded bg-black/20 border border-[var(--border)]';
-          const label = document.createElement('span');
-          label.className = 'text-[12px] text-[var(--fg)] truncate max-w-[220px]';
-          label.style.fontFamily = customFontFamily(name);
-          label.textContent = name;
-          const rm = document.createElement('button');
-          rm.type = 'button';
-          rm.className = 'text-[11px] text-[#e55] hover:text-[#f77] cursor-pointer bg-transparent border-0 shrink-0';
-          rm.textContent = 'Remove';
-          rm.addEventListener('click', () => removeCustomFont(name));
-          row.appendChild(label);
-          row.appendChild(rm);
-          list.appendChild(row);
-        }
-      }
-
-      function refreshFontPresetUI() {
-        const select = document.getElementById('set-fontpreset');
-        const customRow = document.getElementById('fontfamily-custom-row');
-        if (!select || !customRow) return;
-        select.innerHTML = '';
-
-        const addOpt = (value, label, selected) => {
-          const opt = document.createElement('option');
-          opt.value = value;
-          opt.textContent = label;
-          if (selected) opt.selected = true;
-          select.appendChild(opt);
+        const name = data.name || file.name.replace(/\.json$/i, '') || 'Imported Theme';
+        editingTheme = {
+          label: name,
+          bg: data.bg, fg: data.fg, cursor: data.cursor || data.fg, selection: data.selection || data.bg,
+          swatches: data.swatches || [data.bg, data.fg, data.palette[4] || data.fg],
+          palette: [...data.palette],
+          ui: data.ui ? { ...data.ui } : {},
         };
+        document.getElementById('set-theme-name').value = name;
+        renderThemeEditor();
+        previewTheme();
+      } catch { alert('Failed to parse JSON.'); }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  });
 
-        for (const p of PRESET_FONTS) {
-          addOpt(p.family, p.name, currentFontFamily === p.family);
-        }
+  // Theme editor — Export
+  document.getElementById('theme-btn-export').addEventListener('click', () => {
+    if (!editingTheme) return;
+    const json = JSON.stringify({
+      name: editingTheme.label || 'Custom Theme',
+      bg: editingTheme.bg, fg: editingTheme.fg, cursor: editingTheme.cursor, selection: editingTheme.selection,
+      palette: editingTheme.palette,
+      ui: editingTheme.ui,
+    }, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (editingTheme.label || 'custom-theme').replace(/[^a-z0-9_-]/gi, '_') + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
 
-        const customNames = Object.keys(customFonts);
-        if (customNames.length) {
-          const g = document.createElement('optgroup');
-          g.label = 'Imported';
-          for (const name of customNames) {
-            addOpt(customFontFamily(name), name, currentFontFamily === customFontFamily(name));
-          }
-          select.appendChild(g);
-        }
+  // Theme editor — name input sync
+  document.getElementById('set-theme-name').addEventListener('input', e => {
+    if (editingTheme) editingTheme.label = e.target.value.trim();
+  });
 
-        addOpt('__custom__', 'Custom CSS font-family…', false);
+  // Theme editor — Clone Current
+  document.getElementById('theme-btn-clone').addEventListener('click', () => {
+    initEditingTheme(currentThemeName);
+    editingTheme.label = THEMES[currentThemeName]?.label + ' Copy' || 'Copy';
+    document.getElementById('set-theme-name').value = editingTheme.label;
+    renderThemeEditor();
+    previewTheme();
+  });
 
-        const matchesPreset = PRESET_FONTS.some(p => p.family === currentFontFamily);
-        const matchesCustom = customNames.some(n => currentFontFamily === customFontFamily(n));
-        const useCustom = !matchesPreset && !matchesCustom;
+  // Theme editor — Load existing dropdown
+  function refreshThemeCustomSelect() {
+    const sel = document.getElementById('set-theme-custom-select');
+    if (!sel) return;
+    sel.innerHTML = '';
+    for (const [key, t] of Object.entries(THEMES)) {
+      if (BUILTIN_THEME_KEYS.has(key)) continue;
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = t.label || key;
+      sel.appendChild(opt);
+    }
+    const dd = document.querySelector('.custom-dropdown[data-for="set-theme-custom-select"]');
+    if (dd) initCustomDropdown(dd);
+  }
 
-        if (useCustom) {
-          select.value = '__custom__';
-          customRow.classList.remove('hidden');
-          customRow.classList.add('flex');
-          document.getElementById('set-fontfamily').value = currentFontFamily;
-        } else {
-          customRow.classList.add('hidden');
-          customRow.classList.remove('flex');
-          if (matchesPreset) select.value = currentFontFamily;
-          if (matchesCustom) select.value = customFontFamily(customNames.find(n => currentFontFamily === customFontFamily(n)));
-        }
-
-        const dd = document.querySelector('.custom-dropdown[data-for="set-fontpreset"]');
-        if (dd) initCustomDropdown(dd);
-      }
-
-      function initCustomDropdown(dd) {
-        const selectId = dd.dataset.for;
-        const select = document.getElementById(selectId);
-        if (!select) return;
-
-        dd.innerHTML = '';
-        const btn = document.createElement('div');
-        btn.className = 'custom-dropdown-btn';
-        btn.innerHTML = `<span class="custom-dropdown-label"></span><i class="ph ph-caret-down dropdown-arrow"></i>`;
-        const menu = document.createElement('div');
-        menu.className = 'custom-dropdown-menu';
-        dd.appendChild(btn);
-        dd.appendChild(menu);
-
-        function buildOptions() {
-          menu.innerHTML = '';
-          [...select.options].forEach(opt => {
-            const el = document.createElement('div');
-            el.className = 'custom-dropdown-option' + (opt.selected ? ' selected' : '');
-            el.dataset.value = opt.value;
-            let content = '';
-            if (opt.dataset.icon) {
-              content += `<svg class="dropdown-icon" viewBox="0 0 24 24" width="16" height="16"><path d="${opt.dataset.icon}"/></svg>`;
-            }
-            // Support theme swatches via data-swatches attribute
-            if (opt.dataset.swatches) {
-              const swatches = opt.dataset.swatches.split(',');
-              content += `<span class="theme-swatch">${swatches.map(c => `<span style="background:${c}"></span>`).join('')}</span>`;
-            }
-            content += `<span>${opt.textContent}</span>`;
-            el.innerHTML = content;
-            el.addEventListener('click', () => {
-              select.value = opt.value;
-              select.dispatchEvent(new Event('change', { bubbles: true }));
-              refresh();
-              close();
-            });
-            menu.appendChild(el);
-          });
-        }
-
-        function refresh() {
-          const sel = select.options[select.selectedIndex];
-          const label = btn.querySelector('.custom-dropdown-label');
-          let html = '';
-          if (sel && sel.dataset.icon) {
-            html += `<svg class="dropdown-icon" viewBox="0 0 24 24" width="14" height="14"><path d="${sel.dataset.icon}"/></svg>`;
-          }
-          html += sel ? sel.textContent : '';
-          label.innerHTML = html;
-          menu.querySelectorAll('.custom-dropdown-option').forEach(el => {
-            el.classList.toggle('selected', el.dataset.value === select.value);
-          });
-        }
-
-        function close() {
-          btn.classList.remove('open');
-          menu.classList.remove('open');
-          const arrow = btn.querySelector('.dropdown-arrow');
-          if (arrow) { arrow.classList.remove('ph-caret-up'); arrow.classList.add('ph-caret-down'); }
-        }
-
-        btn.addEventListener('click', e => {
-          e.stopPropagation();
-          const isOpen = menu.classList.contains('open');
-          // Close all other dropdowns
-          document.querySelectorAll('.custom-dropdown-menu.open').forEach(m => m.classList.remove('open'));
-          document.querySelectorAll('.custom-dropdown-btn.open').forEach(b => {
-            b.classList.remove('open');
-            const a = b.querySelector('.dropdown-arrow');
-            if (a) { a.classList.remove('ph-caret-up'); a.classList.add('ph-caret-down'); }
-          });
-          if (!isOpen) {
-            buildOptions();
-            btn.classList.add('open');
-            menu.classList.add('open');
-            const arrow = btn.querySelector('.dropdown-arrow');
-            if (arrow) { arrow.classList.remove('ph-caret-down'); arrow.classList.add('ph-caret-up'); }
-          }
-        });
-
-        // Close on outside click
-        document.addEventListener('click', e => {
-          if (!dd.contains(e.target)) close();
-        });
-
-          // Sync when select changes externally
-          select.addEventListener('change', refresh);
-
-          // Initial build
-          buildOptions();
-          refresh();
-      }
-
-      // Init all custom dropdowns
-      document.querySelectorAll('.custom-dropdown').forEach(initCustomDropdown);
-
-      /* ═══════════════════════════════════════════════════════════════
-       T H E M E   E D I T O R
-       ═══════════════════════════════════════════════════════════════ */
-      const THEME_COLOR_GROUPS = {
-        'Core': {
-          bg: 'Background', fg: 'Foreground', cursor: 'Cursor', selection: 'Selection',
-        },
-        'UI Colors': {
-          accent: 'Accent', border: 'Border', multiSelect: 'Multi-select',
-          tabActiveBg: 'Tab Active BG', tabHoverBg: 'Tab Hover BG',
-          dimText: 'Dim Text', mutedText: 'Muted Text',
-        },
-        'Terminal Palette': {
-          p0: 'Black', p1: 'Red', p2: 'Green', p3: 'Yellow',
-          p4: 'Blue', p5: 'Magenta', p6: 'Cyan', p7: 'White',
-          p8: 'Bright Black', p9: 'Bright Red', p10: 'Bright Green', p11: 'Bright Yellow',
-          p12: 'Bright Blue', p13: 'Bright Magenta', p14: 'Bright Cyan', p15: 'Bright White',
-        },
-      };
-
-      const DEFAULT_PALETTE = ['#1e1e2e','#f38ba8','#a6e3a1','#f9e2af','#89b4fa','#f5c2e7','#94e2d5','#cdd6f4','#585b70','#eba0ac','#a6e3a1','#f9e2af','#89b4fa','#f5c2e7','#94e2d5','#bac2de'];
-
-      let editingTheme = null;
-
-      function initEditingTheme(name) {
-        const src = THEMES[name];
-        if (src) {
-          editingTheme = {
-            label: src.label || name,
-            bg: src.bg, fg: src.fg, cursor: src.cursor, selection: src.selection,
-            swatches: src.swatches ? [...src.swatches] : [src.bg, src.fg, src.palette ? src.palette[4] : src.fg],
-            palette: src.palette ? [...src.palette] : [],
-            ui: src.ui ? { ...src.ui } : {},
-          };
-        } else {
-          editingTheme = {
-            label: '', bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#585b70',
-            swatches: ['#1e1e2e', '#cdd6f4', '#89b4fa'],
-            palette: [
-              '#1e1e2e','#f38ba8','#a6e3a1','#f9e2af',
-              '#89b4fa','#f5c2e7','#94e2d5','#cdd6f4',
-              '#585b70','#eba0ac','#a6e3a1','#f9e2af',
-              '#89b4fa','#f5c2e7','#94e2d5','#bac2de',
-            ],
-            ui: {},
-          };
-        }
-      }
-
-      const UI_DEFAULTS = {
-        border: '#ffffff14',
-        tabActiveBg: '#ffffff12',
-        tabHoverBg: '#ffffff0a',
-        dimText: '#ffffff4d',
-        mutedText: '#ffffff80',
-      };
-
-      function getThemeColor(key) {
-        if (!editingTheme) return '#000000';
-        if (key === 'bg') return editingTheme.bg;
-        if (key === 'fg') return editingTheme.fg;
-        if (key === 'cursor') return editingTheme.cursor;
-        if (key === 'selection') return editingTheme.selection;
-        if (key === 'accent') return editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa';
-        if (key === 'multiSelect') return editingTheme.ui.multiSelect || editingTheme.palette[3] || '#f9e2af';
-        if (UI_DEFAULTS[key]) return editingTheme.ui[key] || UI_DEFAULTS[key];
-        if (key.startsWith('p')) return editingTheme.palette[parseInt(key.slice(1))] || '#000000';
-        return '#000000';
-      }
-
-function setThemeColor(key, val) {
-         if (!editingTheme) return;
-         if (key === 'bg') editingTheme.bg = val;
-         else if (key === 'fg') editingTheme.fg = val;
-         else if (key === 'cursor') editingTheme.cursor = val;
-         else if (key === 'selection') editingTheme.selection = val;
-         else if (key === 'accent') editingTheme.ui.accent = val;
-         else if (key === 'border') editingTheme.ui.border = val || undefined;
-         else if (key === 'tabActiveBg') editingTheme.ui.tabActiveBg = val || undefined;
-         else if (key === 'tabHoverBg') editingTheme.ui.tabHoverBg = val || undefined;
-         else if (key === 'dimText') editingTheme.ui.dimText = val || undefined;
-         else if (key === 'mutedText') editingTheme.ui.mutedText = val || undefined;
-         else if (key === 'multiSelect') editingTheme.ui.multiSelect = val || undefined;
-         else if (key.startsWith('p')) editingTheme.palette[parseInt(key.slice(1))] = val;
-         editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
-}
-
-       function openColorisForSwatch(swatchEl, currentColor, themeKey) {
-         const tempInput = document.createElement('input');
-         tempInput.type = 'text';
-         tempInput.value = currentColor || '#000000';
-         tempInput.style.position = 'fixed';
-         tempInput.style.opacity = '0';
-         tempInput.style.pointerEvents = 'none';
-         // Anchor the popup next to the swatch (Coloris positions from the input's rect)
-         const r = swatchEl.getBoundingClientRect();
-         tempInput.style.left = Math.max(8, Math.min(window.innerWidth - 210, r.left - 85)) + 'px';
-         tempInput.style.top = r.bottom + 6 + 'px';
-         tempInput.style.width = '1px';
-         tempInput.style.height = '1px';
-         tempInput.setAttribute('data-coloris', '');
-         document.body.appendChild(tempInput);
-
-         // This Coloris build exposes no .open()/.on(): a click on a
-         // [data-coloris] input opens the picker via its own delegation, and
-         // picked values arrive as 'input' events on that input.
-         tempInput.addEventListener('input', () => {
-           setThemeColor(themeKey, tempInput.value);
-           swatchEl.style.background = tempInput.value;
-           previewTheme();
-         });
-         tempInput.addEventListener('close', () => tempInput.remove());
-         setTimeout(() => tempInput.click(), 0);
-       }
-
-       function previewTheme() {
-         if (!editingTheme) return;
-         const r = document.documentElement.style;
-         r.setProperty('--bg', editingTheme.bg);
-         r.setProperty('--fg', editingTheme.fg);
-         r.setProperty('--cursor', editingTheme.cursor);
-         r.setProperty('--selection', editingTheme.selection);
-         const accent = editingTheme.ui.accent || editingTheme.palette[4] || editingTheme.fg;
-         r.setProperty('--accent', accent);
-         r.setProperty('--ws-active-strip', accent);
-         r.setProperty('--accent-dim', hexToRgba(accent, 0.15));
-         const uiMap = { border:'--border', tabActiveBg:'--tab-active-bg', tabHoverBg:'--tab-hover-bg', dimText:'--dim-text', mutedText:'--muted-text' };
-         for (const [prop, cssVar] of Object.entries(uiMap)) {
-           r.setProperty(cssVar, editingTheme.ui[prop] || UI_DEFAULTS[prop]);
-         }
-       }
-
-function renderThemeEditor() {
-         const container = document.getElementById('theme-editor-groups');
-         if (!container) return;
-         container.innerHTML = '';
-
-function buildColorItem(key, label) {
-           const item = document.createElement('div');
-           item.className = 'theme-color-item';
-           const val = getThemeColor(key);
-
-           const lbl = document.createElement('span');
-           lbl.className = 'theme-color-label';
-           lbl.textContent = label;
-
-           const inp = document.createElement('input');
-           inp.type = 'text';
-           inp.className = 'theme-color-input';
-           inp.setAttribute('data-coloris', '');
-           inp.value = val;
-           inp.spellcheck = false;
-
-           const swatch = document.createElement('span');
-           swatch.className = 'theme-color-swatch';
-           swatch.style.background = val;
-           swatch.title = label;
-
-           inp.addEventListener('input', () => {
-             let v = inp.value.trim();
-             if (/^#?[0-9a-fA-F]{3,8}$/.test(v)) {
-               if (!v.startsWith('#')) v = '#' + v;
-               setThemeColor(key, v);
-               swatch.style.background = v;
-               previewTheme();
-             }
-           });
-
-           item.appendChild(lbl);
-           item.appendChild(inp);
-           item.appendChild(swatch);
-           return item;
-         }
-
-         // Colors title
-         const colorsTitle = document.createElement('div');
-         colorsTitle.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
-         colorsTitle.textContent = 'Colors';
-         container.appendChild(colorsTitle);
-
-         // Core + UI Colors in one card
-         const colorsCard = document.createElement('div');
-         colorsCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
-         for (const [groupName, fields] of Object.entries(THEME_COLOR_GROUPS)) {
-           if (groupName === 'Terminal Palette') continue;
-           if (groupName === 'UI Colors') {
-             const sep = document.createElement('div');
-             sep.className = 'border-t border-[var(--border)] my-3';
-             colorsCard.appendChild(sep);
-           }
-           const title = document.createElement('div');
-           title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
-           title.textContent = groupName;
-           colorsCard.appendChild(title);
-           const grid = document.createElement('div');
-           grid.className = 'theme-color-grid';
-           for (const [key, label] of Object.entries(fields)) {
-             grid.appendChild(buildColorItem(key, label));
-           }
-           colorsCard.appendChild(grid);
-         }
-          container.appendChild(colorsCard);
-
-          // Terminal Palette — its own card
-          const paletteCard = document.createElement('div');
-          paletteCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
-
-          // Title row inside card (with toggle)
-          const title = document.createElement('div');
-          title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] flex justify-between items-center mb-2 ml-1';
-          const titleText = document.createElement('span');
-          titleText.textContent = 'Terminal Palette';
-          title.appendChild(titleText);
-
-          const toggleLabel = document.createElement('label');
-          toggleLabel.className = 'inline-flex items-center cursor-pointer shrink-0';
-          const toggleInput = document.createElement('input');
-          toggleInput.type = 'checkbox';
-          toggleInput.className = 'sr-only peer';
-          const toggleTrack = document.createElement('div');
-          toggleTrack.className = 'relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[""] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]';
-          toggleLabel.appendChild(toggleInput);
-          toggleLabel.appendChild(toggleTrack);
-          title.appendChild(toggleLabel);
-          paletteCard.appendChild(title);
-
-          const paletteGrid = document.createElement('div');
-          paletteGrid.className = 'theme-color-grid';
-          paletteGrid.style.display = 'none';
-
-          for (const [key, label] of Object.entries(THEME_COLOR_GROUPS['Terminal Palette'])) {
-            paletteGrid.appendChild(buildColorItem(key, label));
-          }
-
-          // Reset palette link
-          const resetBtn = document.createElement('div');
-          resetBtn.className = 'text-[11px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline text-right pt-2 border-t border-[var(--border)] mt-1';
-          resetBtn.textContent = 'Reset palette';
-          resetBtn.addEventListener('click', () => {
-            DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
-            editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
-            paletteGrid.querySelectorAll('.theme-color-item').forEach((item, i) => {
-              if (i < 16) {
-                const v = editingTheme.palette[i];
-                const s = item.querySelector('span:nth-child(2)');
-                if (s) s.style.background = v;
-              }
-            });
-            previewTheme();
-          });
-          paletteGrid.appendChild(resetBtn);
-          paletteCard.appendChild(paletteGrid);
-
-          // Toggle handler
-          toggleInput.addEventListener('change', () => {
-            const isOn = toggleInput.checked;
-            paletteGrid.style.display = isOn ? '' : 'none';
-            if (!isOn) {
-              DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
-              editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
-              previewTheme();
-            }
-          });
-
-          container.appendChild(paletteCard);
-        }
-
-      /* ═══════════════════════════════════════════════════════════════
-       S E*TTINGS MODAL
-       ═══════════════════════════════════════════════════════════════ */
-      const settingsOverlay = document.getElementById('settings-overlay');
-
-      function openSettings(cat) {
-        // Populate theme select
-        const themeSelect = document.getElementById('set-theme');
-        themeSelect.innerHTML = '';
-        for (const [key, t] of Object.entries(THEMES)) {
-          const opt = document.createElement('option');
-          opt.value = key;
-          opt.textContent = t.label;
-          opt.dataset.swatches = t.swatches.join(',');
-          if (key === currentThemeName) opt.selected = true;
-          themeSelect.appendChild(opt);
-        }
-        // Rebuild custom dropdown for theme
-        const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
-        if (themeDD) initCustomDropdown(themeDD);
-
-        // Corner style
-        const cornerSelect = document.getElementById('set-corner-style');
-        cornerSelect.value = cornerStyle;
-        cornerSelect.onchange = e => {
-          cornerStyle = e.target.value;
-          applyCornerStyle();
-          saveState();
-        };
-        const cornerDD = document.querySelector('.custom-dropdown[data-for="set-corner-style"]');
-        if (cornerDD) initCustomDropdown(cornerDD);
-
-        // Sidebar style
-        const sbModeSelect = document.getElementById('set-sidebar-mode');
-        sbModeSelect.value = sidebarMode;
-        sbModeSelect.onchange = e => {
-          sidebarMode = e.target.value;
-          applySidebarMode();
-          saveState();
-        };
-        const sbModeDD = document.querySelector('.custom-dropdown[data-for="set-sidebar-mode"]');
-        if (sbModeDD) initCustomDropdown(sbModeDD);
-
-        // Notify when a command finishes
-        const notifyFinishToggle = document.getElementById('set-notify-finish');
-        if (notifyFinishToggle) {
-          notifyFinishToggle.checked = notifyOnCommandFinish;
-          notifyFinishToggle.onchange = e => {
-            notifyOnCommandFinish = e.target.checked;
-            saveState();
-          };
-        }
-
-        // Workspace process details
-        const wsProcsToggle = document.getElementById('set-wsprocs');
-        if (wsProcsToggle) {
-          wsProcsToggle.checked = showWsProcs;
-          wsProcsToggle.onchange = e => {
-            showWsProcs = e.target.checked;
-            applyWsProcsSetting();
-            renderSidebar();
-            saveState();
-          };
-        }
-
-        // Font size
-        document.getElementById('set-fontsize').value = currentFontSize;
-        document.getElementById('set-fontsize-val').textContent = currentFontSize + 'px';
-
-        // Font family
-        refreshFontPresetUI();
-        renderCustomFontsList();
-
-        // Line height
-        document.getElementById('set-lineheight').value = currentLineHeight;
-        document.getElementById('set-lineheight-val').textContent = currentLineHeight.toFixed(1);
-
-        // Cursor style
-        document.getElementById('set-cursor').value = currentCursorStyle;
-
-        // Cursor blink
-        const blinkToggle = document.getElementById('set-cursorblink');
-        blinkToggle.checked = currentCursorBlink;
-
-        // Scrollback
-        document.getElementById('set-scrollback').value = currentScrollback;
-        document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
-
-        // Search engine
-        const searchSelect = document.getElementById('set-search-engine');
-        searchSelect.value = searchEngine;
-        for (const opt of searchSelect.options) {
-          if (SEARCH_ENGINE_ICONS[opt.value]) opt.dataset.icon = SEARCH_ENGINE_ICONS[opt.value];
-        }
-        const searchDD = document.querySelector('.custom-dropdown[data-for="set-search-engine"]');
-        if (searchDD) initCustomDropdown(searchDD);
-        document.getElementById('set-custom-search-row').classList.toggle('hidden', searchEngine !== 'custom');
-        document.getElementById('set-custom-search-row').classList.toggle('flex', searchEngine === 'custom');
-        document.getElementById('set-custom-search-url').value = customSearchUrl;
-
-        // Background
-        refreshBgSettingsUI();
-
-        // Shortcuts
-        renderShortcutsList();
-
-        // Always open on the first category (Appearance) unless deep-linked
-        switchSettingsCat(typeof cat === 'string' ? cat : 'appearance');
-        settingsOverlay.classList.add('open');
-        document.activeElement?.blur();
-
-        // Init theme editor in "New Theme" mode
-        document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === 'new'));
-        document.querySelector('.theme-name-row')?.classList.remove('hidden');
-        document.querySelector('.theme-name-row')?.classList.add('flex');
-        document.querySelector('.theme-edit-row')?.classList.add('hidden');
-        document.querySelector('.theme-edit-row')?.classList.remove('flex');
+  // Theme mode toggle (New / Edit Existing)
+  document.querySelectorAll('.theme-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode;
+      themeEditorMode = mode;
+      document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+      const nameRow = document.querySelector('.theme-name-row');
+      const editRow = document.querySelector('.theme-edit-row');
+      if (mode === 'new') {
+        nameRow?.classList.remove('hidden');
+        nameRow?.classList.add('flex');
+        editRow?.classList.add('hidden');
+        editRow?.classList.remove('flex');
         initEditingTheme(currentThemeName);
-        editingTheme.label = '';
         document.getElementById('set-theme-name').value = '';
         renderThemeEditor();
+        previewTheme();
+      } else {
+        nameRow?.classList.add('hidden');
+        nameRow?.classList.remove('flex');
+        editRow?.classList.remove('hidden');
+        editRow?.classList.add('flex');
         refreshThemeCustomSelect();
-        settingsOverlay.focus({ preventScroll: true });
-        syncBrowserSlots();
-        if (cat === 'plugins') renderPluginsSettings();
-      }
-
-      function closeSettings() {
-        applyTheme(currentThemeName);
-        settingsOverlay.classList.remove('open');
-        syncBrowserSlots();
-        // In the Electron settings window, closing the overlay closes the window
-        if (SETTINGS_ONLY && window.electronAPI && window.electronAPI.settingsClose) window.electronAPI.settingsClose();
-      }
-
-      function renderShortcutsList() {
-        const list = document.getElementById('shortcuts-list');
-        if (!list) return;
-        const searchInput = document.getElementById('shortcuts-search');
-        const query = (searchInput?.value || '').trim().toLowerCase();
-        list.innerHTML = '';
-        let shown = 0;
-        for (const [action, sc] of Object.entries(customShortcuts)) {
-          const label = SHORTCUT_LABELS[action] || action;
-          const combo = formatKeyCombo(sc);
-          if (query && !label.toLowerCase().includes(query) && !combo.toLowerCase().includes(query)) continue;
-          shown++;
-          const item = document.createElement('div');
-          item.className = 'shortcut-item';
-          const labelEl = document.createElement('span');
-          labelEl.textContent = label;
-          const key = document.createElement('span');
-          key.className = 'shortcut-key' + (!sc.key ? ' empty' : '');
-          key.textContent = combo;
-          key.addEventListener('click', () => startRecording(item, key, action));
-          const resetBtn = document.createElement('span');
-          resetBtn.className = 'shortcut-reset';
-          resetBtn.title = 'Reset to default';
-          resetBtn.innerHTML = '<i class="ph ph-arrow-u-up-left"></i>';
-          const defaultSc = DEFAULT_SHORTCUTS[action];
-          resetBtn.addEventListener('click', () => {
-            if (defaultSc) {
-              customShortcuts[action] = JSON.parse(JSON.stringify(defaultSc));
-              saveState();
-              renderShortcutsList();
-            }
-          });
-          const keys = document.createElement('div');
-          keys.className = 'shortcut-keys';
-          keys.appendChild(key);
-          keys.appendChild(resetBtn);
-          item.appendChild(labelEl);
-          item.appendChild(keys);
-          list.appendChild(item);
-        }
-        if (!shown) {
-          const empty = document.createElement('div');
-          empty.className = 'shortcuts-empty';
-          empty.textContent = 'No shortcuts match your search';
-          list.appendChild(empty);
-        }
-      }
-
-      document.addEventListener('input', e => {
-        if (e.target && e.target.id === 'shortcuts-search') renderShortcutsList();
-      });
-
-      function startRecording(item, keyEl, action) {
-        // Cancel any existing recording
-        document.querySelectorAll('.shortcut-key.recording').forEach(el => el.classList.remove('recording'));
-        keyEl.classList.add('recording');
-        keyEl.textContent = 'Press a key...';
-
-        const isClickAction = customShortcuts[action]?.key === 'Click' || DEFAULT_SHORTCUTS[action]?.key === 'Click';
-        let pressed = {};      // track held keys by code
-        let mainKey = null;     // the non-modifier key
-        let modState = { ctrl: false, shift: false, alt: false, meta: false };
-        let cancelled = false;
-
-        function cleanup() {
-          document.removeEventListener('keydown', onDown, true);
-          document.removeEventListener('keyup', onUp, true);
-        }
-
-        function apply(combo) {
-          cleanup();
-          keyEl.classList.remove('recording');
-
-          // Need at least one modifier
-          if (!combo.ctrl && !combo.alt && !combo.meta) {
-            keyEl.textContent = formatKeyCombo(customShortcuts[action]);
-            return;
-          }
-
-          // Check for conflicts — swap if needed
-          for (const [otherAction, otherSc] of Object.entries(customShortcuts)) {
-            if (otherAction === action) continue;
-            if (otherSc.key === combo.key && !!otherSc.ctrl === !!combo.ctrl
-              && !!otherSc.shift === !!combo.shift && !!otherSc.alt === !!combo.alt
-              && !!otherSc.meta === !!combo.meta) {
-              customShortcuts[otherAction] = customShortcuts[action];
-            break;
-              }
-          }
-
-          combo.label = formatKeyCombo(combo);
-          customShortcuts[action] = combo;
-          saveState();
-          renderShortcutsList();
-        }
-
-        function onDown(e) {
-          e.preventDefault();
-          e.stopPropagation();
-
-          // Escape clears the shortcut (empty = disabled)
-          if (e.code === 'Escape') {
-            cancelled = true;
-            cleanup();
-            keyEl.classList.remove('recording');
-            customShortcuts[action] = { ctrl: false, shift: false, alt: false, meta: false, key: null };
-            saveState();
-            renderShortcutsList();
-            return;
-          }
-
-          pressed[e.code] = true;
-
-          // Track modifier state from keydown (reliable)
-          modState.ctrl = e.ctrlKey;
-          modState.shift = e.shiftKey;
-          modState.alt = e.altKey;
-          modState.meta = e.metaKey;
-
-          // Track non-modifier key (use e.key for correct layout mapping, e.g. AZERTY)
-          const isMod = e.code.startsWith('Control') || e.code.startsWith('Shift')
-          || e.code.startsWith('Alt') || e.code.startsWith('Meta');
-          if (!isMod) mainKey = e.key;
-
-          // Show live preview
-          if (isClickAction && !mainKey && (modState.ctrl || modState.alt || modState.meta)) {
-            keyEl.textContent = formatKeyCombo({ ...modState, key: 'Click' });
-          } else if (mainKey) {
-            keyEl.textContent = formatKeyCombo({ ...modState, key: mainKey });
-          }
-        }
-
-        function onUp(e) {
-          e.preventDefault();
-          e.stopPropagation();
-
-          delete pressed[e.code];
-
-          // If cancelled or no main key yet, keep waiting
-          if (cancelled) return;
-
-          // All keys released — finalize
-          if (Object.keys(pressed).length === 0 && mainKey) {
-            apply({ ...modState, key: mainKey });
-          } else if (Object.keys(pressed).length === 0 && !mainKey) {
-            // For click shortcuts: finalize with modifier-only combo
-            if (isClickAction && (modState.ctrl || modState.alt || modState.meta)) {
-              apply({ ...modState, key: 'Click' });
-            } else {
-              keyEl.textContent = 'Press a key...';
-              modState = { ctrl: false, shift: false, alt: false, meta: false };
-            }
-          }
-        }
-
-        document.addEventListener('keydown', onDown, true);
-        document.addEventListener('keyup', onUp, true);
-      }
-
-      // Reset shortcuts to defaults
-      document.addEventListener('click', e => {
-        if (e.target.id === 'shortcuts-reset') {
-          customShortcuts = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS));
-          saveState();
-          renderShortcutsList();
-        }
-      });
-
-      function switchSettingsCat(cat) {
-        const prevCat = document.querySelector('.settings-cat-btn.active')?.dataset.cat;
-        document.querySelectorAll('.settings-cat-btn').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
-        document.querySelectorAll('.settings-section[data-cat]').forEach(s => s.classList.toggle('active', s.dataset.cat === cat));
-        // Leaving theme editor → revert live preview to applied theme
-        if (prevCat === 'theme-editor' && cat !== 'theme-editor') {
-          applyTheme(currentThemeName);
-        }
-        // Reset scroll to top of the new section
-        document.querySelector('.settings-section')?.parentElement?.scrollTo({ top: 0 });
-        settingsCategory = cat;
-        saveState();
-        if (cat === 'plugins') renderPluginsSettings();
-        if (prevCat === 'plugins' && cat !== 'plugins') _pluginsView = { mode: 'list' };
-      }
-
-      // Track theme editor mode so it persists across category switches
-      let themeEditorMode = 'new';
-      let themeEditorEditKey = '';
-
-      function restoreThemeEditorState() {
-        // Re-init editing theme (we reverted preview on exit)
-        if (themeEditorMode === 'new') {
-          initEditingTheme(currentThemeName);
-        } else if (themeEditorEditKey) {
-          initEditingTheme(themeEditorEditKey);
-        } else {
-          initEditingTheme(currentThemeName);
-        }
-        previewTheme();
-        // Restore mode toggle
-        document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === themeEditorMode));
-        const nameRow = document.querySelector('.theme-name-row');
-        const editRow = document.querySelector('.theme-edit-row');
-        if (themeEditorMode === 'new') {
-          nameRow?.classList.remove('hidden'); nameRow?.classList.add('flex');
-          editRow?.classList.add('hidden'); editRow?.classList.remove('flex');
-        } else {
-          nameRow?.classList.add('hidden'); nameRow?.classList.remove('flex');
-          editRow?.classList.remove('hidden'); editRow?.classList.add('flex');
-          refreshThemeCustomSelect();
-          // Restore dropdown selection
-          const sel = document.getElementById('set-theme-custom-select');
-          if (sel && themeEditorEditKey) { sel.value = themeEditorEditKey; }
-          const dd = document.querySelector('.custom-dropdown[data-for="set-theme-custom-select"]');
-          if (dd) initCustomDropdown(dd);
-        }
-        // Restore name input
-        document.getElementById('set-theme-name').value = editingTheme?.label || '';
-        renderThemeEditor();
-      }
-
-      // Category button click handlers
-      document.querySelectorAll('.settings-cat-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          switchSettingsCat(btn.dataset.cat);
-          if (btn.dataset.cat === 'theme-editor') restoreThemeEditorState();
-        });
-      });
-
-      function applySettings() {
-        document.documentElement.style.setProperty('--app-font', currentFontFamily);
-        const wsp = activeWs();
-        if (!wsp) return;
-        const terms = getWorkspaceTerminals(wsp);
-        for (const t of terms) {
-          if (t.type === 'browser') continue;
-          t._customFontSize = currentFontSize; // Reset temporary zoom on global change
-          t.term.options.fontSize = currentFontSize;
-          t.term.options.fontFamily = currentFontFamily;
-          t.term.options.lineHeight = currentLineHeight;
-          t.term.options.cursorStyle = currentCursorStyle;
-          t.term.options.cursorBlink = currentCursorBlink;
-          t.term.options.scrollback = currentScrollback;
-          fitTerm(t);
-        }
-        saveState();
-      }
-
-      // Apply only the settings fields from shared storage (never touches
-      // workspaces/folders/sideOrder) — used by the settings window on boot and
-      // by the main window when the settings window pushes changes.
-      async function restoreSettingsOnly() {
-        try {
-          let state = {};
-          const api = configApi();
-          if (api && api.configReadState) {
-            const diskState = await api.configReadState();
-            if (diskState) state = diskState;
-          }
-          if (!state.theme) {
-            const raw = localStorage.getItem(STATE_KEY);
-            if (raw) state = JSON.parse(raw);
-          }
-          await resolveStateImages(state);
-          if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
-          if (state.fontSize) currentFontSize = state.fontSize;
-          if (state.fontFamily) currentFontFamily = state.fontFamily;
-          if (state.customFonts) {
-            customFonts = {};
-            for (const [k, v] of Object.entries(state.customFonts)) {
-              if (v && v.dataUrl) customFonts[k] = { name: v.name || k, dataUrl: v.dataUrl, format: v.format || 'truetype' };
-            }
-            injectCustomFonts();
-          }
-          if (state.lineHeight) currentLineHeight = state.lineHeight;
-          if (state.cornerStyle) cornerStyle = state.cornerStyle;
-          if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
-          if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
-          if (state.scrollback) currentScrollback = state.scrollback;
-          if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
-          if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
-          if (state.sidebarMode) {
-            if (sidebarMode !== state.sidebarMode) {
-              sidebarMode = state.sidebarMode;
-              applySidebarMode();
-            }
-          }
-          if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
-          if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
-          if (state.backgroundMode) backgroundMode = state.backgroundMode;
-          if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
-          if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
-          if (state.searchEngine) searchEngine = state.searchEngine;
-          if (state.customSearchUrl) customSearchUrl = state.customSearchUrl;
-          if (state.shortcuts) {
-            for (const [k, v] of Object.entries(state.shortcuts)) {
-              if (customShortcuts[k]) customShortcuts[k] = v;
-            }
-          }
-          if (state.pluginStates) {
-            for (const [k, v] of Object.entries(state.pluginStates)) _pluginStates.set(k, !!v);
-          }
-          if (state.pluginConfigs) {
-            for (const [k, v] of Object.entries(state.pluginConfigs)) {
-              if (v && typeof v === 'object') _pluginConfigs.set(k, Object.assign({}, v));
-            }
-          }
-        } catch {}
-      }
-
-      // Browser tabs are DOM <webview>s now, so the in-window overlay covers
-      // them — same technique as the reference preview panel. No separate window.
-      function openSettingsGlobal(cat) {
-        openSettings(cat);
-      }
-
-        /* ═══════════════════════════════════════════════════════════════
-         K E*YBOARD SHORTCUTS
-         ═══════════════════════════════════════════════════════════════ */
-        // Capture-phase — intercepts before xterm.js
-        document.addEventListener('keydown', e => {
-          // Escape clears multi-select mode (skip when settings is open)
-          if (e.key === 'Escape' && isInMultiMode() && !settingsOverlay.classList.contains('open')) {
-            e.preventDefault(); e.stopPropagation();
-            clearMultiSelect();
-            return;
-          }
-          // Focus adjacent pane
-          for (const dir of ['Left', 'Down', 'Up', 'Right']) {
-            const action = 'focus' + dir.charAt(0).toUpperCase() + dir.slice(1).toLowerCase();
-            if (matchShortcut(e, action)) {
-              e.preventDefault(); e.stopPropagation();
-              focusAdjacentGroup(dir.toLowerCase());
-              return;
-            }
-          }
-          // Tab switching
-          if (matchShortcut(e, 'prevTab')) { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
-          if (matchShortcut(e, 'nextTab')) { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
-          // Close terminal
-          if (matchShortcut(e, 'closeTerminal')) {
-            e.preventDefault(); e.stopPropagation();
-            const wsp = activeWs();
-            if (wsp && wsp.activeTermId) removeTerminal(wsp.id, wsp.activeTermId);
-            return;
-          }
-          // Copy
-          if (matchShortcut(e, 'copy')) {
-            const t = activeTerminal();
-            if (t && t.type !== 'browser' && t.term.hasSelection()) {
-              e.preventDefault(); e.stopPropagation();
-              const text = t.term.getSelection();
-              navigator.clipboard.writeText(text);
-            }
-            return;
-          }
-          // Paste
-          if (matchShortcut(e, 'paste')) {
-            const t = activeTerminal();
-            if (t && t.type !== 'browser') {
-              e.preventDefault(); e.stopPropagation();
-              doPaste(t);
-            }
-            return;
-          }
-          // Ctrl+V paste (non-shift variant)
-          if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') {
-            const t = activeTerminal();
-            if (t && t.type !== 'browser') {
-              e.preventDefault(); e.stopPropagation();
-              doPaste(t);
-            }
-            return;
-          }
-          // Workspace switching
-          if (matchShortcut(e, 'nextWorkspace')) { e.preventDefault(); e.stopPropagation(); nextWorkspace(); return; }
-          if (matchShortcut(e, 'prevWorkspace')) { e.preventDefault(); e.stopPropagation(); prevWorkspace(); return; }
-          // Alt+N → workspace at sidebar position N
-          for (let i = 1; i <= 9; i++) {
-            if (matchShortcut(e, 'switchWs' + i)) {
-              e.preventDefault(); e.stopPropagation();
-              switchWsByNumber(i);
-              return;
-            }
-          }
-          // Ctrl+Tab / Ctrl+Shift+Tab
-          if (e.ctrlKey && e.code === 'Tab') {
-            e.preventDefault(); e.stopPropagation();
-            e.shiftKey ? prevTab() : nextTab();
-            return;
-          }
-        }, true);
-
-        // Bubble-phase shortcuts
-        document.addEventListener('keydown', e => {
-          if (matchShortcut(e, 'newTerminal')) { e.preventDefault(); addTerminal(); return; }
-          if (matchShortcut(e, 'splitH')) {
-            e.preventDefault();
-            const wsp = activeWs();
-            const active = activeTerminal();
-            if (wsp && active) {
-              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
-              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'row');
-            }
-            return;
-          }
-          if (matchShortcut(e, 'splitV')) {
-            e.preventDefault();
-            const wsp = activeWs();
-            const active = activeTerminal();
-            if (wsp && active) {
-              const activeGroup = findGroupContainingTerm(wsp.layout, active.id);
-              if (activeGroup) splitGroupDirectly(wsp.id, activeGroup.id, 'column');
-            }
-            return;
-          }
-          if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
-          if (matchShortcut(e, 'tabSearch')) { e.preventDefault(); e.stopPropagation(); openTabSearch(); return; }
-          if (matchShortcut(e, 'browserTab')) {
-            e.preventDefault();
-            const wsp = activeWs();
-            const active = activeTerminal();
-            if (wsp) {
-              const activeGroup = active ? findGroupContainingTerm(wsp.layout, active.id) : findFirstGroup(wsp.layout);
-              if (activeGroup) addBrowserTab(wsp.id, activeGroup.id);
-            }
-            return;
-          }
-          if (matchShortcut(e, 'quitApp')) {
-            e.preventDefault(); e.stopPropagation();
-            confirmQuitApp();
-            return;
-          }
-          if (matchShortcut(e, 'maximizeTab')) {
-            e.preventDefault(); e.stopPropagation();
-            const wsp = activeWs();
-            if (wsp && wsp.activeTermId) toggleMaximizeTerminal(wsp.id, wsp.activeTermId);
-            return;
-          }
-          if (matchShortcut(e, 'profiles')) { e.preventDefault(); e.stopPropagation(); openProfilePicker(); return; }
-          if (matchShortcut(e, 'toggleSidebar')) { e.preventDefault(); e.stopPropagation(); toggleSidebar(); return; }
-          // Arrow key tab switching (legacy)
-          if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
-            if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
-            if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
-          }
-          // Plugin command combos (last, so built-in shortcuts win)
-          if (dispatchPluginKeydown(e)) return;
-        });
-
-      // Settings-window bootstrap: skip the entire terminal/browser layer.
-      async function settingsOnlyBoot() {
-        await loadCustomThemes();
-        await restoreSettingsOnly();
-        await loadPlugins();
-        applyTheme(currentThemeName);
-        document.body.classList.add('settings-only');
-        const splash = document.getElementById('splash');
-        if (splash) splash.classList.add('hide');
-        openSettings('appearance');
-      }
-
-      async function detachedOnlyBoot() {
-        await loadCustomThemes();
-        // Restore only theme/font settings (not workspaces) for the detached window
-        try {
-          let raw = null;
-          const api = configApi();
-          if (api && api.configReadState) {
-            const diskState = await api.configReadState();
-            if (diskState) raw = JSON.stringify(diskState);
-          }
-          if (!raw) raw = localStorage.getItem(STATE_KEY);
-          if (raw) {
-            const state = JSON.parse(raw);
-            if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
-            if (state.fontSize) currentFontSize = state.fontSize;
-            if (state.fontFamily) currentFontFamily = state.fontFamily;
-            if (state.customFonts) {
-              customFonts = {};
-              for (const [k, v] of Object.entries(state.customFonts)) {
-                if (v && v.dataUrl) customFonts[k] = { name: v.name || k, dataUrl: v.dataUrl, format: v.format || 'truetype' };
-              }
-              injectCustomFonts();
-            }
-            if (state.lineHeight) currentLineHeight = state.lineHeight;
-            if (state.cornerStyle) cornerStyle = state.cornerStyle;
-            if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
-            if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
-            if (state.scrollback !== undefined) currentScrollback = state.scrollback;
-          }
-        } catch {}
-        applyTheme(currentThemeName);
-        document.body.classList.add('detached');
-
-        // Hide splash screen (normal init hides it at line ~6017, after the detached return)
-        const splash = document.getElementById('splash');
-        if (splash) splash.classList.add('hide');
-
-        // Show the titlebar so the window is draggable
-        const tb = document.getElementById('titlebar');
-        if (tb) tb.classList.add('active');
-
-        // Hide sidebar
-        const sidebar = document.getElementById('sidebar');
-        if (sidebar) sidebar.style.display = 'none';
-
-        // Wire up Electron PTY bridge (same as normal init)
-        if (isDesktop() && window.electronAPI) {
-          const api = window.electronAPI;
-          wsReady = true;
-          nativePtyReady = true;
-          api.onTerminalData(({ id, data }) => {
-            const result = findTermById(id);
-            if (result && result.term && result.term.type !== 'browser') {
-              result.term.term.write(data);
-            }
-          });
-          api.onTerminalExit(({ id, code }) => {
-            const result = findTermById(id);
-            if (result) {
-              result.dead = true;
-              result.term = null;
-            }
-            window.close();
-          });
-          // Main process accepted a cross-window move for a tab living in
-          // THIS window — snapshot its buffer, remove the tab locally, and
-          // report how many tabs remain (main closes this window at 0).
-          if (api.onTabDragComplete) {
-            api.onTabDragComplete(({ id }) => {
-              let ready = { id, remaining: 0 };
-              try {
-                const wsp = workspaces[0];
-                const group = wsp && findGroupContainingTerm(wsp.layout, id);
-                const entry = group && group.terminals.find(x => x.id === id);
-                if (entry && entry.term) {
-                  const payload = serializeTermBuffer(entry);
-                  if (payload) localStorage.setItem(DETACH_BUFFER_KEY(id), JSON.stringify(payload));
-                  ready = { id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd, label: entry.label, remaining: 0 };
-                }
-                if (group) {
-                  group.terminals = group.terminals.filter(x => x.id !== id);
-                  if (group.activeTermId === id) group.activeTermId = group.terminals[0]?.id || null;
-                  ready.remaining = getWorkspaceTerminals(wsp).length;
-                  if (ready.remaining > 0) {
-                    renderPaneArea();
-                    const nt = activeTerminal();
-                    if (nt) activateTerminal(wsp.id, nt.id);
-                    saveState();
-                  }
-                }
-              } catch {}
-              if (api.tabDragReady) api.tabDragReady(ready);
-            });
-          }
-          // A terminal dragged from another window (main or a sibling
-          // detached window) and dropped here — re-create the tab attached
-          // to the same PTY, placed like a normal tab drop.
-          if (api.onTerminalReattach) {
-            api.onTerminalReattach(({ id, cols, rows, cwd, placement }) => {
-              try { reattachTerminal(id, cols, rows, cwd, placement); } catch (e) { console.error('[reattach] failed:', e); }
-            });
-          }
-          // Which terminal another window is currently dragging — used by the
-          // shared tab-bar/pane drop handlers to route the cross-window drop.
-          if (api.onTabDragActive) {
-            api.onTabDragActive(({ id }) => { window.externalDragTermId = id || null; });
-          }
-        }
-
-        // Read detached params
-        const termId = DETACHED_PARAMS.get('termId');
-        const cols = parseInt(DETACHED_PARAMS.get('cols')) || 80;
-        const rows = parseInt(DETACHED_PARAMS.get('rows')) || 24;
-        const cwd = DETACHED_PARAMS.get('cwd') || undefined;
-
-        if (!termId) return;
-
-        let restored = false;
-        let detachedBuffer = null; // stashed screen/scrollback (with tab label)
-        try { restored = await restoreState(); } catch {}
-
-        if (!restored) {
-          // Create a minimal workspace to hold the terminal
-          const wsId = 'detached-ws';
-          const wsp = {
-            id: wsId,
-            label: 'Detached',
-            layout: { type: 'group', id: 'group-detached', terminals: [], activeTermId: null },
-          };
-          workspaces = [wsp];
-          activeWsId = wsId;
-          sideOrder = [{ type: 'ws', id: wsId }];
-
-          // Read the stashed buffer now so the tab keeps its original name
-          try {
-            const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
-            if (raw) detachedBuffer = JSON.parse(raw);
-          } catch {}
-
-          // Create the terminal entry
-          const entry = _createTermEntry(wsp, termId, (detachedBuffer && detachedBuffer.label) || 'terminal');
-          entry.cwd = cwd;
-          wsp.layout.terminals = [entry];
-          wsp.layout.activeTermId = termId;
-        }
-
-        // Render the pane area (creates the DOM and opens the xterm)
-        const empty = document.getElementById('empty-state');
-        if (empty) empty.style.display = 'none';
-        renderPaneArea();
-
-        // The PTY for this terminal is already running in the main process (it
-        // was never killed on detach), so we do NOT send terminal:create — that
-        // would kill the session and spawn a fresh shell. Instead, replay the
-        // captured screen/scrollback and then let live output stream in.
-        const active = activeTerminal();
-        if (active && active.type !== 'browser') {
-          // Open at the size the PTY was running at so the replayed lines
-          // don't wrap, then fit to the actual window size after layout.
-          try { active.term.resize(cols, rows); } catch {}
-          if (!detachedBuffer) {
-            // restored-from-state path: the stash wasn't read above
-            try {
-              const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
-              detachedBuffer = raw ? JSON.parse(raw) : null;
-            } catch {}
-          }
-          try { localStorage.removeItem(DETACH_BUFFER_KEY(termId)); } catch {}
-          if (detachedBuffer) restoreTermBuffer(active, detachedBuffer);
-        }
-
-        // Tell main we're ready so it flushes any output produced while the
-        // window was booting (it buffers PTY data for detached terminals).
-        if (window.electronAPI && window.electronAPI.terminalAttached) {
-          window.electronAPI.terminalAttached(termId);
-        }
-
-        // Fit after DOM is laid out
-        setTimeout(() => {
-          const t = activeTerminal();
-          if (t && t.type !== 'browser') fitTerm(t);
-        }, 80);
-      }
-
-      // Background image settings controls (declared here so the settings-window
-      // bootstrap can read them before the wiring below runs — TDZ guard).
-      const bgModeSelect = document.getElementById('set-bg-mode');
-      const bgOpacitySlider = document.getElementById('set-bg-opacity');
-      const bgOpacityVal = document.getElementById('set-bg-opacity-val');
-      const bgUploadArea = document.getElementById('set-bg-image-area');
-      const bgFileInput = document.getElementById('set-bg-image-input');
-      const bgPreview = bgUploadArea.querySelector('.bg-upload-preview');
-      const bgClearBtn = document.getElementById('bg-image-clear');
-      const bgPerTabNote = document.getElementById('bg-per-tab-note');
-      const bgControlsRow = document.getElementById('bg-image-controls');
-
-      // Settings-window bootstrap: skip the entire terminal/browser layer.
-      if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
-
-      // Detached-terminal bootstrap: minimal terminal-only window.
-      if (DETACHED_ONLY) { detachedOnlyBoot(); return; }
-
-      // Open/close
-      document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
-      const btnProfiles = document.getElementById('btn-profiles');
-      if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
-      const btnSidebarRight = document.getElementById('btn-sidebar-right');
-      if (btnSidebarRight) btnSidebarRight.addEventListener('click', () => document.body.classList.toggle('sb-right-hidden'));
-
-      // Right sidebar pages (main / clipboard)
-      const sbrOpen = document.getElementById('sbr-open-clipboard');
-      const sbrBack = document.getElementById('sbr-clipboard-back');
-      const sbrMain = document.getElementById('sbr-main');
-      const sbrClip = document.getElementById('sbr-clipboard');
-      const sbrClipContent = document.getElementById('sbr-clipboard-content');
-      if (sbrOpen && sbrBack && sbrMain && sbrClip) {
-        const CLIP_KEY = 'terminalvibe.clipboardHistory';
-        const CLIP_MAX = 200;
-        let clipHistory = [];
-        try { clipHistory = JSON.parse(localStorage.getItem(CLIP_KEY) || '[]'); } catch { clipHistory = []; }
-        if (!Array.isArray(clipHistory)) clipHistory = [];
-        const readClip = async () => (isDesktop() && window.electronAPI?.clipboardRead)
-          ? window.electronAPI.clipboardRead()
-          : navigator.clipboard.readText();
-        const renderClipHistory = () => {
-          sbrClipContent.textContent = '';
-          if (!clipHistory.length) { sbrClipContent.textContent = '(clipboard history is empty)'; return; }
-          clipHistory.forEach(text => {
-            const el = document.createElement('div');
-            el.className = 'sbr-clip-item';
-            el.textContent = text;
-            el.title = 'Click to paste';
-            el.addEventListener('click', () => {
-              if (isDesktop() && window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text);
-              else navigator.clipboard.writeText(text).catch(() => {});
-              const t = activeTerminal();
-              if (t && t.term && t.type !== 'browser') { t.term.paste(text); t.term.focus?.(); }
-            });
-            sbrClipContent.appendChild(el);
-          });
-        };
-        const captureClip = async () => {
-          try {
-            const text = await readClip();
-            if (!text || !text.trim() || clipHistory[0] === text) return;
-            clipHistory = [text, ...clipHistory.filter(t => t !== text)].slice(0, CLIP_MAX);
-            localStorage.setItem(CLIP_KEY, JSON.stringify(clipHistory));
-            if (sbrClip.style.display !== 'none') renderClipHistory();
-          } catch {}
-        };
-        captureClip();
-        setInterval(captureClip, 1000);
-        const showClipboardPage = async () => {
-          sbrMain.style.display = 'none';
-          sbrClip.style.display = 'flex';
-          await captureClip();
-          renderClipHistory();
-        };
-        sbrOpen.addEventListener('click', showClipboardPage);
-        sbrBack.addEventListener('click', () => {
-          sbrClip.style.display = 'none';
-          sbrMain.style.display = 'flex';
-        });
-      }
-      document.getElementById('settings-close').addEventListener('click', closeSettings);
-      settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
-      document.addEventListener('keydown', e => {
-        if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) { closeSettings(); e.stopPropagation(); }
-        if (e.ctrlKey && e.key === ',' && !e.metaKey && !e.altKey) { e.preventDefault(); openSettingsGlobal(); }
-      });
-      // Deep-link API: e.g. openSettings('appearance')
-      window.openSettings = openSettingsGlobal;
-      window.closeSettings = closeSettings;
-
-      // Plugins: open the plugins directory in the OS file manager
-      const pluginsOpenDir = document.getElementById('plugins-open-dir');
-      if (pluginsOpenDir) {
-        pluginsOpenDir.addEventListener('click', () => {
-          const api = configApi();
-          if (api && api.configOpenPluginsDir) api.configOpenPluginsDir();
-        });
-      }
-
-      // Theme change
-      document.getElementById('set-theme').addEventListener('change', e => {
-        applyTheme(e.target.value);
-        saveState();
-      });
-
-      // Font size
-      document.getElementById('set-fontsize').addEventListener('input', e => {
-        currentFontSize = parseInt(e.target.value);
-        document.getElementById('set-fontsize-val').textContent = currentFontSize + 'px';
-        applySettings();
-      });
-
-      // Font family preset
-      document.getElementById('set-fontpreset').addEventListener('change', e => {
-        const v = e.target.value;
-        const customRow = document.getElementById('fontfamily-custom-row');
-        if (v === '__custom__') {
-          customRow.classList.remove('hidden');
-          customRow.classList.add('flex');
-          return;
-        }
-        currentFontFamily = v;
-        customRow.classList.add('hidden');
-        customRow.classList.remove('flex');
-        applySettings();
-      });
-
-      // Font family (custom CSS stack)
-      document.getElementById('set-fontfamily').addEventListener('change', e => {
-        currentFontFamily = e.target.value;
-        applySettings();
-      });
-
-      // Font import
-      document.getElementById('font-import-btn').addEventListener('click', () => {
-        document.getElementById('font-import-input').click();
-      });
-      document.getElementById('font-import-input').addEventListener('change', e => {
-        importFontFiles(e.target.files);
-        e.target.value = '';
-      });
-
-      // Line height
-      document.getElementById('set-lineheight').addEventListener('input', e => {
-        currentLineHeight = parseFloat(e.target.value);
-        document.getElementById('set-lineheight-val').textContent = currentLineHeight.toFixed(1);
-        applySettings();
-      });
-
-      // Cursor style
-      document.getElementById('set-cursor').addEventListener('change', e => {
-        currentCursorStyle = e.target.value;
-        applySettings();
-      });
-
-      // Cursor blink toggle
-      document.getElementById('set-cursorblink').addEventListener('change', () => {
-        currentCursorBlink = document.getElementById('set-cursorblink').checked;
-        applySettings();
-      });
-
-      // Status bar toggle
-
-      // Scrollback
-      document.getElementById('set-scrollback').addEventListener('input', e => {
-        currentScrollback = parseInt(e.target.value);
-        document.getElementById('set-scrollback-val').textContent = currentScrollback.toLocaleString();
-        applySettings();
-      });
-
-      // Search engine
-      document.getElementById('set-search-engine').addEventListener('change', e => {
-        searchEngine = e.target.value;
-        const row = document.getElementById('set-custom-search-row');
-        row.classList.toggle('hidden', searchEngine !== 'custom');
-        row.classList.toggle('flex', searchEngine === 'custom');
-        saveState();
-      });
-      document.getElementById('set-custom-search-url').addEventListener('input', e => {
-        customSearchUrl = e.target.value;
-        saveState();
-      });
-
-      // ── CLI doc fuzzy search ──
-      const cliPre = document.getElementById('cli-doc-pre');
-      const cliLines = cliPre ? cliPre.textContent.split('\n') : [];
-      document.getElementById('cli-doc-search')?.addEventListener('input', e => {
-        const q = e.target.value.trim().toLowerCase();
-        if (!q) { cliPre.textContent = cliLines.join('\n'); return; }
-        cliPre.textContent = cliLines.map(line => {
-          const l = line.toLowerCase();
-          let qi = 0;
-          for (let i = 0; i < l.length && qi < q.length; i++) {
-            if (l[i] === q[qi]) qi++;
-          }
-          return qi === q.length ? line : '';
-        }).join('\n');
-      });
-
-      // ── Background Image Settings ──
-      function updateBgUploadPreview() {
-        const hasImage = backgroundMode === 'global' && !!globalBackgroundImage;
-        bgUploadArea.classList.toggle('has-image', hasImage);
-        if (hasImage) {
-          bgPreview.src = globalBackgroundImage;
-        }
-      }
-
-      function refreshBgSettingsUI() {
-        bgModeSelect.value = backgroundMode;
-        const dd = document.querySelector('.custom-dropdown[data-for="set-bg-mode"]');
-        if (dd) initCustomDropdown(dd);
-
-        bgControlsRow.style.display = backgroundMode === 'none' ? 'none' : '';
-        bgUploadArea.style.display = backgroundMode === 'global' ? '' : 'none';
-        bgPerTabNote.style.display = (backgroundMode === 'per-tab' || backgroundMode === 'per-workspace') ? '' : 'none';
-        bgOpacitySlider.value = Math.round(backgroundOpacity * 100);
-        bgOpacityVal.textContent = Math.round(backgroundOpacity * 100) + '%';
-        updateBgUploadPreview();
-      }
-
-      // Background mode change
-      bgModeSelect.addEventListener('change', () => {
-        backgroundMode = bgModeSelect.value;
-        refreshBgSettingsUI();
-        applyBackground();
-        saveState();
-      });
-
-      // Opacity
-      bgOpacitySlider.addEventListener('input', () => {
-        backgroundOpacity = parseInt(bgOpacitySlider.value) / 100;
-        bgOpacityVal.textContent = Math.round(backgroundOpacity * 100) + '%';
-        applyBackground();
-        saveState();
-      });
-
-      // File upload
-      bgUploadArea.addEventListener('click', (e) => {
-        if (e.target.closest('.bg-clear-btn')) return;
-        if (backgroundMode === 'none') return;
-        bgFileInput.click();
-      });
-
-      bgFileInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        loadBgImageFromFile(file, (dataUrl) => {
-          if (backgroundMode === 'global') {
-            setGlobalBackgroundImage(dataUrl);
-          }
-          refreshBgSettingsUI();
-        });
-        e.target.value = '';
-      });
-
-      bgClearBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (backgroundMode === 'global') {
-          setGlobalBackgroundImage('');
-        }
-        refreshBgSettingsUI();
-      });
-
-      // Theme editor — Save
-      document.getElementById('theme-btn-save').addEventListener('click', async () => {
-        const nameInput = document.getElementById('set-theme-name');
-        const name = nameInput.value.trim();
-        if (!name) { nameInput.focus(); return; }
-        if (BUILTIN_THEME_KEYS.has(name)) { alert('Cannot overwrite a built-in theme.'); return; }
-        editingTheme.label = name;
-        const customs = await getCustomThemes();
-        customs[name] = { ...editingTheme, _custom: true };
-        await saveCustomThemes(customs);
-        applyTheme(name);
-        saveState();
-        refreshThemeDropdown();
-      });
-
-      // Theme editor — Delete
-      document.getElementById('theme-btn-delete').addEventListener('click', async () => {
-        const nameInput = document.getElementById('set-theme-name');
-        const name = nameInput.value.trim();
-        if (!name || BUILTIN_THEME_KEYS.has(name)) return;
-        if (!(await getCustomThemes())[name]) return;
-        await deleteCustomTheme(name);
-        initEditingTheme(currentThemeName);
-        nameInput.value = editingTheme.label || '';
-        renderThemeEditor();
-        saveState();
-        refreshThemeDropdown();
-      });
-
-      // Theme editor — Reset
-      document.getElementById('theme-btn-import').addEventListener('click', () => {
-        document.getElementById('theme-import-input').click();
-      });
-      document.getElementById('theme-import-input').addEventListener('change', e => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          try {
-            const data = JSON.parse(reader.result);
-            if (!data.bg || !data.fg || !data.palette || !Array.isArray(data.palette) || data.palette.length < 16) {
-              alert('Invalid theme JSON: missing bg, fg, or palette[16].');
-              return;
-            }
-            const name = data.name || file.name.replace(/\.json$/i, '') || 'Imported Theme';
-            editingTheme = {
-              label: name,
-              bg: data.bg, fg: data.fg, cursor: data.cursor || data.fg, selection: data.selection || data.bg,
-              swatches: data.swatches || [data.bg, data.fg, data.palette[4] || data.fg],
-              palette: [...data.palette],
-              ui: data.ui ? { ...data.ui } : {},
-            };
-            document.getElementById('set-theme-name').value = name;
-            renderThemeEditor();
-            previewTheme();
-          } catch { alert('Failed to parse JSON.'); }
-        };
-        reader.readAsText(file);
-        e.target.value = '';
-      });
-
-      // Theme editor — Export
-      document.getElementById('theme-btn-export').addEventListener('click', () => {
-        if (!editingTheme) return;
-        const json = JSON.stringify({
-          name: editingTheme.label || 'Custom Theme',
-          bg: editingTheme.bg, fg: editingTheme.fg, cursor: editingTheme.cursor, selection: editingTheme.selection,
-          palette: editingTheme.palette,
-          ui: editingTheme.ui,
-        }, null, 2);
-        const blob = new Blob([json], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = (editingTheme.label || 'custom-theme').replace(/[^a-z0-9_-]/gi, '_') + '.json';
-        a.click();
-        URL.revokeObjectURL(a.href);
-      });
-
-      // Theme editor — name input sync
-      document.getElementById('set-theme-name').addEventListener('input', e => {
-        if (editingTheme) editingTheme.label = e.target.value.trim();
-      });
-
-      // Theme editor — Clone Current
-      document.getElementById('theme-btn-clone').addEventListener('click', () => {
-        initEditingTheme(currentThemeName);
-        editingTheme.label = THEMES[currentThemeName]?.label + ' Copy' || 'Copy';
-        document.getElementById('set-theme-name').value = editingTheme.label;
-        renderThemeEditor();
-        previewTheme();
-      });
-
-      // Theme editor — Load existing dropdown
-      function refreshThemeCustomSelect() {
         const sel = document.getElementById('set-theme-custom-select');
-        if (!sel) return;
-        sel.innerHTML = '';
-        for (const [key, t] of Object.entries(THEMES)) {
-          if (BUILTIN_THEME_KEYS.has(key)) continue;
-          const opt = document.createElement('option');
-          opt.value = key;
-          opt.textContent = t.label || key;
-          sel.appendChild(opt);
+        if (sel && sel.value) {
+          themeEditorEditKey = sel.value;
+          initEditingTheme(sel.value);
+          renderThemeEditor();
+          previewTheme();
         }
-        const dd = document.querySelector('.custom-dropdown[data-for="set-theme-custom-select"]');
-        if (dd) initCustomDropdown(dd);
       }
+    });
+  });
+  document.getElementById('set-theme-custom-select')?.addEventListener('change', e => {
+    themeEditorEditKey = e.target.value;
+    initEditingTheme(e.target.value);
+    document.getElementById('set-theme-name').value = editingTheme.label || '';
+    renderThemeEditor();
+    previewTheme();
+  });
 
-      // Theme mode toggle (New / Edit Existing)
-      document.querySelectorAll('.theme-mode-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const mode = btn.dataset.mode;
-          themeEditorMode = mode;
-          document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
-          const nameRow = document.querySelector('.theme-name-row');
-          const editRow = document.querySelector('.theme-edit-row');
-          if (mode === 'new') {
-            nameRow?.classList.remove('hidden');
-            nameRow?.classList.add('flex');
-            editRow?.classList.add('hidden');
-            editRow?.classList.remove('flex');
-            initEditingTheme(currentThemeName);
-            document.getElementById('set-theme-name').value = '';
-            renderThemeEditor();
-            previewTheme();
-          } else {
-            nameRow?.classList.add('hidden');
-            nameRow?.classList.remove('flex');
-            editRow?.classList.remove('hidden');
-            editRow?.classList.add('flex');
-            refreshThemeCustomSelect();
-            const sel = document.getElementById('set-theme-custom-select');
-            if (sel && sel.value) {
-              themeEditorEditKey = sel.value;
-              initEditingTheme(sel.value);
-              renderThemeEditor();
-              previewTheme();
-            }
-          }
-        });
-      });
-      document.getElementById('set-theme-custom-select')?.addEventListener('change', e => {
-        themeEditorEditKey = e.target.value;
-        initEditingTheme(e.target.value);
-        document.getElementById('set-theme-name').value = editingTheme.label || '';
-        renderThemeEditor();
-        previewTheme();
-      });
+  function refreshThemeDropdown() {
+    const themeSelect = document.getElementById('set-theme');
+    themeSelect.innerHTML = '';
+    for (const [key, t] of Object.entries(THEMES)) {
+      const opt = document.createElement('option');
+      opt.value = key; opt.textContent = t.label;
+      opt.dataset.swatches = t.swatches.join(',');
+      if (key === currentThemeName) opt.selected = true;
+      themeSelect.appendChild(opt);
+    }
+    const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
+    if (themeDD) initCustomDropdown(themeDD);
+    refreshThemeCustomSelect();
+  }
 
-      function refreshThemeDropdown() {
-        const themeSelect = document.getElementById('set-theme');
-        themeSelect.innerHTML = '';
-        for (const [key, t] of Object.entries(THEMES)) {
-          const opt = document.createElement('option');
-          opt.value = key; opt.textContent = t.label;
-          opt.dataset.swatches = t.swatches.join(',');
-          if (key === currentThemeName) opt.selected = true;
-          themeSelect.appendChild(opt);
-        }
-        const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
-        if (themeDD) initCustomDropdown(themeDD);
-        refreshThemeCustomSelect();
-      }
+  // Prevent sidebar from stealing terminal focus
+  document.getElementById('sidebar').addEventListener('mousedown', e => {
+    if (e.target.closest('[draggable="true"]')) return;
+    if (!e.target.closest('input, textarea, select, [contenteditable]')) e.preventDefault();
+  });
 
-      // Prevent sidebar from stealing terminal focus
-      document.getElementById('sidebar').addEventListener('mousedown', e => {
-        if (e.target.closest('[draggable="true"]')) return;
-        if (!e.target.closest('input, textarea, select, [contenteditable]')) e.preventDefault();
-      });
+  // Sidebar Split.js
+  let sidebarSplit = null;
+  let savedSidebarWidth = null;
+  const SB_EXPANDED_MIN = 200;
+  const SB_MAX = 400;
+  const SB_SPLIT_OPTS = {
+    gutterSize: 4,
+    snapOffset: 0,
+    maxSize: [SB_MAX, Infinity],
+    elementStyle(dimension, size, gutterSize) {
+      return { 'flex-basis': `calc(${size}% - ${gutterSize}px)` };
+    },
+    gutterStyle(dimension, gutterSize) {
+      return { 'flex-basis': gutterSize + 'px' };
+    },
+  };
 
-        // Sidebar Split.js
-        let sidebarSplit = null;
-        let savedSidebarWidth = null;
-        const SB_EXPANDED_MIN = 200;
-        const SB_MAX = 400;
-        const SB_SPLIT_OPTS = {
-          gutterSize: 4,
-          snapOffset: 0,
-          maxSize: [SB_MAX, Infinity],
-          elementStyle(dimension, size, gutterSize) {
-            return { 'flex-basis': `calc(${size}% - ${gutterSize}px)` };
-          },
-          gutterStyle(dimension, gutterSize) {
-            return { 'flex-basis': gutterSize + 'px' };
-          },
-        };
+  function initSidebarSplit() {
+    const sb = document.getElementById('sidebar');
+    const main = document.getElementById('main');
+    const expanded = sb.classList.contains('expanded');
+    const savedPx = savedSidebarWidth || (expanded ? SB_EXPANDED_MIN : null);
+    const containerW = document.getElementById('app').offsetWidth;
+    const initialPct = savedPx ? Math.max(5, (savedPx / containerW) * 100) : (expanded ? 15 : 0);
 
-        function initSidebarSplit() {
-          const sb = document.getElementById('sidebar');
-          const main = document.getElementById('main');
-          const expanded = sb.classList.contains('expanded');
-          const savedPx = savedSidebarWidth || (expanded ? SB_EXPANDED_MIN : null);
+    sidebarSplit = Split([sb, main], {
+      ...SB_SPLIT_OPTS,
+      sizes: [initialPct, 100 - initialPct],
+      minSize: expanded ? [SB_EXPANDED_MIN, 200] : [0, 200],
+      onDragStart() {
+        _suppressResize = true;
+        sb.style.willChange = 'flex-basis';
+        main.style.willChange = 'flex-basis';
+        sb.style.overflowY = 'hidden';
+        startResizing();
+      },
+      onDragEnd(sizes) {
+        _suppressResize = false;
+        sb.style.willChange = '';
+        main.style.willChange = '';
+        sb.style.overflowY = '';
+        // Remember the resized width so collapse/expand restores it
+        if (sb.classList.contains('expanded')) {
           const containerW = document.getElementById('app').offsetWidth;
-          const initialPct = savedPx ? Math.max(5, (savedPx / containerW) * 100) : (expanded ? 15 : 0);
-
-          sidebarSplit = Split([sb, main], {
-            ...SB_SPLIT_OPTS,
-            sizes: [initialPct, 100 - initialPct],
-            minSize: expanded ? [SB_EXPANDED_MIN, 200] : [0, 200],
-            onDragStart() {
-              _suppressResize = true;
-              sb.style.willChange = 'flex-basis';
-              main.style.willChange = 'flex-basis';
-              sb.style.overflowY = 'hidden';
-              startResizing();
-            },
-            onDragEnd(sizes) {
-              _suppressResize = false;
-              sb.style.willChange = '';
-              main.style.willChange = '';
-              sb.style.overflowY = '';
-              // Remember the resized width so collapse/expand restores it
-              if (sb.classList.contains('expanded')) {
-                const containerW = document.getElementById('app').offsetWidth;
-                const sidebarPx = containerW * sizes[0] / 100;
-                if (sidebarPx < SB_EXPANDED_MIN) {
-                  savedSidebarWidth = SB_EXPANDED_MIN;
-                  const pct = (SB_EXPANDED_MIN / containerW) * 100;
-                  sidebarSplit.setSizes([pct, 100 - pct]);
-                } else {
-                  savedSidebarWidth = Math.min(sidebarPx, SB_MAX);
-                }
-              }
-              const wsp = activeWs();
-              if (wsp) {
-                for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-              }
-              stopResizing();
-            },
-          });
-        }
-
-        initSidebarSplit();
-
-        // ── Right sidebar resize (custom sash, like terminal splits) ──
-        (function initRightSidebarResize() {
-          const sash = document.getElementById('sash-right');
-          if (!sash) return;
-          const panel = document.getElementById('sidebar-right');
-          const MIN = 160, MAX = 260;
-          sash.addEventListener('mousedown', e => {
-            e.preventDefault();
-            sash.classList.add('dragging');
-            const startX = e.clientX;
-            const startW = panel.offsetWidth;
-            _suppressResize = true;
-            startResizing();
-            const onMove = ev => {
-              panel.style.width = Math.max(MIN, Math.min(startW + (startX - ev.clientX), MAX)) + 'px';
-            };
-            const onUp = () => {
-              sash.classList.remove('dragging');
-              document.removeEventListener('mousemove', onMove);
-              document.removeEventListener('mouseup', onUp);
-              _suppressResize = false;
-              const wsp = activeWs();
-              if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-              saveState();
-              stopResizing();
-            };
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onUp);
-          });
-        })();
-
-        // ── Sidebar display modes: 'normal' | 'hover' | 'hidden' ──
-        let hoverPinned = false;   // expanded via toggle button while in hover mode
-        let sbTempVisible = false; // temporarily shown via toggle button while in hidden mode
-
-        function sbExpand() {
-          const sb = document.getElementById('sidebar');
-          sb.classList.add('expanded');
-          const px = savedSidebarWidth || Math.max(sb.offsetWidth || 0, SB_EXPANDED_MIN);
-          savedSidebarWidth = Math.max(px, SB_EXPANDED_MIN);
-          const pct = Math.max(5, (savedSidebarWidth / document.getElementById('app').offsetWidth) * 100);
-          sidebarSplit.setSizes([pct, 100 - pct]);
-        }
-        function sbCollapse() {
-          const sb = document.getElementById('sidebar');
-          sb.classList.remove('expanded', 'hover-expanded');
-          sidebarSplit.setSizes([0, 100]);
-        }
-        function sbFit() {
-          const wsp = activeWs();
-          if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-        }
-
-        const sbEl = document.getElementById('sidebar');
-
-        window.__sidebarCtl = {
-          apply(mode) {
-            hoverPinned = false;
-            sbTempVisible = false;
-            sbEl.classList.remove('hover-overlay', 'hover-expanded');
-            if (mode === 'hidden') sbCollapse();
-            sbFit();
-          },
-        };
-
-        sbEl.addEventListener('mouseenter', () => {
-          if (sidebarMode !== 'hover' || hoverPinned) return;
-          if (sbEl.classList.contains('expanded')) return;
-          // Overlay expand: floats above the content (no layout shift, Brave-like)
-          sbEl.style.setProperty('--sb-overlay-w', (savedSidebarWidth || 220) + 'px');
-          sbEl.classList.add('expanded', 'hover-expanded', 'hover-overlay');
-        });
-        sbEl.addEventListener('mouseleave', () => {
-          if (sidebarMode !== 'hover' || hoverPinned) return;
-          if (!sbEl.classList.contains('hover-expanded')) return;
-          sbEl.classList.remove('expanded', 'hover-expanded', 'hover-overlay');
-        });
-
-        applySidebarMode();
-
-        document.getElementById('btn-sidebar-toggle').addEventListener('click', toggleSidebar);
-
-        function toggleSidebar() {
-          const sb = document.getElementById('sidebar');
-          if (sidebarMode === 'hidden') {
-            sbTempVisible = !sbTempVisible;
-            document.body.classList.toggle('sb-hidden', !sbTempVisible);
-            if (sbTempVisible) sbExpand(); else sbCollapse();
-            sbFit();
-            saveState();
-            return;
-          }
-          const wasHover = sb.classList.contains('hover-expanded');
-          if (wasHover) {
-            // Pin the hover overlay into a real (layout) expanded state
-            sb.classList.remove('hover-overlay', 'hover-expanded');
-            hoverPinned = sidebarMode === 'hover';
-            sbExpand();
+          const sidebarPx = containerW * sizes[0] / 100;
+          if (sidebarPx < SB_EXPANDED_MIN) {
+            savedSidebarWidth = SB_EXPANDED_MIN;
+            const pct = (SB_EXPANDED_MIN / containerW) * 100;
+            sidebarSplit.setSizes([pct, 100 - pct]);
           } else {
-            const expanded = sb.classList.toggle('expanded');
-            hoverPinned = sidebarMode === 'hover' && expanded;
-            if (expanded) {
-              sbExpand();
-            } else {
-              sbCollapse();
-            }
-          }
-          sbFit();
-          saveState();
-        }
-
-/* ═══════════════════════════════════════════════════════════════
-         D I*RECTIONAL PANE NAVIGATION (Alt + H/J/K/L)
-═══════════════════════════════════════════════════════════════ */
-        let _paneNavCooldown = false;
-        function focusAdjacentGroup(direction) {
-          if (_paneNavCooldown) return;
-          _paneNavCooldown = true;
-          setTimeout(() => { _paneNavCooldown = false; }, 50);
-          const wsp = activeWs();
-          if (!wsp || !wsp.layout) return;
-          const active = activeTerminal();
-          if (!active) return;
-          const currentGroup = findGroupContainingTerm(wsp.layout, active.id);
-          if (!currentGroup) return;
-
-          const groupEls = document.querySelectorAll('.term-group-body');
-          const groups = [];
-          for (const el of groupEls) {
-            const gid = el.closest('.term-group')?.dataset?.groupId;
-            if (!gid) continue;
-            const rect = el.getBoundingClientRect();
-            groups.push({ id: gid, rect, cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2 });
-          }
-
-          const curEl = document.querySelector(`.term-group[data-group-id="${currentGroup.id}"] .term-group-body`);
-          if (!curEl) return;
-          const curRect = curEl.getBoundingClientRect();
-          const curCx = curRect.left + curRect.width / 2;
-          const curCy = curRect.top + curRect.height / 2;
-
-          let best = null;
-          let bestScore = Infinity;
-
-          for (const g of groups) {
-            if (g.id === currentGroup.id) continue;
-            const dx = g.cx - curCx;
-            const dy = g.cy - curCy;
-
-            let primary = 0, secondary = 0, valid = false;
-            switch (direction) {
-              case 'left':  valid = dx < -10; primary = -dx; secondary = Math.abs(dy); break;
-              case 'right': valid = dx > 10;  primary = dx;  secondary = Math.abs(dy); break;
-              case 'up':    valid = dy < -10; primary = -dy; secondary = Math.abs(dx); break;
-              case 'down':  valid = dy > 10;  primary = dy;  secondary = Math.abs(dx); break;
-            }
-            if (!valid) continue;
-
-            const score = primary + secondary * 3;
-            if (score < bestScore) {
-              bestScore = score;
-              best = g;
-            }
-          }
-
-          if (!best) return;
-
-          const targetGroup = findGroupById(wsp.layout, best.id);
-          if (!targetGroup || !targetGroup.terminals.length) return;
-          activateTerminal(wsp.id, targetGroup.activeTermId || targetGroup.terminals[0].id);
-        }
-
-
-        function prevTab() {
-          const wsp = activeWs();
-          if (!wsp) return;
-          const active = activeTerminal();
-          if (!active) return;
-          const group = findGroupContainingTerm(wsp.layout, active.id);
-          if (!group || group.terminals.length <= 1) return;
-
-          const idx = group.terminals.findIndex(t => t.id === active.id);
-          const prev = group.terminals[(idx - 1 + group.terminals.length) % group.terminals.length];
-          activateTerminal(wsp.id, prev.id);
-        }
-
-        function nextTab() {
-          const wsp = activeWs();
-          if (!wsp) return;
-          const active = activeTerminal();
-          if (!active) return;
-          const group = findGroupContainingTerm(wsp.layout, active.id);
-          if (!group || group.terminals.length <= 1) return;
-
-          const idx = group.terminals.findIndex(t => t.id === active.id);
-          const next = group.terminals[(idx + 1) % group.terminals.length];
-          activateTerminal(wsp.id, next.id);
-        }
-
-        // Block middle-click paste on tabs (prevents xterm.js from seeing it)
-        function _handleTabMiddleClick(e) {
-          const tab = e.target.closest('.tg-tab');
-          if (tab) {
-            e.preventDefault();
-            e.stopPropagation();
-            _suppressPasteUntil = Date.now() + 200;
-            const tabId = tab.dataset.termid;
-            const wsp = activeWs();
-            if (tabId && wsp) removeTerminal(wsp.id, tabId);
+            savedSidebarWidth = Math.min(sidebarPx, SB_MAX);
           }
         }
-        // Block middle-click paste on workspace buttons
-        function _handleWsMiddleClick(e) {
-          const btn = e.target.closest('.ws-btn');
-          if (btn) {
-            e.preventDefault();
-            e.stopPropagation();
-            _suppressPasteUntil = Date.now() + 200;
-            const wsId = btn.dataset.wsid;
-            if (wsId) removeWorkspace(wsId);
-          }
+        const wsp = activeWs();
+        if (wsp) {
+          for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
         }
-        document.addEventListener('mousedown', e => {
-          if (e.button === 1) {
-            _handleTabMiddleClick(e); _handleWsMiddleClick(e);
-            // Middle-click anywhere outside a terminal would paste into the focused one
-            if (!e.defaultPrevented && !e.target.closest('.term-slot')) {
-              e.preventDefault(); e.stopPropagation();
-              _suppressPasteUntil = Date.now() + 200;
-            }
-          }
-        }, true);
-        document.addEventListener('auxclick', e => {
-          if (e.button === 1) { _handleTabMiddleClick(e); _handleWsMiddleClick(e); }
-        }, true);
+        stopResizing();
+      },
+    });
+  }
 
-        // Horizontal scroll on tab bar with mouse wheel.
-        // Only intercept when the bar actually overflows, otherwise let the
-        // page scroll vertically (prevents swallowing wheel over a short bar).
-        document.addEventListener('wheel', e => {
-          const tabs = e.target.closest('.term-group-tabs');
-          if (!tabs) return;
-          if (tabs.scrollWidth <= tabs.clientWidth + 1) return;
-          if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-            e.preventDefault();
-            tabs.scrollLeft += e.deltaY;
-            updateTabBarOverflow(tabs.closest('.term-group'));
-          }
-        }, { passive: false });
+  initSidebarSplit();
 
-        /* ═══════════════════════════════════════════════════════════════
-         R E*SIZE OBSERVER
-         ═══════════════════════════════════════════════════════════════ */
-        /* ── Resizing overlay controllers ── */
-        function startResizing() {
-          document.body.classList.add('resizing');
-        }
+  // ── Right sidebar resize (custom sash, like terminal splits) ──
+  (function initRightSidebarResize() {
+    const sash = document.getElementById('sash-right');
+    if (!sash) return;
+    const panel = document.getElementById('sidebar-right');
+    const MIN = 160, MAX = 260;
+    sash.addEventListener('mousedown', e => {
+      e.preventDefault();
+      sash.classList.add('dragging');
+      const startX = e.clientX;
+      const startW = panel.offsetWidth;
+      _suppressResize = true;
+      startResizing();
+      const onMove = ev => {
+        panel.style.width = Math.max(MIN, Math.min(startW + (startX - ev.clientX), MAX)) + 'px';
+      };
+      const onUp = () => {
+        sash.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        _suppressResize = false;
+        const wsp = activeWs();
+        if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+        saveState();
+        stopResizing();
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  })();
 
-        function stopResizing() {
-          document.body.classList.remove('resizing');
-        }
+  // ── Sidebar display modes: 'normal' | 'hover' | 'hidden' ──
+  let hoverPinned = false;   // expanded via toggle button while in hover mode
+  let sbTempVisible = false; // temporarily shown via toggle button while in hidden mode
 
-        let resizeRaf = null;
-        let _suppressResize = false;
-        let _suppressPasteUntil = 0;
-        function syncSplitSizes(node) {
-          if (!node) return;
-          if (node.type === 'split') {
-            const container = document.getElementById('split-' + node.id);
-            if (container) {
-              const panes = [...container.children].filter(c => !c.classList.contains('sash'));
-              const sizes = panes.map(p => node.direction === 'row' ? p.offsetWidth : p.offsetHeight);
-              const total = sizes.reduce((a, b) => a + b, 0);
-              if (total > 0) node.sizes = sizes.map(s => (s / total) * 100);
-            }
-            node.children.forEach(syncSplitSizes);
-          }
-        }
+  function sbExpand() {
+    const sb = document.getElementById('sidebar');
+    sb.classList.add('expanded');
+    const px = savedSidebarWidth || Math.max(sb.offsetWidth || 0, SB_EXPANDED_MIN);
+    savedSidebarWidth = Math.max(px, SB_EXPANDED_MIN);
+    const pct = Math.max(5, (savedSidebarWidth / document.getElementById('app').offsetWidth) * 100);
+    sidebarSplit.setSizes([pct, 100 - pct]);
+  }
+  function sbCollapse() {
+    const sb = document.getElementById('sidebar');
+    sb.classList.remove('expanded', 'hover-expanded');
+    sidebarSplit.setSizes([0, 100]);
+  }
+  function sbFit() {
+    const wsp = activeWs();
+    if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+  }
 
-        const ro = new ResizeObserver(() => {
-          if (_suppressResize) return;
-          if (resizeRaf) return;
-          resizeRaf = requestAnimationFrame(() => {
-            resizeRaf = null;
-            const wsp = activeWs();
-            if (!wsp) return;
-            syncSplitSizes(wsp.layout);
-            const terms = getWorkspaceTerminals(wsp);
-            for (const t of terms) fitTerm(t);
-            document.querySelectorAll('.term-group').forEach(updateTabBarOverflow);
-          });
-        });
-        ro.observe(document.getElementById('pane-area'));
+  const sbEl = document.getElementById('sidebar');
 
-        // Suppress ResizeObserver during window maximize/minimize animation
-        let _winResizeTimer = null;
-        let _savedBrowserBg = null;
-        window.addEventListener('resize', () => {
-          _suppressResize = true;
-          startResizing();
-          if (_winResizeTimer) clearTimeout(_winResizeTimer);
-          // Hide browser iframes & their white background to prevent flicker
-          if (!_savedBrowserBg) {
-            const bcs = document.querySelectorAll('.browser-content');
-            _savedBrowserBg = [];
-            bcs.forEach(el => {
-              _savedBrowserBg.push(el.style.background);
-              el.style.background = 'transparent';
-            });
-          }
-          document.querySelectorAll('.browser-fallback').forEach(f => f.style.visibility = 'hidden');
-          _winResizeTimer = setTimeout(() => {
-            _winResizeTimer = null;
-            _suppressResize = false;
-            stopResizing();
-            // Restore browser iframes
-            document.querySelectorAll('.browser-fallback').forEach(f => f.style.visibility = '');
-            if (_savedBrowserBg) {
-              const bcs = document.querySelectorAll('.browser-content');
-              bcs.forEach((el, i) => { el.style.background = _savedBrowserBg[i] || ''; });
-              _savedBrowserBg = null;
-            }
-            // Trigger a single batched fit after the transition settles
-            const wsp = activeWs();
-            if (wsp) {
-              syncSplitSizes(wsp.layout);
-              for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-              syncBrowserSlots();
-            }
-          }, 150);
-        });
+  window.__sidebarCtl = {
+    apply(mode) {
+      hoverPinned = false;
+      sbTempVisible = false;
+      sbEl.classList.remove('hover-overlay', 'hover-expanded');
+      if (mode === 'hidden') sbCollapse();
+      sbFit();
+    },
+  };
 
-        /* ═══════════════════════════════════════════════════════════════
-         U T*IL
-         ═══════════════════════════════════════════════════════════════ */
-        function escHtml(s) {
-          return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-        }
+  sbEl.addEventListener('mouseenter', () => {
+    if (sidebarMode !== 'hover' || hoverPinned) return;
+    if (sbEl.classList.contains('expanded')) return;
+    // Overlay expand: floats above the content (no layout shift, Brave-like)
+    sbEl.style.setProperty('--sb-overlay-w', (savedSidebarWidth || 220) + 'px');
+    sbEl.classList.add('expanded', 'hover-expanded', 'hover-overlay');
+  });
+  sbEl.addEventListener('mouseleave', () => {
+    if (sidebarMode !== 'hover' || hoverPinned) return;
+    if (!sbEl.classList.contains('hover-expanded')) return;
+    sbEl.classList.remove('expanded', 'hover-expanded', 'hover-overlay');
+  });
 
-        /* ═══════════════════════════════════════════════════════════════
-         B O*OT
-         ═══════════════════════════════════════════════════════════════ */
-        (async () => {
-          // Profile gate: with multiple profiles, block boot behind the picker
-          // until one is chosen (profilesSwitch reloads the window).
-          if (!SETTINGS_ONLY && !DETACHED_ONLY) { await profileGate(); }
-          await loadCustomThemes();
-          const restored = await restoreState();
+  applySidebarMode();
+
+  document.getElementById('btn-sidebar-toggle').addEventListener('click', toggleSidebar);
+
+  function toggleSidebar() {
+    const sb = document.getElementById('sidebar');
+    if (sidebarMode === 'hidden') {
+      sbTempVisible = !sbTempVisible;
+      document.body.classList.toggle('sb-hidden', !sbTempVisible);
+      if (sbTempVisible) sbExpand(); else sbCollapse();
+      sbFit();
+      saveState();
+      return;
+    }
+    const wasHover = sb.classList.contains('hover-expanded');
+    if (wasHover) {
+      // Pin the hover overlay into a real (layout) expanded state
+      sb.classList.remove('hover-overlay', 'hover-expanded');
+      hoverPinned = sidebarMode === 'hover';
+      sbExpand();
+    } else {
+      const expanded = sb.classList.toggle('expanded');
+      hoverPinned = sidebarMode === 'hover' && expanded;
+      if (expanded) {
+        sbExpand();
+      } else {
+        sbCollapse();
+      }
+    }
+    sbFit();
+    saveState();
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+           D I*RECTIONAL PANE NAVIGATION (Alt + H/J/K/L)
+  ═══════════════════════════════════════════════════════════════ */
+  let _paneNavCooldown = false;
+  function focusAdjacentGroup(direction) {
+    if (_paneNavCooldown) return;
+    _paneNavCooldown = true;
+    setTimeout(() => { _paneNavCooldown = false; }, 50);
+    const wsp = activeWs();
+    if (!wsp || !wsp.layout) return;
+    const active = activeTerminal();
+    if (!active) return;
+    const currentGroup = findGroupContainingTerm(wsp.layout, active.id);
+    if (!currentGroup) return;
+
+    const groupEls = document.querySelectorAll('.term-group-body');
+    const groups = [];
+    for (const el of groupEls) {
+      const gid = el.closest('.term-group')?.dataset?.groupId;
+      if (!gid) continue;
+      const rect = el.getBoundingClientRect();
+      groups.push({ id: gid, rect, cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2 });
+    }
+
+    const curEl = document.querySelector(`.term-group[data-group-id="${currentGroup.id}"] .term-group-body`);
+    if (!curEl) return;
+    const curRect = curEl.getBoundingClientRect();
+    const curCx = curRect.left + curRect.width / 2;
+    const curCy = curRect.top + curRect.height / 2;
+
+    let best = null;
+    let bestScore = Infinity;
+
+    for (const g of groups) {
+      if (g.id === currentGroup.id) continue;
+      const dx = g.cx - curCx;
+      const dy = g.cy - curCy;
+
+      let primary = 0, secondary = 0, valid = false;
+      switch (direction) {
+        case 'left': valid = dx < -10; primary = -dx; secondary = Math.abs(dy); break;
+        case 'right': valid = dx > 10; primary = dx; secondary = Math.abs(dy); break;
+        case 'up': valid = dy < -10; primary = -dy; secondary = Math.abs(dx); break;
+        case 'down': valid = dy > 10; primary = dy; secondary = Math.abs(dx); break;
+      }
+      if (!valid) continue;
+
+      const score = primary + secondary * 3;
+      if (score < bestScore) {
+        bestScore = score;
+        best = g;
+      }
+    }
+
+    if (!best) return;
+
+    const targetGroup = findGroupById(wsp.layout, best.id);
+    if (!targetGroup || !targetGroup.terminals.length) return;
+    activateTerminal(wsp.id, targetGroup.activeTermId || targetGroup.terminals[0].id);
+  }
+
+
+  function prevTab() {
+    const wsp = activeWs();
+    if (!wsp) return;
+    const active = activeTerminal();
+    if (!active) return;
+    const group = findGroupContainingTerm(wsp.layout, active.id);
+    if (!group || group.terminals.length <= 1) return;
+
+    const idx = group.terminals.findIndex(t => t.id === active.id);
+    const prev = group.terminals[(idx - 1 + group.terminals.length) % group.terminals.length];
+    activateTerminal(wsp.id, prev.id);
+  }
+
+  function nextTab() {
+    const wsp = activeWs();
+    if (!wsp) return;
+    const active = activeTerminal();
+    if (!active) return;
+    const group = findGroupContainingTerm(wsp.layout, active.id);
+    if (!group || group.terminals.length <= 1) return;
+
+    const idx = group.terminals.findIndex(t => t.id === active.id);
+    const next = group.terminals[(idx + 1) % group.terminals.length];
+    activateTerminal(wsp.id, next.id);
+  }
+
+  // Block middle-click paste on tabs (prevents xterm.js from seeing it)
+  function _handleTabMiddleClick(e) {
+    const tab = e.target.closest('.tg-tab');
+    if (tab) {
+      e.preventDefault();
+      e.stopPropagation();
+      _suppressPasteUntil = Date.now() + 200;
+      const tabId = tab.dataset.termid;
+      const wsp = activeWs();
+      if (tabId && wsp) removeTerminal(wsp.id, tabId);
+    }
+  }
+  // Block middle-click paste on workspace buttons
+  function _handleWsMiddleClick(e) {
+    const btn = e.target.closest('.ws-btn');
+    if (btn) {
+      e.preventDefault();
+      e.stopPropagation();
+      _suppressPasteUntil = Date.now() + 200;
+      const wsId = btn.dataset.wsid;
+      if (wsId) removeWorkspace(wsId);
+    }
+  }
+  document.addEventListener('mousedown', e => {
+    if (e.button === 1) {
+      _handleTabMiddleClick(e); _handleWsMiddleClick(e);
+      // Middle-click anywhere outside a terminal would paste into the focused one
+      if (!e.defaultPrevented && !e.target.closest('.term-slot')) {
+        e.preventDefault(); e.stopPropagation();
+        _suppressPasteUntil = Date.now() + 200;
+      }
+    }
+  }, true);
+  document.addEventListener('auxclick', e => {
+    if (e.button === 1) { _handleTabMiddleClick(e); _handleWsMiddleClick(e); }
+  }, true);
+
+  // Horizontal scroll on tab bar with mouse wheel.
+  // Only intercept when the bar actually overflows, otherwise let the
+  // page scroll vertically (prevents swallowing wheel over a short bar).
+  document.addEventListener('wheel', e => {
+    const tabs = e.target.closest('.term-group-tabs');
+    if (!tabs) return;
+    if (tabs.scrollWidth <= tabs.clientWidth + 1) return;
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      e.preventDefault();
+      tabs.scrollLeft += e.deltaY;
+      updateTabBarOverflow(tabs.closest('.term-group'));
+    }
+  }, { passive: false });
+
+  /* ═══════════════════════════════════════════════════════════════
+   R E*SIZE OBSERVER
+   ═══════════════════════════════════════════════════════════════ */
+  /* ── Resizing overlay controllers ── */
+  function startResizing() {
+    document.body.classList.add('resizing');
+  }
+
+  function stopResizing() {
+    document.body.classList.remove('resizing');
+  }
+
+  let resizeRaf = null;
+  let _suppressResize = false;
+  let _suppressPasteUntil = 0;
+  function syncSplitSizes(node) {
+    if (!node) return;
+    if (node.type === 'split') {
+      const container = document.getElementById('split-' + node.id);
+      if (container) {
+        const panes = [...container.children].filter(c => !c.classList.contains('sash'));
+        const sizes = panes.map(p => node.direction === 'row' ? p.offsetWidth : p.offsetHeight);
+        const total = sizes.reduce((a, b) => a + b, 0);
+        if (total > 0) node.sizes = sizes.map(s => (s / total) * 100);
+      }
+      node.children.forEach(syncSplitSizes);
+    }
+  }
+
+  const ro = new ResizeObserver(() => {
+    if (_suppressResize) return;
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = null;
+      const wsp = activeWs();
+      if (!wsp) return;
+      syncSplitSizes(wsp.layout);
+      const terms = getWorkspaceTerminals(wsp);
+      for (const t of terms) fitTerm(t);
+      document.querySelectorAll('.term-group').forEach(updateTabBarOverflow);
+    });
+  });
+  ro.observe(document.getElementById('pane-area'));
+
+  // Suppress ResizeObserver during window maximize/minimize animation
+  let _winResizeTimer = null;
+  let _savedBrowserBg = null;
+  window.addEventListener('resize', () => {
+    _suppressResize = true;
+    startResizing();
+    if (_winResizeTimer) clearTimeout(_winResizeTimer);
+    // Hide browser iframes & their white background to prevent flicker
+    if (!_savedBrowserBg) {
+      const bcs = document.querySelectorAll('.browser-content');
+      _savedBrowserBg = [];
+      bcs.forEach(el => {
+        _savedBrowserBg.push(el.style.background);
+        el.style.background = 'transparent';
+      });
+    }
+    document.querySelectorAll('.browser-fallback').forEach(f => f.style.visibility = 'hidden');
+    _winResizeTimer = setTimeout(() => {
+      _winResizeTimer = null;
+      _suppressResize = false;
+      stopResizing();
+      // Restore browser iframes
+      document.querySelectorAll('.browser-fallback').forEach(f => f.style.visibility = '');
+      if (_savedBrowserBg) {
+        const bcs = document.querySelectorAll('.browser-content');
+        bcs.forEach((el, i) => { el.style.background = _savedBrowserBg[i] || ''; });
+        _savedBrowserBg = null;
+      }
+      // Trigger a single batched fit after the transition settles
+      const wsp = activeWs();
+      if (wsp) {
+        syncSplitSizes(wsp.layout);
+        for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
+        syncBrowserSlots();
+      }
+    }, 150);
+  });
+
+  /* ═══════════════════════════════════════════════════════════════
+   U T*IL
+   ═══════════════════════════════════════════════════════════════ */
+  function escHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+   B O*OT
+   ═══════════════════════════════════════════════════════════════ */
+  (async () => {
+    // Profile gate: with multiple profiles, block boot behind the picker
+    // until one is chosen (profilesSwitch reloads the window).
+    if (!SETTINGS_ONLY && !DETACHED_ONLY) { await profileGate(); }
+    await loadCustomThemes();
+    const restored = await restoreState();
+    applyTheme(currentThemeName);
+    applySidebarMode();
+    applyWsProcsSetting();
+
+    // Hide splash screen as soon as the core terminal UI is rendered;
+    // plugins are add-ons and load in the background (do NOT gate boot on them).
+    const splash = document.getElementById('splash');
+    if (splash) splash.classList.add('hide');
+    if (!SETTINGS_ONLY) loadPlugins(); // deferred, non-blocking
+
+    // Apply initial background & opacity
+    applyBackground();
+
+    // Settings live in a separate Electron window; re-apply on any change
+    if (isDesktop() && window.electronAPI && window.electronAPI.onSettingsChanged) {
+      window.electronAPI.onSettingsChanged(() => {
+        restoreSettingsOnly().then(() => {
           applyTheme(currentThemeName);
-          applySidebarMode();
+          applyBackground();
+          applySettings();
           applyWsProcsSetting();
-
-        // Hide splash screen as soon as the core terminal UI is rendered;
-        // plugins are add-ons and load in the background (do NOT gate boot on them).
-        const splash = document.getElementById('splash');
-        if (splash) splash.classList.add('hide');
-        if (!SETTINGS_ONLY) loadPlugins(); // deferred, non-blocking
-
-        // Apply initial background & opacity
-        applyBackground();
-
-        // Settings live in a separate Electron window; re-apply on any change
-        if (isDesktop() && window.electronAPI && window.electronAPI.onSettingsChanged) {
-          window.electronAPI.onSettingsChanged(() => {
-            restoreSettingsOnly().then(() => {
-              applyTheme(currentThemeName);
-              applyBackground();
-              applySettings();
-              applyWsProcsSetting();
-              renderSidebar();
-              syncBrowserSlots();
-              syncPlugins();
-            });
-          });
-        }
-
-        // While the settings window is open, detach native browser views so they
-        // can never paint above it; re-show them (alive, no reload) on close.
-        if (isDesktop() && window.electronAPI && window.electronAPI.onSettingsWindowState) {
-          window.electronAPI.onSettingsWindowState(({ open }) => {
-            settingsWindowOpen = open;
-            if (open) {
-              for (const ws of workspaces) {
-                for (const t of getWorkspaceTerminals(ws)) {
-                  if (t.type === 'browser' && t._viewCreated) window.electronAPI.browserHide(t.id);
-                }
-              }
-            } else {
-              syncBrowserSlots();
-            }
-          });
-        }
-
-        // OS close button ("X") → run the same quit-confirmation modal as the
-        // Ctrl+Shift+Q shortcut. Main holds the window open until we confirm.
-        if (isDesktop() && window.electronAPI && window.electronAPI.onAppCloseRequest) {
-          window.electronAPI.onAppCloseRequest(() => confirmQuitApp());
-        }
-
-        if (restored) {
           renderSidebar();
-          renderPaneArea();
-        }
+          syncBrowserSlots();
+          syncPlugins();
+        });
+      });
+    }
 
-        // In the desktop shell use the native PTY backend; otherwise plain WebSocket
-        if (isDesktop()) {
-          setTimeout(() => { try { connectNativePTY(); } catch (e) { console.error('connectNativePTY failed:', e); } }, 100);
+    // While the settings window is open, detach native browser views so they
+    // can never paint above it; re-show them (alive, no reload) on close.
+    if (isDesktop() && window.electronAPI && window.electronAPI.onSettingsWindowState) {
+      window.electronAPI.onSettingsWindowState(({ open }) => {
+        settingsWindowOpen = open;
+        if (open) {
+          for (const ws of workspaces) {
+            for (const t of getWorkspaceTerminals(ws)) {
+              if (t.type === 'browser' && t._viewCreated) window.electronAPI.browserHide(t.id);
+            }
+          }
         } else {
-          try { connectWS(); } catch (e) { console.error('connectWS failed:', e); }
+          syncBrowserSlots();
         }
+      });
+    }
 
-        // Desktop shell: show the native-overlay titlebar strip (drag region + label)
-        if (isDesktop()) {
-          const tb = document.getElementById('titlebar');
-          if (tb) tb.classList.add('active');
+    // OS close button ("X") → run the same quit-confirmation modal as the
+    // Ctrl+Shift+Q shortcut. Main holds the window open until we confirm.
+    if (isDesktop() && window.electronAPI && window.electronAPI.onAppCloseRequest) {
+      window.electronAPI.onAppCloseRequest(() => confirmQuitApp());
+    }
+
+    if (restored) {
+      renderSidebar();
+      renderPaneArea();
+    }
+
+    // In the desktop shell use the native PTY backend; otherwise plain WebSocket
+    if (isDesktop()) {
+      setTimeout(() => { try { connectNativePTY(); } catch (e) { console.error('connectNativePTY failed:', e); } }, 100);
+    } else {
+      try { connectWS(); } catch (e) { console.error('connectWS failed:', e); }
+    }
+
+    // Desktop shell: show the native-overlay titlebar strip (drag region + label)
+    if (isDesktop()) {
+      const tb = document.getElementById('titlebar');
+      if (tb) tb.classList.add('active');
+    }
+
+    // Listen for navigation and focus messages from browser tab iframes
+    window.addEventListener('message', function (e) {
+      // Handle iframe focus/click
+      if (e.data && e.data.terminalVibeFocus) {
+        const iframes = document.querySelectorAll('iframe.browser-fallback');
+        for (let i = 0; i < iframes.length; i++) {
+          if (iframes[i].contentWindow === e.source) {
+            const slot = iframes[i].closest('.term-slot');
+            if (slot && !slot.classList.contains('focused')) {
+              slot.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            }
+            break;
+          }
         }
-
-        // Listen for navigation and focus messages from browser tab iframes
-        window.addEventListener('message', function(e) {
-          // Handle iframe focus/click
-          if (e.data && e.data.terminalVibeFocus) {
-            const iframes = document.querySelectorAll('iframe.browser-fallback');
-            for (let i = 0; i < iframes.length; i++) {
-              if (iframes[i].contentWindow === e.source) {
-                const slot = iframes[i].closest('.term-slot');
-                if (slot && !slot.classList.contains('focused')) {
-                  slot.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                }
-                break;
-              }
-            }
-          }
-          // Handle navigation URL sync
-          if (e.data && e.data.terminalVibeNav) {
-            const active = activeTerminal();
-            if (active && active.type === 'browser' && active._syncUrl) {
-              var navUrl = e.data.terminalVibeNav;
-              if (navUrl !== active.url) active._syncUrl(navUrl);
-            }
-          }
-        });
-
-        // Auto-save every 30 seconds
-        setInterval(saveState, 30000);
-
-        // Keep the workspace buttons' running-process lists up to date
-        setInterval(refreshAllWorkspaceProcs, 5000);
-
-        // Save on close (browser)
-        window.addEventListener('beforeunload', (e) => {
-          if (_profileSwitching) return;
-          saveState();
-          if (!isDesktop()) {
-            const hasLiveTerms = workspaces.some(ws => getWorkspaceTerminals(ws).some(t => !t.dead));
-            if (hasLiveTerms) { e.preventDefault(); e.returnValue = ''; }
-          }
-        });
-
-        // Save on window close (Electron)
-        if (isDesktop() && window.electronAPI) {
-          window.addEventListener('beforeunload', () => { if (_profileSwitching) return; saveState(); });
+      }
+      // Handle navigation URL sync
+      if (e.data && e.data.terminalVibeNav) {
+        const active = activeTerminal();
+        if (active && active.type === 'browser' && active._syncUrl) {
+          var navUrl = e.data.terminalVibeNav;
+          if (navUrl !== active.url) active._syncUrl(navUrl);
         }
+      }
+    });
 
-        // Robust Cross-Origin & Local Asset Iframe Focus Tracker. Also watches the
-        // <webview> tag: its guest holds focus while clicking a browser tab, so
-        // the slot must be highlighted even though the host DOM sees no mousedown.
-        let _lastActiveIframe = null;
-        setInterval(() => {
-          const ae = document.activeElement;
-          if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'WEBVIEW')) {
-            if (ae !== _lastActiveIframe) {
-              _lastActiveIframe = ae;
-              const bc = ae.closest('.browser-slot');
-              if (bc) bc.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-            }
-          } else {
-            _lastActiveIframe = null;
+    // Auto-save every 30 seconds
+    setInterval(saveState, 30000);
+
+    // Keep the workspace buttons' running-process lists up to date
+    setInterval(refreshAllWorkspaceProcs, 5000);
+
+    // Save on close (browser)
+    window.addEventListener('beforeunload', (e) => {
+      if (_profileSwitching) return;
+      saveState();
+      if (!isDesktop()) {
+        const hasLiveTerms = workspaces.some(ws => getWorkspaceTerminals(ws).some(t => !t.dead));
+        if (hasLiveTerms) { e.preventDefault(); e.returnValue = ''; }
+      }
+    });
+
+    // Save on window close (Electron)
+    if (isDesktop() && window.electronAPI) {
+      window.addEventListener('beforeunload', () => { if (_profileSwitching) return; saveState(); });
+    }
+
+    // Robust Cross-Origin & Local Asset Iframe Focus Tracker. Also watches the
+    // <webview> tag: its guest holds focus while clicking a browser tab, so
+    // the slot must be highlighted even though the host DOM sees no mousedown.
+    let _lastActiveIframe = null;
+    setInterval(() => {
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'WEBVIEW')) {
+        if (ae !== _lastActiveIframe) {
+          _lastActiveIframe = ae;
+          const bc = ae.closest('.browser-slot');
+          if (bc) bc.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        }
+      } else {
+        _lastActiveIframe = null;
+      }
+    }, 100);
+
+    // Keep blur for instant reaction and Electron native child webviews
+    window.addEventListener('blur', () => {
+      setTimeout(() => {
+        const ae = document.activeElement;
+        if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'WEBVIEW')) {
+          const bc = ae.closest('.browser-slot');
+          if (bc) bc.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        } else {
+          const active = activeTerminal();
+          if (active && active.type === 'browser' && active.browserContainer) {
+            active.browserContainer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
           }
-        }, 100);
+        }
+      }, 50);
+    });
 
-        // Keep blur for instant reaction and Electron native child webviews
-        window.addEventListener('blur', () => {
-          setTimeout(() => {
-            const ae = document.activeElement;
-            if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'WEBVIEW')) {
-               const bc = ae.closest('.browser-slot');
-               if (bc) bc.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-            } else {
-               const active = activeTerminal();
-               if (active && active.type === 'browser' && active.browserContainer) {
-                   active.browserContainer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-               }
-            }
-          }, 50);
-        });
-
-        })(); // async boot
+  })(); // async boot
 })();

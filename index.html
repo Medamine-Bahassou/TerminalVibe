@@ -1,529 +1,664 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TerminalVibe</title>
-<link rel="stylesheet" href="vendor/xterm/xterm.css">
-<link rel="stylesheet" href="vendor/coloris.min.css">
-<link rel="stylesheet" href="style.css">
-<script src="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1"></script>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="vendor/xterm/xterm.js"></script>
-<script src="vendor/xterm/xterm-addon-fit.js"></script>
-<script src="vendor/xterm/xterm-addon-web-links.js"></script>
-<script src="vendor/xterm/xterm-addon-search.js"></script>
-<script src="vendor/xterm/xterm-addon-unicode11.js"></script>
-<script src="vendor/xterm/xterm-addon-webgl.js"></script>
-<script src="vendor/coloris.min.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TerminalVibe</title>
+  <link rel="stylesheet" href="vendor/xterm/xterm.css">
+  <link rel="stylesheet" href="vendor/coloris.min.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="vendor/xterm/xterm.js"></script>
+  <script src="vendor/xterm/xterm-addon-fit.js"></script>
+  <script src="vendor/xterm/xterm-addon-web-links.js"></script>
+  <script src="vendor/xterm/xterm-addon-search.js"></script>
+  <script src="vendor/xterm/xterm-addon-unicode11.js"></script>
+  <script src="vendor/xterm/xterm-addon-webgl.js"></script>
+  <script src="vendor/coloris.min.js"></script>
 </head>
+
 <body class="roundless sb-right-hidden">
-<div id="splash">
-  <div class="splash-logo">
-    <svg viewBox="30 55 440 290" fill="currentColor">
-      <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z"/>
-      <rect x="228" y="60" width="237" height="80"/>
-      <rect x="228" y="260" width="237" height="80"/>
+  <div id="splash">
+    <div class="splash-logo">
+      <svg viewBox="30 55 440 290" fill="currentColor">
+        <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z" />
+        <rect x="228" y="60" width="237" height="80" />
+        <rect x="228" y="260" width="237" height="80" />
+      </svg>
+    </div>
+    <div class="splash-bar">
+      <div class="splash-bar-fill"></div>
+    </div>
+  </div>
+  <!-- Profile picker (shown at boot when >1 profile or none chosen yet) -->
+  <div id="profile-picker" style="display:none">
+    <div class="pp-inner">
+      <div class="pp-title">Choose a profile</div>
+      <div id="pp-grid"></div>
+    </div>
+  </div>
+  <!-- Tab search overlay (Ctrl+Shift+O) -->
+  <div id="tab-search" style="display:none">
+    <div class="ts-inner">
+      <div class="ts-input-row">
+        <i class="ph ph-magnifying-glass"></i>
+        <input id="ts-input" placeholder="Search tabs…" spellcheck="false" autocomplete="off">
+      </div>
+      <div id="ts-results"></div>
+    </div>
+  </div>
+  <div id="titlebar">
+    <svg class="titlebar-logo" viewBox="30 55 440 290" fill="currentColor" aria-label="TerminalVibe">
+      <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z" />
+      <rect x="228" y="60" width="237" height="80" />
+      <rect x="228" y="260" width="237" height="80" />
     </svg>
+    <button id="btn-sidebar-toggle" class="titlebar-btn" title="Toggle sidebar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <line x1="9" y1="4" x2="9" y2="20" />
+      </svg>
+    </button>
+    <div class="titlebar-spacer"></div>
+    <div id="btn-profiles" class="titlebar-btn no-drag" title="Profiles">
+      <i class="ph ph-users"></i>
+    </div>
+    <div id="btn-sidebar-right" class="titlebar-btn no-drag" title="Toggle right sidebar">
+      <i class="ph ph-sidebar-simple" style="transform:scaleX(-1)"></i>
+    </div>
+    <div class="titlebar-overlay-gap"></div>
   </div>
-  <div class="splash-bar"><div class="splash-bar-fill"></div></div>
-</div>
-<!-- Profile picker (shown at boot when >1 profile or none chosen yet) -->
-<div id="profile-picker" style="display:none">
-  <div class="pp-inner">
-    <div class="pp-title">Choose a profile</div>
-    <div id="pp-grid"></div>
-  </div>
-</div>
-<!-- Tab search overlay (Ctrl+Shift+O) -->
-<div id="tab-search" style="display:none">
-  <div class="ts-inner">
-    <div class="ts-input-row">
-      <i class="ph ph-magnifying-glass"></i>
-      <input id="ts-input" placeholder="Search tabs…" spellcheck="false" autocomplete="off">
-    </div>
-    <div id="ts-results"></div>
-  </div>
-</div>
-<div id="titlebar">
-  <svg class="titlebar-logo" viewBox="30 55 440 290" fill="currentColor" aria-label="TerminalVibe">
-    <path d="M 35 60 L 315 200 L 35 340 L 35 260 L 155 200 L 35 140 Z"/>
-    <rect x="228" y="60" width="237" height="80"/>
-    <rect x="228" y="260" width="237" height="80"/>
-  </svg>
-  <button id="btn-sidebar-toggle" class="titlebar-btn" title="Toggle sidebar">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
-  </button>
-  <div class="titlebar-spacer"></div>
-  <div id="btn-profiles" class="titlebar-btn no-drag" title="Profiles">
-    <i class="ph ph-users"></i>
-  </div>
-  <div id="btn-sidebar-right" class="titlebar-btn no-drag" title="Toggle right sidebar">
-    <i class="ph ph-sidebar-simple" style="transform:scaleX(-1)"></i>
-  </div>
-  <div class="titlebar-overlay-gap"></div>
-</div>
-<div id="app">
-  <!-- ── Sidebar ── -->
-  <nav id="sidebar">
-    <div id="sidebar-inner">
-    <!-- workspace buttons injected here -->
-    <div class="sidebar-actions">
-      <div class="sa-btn" id="btn-settings" title="Settings">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-      </div>
-    </div>
-    </div>
-  </nav>
-  <div id="main">
-    <!-- ── Pane area ── -->
-    <div id="pane-area">
-      <div id="empty-state" class="empty-state" style="display:none">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="3" width="20" height="18" rx="3"/>
-          <polyline points="8,9 4.5,12 8,15"/>
-          <line x1="12" y1="15" x2="16" y2="15"/>
-        </svg>
-        <p>No terminal open — press <kbd>Ctrl+Shift+T</kbd> or click <kbd>+</kbd></p>
-      </div>
-      <!-- split containers injected here -->
-
-      <!-- Search overlay -->
-      <div id="searchbar">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="opacity:0.5;flex-shrink:0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input id="search-input" placeholder="Search…" spellcheck="false" autocomplete="off">
-        <span class="sb-nav" id="search-prev" title="Previous">▲</span>
-        <span class="sb-nav" id="search-next" title="Next">▼</span>
-        <span class="sb-close-btn" id="search-close">✕</span>
-      </div>
-    </div>
-
-    <!-- Plugin widget dock (status bar) -->
-    <div id="statusbar">
-      <div id="statusbar-left"></div>
-      <div id="statusbar-right"></div>
-    </div>
-
-  </div>
-  <div id="sash-right"></div>
-  <aside id="sidebar-right">
-    <div id="sbr-main" class="sbr-page">
-      <div class="sbr-header">
-        <span class="sbr-title">Panel</span>
-      </div>
-      <div class="sbr-body">
-        <button class="sbr-big-btn" id="sbr-open-clipboard" title="Clipboard"><i class="ph ph-clipboard-text"></i><span>Clipboard</span></button>
-      </div>
-    </div>
-    <div id="sbr-clipboard" class="sbr-page" style="display:none">
-      <div class="sbr-header">
-        <button class="sbr-btn" id="sbr-clipboard-back" title="Back"><i class="ph ph-arrow-left"></i></button>
-        <span class="sbr-title">Clipboard</span>
-      </div>
-      <div id="sbr-clipboard-content" class="sbr-clipboard-content"></div>
-    </div>
-  </aside>
-</div>
-
-<!-- Context menu -->
-<div id="ctx"></div>
-<!-- Prompt modal -->
-<div id="prompt-overlay">
-  <div id="prompt-modal">
-    <div id="prompt-label"></div>
-    <div id="prompt-input-row">
-      <div id="prompt-icon-btn" style="display:none" title="Set workspace icon">
-        <i class="ph ph-image"></i>
-        <img id="prompt-icon-img" alt="" draggable="false" />
-        <span id="prompt-icon-clear" title="Remove icon"><i class="ph ph-x"></i></span>
-      </div>
-      <input id="prompt-input" type="text" spellcheck="false" />
-    </div>
-    <input type="file" id="prompt-icon-file" accept="image/*" style="display:none" />
-    <div id="prompt-colors" style="display:none">
-      <div class="prompt-colors-label">Tab color</div>
-      <div class="prompt-colors-row">
-        <div class="prompt-swatch active" data-color="" title="None"><span>✕</span></div>
-        <div class="prompt-swatch" data-color="#f38ba8" title="Red" style="background:#f38ba8"></div>
-        <div class="prompt-swatch" data-color="#fab387" title="Orange" style="background:#fab387"></div>
-        <div class="prompt-swatch" data-color="#f9e2af" title="Yellow" style="background:#f9e2af"></div>
-        <div class="prompt-swatch" data-color="#a6e3a1" title="Green" style="background:#a6e3a1"></div>
-        <div class="prompt-swatch" data-color="#89b4fa" title="Blue" style="background:#89b4fa"></div>
-        <div class="prompt-swatch" data-color="#cba6f7" title="Purple" style="background:#cba6f7"></div>
-        <div class="prompt-swatch" data-color="#f5c2e7" title="Pink" style="background:#f5c2e7"></div>
-        <div class="prompt-swatch prompt-swatch-custom" data-color="" title="Custom color…"><span>+</span></div>
-      </div>
-    </div>
-    <div class="prompt-actions">
-      <button id="prompt-cancel">Cancel</button>
-      <button id="prompt-ok">OK</button>
-    </div>
-  </div>
-</div>
-<!-- Close-tab confirmation modal (running process) -->
-<div id="close-confirm-overlay">
-  <div id="close-confirm-modal">
-    <div class="cc-icon"><i class="ph ph-warning-circle"></i></div>
-    <div id="cc-title">Close tab?</div>
-    <div id="cc-message"></div>
-    <label class="cc-dont-again" id="cc-dont-again-row">
-      <input type="checkbox" id="cc-dontagain">
-      <span>Don't ask again</span>
-    </label>
-    <div class="prompt-actions">
-      <button id="cc-cancel">Cancel</button>
-      <button id="cc-close">Close Tab</button>
-    </div>
-  </div>
-</div>
-<!-- Settings -->
-<div id="settings-overlay" tabindex="-1" class="fixed inset-0 z-[10000] hidden flex flex-col opacity-0 transition-opacity duration-150">
-  <div id="settings-modal" class="w-full h-full flex flex-col select-none bg-[var(--bg)]">
-    <div class="settings-header flex items-center gap-1.5 pl-3 pr-2 h-8 shrink-0 border-b border-[var(--border)]">
-      <div id="settings-close" class="settings-back-btn no-drag" title="Close settings">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[16px] h-[16px]"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
-      </div>
-      <h2 class="text-[12.5px] font-semibold text-[var(--fg)] m-0">Settings</h2>
-    </div>
-    <div class="flex flex-1 min-h-0 overflow-hidden">
-      <div class="w-[200px] shrink-0 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col overflow-y-auto">
-        <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="appearance">
-          <i class="ph ph-sun shrink-0"></i>
-          <span>Appearance</span>
-        </div>
-        <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="terminal">
-          <i class="ph ph-terminal-window shrink-0"></i>
-          <span>Terminal</span>
-        </div>
-        <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="shortcuts">
-          <i class="ph ph-keyboard shrink-0"></i>
-          <span>Shortcuts</span>
-        </div>
-        <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="theme-editor">
-          <i class="ph ph-palette shrink-0"></i>
-          <span>Theme Editor</span>
-        </div>
-        <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="plugins">
-          <i class="ph ph-puzzle-piece shrink-0"></i>
-          <span>Plugins</span>
-        </div>
-        <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="advanced">
-          <i class="ph ph-faders-horizontal shrink-0"></i>
-          <span>Advanced</span>
-        </div>
-      </div>
-      <div class="flex-1 p-4 px-6 overflow-y-auto relative">
-        <!-- Appearance -->
-        <div class="settings-section active select-none" data-cat="appearance">
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Color Scheme</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Theme</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Select the active color palette</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <select id="set-theme" class="native-select-hidden"></select>
-                <div class="custom-dropdown" data-for="set-theme"></div>
-              </div>
-            </div>
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Corner style</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Component border radius</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <select id="set-corner-style" class="native-select-hidden">
-                  <option value="rounded">Rounded</option>
-                  <option value="sharp">Sharp</option>
-                </select>
-                <div class="custom-dropdown" data-for="set-corner-style"></div>
-              </div>
-            </div>
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Sidebar style</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">How the sidebar is shown</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <select id="set-sidebar-mode" class="native-select-hidden">
-                  <option value="normal">Default</option>
-                  <option value="hover">Expand on hover</option>
-                  <option value="hidden">Hidden (toggle button)</option>
-                </select>
-                <div class="custom-dropdown" data-for="set-sidebar-mode"></div>
-              </div>
-            </div>
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Workspace process details</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show running processes under each workspace button</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <label class="inline-flex items-center cursor-pointer">
-                  <input type="checkbox" class="sr-only peer" id="set-wsprocs">
-                  <div class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]"></div>
-                </label>
-              </div>
-            </div>
+  <div id="app">
+    <!-- ── Sidebar ── -->
+    <nav id="sidebar">
+      <div id="sidebar-inner">
+        <!-- workspace buttons injected here -->
+        <div class="sidebar-actions">
+          <div class="sa-btn" id="btn-settings" title="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <circle cx="12" cy="12" r="3" />
+              <path
+                d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+            </svg>
           </div>
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">Typography</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Font family</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Preset, imported, or custom CSS stack</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <select id="set-fontpreset" class="native-select-hidden"></select>
-                <div class="custom-dropdown" data-for="set-fontpreset"></div>
-              </div>
-            </div>
-            <div id="fontfamily-custom-row" class="hidden items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Custom CSS font-family</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="text" id="set-fontfamily" spellcheck="false" autocomplete="off" placeholder="'JetBrains Mono', monospace" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
-              </div>
-            </div>
-            <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Import font</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">TTF, OTF, WOFF or WOFF2 files</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <button type="button" id="font-import-btn" class="theme-action-btn">Import</button>
-                <input type="file" id="font-import-input" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2,application/font-woff2" multiple class="hidden">
-              </div>
-            </div>
-            <div id="custom-fonts-list" class="px-3 py-2 flex flex-col gap-1.5"></div>
-            <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Font size</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="range" id="set-fontsize" min="8" max="32" step="1" class="slider">
-                <span class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]" id="set-fontsize-val"></span>
-              </div>
-            </div>
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Line height</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="range" id="set-lineheight" min="1.0" max="2.0" step="0.05" class="slider">
-                <span class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]" id="set-lineheight-val"></span>
-              </div>
-            </div>
+        </div>
+      </div>
+    </nav>
+    <div id="main">
+      <!-- ── Pane area ── -->
+      <div id="pane-area">
+        <div id="empty-state" class="empty-state" style="display:none">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"
+            stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="18" rx="3" />
+            <polyline points="8,9 4.5,12 8,15" />
+            <line x1="12" y1="15" x2="16" y2="15" />
+          </svg>
+          <p>No terminal open — press <kbd>Ctrl+Shift+T</kbd> or click <kbd>+</kbd></p>
+        </div>
+        <!-- split containers injected here -->
+
+        <!-- Search overlay -->
+        <div id="searchbar">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" style="opacity:0.5;flex-shrink:0">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input id="search-input" placeholder="Search…" spellcheck="false" autocomplete="off">
+          <span class="sb-nav" id="search-prev" title="Previous">▲</span>
+          <span class="sb-nav" id="search-next" title="Next">▼</span>
+          <span class="sb-close-btn" id="search-close">✕</span>
+        </div>
+      </div>
+
+      <!-- Plugin widget dock (status bar) -->
+      <div id="statusbar">
+        <div id="statusbar-left"></div>
+        <div id="statusbar-right"></div>
+      </div>
+
+    </div>
+    <div id="sash-right"></div>
+    <aside id="sidebar-right">
+      <div id="sbr-main" class="sbr-page">
+        <div class="sbr-header">
+          <span class="sbr-title">Panel</span>
+        </div>
+        <div class="sbr-body">
+          <button class="sbr-big-btn" id="sbr-open-clipboard" title="Clipboard"><i
+              class="ph ph-clipboard-text"></i><span>Clipboard</span></button>
+        </div>
+      </div>
+      <div id="sbr-clipboard" class="sbr-page" style="display:none">
+        <div class="sbr-header">
+          <button class="sbr-btn" id="sbr-clipboard-back" title="Back"><i class="ph ph-arrow-left"></i></button>
+          <span class="sbr-title">Clipboard</span>
+        </div>
+        <div id="sbr-clipboard-content" class="sbr-clipboard-content"></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Context menu -->
+  <div id="ctx"></div>
+  <!-- Prompt modal -->
+  <div id="prompt-overlay">
+    <div id="prompt-modal">
+      <div id="prompt-label"></div>
+      <div id="prompt-input-row">
+        <div id="prompt-icon-btn" style="display:none" title="Set workspace icon">
+          <i class="ph ph-image"></i>
+          <img id="prompt-icon-img" alt="" draggable="false" />
+          <span id="prompt-icon-clear" title="Remove icon"><i class="ph ph-x"></i></span>
+        </div>
+        <input id="prompt-input" type="text" spellcheck="false" />
+      </div>
+      <input type="file" id="prompt-icon-file" accept="image/*" style="display:none" />
+      <div id="prompt-colors" style="display:none">
+        <div class="prompt-colors-label">Tab color</div>
+        <div class="prompt-colors-row">
+          <div class="prompt-swatch active" data-color="" title="None"><span>✕</span></div>
+          <div class="prompt-swatch" data-color="#f38ba8" title="Red" style="background:#f38ba8"></div>
+          <div class="prompt-swatch" data-color="#fab387" title="Orange" style="background:#fab387"></div>
+          <div class="prompt-swatch" data-color="#f9e2af" title="Yellow" style="background:#f9e2af"></div>
+          <div class="prompt-swatch" data-color="#a6e3a1" title="Green" style="background:#a6e3a1"></div>
+          <div class="prompt-swatch" data-color="#89b4fa" title="Blue" style="background:#89b4fa"></div>
+          <div class="prompt-swatch" data-color="#cba6f7" title="Purple" style="background:#cba6f7"></div>
+          <div class="prompt-swatch" data-color="#f5c2e7" title="Pink" style="background:#f5c2e7"></div>
+          <div class="prompt-swatch prompt-swatch-custom" data-color="" title="Custom color…"><span>+</span></div>
+        </div>
+      </div>
+      <div class="prompt-actions">
+        <button id="prompt-cancel">Cancel</button>
+        <button id="prompt-ok">OK</button>
+      </div>
+    </div>
+  </div>
+  <!-- Close-tab confirmation modal (running process) -->
+  <div id="close-confirm-overlay">
+    <div id="close-confirm-modal">
+      <div class="cc-icon"><i class="ph ph-warning-circle"></i></div>
+      <div id="cc-title">Close tab?</div>
+      <div id="cc-message"></div>
+      <label class="cc-dont-again" id="cc-dont-again-row">
+        <input type="checkbox" id="cc-dontagain">
+        <span>Don't ask again</span>
+      </label>
+      <div class="prompt-actions">
+        <button id="cc-cancel">Cancel</button>
+        <button id="cc-close">Close Tab</button>
+      </div>
+    </div>
+  </div>
+  <!-- Settings -->
+  <div id="settings-overlay" tabindex="-1"
+    class="fixed inset-0 z-[10000] hidden flex flex-col opacity-0 transition-opacity duration-150">
+    <div id="settings-modal" class="w-full h-full flex flex-col select-none bg-[var(--bg)]">
+      <div class="settings-header flex items-center gap-1.5 pl-3 pr-2 h-8 shrink-0 border-b border-[var(--border)]">
+        <div id="settings-close" class="settings-back-btn no-drag" title="Close settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            stroke-linejoin="round" class="w-[16px] h-[16px]">
+            <line x1="19" y1="12" x2="5" y2="12" />
+            <polyline points="12 19 5 12 12 5" />
+          </svg>
+        </div>
+        <h2 class="text-[12.5px] font-semibold text-[var(--fg)] m-0">Settings</h2>
+      </div>
+      <div class="flex flex-1 min-h-0 overflow-hidden">
+        <div
+          class="w-[200px] shrink-0 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col overflow-y-auto">
+          <div
+            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
+            data-cat="appearance">
+            <i class="ph ph-sun shrink-0"></i>
+            <span>Appearance</span>
           </div>
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">Background</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="flex items-start justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Background mode</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show image per tab, per workspace, or globally</span>
+          <div
+            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
+            data-cat="terminal">
+            <i class="ph ph-terminal-window shrink-0"></i>
+            <span>Terminal</span>
+          </div>
+          <div
+            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
+            data-cat="shortcuts">
+            <i class="ph ph-keyboard shrink-0"></i>
+            <span>Shortcuts</span>
+          </div>
+          <div
+            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
+            data-cat="theme-editor">
+            <i class="ph ph-palette shrink-0"></i>
+            <span>Theme Editor</span>
+          </div>
+          <div
+            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
+            data-cat="plugins">
+            <i class="ph ph-puzzle-piece shrink-0"></i>
+            <span>Plugins</span>
+          </div>
+          <div
+            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
+            data-cat="advanced">
+            <i class="ph ph-faders-horizontal shrink-0"></i>
+            <span>Advanced</span>
+          </div>
+        </div>
+        <div class="flex-1 p-4 px-6 overflow-y-auto relative">
+          <!-- Appearance -->
+          <div class="settings-section active select-none" data-cat="appearance">
+            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Color
+              Scheme</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Theme</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Select the active color
+                    palette</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-theme" class="native-select-hidden"></select>
+                  <div class="custom-dropdown" data-for="set-theme"></div>
+                </div>
               </div>
-              <div class="flex-1 flex flex-col items-end gap-2.5">
-                <div class="flex items-center gap-3">
-                  <span id="bg-per-tab-note" style="display:none" class="bg-black/20 px-2 py-1 rounded text-[10.5px] leading-tight text-[var(--muted-text)] whitespace-nowrap">Right-click a terminal to set its background image</span>
-                  <select id="set-bg-mode" class="native-select-hidden">
-                    <option value="none">Disabled</option>
-                    <option value="per-tab">Per Tab</option>
-                    <option value="per-workspace">Per Workspace</option>
-                    <option value="global">Global Window</option>
+              <div
+                class="flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Corner style</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Component border
+                    radius</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-corner-style" class="native-select-hidden">
+                    <option value="rounded">Rounded</option>
+                    <option value="sharp">Sharp</option>
                   </select>
-                  <div class="custom-dropdown" data-for="set-bg-mode"></div>
+                  <div class="custom-dropdown" data-for="set-corner-style"></div>
                 </div>
-                <div id="bg-image-controls" style="display:none" class="flex items-center justify-end gap-3">
-                  <div class="flex items-center gap-2">
-                    <input type="range" id="set-bg-opacity" min="0" max="100" step="1" value="85" class="slider">
-                    <span class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]" id="set-bg-opacity-val"></span>
+              </div>
+              <div
+                class="flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Sidebar style</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">How the sidebar is
+                    shown</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-sidebar-mode" class="native-select-hidden">
+                    <option value="normal">Default</option>
+                    <option value="hover">Expand on hover</option>
+                    <option value="hidden">Hidden (toggle button)</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-sidebar-mode"></div>
+                </div>
+              </div>
+              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Workspace process details</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show running processes
+                    under each workspace button</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <label class="inline-flex items-center cursor-pointer">
+                    <input type="checkbox" class="sr-only peer" id="set-wsprocs">
+                    <div
+                      class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]">
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">
+              Typography</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Font family</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Preset, imported, or
+                    custom CSS stack</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-fontpreset" class="native-select-hidden"></select>
+                  <div class="custom-dropdown" data-for="set-fontpreset"></div>
+                </div>
+              </div>
+              <div id="fontfamily-custom-row"
+                class="hidden items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Custom CSS font-family</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <input type="text" id="set-fontfamily" spellcheck="false" autocomplete="off"
+                    placeholder="'JetBrains Mono', monospace"
+                    class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                </div>
+              </div>
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Import font</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">TTF, OTF, WOFF or WOFF2
+                    files</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <button type="button" id="font-import-btn" class="theme-action-btn">Import</button>
+                  <input type="file" id="font-import-input"
+                    accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2,application/font-woff2"
+                    multiple class="hidden">
+                </div>
+              </div>
+              <div id="custom-fonts-list" class="px-3 py-2 flex flex-col gap-1.5"></div>
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Font size</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <input type="range" id="set-fontsize" min="8" max="32" step="1" class="slider">
+                  <span
+                    class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]"
+                    id="set-fontsize-val"></span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Line height</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <input type="range" id="set-lineheight" min="1.0" max="2.0" step="0.05" class="slider">
+                  <span
+                    class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]"
+                    id="set-lineheight-val"></span>
+                </div>
+              </div>
+            </div>
+            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">
+              Background</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div class="flex items-start justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Background mode</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show image per tab, per
+                    workspace, or globally</span>
+                </div>
+                <div class="flex-1 flex flex-col items-end gap-2.5">
+                  <div class="flex items-center gap-3">
+                    <span id="bg-per-tab-note" style="display:none"
+                      class="bg-black/20 px-2 py-1 rounded text-[10.5px] leading-tight text-[var(--muted-text)] whitespace-nowrap">Right-click
+                      a terminal to set its background image</span>
+                    <select id="set-bg-mode" class="native-select-hidden">
+                      <option value="none">Disabled</option>
+                      <option value="per-tab">Per Tab</option>
+                      <option value="per-workspace">Per Workspace</option>
+                      <option value="global">Global Window</option>
+                    </select>
+                    <div class="custom-dropdown" data-for="set-bg-mode"></div>
                   </div>
-                  <div id="set-bg-image-area" class="bg-upload-area compact" style="display:none">
-                    <svg class="bg-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                    <span class="bg-upload-text">Select image</span>
-                    <img class="bg-upload-preview" alt="">
-                    <div class="bg-clear-btn" id="bg-image-clear" title="Remove image">✕</div>
-                    <input type="file" id="set-bg-image-input" accept="image/*" class="hidden">
+                  <div id="bg-image-controls" style="display:none" class="flex items-center justify-end gap-3">
+                    <div class="flex items-center gap-2">
+                      <input type="range" id="set-bg-opacity" min="0" max="100" step="1" value="85" class="slider">
+                      <span
+                        class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]"
+                        id="set-bg-opacity-val"></span>
+                    </div>
+                    <div id="set-bg-image-area" class="bg-upload-area compact" style="display:none">
+                      <svg class="bg-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <polyline points="21 15 16 10 5 21" />
+                      </svg>
+                      <span class="bg-upload-text">Select image</span>
+                      <img class="bg-upload-preview" alt="">
+                      <div class="bg-clear-btn" id="bg-image-clear" title="Remove image">✕</div>
+                      <input type="file" id="set-bg-image-input" accept="image/*" class="hidden">
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-        <!-- Terminal -->
-        <div class="settings-section select-none" data-cat="terminal">
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Cursor</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Cursor style</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <select id="set-cursor" class="native-select-hidden">
-                  <option value="block">Block</option>
-                  <option value="underline">Underline</option>
-                  <option value="bar">Bar</option>
-                </select>
-                <div class="custom-dropdown" data-for="set-cursor"></div>
-              </div>
+          <!-- Terminal -->
+          <div class="settings-section select-none" data-cat="terminal">
+            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Cursor
             </div>
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Cursor blink</span>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Cursor style</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-cursor" class="native-select-hidden">
+                    <option value="block">Block</option>
+                    <option value="underline">Underline</option>
+                    <option value="bar">Bar</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-cursor"></div>
+                </div>
               </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <label class="inline-flex items-center cursor-pointer">
-                  <input type="checkbox" class="sr-only peer" id="set-cursorblink">
-                  <div class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]"></div>
-                </label>
-              </div>
-            </div>
-          </div>
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">Behavior</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Scrollback lines</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Number of lines kept in memory</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="range" id="set-scrollback" min="1000" max="100000" step="1000" class="slider">
-                <span class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]" id="set-scrollback-val"></span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <!-- Shortcuts -->
-        <div class="settings-section select-none" data-cat="shortcuts">
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Keyboard Shortcuts</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col px-4 py-2.5">
-            <div class="shortcuts-search-box relative mb-2">
-              <input type="text" id="shortcuts-search" placeholder="Search shortcuts…" spellcheck="false" autocomplete="off">
-              <i class="ph ph-magnifying-glass"></i>
-            </div>
-            <div class="settings-shortcuts" id="shortcuts-list"></div>
-            <div class="flex justify-end mt-2 pt-2 border-t border-[var(--border)]">
-              <span class="shortcuts-reset text-[11px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline" id="shortcuts-reset">Reset to defaults</span>
-            </div>
-          </div>
-        </div>
-        <!-- Theme Editor -->
-        <div class="settings-section select-none" data-cat="theme-editor">
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Theme Profile</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-3">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Mode</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <div class="inline-flex  border border-[var(--border)] overflow-hidden">
-                  <button class="theme-mode-btn active px-3 py-1.5 text-[11px] font-medium cursor-pointer transition-colors" data-mode="new">New Theme</button>
-                  <button class="theme-mode-btn px-3 py-1.5 text-[11px] font-medium cursor-pointer transition-colors border-l border-[var(--border)]" data-mode="edit">Edit Existing</button>
+              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Cursor blink</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <label class="inline-flex items-center cursor-pointer">
+                    <input type="checkbox" class="sr-only peer" id="set-cursorblink">
+                    <div
+                      class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]">
+                    </div>
+                  </label>
                 </div>
               </div>
             </div>
-            <div class="theme-name-row flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Theme name</span>
+            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">
+              Behavior</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Default path</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Working directory for new terminals (leave empty to follow current directory)</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-2">
+                  <input type="text" id="set-default-path" spellcheck="false" autocomplete="off" placeholder="e.g. ~ or /home/projects"
+                    class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[210px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                  <button type="button" id="set-default-path-browse" class="theme-action-btn !py-1.5 !px-2.5 !text-[12px] flex items-center gap-1.5" title="Browse folder">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                    <span>Browse</span>
+                  </button>
+                </div>
               </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="text" id="set-theme-name" spellcheck="false" autocomplete="off" placeholder="My Custom Theme" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
-              </div>
-            </div>
-            <div class="theme-edit-row hidden items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Select theme</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Choose a custom theme to edit</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <select id="set-theme-custom-select" class="native-select-hidden"></select>
-                <div class="custom-dropdown" data-for="set-theme-custom-select"></div>
-              </div>
-            </div>
-          </div>
-          <div id="theme-editor-groups"></div>
-          <div class="theme-actions flex flex-wrap gap-1.5 mt-3 justify-end pt-2 border-t border-[var(--border)]">
-            <button class="theme-action-btn" id="theme-btn-import">Import JSON</button>
-            <button class="theme-action-btn" id="theme-btn-export">Export</button>
-            <span class="theme-actions-sep w-px bg-[var(--border)] mx-1"></span>
-            <button class="theme-action-btn" id="theme-btn-clone">Clone Active</button>
-            <button class="theme-action-btn" id="theme-btn-delete">Delete</button>
-            <button class="theme-action-btn theme-action-primary" id="theme-btn-save">Save Theme</button>
-          </div>
-          <input type="file" id="theme-import-input" accept=".json" class="hidden">
-        </div>
-        <!-- Plugins -->
-        <div class="settings-section select-none" data-cat="plugins">
-          <div class="flex items-center justify-between mt-0 mb-1.5 ml-1">
-            <div id="plugins-title" class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)]">Plugins</div>
-            <button type="button" id="plugins-open-dir" class="plugin-icon-btn" title="Open the plugins directory">
-              <i class="ph ph-folder-open"></i>
-            </button>
-          </div>
-          <div id="plugins-list" class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] mb-3 flex flex-col"></div>
-          <div class="text-[11px] text-[var(--muted-text)] px-1 leading-relaxed">
-            Plugins live in <code>~/.terminalvibe/plugins/&lt;id&gt;/</code>. Drop a folder there, restart, then activate it here.
-          </div>
-        </div>
-        <!-- Advanced -->
-        <div class="settings-section select-none" data-cat="advanced">
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">System</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Default Shell</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Override system default (requires restart)</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="text" id="set-shell" spellcheck="false" autocomplete="off" placeholder="e.g. /bin/zsh" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
-              </div>
-            </div>
-            <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Notify when a command finishes</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Desktop notification when a terminal command ends while the app isn't focused</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <label class="inline-flex items-center cursor-pointer">
-                  <input type="checkbox" class="sr-only peer" id="set-notify-finish">
-                  <div class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]"></div>
-                </label>
-              </div>
-            </div>
-            <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Search Engine</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Used when typing search queries in the browser</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <select id="set-search-engine" class="native-select-hidden">
-                  <option value="google">Google</option>
-                  <option value="duckduckgo">DuckDuckGo</option>
-                  <option value="brave">Brave</option>
-                  <option value="startpage">Startpage</option>
-                  <option value="custom">Custom</option>
-                </select>
-                <div class="custom-dropdown" data-for="set-search-engine"></div>
-              </div>
-            </div>
-            <div id="set-custom-search-row" class="hidden items-center justify-between px-3 py-2.5 border-t border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-              <div class="flex flex-col gap-1">
-                <span class="text-[12.5px] font-medium text-[var(--fg)]">Custom Search URL</span>
-                <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Use %s as the search query placeholder</span>
-              </div>
-              <div class="flex-1 flex items-center justify-end gap-3">
-                <input type="text" id="set-custom-search-url" spellcheck="false" autocomplete="off" placeholder="https://example.com/search?q=%s" class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[260px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Scrollback lines</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Number of lines kept in
+                    memory</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <input type="range" id="set-scrollback" min="1000" max="100000" step="1000" class="slider">
+                  <span
+                    class="settings-value bg-black/20 px-2 py-1 rounded text-[11px] min-w-[38px] text-center tabular-nums text-[var(--muted-text)]"
+                    id="set-scrollback-val"></span>
+                </div>
               </div>
             </div>
           </div>
-          <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-3 mb-1.5 ml-1">Command Line</div>
-          <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-            <div class="px-3 pt-2.5">
-              <input type="text" id="cli-doc-search" placeholder="Search commands…" spellcheck="false" autocomplete="off" class="w-full bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+          <!-- Shortcuts -->
+          <div class="settings-section select-none" data-cat="shortcuts">
+            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">
+              Keyboard Shortcuts</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col px-4 py-2.5">
+              <div class="shortcuts-search-box relative mb-2">
+                <input type="text" id="shortcuts-search" placeholder="Search shortcuts…" spellcheck="false"
+                  autocomplete="off">
+                <i class="ph ph-magnifying-glass"></i>
+              </div>
+              <div class="settings-shortcuts" id="shortcuts-list"></div>
+              <div class="flex justify-end mt-2 pt-2 border-t border-[var(--border)]">
+                <span
+                  class="shortcuts-reset text-[11px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline"
+                  id="shortcuts-reset">Reset to defaults</span>
+              </div>
             </div>
-            <pre id="cli-doc-pre" class="m-0 p-3.5 text-[11.5px] leading-relaxed text-[var(--muted-text)] font-mono overflow-x-auto whitespace-pre">Usage: terminalvibe &lt;command&gt; [options]
+          </div>
+          <!-- Theme Editor -->
+          <div class="settings-section select-none" data-cat="theme-editor">
+            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Theme
+              Profile</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-3">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Mode</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <div class="inline-flex  border border-[var(--border)] overflow-hidden">
+                    <button
+                      class="theme-mode-btn active px-3 py-1.5 text-[11px] font-medium cursor-pointer transition-colors"
+                      data-mode="new">New Theme</button>
+                    <button
+                      class="theme-mode-btn px-3 py-1.5 text-[11px] font-medium cursor-pointer transition-colors border-l border-[var(--border)]"
+                      data-mode="edit">Edit Existing</button>
+                  </div>
+                </div>
+              </div>
+              <div class="theme-name-row flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Theme name</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <input type="text" id="set-theme-name" spellcheck="false" autocomplete="off"
+                    placeholder="My Custom Theme"
+                    class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                </div>
+              </div>
+              <div class="theme-edit-row hidden items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Select theme</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Choose a custom theme
+                    to edit</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-theme-custom-select" class="native-select-hidden"></select>
+                  <div class="custom-dropdown" data-for="set-theme-custom-select"></div>
+                </div>
+              </div>
+            </div>
+            <div id="theme-editor-groups"></div>
+            <div class="theme-actions flex flex-wrap gap-1.5 mt-3 justify-end pt-2 border-t border-[var(--border)]">
+              <button class="theme-action-btn" id="theme-btn-import">Import JSON</button>
+              <button class="theme-action-btn" id="theme-btn-export">Export</button>
+              <span class="theme-actions-sep w-px bg-[var(--border)] mx-1"></span>
+              <button class="theme-action-btn" id="theme-btn-clone">Clone Active</button>
+              <button class="theme-action-btn" id="theme-btn-delete">Delete</button>
+              <button class="theme-action-btn theme-action-primary" id="theme-btn-save">Save Theme</button>
+            </div>
+            <input type="file" id="theme-import-input" accept=".json" class="hidden">
+          </div>
+          <!-- Plugins -->
+          <div class="settings-section select-none" data-cat="plugins">
+            <div class="flex items-center justify-between mt-0 mb-1.5 ml-1">
+              <div id="plugins-title" class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)]">
+                Plugins</div>
+              <button type="button" id="plugins-open-dir" class="plugin-icon-btn" title="Open the plugins directory">
+                <i class="ph ph-folder-open"></i>
+              </button>
+            </div>
+            <div id="plugins-list"
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] mb-3 flex flex-col">
+            </div>
+            <div class="text-[11px] text-[var(--muted-text)] px-1 leading-relaxed">
+              Plugins live in <code>~/.terminalvibe/plugins/&lt;id&gt;/</code>. Drop a folder there, restart, then
+              activate it here.
+            </div>
+          </div>
+          <!-- Advanced -->
+          <div class="settings-section select-none" data-cat="advanced">
+            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">System
+            </div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Default Shell</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Override system default
+                    (requires restart)</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <input type="text" id="set-shell" spellcheck="false" autocomplete="off" placeholder="e.g. /bin/zsh"
+                    class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                </div>
+              </div>
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Notify when a command finishes</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Desktop notification
+                    when a terminal command ends while the app isn't focused</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <label class="inline-flex items-center cursor-pointer">
+                    <input type="checkbox" class="sr-only peer" id="set-notify-finish">
+                    <div
+                      class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]">
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Search Engine</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Used when typing search
+                    queries in the browser</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-search-engine" class="native-select-hidden">
+                    <option value="google">Google</option>
+                    <option value="duckduckgo">DuckDuckGo</option>
+                    <option value="brave">Brave</option>
+                    <option value="startpage">Startpage</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-search-engine"></div>
+                </div>
+              </div>
+              <div id="set-custom-search-row"
+                class="hidden items-center justify-between px-3 py-2.5 border-t border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Custom Search URL</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Use %s as the search
+                    query placeholder</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <input type="text" id="set-custom-search-url" spellcheck="false" autocomplete="off"
+                    placeholder="https://example.com/search?q=%s"
+                    class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[260px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                </div>
+              </div>
+            </div>
+            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-3 mb-1.5 ml-1">
+              Command Line</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div class="px-3 pt-2.5">
+                <input type="text" id="cli-doc-search" placeholder="Search commands…" spellcheck="false"
+                  autocomplete="off"
+                  class="w-full bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+              </div>
+              <pre id="cli-doc-pre"
+                class="m-0 p-3.5 text-[11.5px] leading-relaxed text-[var(--muted-text)] font-mono overflow-x-auto whitespace-pre">Usage: terminalvibe &lt;command&gt; [options]
 
 Commands:
   new NAME [-t S] [-s v|h S] [--split-back] [--workspace NAME ...] [--profile ID] [--cwd DIR]
@@ -556,14 +691,15 @@ Examples:
   terminalvibe list
   terminalvibe close "My Workspace"
   terminalvibe attach "My Workspace"</pre>
+            </div>
           </div>
         </div>
       </div>
     </div>
   </div>
-</div>
 
-<script src="vendor/split.min.js"></script>
-<script src="app.js"></script>
+  <script src="vendor/split.min.js"></script>
+  <script src="app.js"></script>
 </body>
+
 </html>

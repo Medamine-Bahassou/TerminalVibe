@@ -19,7 +19,7 @@ for (const a of assets) {
   fs.copyFileSync(path.join(root, a), path.join(dist, a));
 }
 
-  const vendorXterm = path.join(root, 'vendor', 'xterm');
+const vendorXterm = path.join(root, 'vendor', 'xterm');
 if (fs.existsSync(vendorXterm)) {
   fs.cpSync(vendorXterm, path.join(dist, 'vendor', 'xterm'), { recursive: true });
 } else {

@@ -305,8 +305,20 @@ user-select: none;
   border-color: var(--accent);
 }
 .ws-btn.dragging { opacity: 0.4; }
-.ws-btn.drop-above { box-shadow: inset 0 2px 0 var(--accent) !important; }
-.ws-btn.drop-below { box-shadow: inset 0 -2px 0 var(--accent) !important; }
+.ws-btn.drop-above, .ws-btn.drop-below { box-shadow: none !important; }
+.ws-btn.drop-above::after,
+.ws-btn.drop-below::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  z-index: 10;
+  pointer-events: none;
+}
+.ws-btn.drop-above::after { top: 0; }
+.ws-btn.drop-below::after { bottom: 0; }
 .ws-btn .ws-strip {
   position: absolute;
   left: 0; top: 50%;
@@ -1084,8 +1096,20 @@ isolation: isolate;
   margin-right: 2px;
 }
 
-.tg-tab.drop-left { box-shadow: inset 2px 0 0 var(--accent); }
-.tg-tab.drop-right { box-shadow: inset -2px 0 0 var(--accent); }
+.tg-tab.drop-left, .tg-tab.drop-right { box-shadow: none; }
+.tg-tab.drop-left::after,
+.tg-tab.drop-right::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  z-index: 10;
+  pointer-events: none;
+}
+.tg-tab.drop-left::after { left: 0; }
+.tg-tab.drop-right::after { right: 0; }
 .tg-tab.dragging { opacity: 0.4; }
 
 /* Maximized group indicator */

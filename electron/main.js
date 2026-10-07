@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, Notification } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, Notification, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
@@ -483,6 +483,33 @@ ipcMain.handle('file:resolve', (_e, p) => {
   } catch { return null; }
 });
 
+ipcMain.handle('dialog:openDirectory', async (_e, defaultPath) => {
+  try {
+    const win = BrowserWindow.getFocusedWindow() || mainWindow;
+    let initialPath = defaultPath;
+    if (initialPath && typeof initialPath === 'string') {
+      initialPath = initialPath.trim().replace(/^["']|["']$/g, '');
+      if (initialPath === '~') initialPath = require('os').homedir();
+      else if (initialPath.startsWith('~/') || initialPath.startsWith('~\\')) {
+        initialPath = path.join(require('os').homedir(), initialPath.slice(2));
+      }
+    }
+    if (!initialPath || !fs.existsSync(initialPath)) {
+      initialPath = require('os').homedir();
+    }
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Select Default Working Directory',
+      defaultPath: initialPath,
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (res.canceled || !res.filePaths.length) return null;
+    return res.filePaths[0];
+  } catch (err) {
+    console.error('[dialog] openDirectory failed:', err);
+    return null;
+  }
+});
+
 // ── IPC: config directory (~/.terminalvibe/) ──
 ipcMain.handle('config:getPath', () => CONFIG_DIR);
 
@@ -955,12 +982,28 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
       try { old.kill(); } catch {}
       ptys.delete(id);
     }
+    let spawnCwd = cwd || undefined;
+    if (spawnCwd && typeof spawnCwd === 'string') {
+      spawnCwd = spawnCwd.trim().replace(/^["']|["']$/g, '');
+      if (spawnCwd === '~') {
+        spawnCwd = require('os').homedir();
+      } else if (spawnCwd.startsWith('~/') || spawnCwd.startsWith('~\\')) {
+        spawnCwd = path.join(require('os').homedir(), spawnCwd.slice(2));
+      }
+      try {
+        if (!fs.existsSync(spawnCwd) || !fs.statSync(spawnCwd).isDirectory()) {
+          spawnCwd = undefined;
+        }
+      } catch {
+        spawnCwd = undefined;
+      }
+    }
     const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
     const t = pty.spawn(shell, argv && argv.length ? argv : [], {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
-      cwd: cwd || undefined,
+      cwd: spawnCwd,
       env: { ...process.env, TERM: 'xterm-256color' },
     });
     ptys.set(id, t);
@@ -1064,7 +1107,7 @@ setInterval(() => {
 
 // ── IPC: detach terminal into a new window ──
 ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
-  if (detachedWindows.has(id)) return false;
+  if (detachedWindows.has(id) || reattachingIds.has(id) || tabDragFinishers.has(id)) return false;
 
   // Unique id for this detached window so its state never collides with
   // other detached windows (each one saves under its own localStorage key).
@@ -1151,6 +1194,7 @@ ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
 // target window is told to re-create it ('terminal:reattach'). A detached
 // window whose last tab was moved away is closed with its PTY preserved.
 let tabDragState = null; // { termId, overMain, timer }
+let lastDraggedTermId = null;
 
 function pointInRect(pt, r) {
   return !!r && pt.x >= r.x && pt.x <= r.x + r.width && pt.y >= r.y && pt.y <= r.y + r.height;
@@ -1190,6 +1234,7 @@ function stopTabDrag() {
 ipcMain.on('tab-drag:start', (e, { id } = {}) => {
   stopTabDrag();
   if (!id || (!ptys.has(id) && !detachedWindows.has(id))) return;
+  lastDraggedTermId = id;
   // Tell every OTHER window which terminal is being dragged.
   broadcastDragActive(id, e.sender);
   if (!detachedWindows.has(id)) return; // main-window drag: no re-attach polling
@@ -1278,33 +1323,84 @@ function startTabMove(p, placement, targetWcId) {
   tabDragFinishers.set(id, f);
 }
 
-ipcMain.on('tab-drag:end', (_e, p) => {
-  stopTabDrag();
-  if (!p || !p.id || p.cancelled) return;
-  if (tabDragFinishers.has(p.id)) return; // a drop already started the move
-  const dw = detachedWindows.get(p.id);
-  if (!dw || dw.isDestroyed() || !ptys.has(p.id)) return;
+let tabDragHoverPlacement = null; // { termId, targetGroupId, zone, beforeTabId, targetWcId, time }
 
-  // If some window ACCEPTED the drop (a tab bar or pane overlay), that
-  // window's drop handler owns the follow-up — its 'tab-drag:drop' IPC races
-  // this message across processes, so acting here would conflict with it.
-  // dragend is only the fallback for drags no target accepted.
-  if (!p.unhandled && !p.outside) return;
-  // The pointer was still over the detached window at release
-  // (dragenter/dragleave state) — that's a local drop, never a re-attach.
-  if (p.insideAtEnd) return;
-  // Fallback: attach into the main window's active group.
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    startTabMove(p, null, mainWindow.webContents.id);
+ipcMain.on('tab-drag:hover', (e, p) => {
+  if (!p || !p.id || !p.targetGroupId) {
+    tabDragHoverPlacement = null;
+    return;
   }
+  tabDragHoverPlacement = {
+    termId: p.id,
+    targetGroupId: p.targetGroupId,
+    zone: p.zone || 'center',
+    beforeTabId: p.beforeTabId || null,
+    targetWcId: e.sender.id,
+    time: Date.now()
+  };
+});
+
+ipcMain.on('tab-drag:end', (_e, p) => {
+  const dragId = (p && p.id) || (tabDragState && tabDragState.termId) || (tabDragHoverPlacement && tabDragHoverPlacement.termId) || lastDraggedTermId;
+  stopTabDrag();
+  if (!dragId || (p && p.cancelled)) {
+    tabDragHoverPlacement = null;
+    return;
+  }
+  if (tabDragFinishers.has(dragId)) return; // a drop already started the move
+  const dw = detachedWindows.get(dragId);
+  if (!dw || dw.isDestroyed() || !ptys.has(dragId)) {
+    tabDragHoverPlacement = null;
+    return;
+  }
+
+  // Check physical cursor screen point if reported
+  let pt = null;
+  try { pt = screen.getCursorScreenPoint(); } catch {}
+  const cursorOverDw = pt && !(pt.x === 0 && pt.y === 0)
+    ? pointInRect(pt, dw.getBounds()) : false;
+
+  // If cursor is over the detached window itself and no hover target on another window was reported, user dropped locally
+  if (cursorOverDw && !tabDragHoverPlacement) {
+    tabDragHoverPlacement = null;
+    return;
+  }
+
+  // If insideAtEnd is true and we don't have outside/unhandled signals, avoid reattaching
+  if (p && p.insideAtEnd && !p.outside && !p.unhandled && !tabDragHoverPlacement) {
+    tabDragHoverPlacement = null;
+    return;
+  }
+
+  const hover = (tabDragHoverPlacement && tabDragHoverPlacement.termId === dragId) ? tabDragHoverPlacement : null;
+  tabDragHoverPlacement = null;
+
+  // Fallback: attach into the main window (or target window from hover) iff no drop target accepted it.
+  // Wait a short 100ms window so an in-flight 'tab-drag:drop' message with exact split/tab placement
+  // has time to arrive and take precedence.
+  setTimeout(() => {
+    if (tabDragFinishers.has(dragId)) return;
+    if (hover && hover.targetWcId) {
+      startTabMove({ id: dragId }, { targetGroupId: hover.targetGroupId, zone: hover.zone, beforeTabId: hover.beforeTabId }, hover.targetWcId);
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+      startTabMove({ id: dragId }, null, mainWindow.webContents.id);
+    }
+  }, 100);
 });
 
 // A window accepted the drop on a specific target (tab bar / pane zone).
 // The target window is the sender of this message.
 ipcMain.on('tab-drag:drop', (e, p) => {
+  const termId = (p && p.id) || (tabDragState && tabDragState.termId) || (tabDragHoverPlacement && tabDragHoverPlacement.termId) || lastDraggedTermId;
+  const placement = {
+    targetGroupId: p && p.targetGroupId,
+    zone: (p && p.zone) || 'center',
+    beforeTabId: (p && p.beforeTabId) || null
+  };
+  tabDragHoverPlacement = null;
   stopTabDrag();
-  if (!p || !p.id || !p.targetGroupId) return;
-  startTabMove({ id: p.id }, { targetGroupId: p.targetGroupId, zone: p.zone || 'center', beforeTabId: p.beforeTabId || null }, e.sender.id);
+  if (!termId || !placement.targetGroupId) return;
+  startTabMove({ id: termId }, placement, e.sender.id);
 });
 
 // ── IPC: native browser tab views (WebContentsView) ──

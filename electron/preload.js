@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Local file path resolution
   resolveLocalPath: (p) => ipcRenderer.invoke('file:resolve', p),
+  selectDirectory: (defaultPath) => ipcRenderer.invoke('dialog:openDirectory', defaultPath),
 
   // Native PTY (node-pty runs in the main process)
   terminalCreate: (o) => ipcRenderer.invoke('terminal:create', o),
@@ -31,6 +32,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   tabDragStart: (o) => ipcRenderer.send('tab-drag:start', o),
   tabDragEnd: (o) => ipcRenderer.send('tab-drag:end', o),
   tabDragDrop: (o) => ipcRenderer.send('tab-drag:drop', o),
+  tabDragHover: (o) => ipcRenderer.send('tab-drag:hover', o),
   tabDragReady: (o) => ipcRenderer.send('tab-drag:ready', o),
   onTerminalReattach: (cb) => {
     const l = (_e, d) => cb(d);
