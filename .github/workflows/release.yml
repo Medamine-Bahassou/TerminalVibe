@@ -13,8 +13,39 @@ permissions:
   contents: write
 
 jobs:
+  prepare:
+    name: Determine Version & Changelog
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.prep.outputs.version }}
+      tag: ${{ steps.prep.outputs.tag }}
+      title: ${{ steps.prep.outputs.title }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all git tags
+        run: git fetch --tags --force
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Calculate next version and release notes
+        id: prep
+        run: node scripts/prepare-release.js
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release_notes.md
+          if-no-files-found: error
+
   build-linux:
     name: Build Linux AppImage
+    needs: prepare
     # Older glibc (2.35) so the AppImage runs on more Linux distros
     runs-on: ubuntu-22.04
     steps:
@@ -24,6 +55,9 @@ jobs:
         with:
           node-version: 22
           cache: 'npm'
+
+      - name: Set release version
+        run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Install dependencies
         run: npm ci
@@ -43,6 +77,7 @@ jobs:
 
   build-windows:
     name: Build Windows Executables
+    needs: prepare
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +86,9 @@ jobs:
         with:
           node-version: 22
           cache: 'npm'
+
+      - name: Set release version
+        run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Install dependencies
         run: npm ci
@@ -70,34 +108,22 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [build-linux, build-windows]
+    needs: [prepare, build-linux, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all build artifacts
+      - name: Download all build artifacts and release notes
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
-      - name: Prepare Release Metadata & Checksums
-        id: meta
-        shell: bash
+      - name: Generate SHA256 checksums
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            TAG="${{ github.ref_name }}"
-            TITLE="Release ${TAG}"
-          else
-            TAG="v${VERSION}-build.${{ github.run_number }}"
-            TITLE="TerminalVibe v${VERSION} (Build #${{ github.run_number }})"
-          fi
-
-          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "release_title=${TITLE}" >> "$GITHUB_OUTPUT"
-
           cd artifacts
+          cp release_notes.md ../release_notes.md 2>/dev/null || true
+          rm -f release_notes.md
           sha256sum * > SHA256SUMS.txt
           echo "Generated SHA256 checksums:"
           cat SHA256SUMS.txt
@@ -105,8 +131,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag_name }}
-          name: ${{ steps.meta.outputs.release_title }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.title }}
+          body_path: release_notes.md
           files: |
             artifacts/*.AppImage
             artifacts/*.exe
@@ -114,6 +141,5 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
