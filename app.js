@@ -1,6 +1,9 @@
 (function () {
   'use strict';
 
+  window.addEventListener('error', e => console.error('[UNCAUGHT]', e.error || e.message, e.filename, e.lineno));
+  window.addEventListener('unhandledrejection', e => console.error('[UNHANDLED-REJECTION]', e.reason));
+
   // The settings UI can live in a separate Electron window (index.html?mode=settings)
   // so it renders above native browser views. In that window only the settings
   // page boots — the whole terminal/browser/sidebar layer is skipped.
@@ -9116,19 +9119,28 @@
    B O*OT
    ═══════════════════════════════════════════════════════════════ */
   (async () => {
-    // Profile gate: with multiple profiles, block boot behind the picker
-    // until one is chosen (profilesSwitch reloads the window).
-    if (!SETTINGS_ONLY && !DETACHED_ONLY) { await profileGate(); }
-    await loadCustomThemes();
-    const restored = await restoreState();
-    applyTheme(currentThemeName);
-    applySidebarMode();
-    applyWsProcsSetting();
+    // Show titlebar immediately on desktop so window control overlay does not overlap tabs
+    if (isDesktop() && !SETTINGS_ONLY && !DETACHED_ONLY) {
+      const tb = document.getElementById('titlebar');
+      if (tb) tb.classList.add('active');
+    }
 
-    // Hide splash screen as soon as the core terminal UI is rendered;
-    // plugins are add-ons and load in the background (do NOT gate boot on them).
-    const splash = document.getElementById('splash');
-    if (splash) splash.classList.add('hide');
+    let restored = false;
+    try {
+      if (!SETTINGS_ONLY && !DETACHED_ONLY) {
+        await profileGate();
+      }
+      await loadCustomThemes();
+      restored = await restoreState();
+      applyTheme(currentThemeName);
+      applySidebarMode();
+      applyWsProcsSetting();
+    } catch (bootErr) {
+      console.error('[BOOT-ERROR]', bootErr);
+    } finally {
+      const splash = document.getElementById('splash');
+      if (splash) splash.classList.add('hide');
+    }
     if (!SETTINGS_ONLY) loadPlugins(); // deferred, non-blocking
 
     // Apply initial background & opacity

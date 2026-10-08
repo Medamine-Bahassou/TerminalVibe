@@ -49,7 +49,9 @@
     "files": [
       "electron/**/*",
       "dist/**/*",
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/**/*",
+      "node_modules/js-yaml/**/*",
+      "node_modules/argparse/**/*"
     ],
     "extraResources": [
       {
