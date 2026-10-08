@@ -700,6 +700,24 @@ Examples:
 
   <script src="vendor/split.min.js"></script>
   <script src="app.js"></script>
+  <script>
+    // Boot watchdog: if app.js never executed (parse error, missing vendor
+    // asset in a packaged build), the splash screen would spin forever.
+    // Release it with an actionable message instead. Normal boots set
+    // window.__tvAppJsRan synchronously, so this never fires for them.
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        if (window.__tvAppJsRan) return;
+        console.error('[BOOT-WATCHDOG] app.js did not boot — releasing splash');
+        var s = document.getElementById('splash');
+        if (s) s.classList.add('hide');
+        var msg = document.createElement('div');
+        msg.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:10001;background:var(--bg,#1e1e2e);color:var(--fg,#cdd6f4);font:13px system-ui,sans-serif;text-align:center;padding:24px;';
+        msg.textContent = 'TerminalVibe failed to start (frontend assets missing or failed to load). Open DevTools (F12) for details.';
+        document.body.appendChild(msg);
+      }, 8000);
+    });
+  </script>
 </body>
 
 </html>

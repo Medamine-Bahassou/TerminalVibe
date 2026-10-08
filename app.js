@@ -1,6 +1,12 @@
 (function () {
   'use strict';
 
+  // Liveness flag for the index.html boot watchdog: if app.js fails to even
+  // parse/execute (e.g. a missing vendor <script> in a packaged build), this
+  // never gets set and the watchdog releases the splash screen with an error
+  // instead of leaving the app stuck forever.
+  window.__tvAppJsRan = true;
+
   window.addEventListener('error', e => console.error('[UNCAUGHT]', e.error || e.message, e.filename, e.lineno));
   window.addEventListener('unhandledrejection', e => console.error('[UNHANDLED-REJECTION]', e.reason));
 
@@ -17,13 +23,24 @@
   // Configure Coloris — hex color picker.
   // Keep the picker parented to <body> (the default): style.css lifts it
   // above the settings (z-10000) and prompt (z-10001) overlays.
-  Coloris({
-    themeMode: 'dark',
-    theme: 'default',
-    format: 'hex',
-    alpha: true,
-    wrap: true,
-  });
+  // Guarded: if the vendor asset failed to load (e.g. broken packaged
+  // build), this must never throw — a top-level throw kills this whole IIFE,
+  // boot never runs, and the app sits on the splash screen forever.
+  try {
+    if (typeof Coloris !== 'undefined') {
+      Coloris({
+        themeMode: 'dark',
+        theme: 'default',
+        format: 'hex',
+        alpha: true,
+        wrap: true,
+      });
+    } else {
+      console.error('[BOOT] Coloris vendor script missing — color picker disabled');
+    }
+  } catch (colorisErr) {
+    console.error('[BOOT] Coloris init failed:', colorisErr);
+  }
 
   // Desktop bridge (Electron preload, exposed as window.electronAPI)
   function electronBridge() { return window.electronAPI || null; }
