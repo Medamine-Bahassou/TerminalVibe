@@ -9,7 +9,7 @@
     "start": "node server.js",
     "dev": "node electron/dev-server.js & node server.js & wait",
     "electron": "electron .",
-    "electron:dev": "node electron/dev-server.js & electron .",
+    "electron:dev": "node electron/dev-server.js & DEV_PID=$!; trap \"kill $DEV_PID 2>/dev/null\" EXIT INT TERM; electron .; kill $DEV_PID 2>/dev/null",
     "test": "node scripts/test-cli.js",
     "build": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux dir --publish never",
     "build:appimage": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux AppImage --publish never",
