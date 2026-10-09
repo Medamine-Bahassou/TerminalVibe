@@ -297,6 +297,15 @@ pointer-events: none;
 user-select: none;
 }
 #sidebar.expanded .ws-btn .ws-icon { width: 16px; height: 16px; }
+/* Phosphor icon-font workspace icons ({ phosphor: name } refs): same box as
+image icons, glyph centered inside it. */
+.ws-btn i.ws-icon {
+  font-size: 15px;
+  line-height: 18px;
+  text-align: center;
+  font-style: normal;
+}
+#sidebar.expanded .ws-btn i.ws-icon { font-size: 13px; line-height: 16px; }
 .ws-btn:hover { background: var(--tab-hover-bg); color: var(--fg); }
 .ws-btn.active {
   background: var(--accent-dim);
@@ -319,6 +328,12 @@ user-select: none;
 }
 .ws-btn.drop-above::after { top: 0; }
 .ws-btn.drop-below::after { bottom: 0; }
+.ws-btn.drop-into {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-color: var(--accent);
+}
 .ws-btn .ws-strip {
   position: absolute;
   left: 0; top: 50%;

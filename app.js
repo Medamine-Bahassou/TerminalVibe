@@ -2912,6 +2912,12 @@
   function removeWorkspace(id) {
     const ws = findWs(id);
     if (!ws || _closingWs.has(id)) return;
+    // Never remove the last workspace — the app must always keep at least one
+    // (otherwise the UI lands in a dead zero-workspace state).
+    if (workspaces.length <= 1) {
+      if (typeof zoomBadge === 'function') zoomBadge('Cannot remove the last workspace');
+      return;
+    }
     _closingWs.add(id);
     const termCount = getWorkspaceTerminals(ws).length;
     const msg = termCount > 0
@@ -3645,7 +3651,16 @@
   // `placement` ({ targetGroupId, zone }) drops it into a specific group,
   // splitting the pane like a normal tab drag-and-drop.
   function reattachTerminal(termId, cols, rows, cwd, placement) {
-    let wsp = workspaces.find(w => w.id === activeWsId) || workspaces[0];
+    // A sidebar drop reports the target workspace's group directly, which may
+    // live in an inactive workspace — resolve the owning workspace first so a
+    // detached tab can land there instead of always using the active one.
+    let wsp = null;
+    if (placement && placement.targetGroupId) {
+      for (const ws of workspaces) {
+        if (ws.layout && findGroupById(ws.layout, placement.targetGroupId)) { wsp = ws; break; }
+      }
+    }
+    if (!wsp) wsp = workspaces.find(w => w.id === activeWsId) || workspaces[0];
     if (!wsp) {
       // All workspaces were closed while the tab was detached — make a fresh
       // one manually (createWorkspace would spawn a new terminal/PTY).
@@ -3805,14 +3820,20 @@
     // Last tab in workspace — remove the workspace with confirmation
     // Skip confirmation when detaching (skipPtyClose) — just remove silently
     if (!skipRender && !skipPtyClose && getWorkspaceTerminals(wsp).length <= 1) {
-      if (_closingWs.has(wsId)) return;
-      if (confirmed) { _removeWorkspace(wsId); return; }
-      _closingWs.add(wsId);
-      const label = wsp.label;
-      showConfirm(`Close "${label}"?`,
-        () => { try { _removeWorkspace(wsId); } finally { _closingWs.delete(wsId); } },
-        () => _closingWs.delete(wsId));
-      return;
+      // Last tab of the last workspace: close just the tab and keep the
+      // (now empty) workspace so the app never reaches zero workspaces.
+      if (workspaces.length <= 1) {
+        // Fall through to the normal tab removal below.
+      } else {
+        if (_closingWs.has(wsId)) return;
+        if (confirmed) { _removeWorkspace(wsId); return; }
+        _closingWs.add(wsId);
+        const label = wsp.label;
+        showConfirm(`Close "${label}"?`,
+          () => { try { _removeWorkspace(wsId); } finally { _closingWs.delete(wsId); } },
+          () => _closingWs.delete(wsId));
+        return;
+      }
     }
 
     const group = findGroupContainingTerm(wsp.layout, termId);
@@ -3943,8 +3964,9 @@
     renderSidebar();
     saveState();
 
-    // If this was the last terminal (detach case), remove the now-empty workspace
-    if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0) {
+    // If this was the last terminal (detach case), remove the now-empty workspace —
+    // unless it is the last workspace, which must always be kept.
+    if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0 && workspaces.length > 1) {
       _removeWorkspace(wsId);
     }
     pluginEmit('terminal:remove', { wsId, termId, type: entry?.type });
@@ -4046,6 +4068,11 @@
     if (getWorkspaceTerminals(ws).length <= 1) {
       if (DETACHED_ONLY) {
         window.close();
+        return;
+      }
+      // Last workspace: close the dead tab but keep the workspace itself.
+      if (workspaces.length <= 1) {
+        removeTerminal(ws.id, id);
         return;
       }
       _removeWorkspace(ws.id);
@@ -5702,6 +5729,108 @@
     saveState();
   }
 
+  // Move a tab (terminal or browser) from its current workspace into another
+  // workspace (sidebar drag-and-drop). The entry object itself is moved, so the
+  // PTY / browser session is preserved. Returns true on success.
+  function moveTabToWorkspace(termId, targetWsId) {
+    if (!termId || !targetWsId) return false;
+    const found = findTermById(termId);
+    if (!found) return false;
+    const srcWs = found.ws;
+    const targetWs = findWs(targetWsId);
+    if (!targetWs || srcWs.id === targetWs.id) return false;
+    const srcGroup = findGroupContainingTerm(srcWs.layout, termId);
+    if (!srcGroup) return false;
+    const idx = srcGroup.terminals.findIndex(t => t.id === termId);
+    if (idx === -1) return false;
+    const [entry] = srcGroup.terminals.splice(idx, 1);
+
+    // Fix up source group activation + history
+    if (srcGroup._history) srcGroup._history = srcGroup._history.filter(id => id !== termId);
+    if (srcGroup.activeTermId === termId) {
+      let nextId = null;
+      if (srcGroup._history) {
+        while (srcGroup._history.length) {
+          const candidate = srcGroup._history.pop();
+          if (candidate !== termId && srcGroup.terminals.some(t => t.id === candidate)) {
+            nextId = candidate;
+            break;
+          }
+        }
+      }
+      if (!nextId) {
+        nextId = srcGroup.terminals.length
+          ? srcGroup.terminals[Math.min(idx, srcGroup.terminals.length - 1)].id
+          : null;
+      }
+      srcGroup.activeTermId = nextId;
+    }
+    if (srcWs.activeTermId === termId) {
+      srcWs.activeTermId = srcGroup.activeTermId || null;
+    }
+    if (srcWs._maximizedGroupId === srcGroup.id && srcGroup.terminals.length === 0) {
+      srcWs._maximizedGroupId = null;
+    }
+    srcWs.layout = removeEmptyGroups(srcWs.layout);
+    if (!srcWs.layout) {
+      // Keep the (now empty) workspace alive instead of deleting it.
+      srcWs.layout = { type: 'group', id: 'group-' + uuid(), terminals: [], activeTermId: null };
+      srcWs.activeTermId = null;
+    } else {
+      const remaining = getWorkspaceTerminals(srcWs);
+      if (remaining.length && !remaining.some(t => t.id === srcWs.activeTermId)) {
+        srcWs.activeTermId = remaining[0].id;
+        const fallbackGroup = findGroupContainingTerm(srcWs.layout, srcWs.activeTermId);
+        if (fallbackGroup && !fallbackGroup.activeTermId) fallbackGroup.activeTermId = srcWs.activeTermId;
+      } else if (!remaining.length) {
+        srcWs.activeTermId = null;
+      }
+    }
+
+    // Insert into the target workspace: prefer the group holding its active tab.
+    if (!targetWs.layout) {
+      targetWs.layout = { type: 'group', id: 'group-' + uuid(), terminals: [entry], activeTermId: termId };
+    } else {
+      let targetGroup = (targetWs.activeTermId && findGroupContainingTerm(targetWs.layout, targetWs.activeTermId))
+        || findFirstGroup(targetWs.layout);
+      if (!targetGroup) {
+        targetWs.layout = { type: 'group', id: 'group-' + uuid(), terminals: [entry], activeTermId: termId };
+      } else {
+        targetGroup.terminals.push(entry);
+        if (!targetGroup._history) targetGroup._history = [];
+        if (targetGroup.activeTermId) targetGroup._history.push(targetGroup.activeTermId);
+        targetGroup.activeTermId = termId;
+      }
+    }
+    targetWs.activeTermId = termId;
+
+    // Drop cached DOM for both workspaces so stale slots are never reused.
+    try {
+      if (_wsDomCache[srcWs.id]) { _wsDomCache[srcWs.id].remove(); delete _wsDomCache[srcWs.id]; }
+      if (_wsDomCache[targetWs.id]) { _wsDomCache[targetWs.id].remove(); delete _wsDomCache[targetWs.id]; }
+    } catch { }
+
+    renderSidebar();
+    if (srcWs.id === activeWsId || targetWs.id === activeWsId) {
+      renderPaneArea();
+      if (srcWs.id === activeWsId) {
+        const remaining = getWorkspaceTerminals(srcWs);
+        if (remaining.length) {
+          const toActivate = remaining.some(t => t.id === srcWs.activeTermId)
+            ? srcWs.activeTermId : remaining[0].id;
+          activateTerminal(srcWs.id, toActivate);
+        } else {
+          syncBrowserSlots();
+        }
+      }
+    }
+    // Keep the moved browser surface correctly positioned even when the target
+    // workspace is not active yet (its container rebuilds on switch).
+    try { syncBrowserSlots(); } catch { }
+    saveState();
+    return true;
+  }
+
   /* ═══════════════════════════════════════════════════════════════
    S I*DEBAR RENDERING
    ═══════════════════════════════════════════════════════════════ */
@@ -5712,8 +5841,16 @@
     sb.querySelectorAll('.ws-header, .ws-folder-row, .ws-btn, .ws-pin-label, .ws-pin-sep').forEach(e => e.remove());
 
     const clearDropMarks = () => {
-      sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+      sb.querySelectorAll('.ws-btn.drop-above, .ws-btn.drop-below, .ws-btn.drop-into').forEach(el => el.classList.remove('drop-above', 'drop-below', 'drop-into'));
       sb.querySelectorAll('.ws-folder-row.drop-into, .ws-folder-row.drop-above, .ws-folder-row.drop-below').forEach(el => el.classList.remove('drop-into', 'drop-above', 'drop-below'));
+    };
+
+    // Tab being dragged (local tab or detached-window tab announced via IPC).
+    // Workspace/folder drags set draggedWsId/draggedFolderId instead, so those
+    // are excluded here — this helper only reports tab drags.
+    const getSidebarTabDragId = () => {
+      if (window.draggedWsId || window.draggedFolderId) return null;
+      return window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || null;
     };
 
     // Container-level drop handling for gaps between and around sidebar items
@@ -5850,9 +5987,22 @@
       const wsNum = ++wsSeq;
       const tabCount = getWorkspaceTerminals(wsp).length;
       const isInFolder = folderKey != null;
-      const labelHtml = wsp.icon
-        ? `<img class="ws-icon" src="${escHtml(wsp.icon)}" alt="" draggable="false">`
-        : `<span class="ws-label">${wsNum}</span>`;
+      // Workspace icons come in several shapes: a data-URL/URL string
+      // (uploaded image), { image: id } (unresolved file ref — normally
+      // resolved to a data URL at restore), or { phosphor: name } (icon-font
+      // reference kept in older states). Anything unrenderable falls back to
+      // the number badge; this must never throw (see escHtml note above).
+      const wsIconHtml = () => {
+        const icon = wsp.icon;
+        if (typeof icon === 'string' && icon) {
+          return `<img class="ws-icon" src="${escHtml(icon)}" alt="" draggable="false">`;
+        }
+        if (icon && typeof icon === 'object' && typeof icon.phosphor === 'string' && icon.phosphor) {
+          return `<i class="ws-icon ws-icon-ph ph ph-${escHtml(icon.phosphor)}" aria-hidden="true"></i>`;
+        }
+        return `<span class="ws-label">${wsNum}</span>`;
+      };
+      const labelHtml = wsIconHtml();
       btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<div class="ws-info"><span class="ws-name">${escHtml(wsp.label)}</span><div class="ws-procs"></div></div><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
       if (wsp.pinned) btn.classList.add('pinned');
       btn.title = wsp.label;
@@ -5883,6 +6033,25 @@
         stopResizing();
       });
       btn.addEventListener('dragover', e => {
+        // ── Tab drop: dragging a tab onto a workspace button moves it there ──
+        const tabDragId = getSidebarTabDragId();
+        if (tabDragId) {
+          // Already in this workspace → no-op (avoids flicker + self-move).
+          const src = findTermById(tabDragId);
+          if (src && src.ws.id === wsp.id) return;
+          e.preventDefault();
+          e.stopPropagation();
+          try { e.dataTransfer.dropEffect = 'move'; } catch { }
+          clearDropMarks();
+          btn.classList.add('drop-into');
+          const api = window.electronAPI;
+          if (api && api.tabDragHover && !window.draggedTermId) {
+            const tws = findWs(wsp.id);
+            const tg = tws ? ((tws.activeTermId && findGroupContainingTerm(tws.layout, tws.activeTermId)) || findFirstGroup(tws.layout)) : null;
+            if (tg) { try { api.tabDragHover({ id: tabDragId, targetGroupId: tg.id, zone: 'center', beforeTabId: null }); } catch { } }
+          }
+          return;
+        }
         const dw = window.draggedWsId;
         const df = window.draggedFolderId;
         if (slot !== undefined) {
@@ -5903,10 +6072,36 @@
       });
       btn.addEventListener('dragleave', (e) => {
         if (!e.relatedTarget || !btn.contains(e.relatedTarget)) {
-          btn.classList.remove('drop-above', 'drop-below');
+          btn.classList.remove('drop-above', 'drop-below', 'drop-into');
         }
       });
       btn.addEventListener('drop', e => {
+        // ── Tab drop: include the dragged tab in this workspace ──
+        const tabDragId = getSidebarTabDragId();
+        if (tabDragId) {
+          e.preventDefault();
+          e.stopPropagation();
+          clearDropMarks();
+          if (window.draggedTermId) {
+            moveTabToWorkspace(window.draggedTermId, wsp.id);
+          } else {
+            // Detached-window tab: ask main to re-attach it into this workspace's group.
+            const extId = window.externalDragTermId || window.lastExternalDragTermId || tabDragId;
+            const tws = findWs(wsp.id);
+            let tg = tws ? ((tws.activeTermId && findGroupContainingTerm(tws.layout, tws.activeTermId)) || findFirstGroup(tws.layout)) : null;
+            if (!tg && tws && !tws.layout) {
+              tg = { type: 'group', id: 'group-' + uuid(), terminals: [], activeTermId: null };
+              tws.layout = tg;
+            }
+            const api = window.electronAPI;
+            if (api && api.tabDragDrop && tg) {
+              try { if (api.tabDragHover) api.tabDragHover({ id: null }); } catch { }
+              api.tabDragDrop({ id: extId, targetGroupId: tg.id, zone: 'center' });
+            }
+            window.externalDragTermId = null;
+          }
+          return;
+        }
         e.preventDefault();
         const dw = window.draggedWsId;
         const df = window.draggedFolderId;
@@ -6155,6 +6350,15 @@
      as up to 3 lines. When more than 3 exist, the 3rd line becomes "+N". */
   const _wsProcsCache = new Map(); // wsId -> { names: string[], termIds: string, ts: number }
   const _WS_PROCS_TTL = 4000;
+  // Idle shells and unidentified sessions are never shown in the workspace
+  // button: an idle powershell.exe / cmd.exe / wsl.exe is not a "running
+  // process", and 'unknown' (backend couldn't tell) must not render as text.
+  const _WS_PROCS_HIDE_RE = /^(unknown|bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|pwsh|powershell|cmd|wsl|nu|conhost|openconsole|windowsterminal)$/i;
+  const _isHiddenWsProc = (n) => {
+    if (!n) return true;
+    const base = String(n).trim().replace(/\.exe$/i, '');
+    return !base || _WS_PROCS_HIDE_RE.test(base);
+  };
 
   function renderWsProcs(procsEl, names) {
     if (!procsEl) return;
@@ -6184,7 +6388,7 @@
     }
     Promise.all(terms.map(t => checkTerminalRunning(t.id))).then(names => {
       if (!btn.isConnected) return;
-      const unique = [...new Set(names.filter(Boolean))];
+      const unique = [...new Set(names.filter(n => n && !_isHiddenWsProc(n)))];
       _wsProcsCache.set(wsp.id, { names: unique, termIds, ts: Date.now() });
       renderWsProcs(procsEl, unique);
     });
@@ -6477,12 +6681,17 @@
       promptColors.style.display = 'none';
     }
 
-    // Workspace icon picker (left of the input)
+    // Workspace icon picker (left of the input). selectedIcon is usually a
+    // data-URL string, but workspaces restored from older states can carry
+    // object refs ({ phosphor: name }); those pass through untouched and only
+    // strings are previewed (assigning an object to img.src would stick a
+    // "[object Object]" URL in the preview and lose the real value).
     let selectedIcon = '';
     const setIcon = (dataUrl) => {
       selectedIcon = dataUrl || '';
       promptIconBtn.classList.toggle('has-icon', !!selectedIcon);
-      if (selectedIcon) promptIconImg.src = selectedIcon;
+      if (typeof selectedIcon === 'string' && selectedIcon) promptIconImg.src = selectedIcon;
+      else promptIconImg.removeAttribute('src');
     };
     if (opts.icon !== undefined) {
       promptIconBtn.style.display = '';
@@ -6653,12 +6862,14 @@
 
   // Live terminals with a running process (excluding idle shells), across all
   // workspaces. Resolves to [{label, name}] with the process name per tab.
+  // Idle shells / 'unknown' are excluded (see _isHiddenWsProc) so an idle
+  // powershell / cmd / wsl tab never blocks quit with a bogus entry.
   function gatherRunningProcesses() {
     const pending = [];
     for (const wsp of workspaces) {
       for (const t of getWorkspaceTerminals(wsp)) {
         if (isLiveTerminal(t)) {
-          pending.push(checkTerminalRunning(t.id).then(name => name ? { label: t.label, name } : null));
+          pending.push(checkTerminalRunning(t.id).then(name => (name && !_isHiddenWsProc(name)) ? { label: t.label, name } : null));
         }
       }
     }
@@ -9128,8 +9339,12 @@
   /* ═══════════════════════════════════════════════════════════════
    U T*IL
    ═══════════════════════════════════════════════════════════════ */
+  // Coerces: workspace icons/labels loaded from disk can be non-strings
+  // (e.g. { phosphor: 'name' } icon refs from older states). Rendering must
+  // never throw on them — a throw inside renderSidebar aborts the whole
+  // sidebar/pane render and leaves the app blank.
   function escHtml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   /* ═══════════════════════════════════════════════════════════════

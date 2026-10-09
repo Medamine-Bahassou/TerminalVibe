@@ -2,10 +2,12 @@
 /**
  * Detects whether a PTY session currently has a process running inside it —
  * i.e. something other than the idle shell. Used to decide whether closing a
- * tab should be confirmed before killing the session.
+ * tab should be confirmed before killing the session, and what the workspace
+ * buttons in the sidebar show.
  *
- * Linux-only: inspects /proc. On unsupported platforms we conservatively
- * assume a process is running so we never kill a session silently.
+ * Linux: inspects /proc. Windows: lists child processes via Get-CimInstance
+ * (an idle powershell.exe / cmd.exe / wsl.exe with no busy children counts
+ * as idle — never "unknown"). Other platforms: conservatively assume busy.
  */
 const fs = require('fs');
 const path = require('path');
@@ -28,7 +30,7 @@ function procStatFields(pid) {
   return s.slice(idx + 2).split(' ');
 }
 
-const SHELL_RE = /^(bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|pwsh|nu)$/;
+const SHELL_RE = /^(bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|pwsh|powershell|cmd|wsl|nu)$/;
 const INTERP_RE = /^(node|nodejs|python|python3|python2|ruby|perl|php|deno|bun|lua)$/;
 const SCRIPT_EXT_RE = /\.(js|mjs|cjs|ts|py|rb|pl|lua|php|sh)$/i;
 
@@ -65,6 +67,7 @@ function hasRunningProcess(pid) {
  * @returns {{running: boolean, name: string|null}}
  */
 function runningProcessInfo(pid) {
+  if (process.platform === 'win32') return windowsProcessInfo(pid);
   if (process.platform !== 'linux') return { running: true, name: null };
   if (!pid || pid <= 1) return { running: false, name: null };
   const commRaw = readProc(`/proc/${pid}/comm`);
@@ -85,6 +88,89 @@ function runningProcessInfo(pid) {
   if (tpgid !== 0 && tpgid !== pgrp) {
     const jobComm = readProc(`/proc/${tpgid}/comm`);
     return { running: true, name: jobComm ? processDisplayName(tpgid, jobComm.trim()) : null };
+  }
+  return { running: false, name: null };
+}
+
+// ── Windows ─────────────────────────────────────────────────────────────
+// An idle shell (powershell.exe / cmd.exe / wsl.exe / pwsh.exe) with nothing
+// running inside it must report idle — never {running:true, name:null},
+// which the UI would render as "- unknown" in the workspace button.
+// A terminal is busy when the shell has a non-shell descendant (e.g. the
+// user ran `node server.js` inside powershell → node.exe child).
+// Console helpers (conhost / openconsole) and nested shells are ignored.
+
+// Names that alone mean "idle at a prompt" — never reported as busy.
+const WIN_IDLE_RE = /^(powershell|pwsh|cmd|wsl|bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|nu|conhost|openconsole|windowsterminal)$/i;
+
+// Cached whole-system process table: parentPid -> [{pid, name}]. One
+// powershell spawn per TTL window no matter how many tabs are checked.
+let _winTable = null; // { ts: number, byParent: Map<number, Array<{pid:number,name:string}>> | null }
+const WIN_CACHE_TTL = 2000;
+
+function windowsProcessTable() {
+  const now = Date.now();
+  if (_winTable && now - _winTable.ts < WIN_CACHE_TTL) return _winTable.byParent;
+  let byParent = null;
+  try {
+    const { execFileSync } = require('child_process');
+    const out = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command',
+        "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId):$($_.ParentProcessId):$($_.Name)\" }"],
+      { timeout: 4000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 * 1024 * 1024 }
+    ).toString();
+    byParent = new Map();
+    for (const line of out.split(/\r?\n/)) {
+      const m = /^(\d+):(\d+):(.+)$/.exec(line.trim());
+      if (!m) continue;
+      const pid = parseInt(m[1], 10);
+      const ppid = parseInt(m[2], 10);
+      const name = m[3].trim();
+      if (!name) continue;
+      if (!byParent.has(ppid)) byParent.set(ppid, []);
+      byParent.get(ppid).push({ pid, name });
+    }
+  } catch {
+    byParent = null;
+  }
+  // Bound cache growth: single slot already, just refresh timestamp.
+  _winTable = { ts: now, byParent };
+  return byParent;
+}
+
+function windowsProcessInfo(pid) {
+  if (!pid || pid <= 1) return { running: false, name: null };
+  let byParent = null;
+  try {
+    byParent = windowsProcessTable();
+  } catch {
+    byParent = null;
+  }
+  // Cannot inspect — assume an idle shell rather than reporting "unknown",
+  // so idle powershell/cmd/wsl tabs stay clean in the sidebar.
+  if (!byParent) return { running: false, name: null };
+  // BFS through nested shells / console helpers (depth-capped) looking for
+  // the first real workload process.
+  const seen = new Set([pid]);
+  let frontier = [pid];
+  for (let depth = 0; depth < 3 && frontier.length; depth++) {
+    const next = [];
+    for (const p of frontier) {
+      const kids = byParent.get(p) || [];
+      for (const k of kids) {
+        if (seen.has(k.pid)) continue;
+        seen.add(k.pid);
+        const base = k.name.replace(/\.exe$/i, '');
+        if (!base) continue;
+        if (WIN_IDLE_RE.test(base.toLowerCase())) {
+          next.push(k.pid); // nested shell / conhost — look inside it
+          continue;
+        }
+        return { running: true, name: base };
+      }
+    }
+    frontier = next;
   }
   return { running: false, name: null };
 }

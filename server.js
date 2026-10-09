@@ -104,20 +104,21 @@ class PTYSession {
     this._send = sendCb;
     this._proc = null;
     this._running = false;
-    this.shell = process.env.SHELL || "/bin/bash";
+    this.shell = process.env.SHELL || (process.platform === "win32" ? "powershell.exe" : "/bin/bash");
     this.cwd = cwd;
     this._tmpDir = null;
   }
 
   start() {
+    const homeDir = os.homedir() || process.env.HOME || "/root";
     let spawnCwd = this.cwd;
     if (!spawnCwd) {
-      spawnCwd = process.env.HOME || "/root";
+      spawnCwd = homeDir;
     } else if (spawnCwd.startsWith("~")) {
-      spawnCwd = path.join(process.env.HOME || "/root", spawnCwd.slice(1));
+      spawnCwd = path.join(homeDir, spawnCwd.slice(1));
     }
     try {
-      if (!fs.existsSync(spawnCwd)) spawnCwd = process.env.HOME || "/root";
+      if (!fs.existsSync(spawnCwd)) spawnCwd = homeDir;
     } catch {}
 
     // ── Shell integration: configure OSC 7 cwd reporting ──

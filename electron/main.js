@@ -983,20 +983,26 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
       ptys.delete(id);
     }
     let spawnCwd = cwd || undefined;
+    const homeDir = require('os').homedir();
     if (spawnCwd && typeof spawnCwd === 'string') {
       spawnCwd = spawnCwd.trim().replace(/^["']|["']$/g, '');
       if (spawnCwd === '~') {
-        spawnCwd = require('os').homedir();
+        spawnCwd = homeDir;
       } else if (spawnCwd.startsWith('~/') || spawnCwd.startsWith('~\\')) {
-        spawnCwd = path.join(require('os').homedir(), spawnCwd.slice(2));
+        spawnCwd = path.join(homeDir, spawnCwd.slice(2));
       }
       try {
         if (!fs.existsSync(spawnCwd) || !fs.statSync(spawnCwd).isDirectory()) {
-          spawnCwd = undefined;
+          spawnCwd = homeDir;
         }
       } catch {
-        spawnCwd = undefined;
+        spawnCwd = homeDir;
       }
+    } else {
+      // No cwd requested (or empty): start in the user's home directory.
+      // Leaving this undefined would inherit the Electron main-process cwd,
+      // which on Windows is inside LocalAppData instead of ~.
+      spawnCwd = homeDir;
     }
     const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
     const t = pty.spawn(shell, argv && argv.length ? argv : [], {
