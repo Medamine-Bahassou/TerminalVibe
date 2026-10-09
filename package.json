@@ -13,6 +13,9 @@
     "test": "node scripts/test-cli.js",
     "build": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux dir --publish never",
     "build:appimage": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux AppImage --publish never",
+    "build:deb": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux deb --publish never",
+    "build:rpm": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux rpm --publish never",
+    "build:linux": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux AppImage deb rpm --publish never",
     "build:win": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --win --publish never",
     "dist": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux dir --publish never",
     "electron:install": "node node_modules/electron/install.js"
@@ -66,6 +69,8 @@
     "linux": {
       "target": [
         "AppImage",
+        "deb",
+        "rpm",
         "dir"
       ],
       "category": "Utility",

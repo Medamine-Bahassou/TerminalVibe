@@ -44,7 +44,7 @@ jobs:
           if-no-files-found: error
 
   build-linux:
-    name: Build Linux AppImage
+    name: Build Linux Packages
     needs: prepare
     # Older glibc (2.35) so the AppImage runs on more Linux distros
     runs-on: ubuntu-22.04
@@ -65,14 +65,17 @@ jobs:
       - name: Run CLI tests
         run: npm test
 
-      - name: Build AppImage
-        run: npm run build:appimage
+      - name: Build AppImage, deb and rpm
+        run: npm run build:linux
 
-      - name: Upload Linux artifact
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: linux-appimage
-          path: release/*.AppImage
+          name: linux-packages
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.rpm
           if-no-files-found: error
 
   build-windows:
@@ -136,6 +139,8 @@ jobs:
           body_path: release_notes.md
           files: |
             artifacts/*.AppImage
+            artifacts/*.deb
+            artifacts/*.rpm
             artifacts/*.exe
             artifacts/SHA256SUMS.txt
           draft: false
