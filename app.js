@@ -57,6 +57,8 @@
     splitV: { ctrl: true, shift: true, key: 'E', label: 'Ctrl+Shift+E' },
     search: { ctrl: true, shift: true, key: 'F', label: 'Ctrl+Shift+F' },
     tabSearch: { ctrl: true, shift: true, key: 'O', label: 'Ctrl+Shift+O' },
+    commandPalette: { ctrl: true, shift: true, key: 'K', label: 'Ctrl+Shift+K' },
+    snippets: { ctrl: true, shift: true, key: 'Y', label: 'Ctrl+Shift+Y' },
     browserTab: { ctrl: true, shift: true, key: 'B', label: 'Ctrl+Shift+B' },
     copy: { ctrl: true, shift: true, key: 'C', label: 'Ctrl+Shift+C' },
     paste: { ctrl: true, shift: true, key: 'V', label: 'Ctrl+Shift+V' },
@@ -78,7 +80,7 @@
   const SHORTCUT_LABELS = {
     newTerminal: 'New terminal', closeTerminal: 'Close terminal',
     splitH: 'Split horizontal', splitV: 'Split vertical',
-    search: 'Search', tabSearch: 'Search tabs', browserTab: 'New browser tab',
+    search: 'Search', tabSearch: 'Search tabs', commandPalette: 'Command palette', snippets: 'Snippets', browserTab: 'New browser tab',
     copy: 'Copy selection', paste: 'Paste',
     nextTab: 'Next tab', prevTab: 'Previous tab',
     focusLeft: 'Focus left pane', focusDown: 'Focus down pane',
@@ -343,14 +345,24 @@
   }, true);
 
   /* ═══════════════════════════════════════════════════════════════
-   P L U G I N   S Y S T E M
+   P L U G I N   S Y S T E M  (Obsidian-style: JS + CSS, TS via build)
    ─────────────────────────────────────────────────────────────
-   Plugins live in ~/.terminalvibe/plugins/<id>/ with a plugin.json
-   manifest + a JS entry. The Electron main process reads manifests and
-   entry sources over IPC; entries are evaluated in this renderer against
-   a small `TerminalVibe` registration namespace and activated with an
-   `api` object (commands, events, menus, themes, settings sections, UI
-   widgets). Enable/disable state persists in state.json (pluginStates).
+   Plugins live in ~/.terminalvibe/plugins/<id>/ with a manifest
+   (`manifest.json`, Obsidian-style, or legacy `plugin.json`) + a JS entry
+   + an optional stylesheet. The Electron main process reads manifests and
+   files over IPC; entries are evaluated in this renderer against a small
+   `TerminalVibe` namespace and activated with an `api` object (commands,
+   events, menus, themes, terminal I/O, settings, UI widgets).
+   Layout (Obsidian parity):
+     <id>/manifest.json  (or plugin.json) — name/version/description/...
+     <id>/main.js        (or "main" field, or legacy plugin.js; TS source
+                          in src/main.ts compiles to main.js via esbuild)
+     <id>/styles.css     (auto-injected; legacy style.css also picked up)
+   Supported entry shapes:
+     1. TerminalVibe.register({ id, activate(api), deactivate() })
+     2. module.exports = class extends TerminalVibe.Plugin { onload/onunload }
+     3. module.exports = { activate, deactivate } (or onload/onunload)
+   Enable/disable state persists in state.json (pluginStates).
    ═══════════════════════════════════════════════════════════════ */
   const _pluginRegistry = new Map();   // id -> { activate, deactivate }
   const _pluginStates = new Map();     // id -> true/false (from state.json)
@@ -363,6 +375,7 @@
   const _pluginThemes = new Map();     // themeName -> { pluginId, theme }
   const _pluginWidgets = [];           // { pluginId, id, position, el }
   const _pluginBus = new Map();        // event -> Set<{ pluginId, cb }>
+  const _pluginErrors = new Map();     // id -> error message (failed evaluate/activate)
   let _pluginsView = { mode: 'list' }; // { mode: 'list' } | { mode: 'detail', id }
 
   function pluginEmit(event, data) {
@@ -381,6 +394,179 @@
       && !!e.shiftKey === !!combo.shift
       && !!e.altKey === !!combo.alt
       && !!e.metaKey === !!combo.meta;
+  }
+
+  // Obsidian-style hotkey ({ modifiers: ['Ctrl','Shift'], key: 'H' }) → ours.
+  function _obsidianHotkeysToCombo(hk) {
+    if (!hk) return null;
+    if (typeof hk === 'string') return { key: hk };
+    const mods = new Set((hk.modifiers || []).map(m => String(m).toLowerCase()));
+    const key = hk.key;
+    if (!key) return null;
+    return {
+      ctrl: mods.has('ctrl') || mods.has('control'),
+      shift: mods.has('shift'),
+      alt: mods.has('alt'),
+      meta: mods.has('meta') || mods.has('cmd') || mods.has('command') || mods.has('mod'),
+      key: String(key),
+    };
+  }
+
+  // Obsidian-style base class: `module.exports = class extends
+  // TerminalVibe.Plugin { onload() {...} onunload() {...} }`.
+  // Thin sugar over the same per-plugin `api` object the legacy
+  // TerminalVibe.register({ activate }) style receives.
+  class TerminalVibePlugin {
+    constructor(api) {
+      this.api = api || null;
+      this.app = this.api;
+      this.manifest = api ? { id: api.id, name: api.name, version: api.version } : {};
+      this.pluginId = api ? api.id : '';
+    }
+    get name() { return this.api ? this.api.name : ''; }
+    log(...args) { if (this.api) this.api.log(...args); else console.log('[plugin]', ...args); }
+    async onload() { }
+    onunload() { }
+    // { id, name, callback } (+ optional combo: ours, or hotkeys: Obsidian's)
+    addCommand(def) {
+      if (!this.api || !def) return null;
+      const base = def.id || def.name || 'cmd';
+      const id = (base.includes(':') || (this.pluginId && base.startsWith(this.pluginId)))
+        ? base : (this.pluginId ? this.pluginId + ':' + base : base);
+      let combo = def.combo || null;
+      if (!combo && def.hotkeys) {
+        const first = Array.isArray(def.hotkeys) ? def.hotkeys[0] : def.hotkeys;
+        combo = _obsidianHotkeysToCombo(first);
+      }
+      const label = def.name || def.label || id;
+      const handler = typeof def.callback === 'function' ? def.callback
+        : (typeof def.checkCallback === 'function' ? () => def.checkCallback(false)
+        : (typeof def.handler === 'function' ? def.handler : null));
+      if (!handler) return null;
+      this.api.commands.register({ id, label, combo, handler });
+      return id;
+    }
+    // Obsidian returns an element the plugin fills; we mount it in the
+    // status bar strip (visible once a plugin adds the first widget).
+    addStatusBarItem() {
+      const el = document.createElement('span');
+      el.className = 'tv-plugin-statusbar-item';
+      if (this.api) this.api.ui.addWidget({ id: 'statusbar-' + Math.random().toString(36).slice(2), position: 'statusbar', el });
+      return el;
+    }
+    // Obsidian's left ribbon → our sidebar (appended at the bottom).
+    addRibbonIcon(icon, title, cb) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tv-plugin-ribbon-icon';
+      btn.title = title || '';
+      if (icon) btn.innerHTML = icon;
+      if (typeof cb === 'function') btn.addEventListener('click', cb);
+      if (this.api) this.api.ui.addWidget({ id: 'ribbon-' + Math.random().toString(36).slice(2), position: 'sidebar', el: btn });
+      return btn;
+    }
+    // Auto-cleaned on unload (deactivatePlugin drops the whole bus by id).
+    registerEvent(ev, cb) {
+      if (this.api && typeof cb === 'function') this.api.events.on(ev, cb);
+      return { ev, cb };
+    }
+    off(ev, cb) { if (this.api) this.api.events.off(ev, cb); }
+    // Obsidian's data.json blob ↔ our per-key persisted config.
+    async loadData() { return this.api ? this.api.config.all() : {}; }
+    async saveData(obj) {
+      if (!this.api || !obj || typeof obj !== 'object') return;
+      for (const [k, v] of Object.entries(obj)) this.api.config.set(k, v);
+    }
+  }
+
+  // The global plugin entries evaluate against. Exposes both the legacy
+  // register() and the Obsidian-style Plugin base class.
+  function ensureTerminalVibeGlobal() {
+    if (!window.TerminalVibe || typeof window.TerminalVibe.register !== 'function') {
+      window.TerminalVibe = { register: registerPlugin, Plugin: TerminalVibePlugin };
+    } else if (!window.TerminalVibe.Plugin) {
+      window.TerminalVibe.Plugin = TerminalVibePlugin;
+    }
+    return window.TerminalVibe;
+  }
+
+  // Evaluate an entry with a CommonJS shim so esbuild/tsc-bundled output
+  // (module.exports = ...) works alongside legacy TerminalVibe.register
+  // entries. Returns module.exports (or null when the entry used register).
+  function _evaluatePluginEntry(code, ns) {
+    const module = { exports: {} };
+    const exports = module.exports;
+    (new Function('TerminalVibe', 'module', 'exports', code))(ns, module, exports);
+    return module.exports;
+  }
+
+  function _unwrapDefault(exp) {
+    return (exp && exp.__esModule && exp.default !== undefined) ? exp.default : exp;
+  }
+
+  // Normalize module.exports → { activate, deactivate }.
+  // Handles: Plugin subclass, { onload, onunload }, { activate, deactivate }.
+  function _normalizePluginExport(exp, manifest) {
+    const unwrapped = _unwrapDefault(exp);
+    if (!unwrapped) return null;
+    if (typeof unwrapped === 'function'
+      && unwrapped.prototype
+      && (typeof unwrapped.prototype.onload === 'function' || typeof unwrapped.prototype.onunload === 'function')) {
+      return { _PluginClass: unwrapped };
+    }
+    if ((typeof unwrapped === 'object' || typeof unwrapped === 'function')) {
+      if (typeof unwrapped.onload === 'function' || typeof unwrapped.onunload === 'function') {
+        const inst = unwrapped;
+        return {
+          id: manifest.id,
+          activate: (api) => inst.onload ? inst.onload.call(inst, api) : undefined,
+          deactivate: () => { if (typeof inst.onunload === 'function') inst.onunload.call(inst); },
+          _instance: inst,
+        };
+      }
+      if (typeof unwrapped.activate === 'function') return unwrapped;
+    }
+    return null;
+  }
+
+  // Read the first readable file from a candidate list (entry / styles).
+  async function _readFirstPluginFile(cfgApi, id, candidates) {
+    for (const rel of candidates) {
+      try {
+        const content = await cfgApi.configReadPluginFile(id, rel);
+        if (typeof content === 'string' && content.length) return { rel, content };
+      } catch { }
+    }
+    return null;
+  }
+
+  function _pluginEntryCandidates(manifest) {
+    if (typeof manifest.main === 'string' && manifest.main) return [manifest.main];
+    return ['main.js', 'plugin.js']; // Obsidian default, then legacy
+  }
+
+  function _pluginStyleCandidates(manifest) {
+    if (typeof manifest.styles === 'string' && manifest.styles) return [manifest.styles];
+    if (typeof manifest.css === 'string' && manifest.css) return [manifest.css]; // legacy reserved field
+    return ['styles.css', 'style.css']; // Obsidian default, then legacy
+  }
+
+  // Obsidian parity: stylesheets are auto-injected and namespaced per plugin
+  // so deactivate can remove exactly what the plugin added.
+  function _injectPluginStyles(id, css) {
+    try {
+      document.querySelectorAll('style[data-plugin-styles="' + CSS.escape(id) + '"]').forEach(el => el.remove());
+      const el = document.createElement('style');
+      el.dataset.pluginStyles = id;
+      el.textContent = css;
+      document.head.appendChild(el);
+    } catch (e) { console.error('[plugin] style inject failed for', id, ':', e); }
+  }
+
+  function _removePluginStyles(id) {
+    try {
+      document.querySelectorAll('style[data-plugin-styles="' + CSS.escape(id) + '"]').forEach(el => el.remove());
+    } catch { }
   }
 
   function _makePluginApi(manifest) {
@@ -434,6 +620,23 @@
         unregister: (name) => {
           const rec = _pluginThemes.get(name);
           if (rec && rec.pluginId === manifest.id) { delete THEMES[name]; _pluginThemes.delete(name); }
+        },
+      },
+      terminal: {
+        // Write directly to a terminal's screen buffer (xterm display).
+        // Display-only: never fed to the shell, so special characters can't
+        // trigger glob errors or command execution. For real input/keystrokes
+        // use window.electronAPI.terminalWrite({ id, data }) instead.
+        write: (id, data) => {
+          try {
+            const result = findTermById(id);
+            if (!result || !result.term || result.term.type === 'browser' || !result.term.term) return false;
+            result.term.term.write(data);
+            return true;
+          } catch (e) {
+            console.error('[plugin] terminal.write failed for', id, ':', e);
+            return false;
+          }
         },
       },
       ui: {
@@ -530,8 +733,17 @@
     const sidebarInner = document.getElementById('sidebar-inner');
     if (sidebarInner) {
       sidebarInner.querySelectorAll('[data-plugin-widget]').forEach(el => el.remove());
+      // Banner widgets live above the WORKSPACES header (prepended in order).
+      const tops = _pluginWidgets.filter(x => x.position === 'sidebar-top');
+      for (let i = tops.length - 1; i >= 0; i--) {
+        const w = tops[i];
+        w.el.dataset.pluginWidget = '1';
+        w.el.dataset.widgetPosition = 'sidebar-top';
+        sidebarInner.insertBefore(w.el, sidebarInner.firstChild);
+      }
       for (const w of _pluginWidgets.filter(x => x.position === 'sidebar')) {
         w.el.dataset.pluginWidget = '1';
+        w.el.dataset.widgetPosition = 'sidebar';
         sidebarInner.appendChild(w.el);
       }
     }
@@ -539,6 +751,7 @@
 
   // Render the Settings → Plugins page: one row per installed plugin with a
   // status, an activate/deactivate toggle, and an "open folder" access button.
+  // Newly added folders are activated here, so imports apply without restart.
   async function renderPluginsSettings() {
     const list = document.getElementById('plugins-list');
     if (!list) return;
@@ -547,12 +760,13 @@
     if (api && api.configListPlugins) {
       try { manifests = await api.configListPlugins(); } catch { manifests = []; }
     }
+    try { await autoSyncPlugins(manifests); } catch { }
     list.innerHTML = '';
     updatePluginsSectionTitle(manifests);
     if (!Array.isArray(manifests) || !manifests.length) {
       const empty = document.createElement('div');
       empty.className = 'px-3 py-2.5 text-[11px] text-[var(--muted-text)]';
-      empty.textContent = 'No plugins installed. Drop a folder into ~/.terminalvibe/plugins/ and restart.';
+      empty.textContent = 'No plugins installed. Drop a folder into ~/.terminalvibe/plugins/, then reopen this page.';
       list.appendChild(empty);
       return;
     }
@@ -582,8 +796,11 @@
         head.appendChild(v);
       }
       const status = document.createElement('span');
-      status.className = 'text-[10px] px-1.5 py-0.5 rounded ' + (enabled ? 'bg-[color-mix(in_srgb,var(--accent)_25%,transparent)] text-[var(--accent)]' : 'bg-black/20 text-[var(--dim-text)]');
-      status.textContent = enabled ? 'Active' : 'Disabled';
+      const pluginErrMsg = _pluginErrors.get(manifest.id);
+      status.className = 'text-[10px] px-1.5 py-0.5 rounded ' + (!enabled ? 'bg-black/20 text-[var(--dim-text)]'
+        : pluginErrMsg ? 'bg-red-500/20 text-red-400'
+        : 'bg-[color-mix(in_srgb,var(--accent)_25%,transparent)] text-[var(--accent)]');
+      status.textContent = !enabled ? 'Disabled' : (pluginErrMsg ? 'Error' : 'Active');
       head.appendChild(status);
       meta.appendChild(head);
       if (manifest.description) {
@@ -596,6 +813,13 @@
       idEl.className = 'text-[11px] text-[var(--muted-text)]';
       idEl.textContent = manifest.id + (manifest.author ? '  ·  ' + manifest.author : '');
       meta.appendChild(idEl);
+      const pluginErr = _pluginErrors.get(manifest.id);
+      if (pluginErr) {
+        const errEl = document.createElement('div');
+        errEl.className = 'text-[11px] text-red-400 leading-tight max-w-[420px]';
+        errEl.textContent = 'Error: ' + pluginErr;
+        meta.appendChild(errEl);
+      }
       row.appendChild(meta);
 
       const controls = document.createElement('div');
@@ -807,23 +1031,103 @@
     renderPluginsSettings();
   }
 
-  // Evaluate + activate one plugin manifest.
+  // Evaluate + activate one plugin manifest. Supports the legacy
+  // TerminalVibe.register style and Obsidian-style module.exports
+  // (Plugin subclass or { onload/onunload }). Idempotent: re-activating
+  // first unloads the previous instance so toggles never double-register.
   async function activatePlugin(manifest) {
-    const api = configApi();
-    if (!window.TerminalVibe) window.TerminalVibe = { register: registerPlugin };
+    const cfgApi = configApi();
+    if (!cfgApi || !cfgApi.configReadPluginFile) return;
+    const ns = ensureTerminalVibeGlobal();
+    if (_pluginRegistry.has(manifest.id)) {
+      try { deactivatePlugin(manifest.id); } catch { }
+    }
+    _pluginErrors.delete(manifest.id);
     _pluginManifests.set(manifest.id, manifest);
-    if (typeof manifest.main !== 'string') { console.warn('[plugin]', manifest.id, 'missing "main" entry'); return; }
-    const code = await api.configReadPluginFile(manifest.id, manifest.main);
-    if (!code) { console.warn('[plugin]', manifest.id, 'entry not readable:', manifest.main); return; }
-    try {
-      (new Function('TerminalVibe', code))(window.TerminalVibe);
-    } catch (e) {
-      console.error('[plugin] failed to evaluate', manifest.id, ':', e);
+
+    // Styles first — independent of JS, like Obsidian (styles.css).
+    const styleHit = await _readFirstPluginFile(cfgApi, manifest.id, _pluginStyleCandidates(manifest));
+    if (styleHit) _injectPluginStyles(manifest.id, styleHit.content);
+
+    const entryHit = await _readFirstPluginFile(cfgApi, manifest.id, _pluginEntryCandidates(manifest));
+    if (!entryHit) {
+      const msg = 'missing entry (looked for ' + _pluginEntryCandidates(manifest).join(', ') + ')';
+      console.warn('[plugin]', manifest.id, msg);
+      _pluginErrors.set(manifest.id, msg);
       return;
     }
-    const def = _pluginRegistry.get(manifest.id);
-    if (!def || typeof def.activate !== 'function') return;
-    def.activate(_makePluginApi(manifest));
+
+    let exported = null;
+    const before = new Set(_pluginRegistry.keys());
+    try {
+      exported = _evaluatePluginEntry(entryHit.content, ns);
+    } catch (e) {
+      console.error('[plugin] failed to evaluate', manifest.id, ':', e);
+      _pluginErrors.set(manifest.id, String((e && e.message) || e));
+      return;
+    }
+
+    // Legacy register() wins when the entry used it; otherwise fall back to
+    // whatever the entry assigned to module.exports.
+    let def = _pluginRegistry.get(manifest.id);
+    if (!def) {
+      for (const k of _pluginRegistry.keys()) {
+        if (!before.has(k)) {
+          const aliasKey = k;
+          def = _pluginRegistry.get(aliasKey);
+          // Folder name is the canonical id (as in Obsidian): re-key so
+          // unload/cleanup by folder works even when register() used another.
+          if (aliasKey !== manifest.id) {
+            console.warn('[plugin] id mismatch: folder "' + manifest.id + '" registered as "' + aliasKey + '" — using folder id');
+            _pluginRegistry.delete(aliasKey);
+            _pluginRegistry.set(manifest.id, def);
+          }
+          break;
+        }
+      }
+    }
+    if (!def) {
+      def = _normalizePluginExport(exported, manifest);
+      if (def) _pluginRegistry.set(manifest.id, def);
+    }
+    // Obsidian-style Plugin subclass → instantiate with the plugin api.
+    if (def && def._PluginClass) {
+      const PluginClass = def._PluginClass;
+      let instance = null;
+      try {
+        instance = new PluginClass(_makePluginApi(manifest));
+      } catch (e) {
+        console.error('[plugin] failed to construct', manifest.id, ':', e);
+        _pluginErrors.set(manifest.id, String((e && e.message) || e));
+        _pluginRegistry.delete(manifest.id);
+        return;
+      }
+      def = {
+        id: manifest.id,
+        activate: (api) => { instance.api = api; instance.app = api; return instance.onload ? instance.onload() : undefined; },
+        deactivate: () => { if (instance && typeof instance.onunload === 'function') instance.onunload(); },
+        _instance: instance,
+      };
+      _pluginRegistry.set(manifest.id, def);
+    }
+    if (!def || typeof def.activate !== 'function') {
+      const msg = 'entry registered nothing (need TerminalVibe.register or module.exports)';
+      console.warn('[plugin]', manifest.id, msg);
+      _pluginErrors.set(manifest.id, msg);
+      _pluginRegistry.delete(manifest.id);
+      return;
+    }
+    if (def.id && def.id !== manifest.id) {
+      console.warn('[plugin] id mismatch: folder "' + manifest.id + '" registered as "' + def.id + '" — using folder id');
+    }
+    try {
+      await def.activate(_makePluginApi(manifest));
+    } catch (e) {
+      console.error('[plugin] activate failed for', manifest.id, ':', e);
+      try { deactivatePlugin(manifest.id); } catch { }
+      _pluginErrors.set(manifest.id, String((e && e.message) || e));
+      return;
+    }
     // Deliver persisted config to the freshly-activated plugin
     _pluginConfigLast.delete(manifest.id);
     deliverPluginConfig(manifest.id, null);
@@ -833,7 +1137,10 @@
   function deactivatePlugin(id) {
     const def = _pluginRegistry.get(id);
     if (def && typeof def.deactivate === 'function') {
-      try { def.deactivate(); } catch (e) { console.error('[plugin] deactivate hook failed for', id, ':', e); }
+      try {
+        const r = def.deactivate();
+        if (r && typeof r.catch === 'function') r.catch(e => console.error('[plugin] deactivate hook failed for', id, ':', e));
+      } catch (e) { console.error('[plugin] deactivate hook failed for', id, ':', e); }
     }
     for (const [cid, cmd] of [..._pluginCommands]) {
       if (cmd.pluginId === id) _pluginCommands.delete(cid);
@@ -859,10 +1166,16 @@
     for (const [ev, set] of _pluginBus) {
       for (const h of [...set]) { if (h.pluginId === id) set.delete(h); }
     }
+    _removePluginStyles(id);
+    _pluginErrors.delete(id);
     _pluginConfigCbs.delete(id);
     _pluginConfigLast.delete(id);
     _pluginManifests.delete(id);
-    _pluginRegistry.delete(id);
+    // Drop the registry entry plus any alias keys pointing at the same def
+    // (left over from folder/register id mismatches).
+    for (const k of [..._pluginRegistry.keys()]) {
+      if (k === id || _pluginRegistry.get(k) === def) _pluginRegistry.delete(k);
+    }
   }
 
   function dispatchPluginKeydown(e) {
@@ -890,7 +1203,7 @@
       const manifests = await api.configListPlugins();
       if (!Array.isArray(manifests) || !manifests.length) return;
 
-      window.TerminalVibe = { register: registerPlugin };
+      ensureTerminalVibeGlobal();
 
       for (const manifest of manifests) {
         if (_pluginStates.get(manifest.id) === false) continue;
@@ -922,6 +1235,27 @@
       }
       try { await activatePlugin(manifest); } catch (e) { console.error('[plugin] activate failed for', manifest.id, ':', e); }
     }
+  }
+
+  // Auto-apply on Plugins-page open: activate anything enabled-but-not-loaded
+  // (e.g. a folder the user just copied into ~/.terminalvibe/plugins/) and
+  // unload anything whose folder disappeared — no restart required.
+  let _pluginsAutoSyncing = null;
+  async function autoSyncPlugins(manifests) {
+    if (_pluginsAutoSyncing) { try { await _pluginsAutoSyncing; } catch { } return; }
+    const run = (async () => {
+      const live = new Set((manifests || []).map(m => m.id));
+      for (const [id] of [..._pluginRegistry]) {
+        if (!live.has(id)) { try { deactivatePlugin(id); } catch (e) { console.error('[plugin] deactivate failed for', id, ':', e); } }
+      }
+      for (const m of (manifests || [])) {
+        if (_pluginStates.get(m.id) === false) continue;
+        if (_pluginRegistry.has(m.id)) continue;
+        try { await activatePlugin(m); } catch (e) { console.error('[plugin] activate failed for', m.id, ':', e); }
+      }
+    })();
+    _pluginsAutoSyncing = run;
+    try { await run; } finally { if (_pluginsAutoSyncing === run) _pluginsAutoSyncing = null; }
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -1062,7 +1396,7 @@
     // re-raise above the settings layer.
     const overlayOpen = settingsWindowOpen ||
       (document.getElementById('settings-overlay')?.classList.contains('open') === true);
-    if (overlayOpen) {
+    if (overlayOpen || document.body.classList.contains('tab-dragging')) {
       if (window.electronAPI) {
         for (const ws of workspaces) {
           for (const t of getWorkspaceTerminals(ws)) {
@@ -1205,8 +1539,8 @@
     ws.onmessage = (e) => {
       if (e.data instanceof ArrayBuffer) {
         const arr = new Uint8Array(e.data);
-        const sidBytes = arr.slice(0, ID_LEN);
-        const data = arr.slice(ID_LEN);
+        const sidBytes = arr.subarray(0, ID_LEN);
+        const data = arr.subarray(ID_LEN);
         const sid = new TextDecoder().decode(sidBytes).trimEnd();
         const result = findTermById(sid);
         if (result) {
@@ -1407,14 +1741,16 @@
           if (id) {
             window.externalDragTermId = id;
             window.lastExternalDragTermId = id;
-            startResizing();
+            startResizing(true);
             if (window._clearExternalDragTimer) {
               clearTimeout(window._clearExternalDragTimer);
               window._clearExternalDragTimer = null;
             }
           } else {
             window.externalDragTermId = null;
-            stopResizing();
+            // tab-drag:start broadcasts {id:null} to every window (incl. this one)
+            // right after our own dragstart — don't tear down a local drag's shield.
+            if (!window.draggedTermId) stopResizing();
             if (window._clearExternalDragTimer) clearTimeout(window._clearExternalDragTimer);
             window._clearExternalDragTimer = setTimeout(() => {
               window.lastExternalDragTermId = null;
@@ -3167,7 +3503,7 @@
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
             // Drag & drop
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
             tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
             tab.addEventListener('dragover', e => {
               e.preventDefault();
@@ -3340,7 +3676,7 @@
               }
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
             tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
             tab.addEventListener('dragover', e => {
               e.preventDefault();
@@ -4653,7 +4989,7 @@
           window.draggedTermId = t.id;
           window.dragSourceGroupId = node.id;
           tab.classList.add('dragging');
-          startResizing();
+          startResizing(true);
           // Announce the drag to the main process so every OTHER window can
           // recognize this tab if it's dropped there (drag data is unreadable
           // across renderers).
@@ -5971,6 +6307,12 @@
 
     header.appendChild(headerActions);
     sb.insertBefore(header, sb.firstChild);
+    // Plugin banner widgets ("sidebar-top", e.g. an image above the
+    // workspaces) must stay above the header: renderSidebar rebuilds the
+    // header on every render, so re-assert their position here.
+    const _topWidgets = [...sb.querySelectorAll('[data-plugin-widget]')]
+      .filter(el => el.dataset.widgetPosition === 'sidebar-top');
+    for (let i = _topWidgets.length - 1; i >= 0; i--) sb.insertBefore(_topWidgets[i], sb.firstChild);
 
     // ── Workspace button builder (shared by root list and folders) ──
     // slot is the sideOrder index for top-level buttons (undefined for folder children)
@@ -7091,41 +7433,122 @@
     return qi === query.length ? score : Infinity;
   }
 
+  // One overlay, three modes: 'tabs' (jump to tab), 'cmds' (command palette),
+  // 'snips' (saved commands). Items: { label, meta, icon, run(e), del?, pin? }.
+  let tsMode = 'tabs';
+  let tsShown = [];
+
   function collectTabItems() {
     const items = [];
     for (const ws of workspaces) {
       for (const t of getWorkspaceTerminals(ws)) {
-        items.push({ id: t.id, wsId: ws.id, label: t.label, type: t.type, wsLabel: ws.label });
+        items.push({
+          label: t.label, meta: ws.label, icon: t.type === 'browser' ? 'ph-globe-hemisphere-west' : 'ph-terminal-window',
+          run: () => { activateTerminal(ws.id, t.id); activateWorkspace(ws.id); },
+        });
       }
     }
     return items;
   }
 
+  function collectCommandItems() {
+    const key = a => formatKeyCombo(customShortcuts[a]);
+    const wsp = () => activeWs();
+    const act = () => activeTerminal();
+    const split = dir => { const w = wsp(), t = act(); const g = w && t && findGroupContainingTerm(w.layout, t.id); if (g) splitGroupDirectly(w.id, g.id, dir); };
+    const cmds = [
+      ['New terminal', 'newTerminal', 'ph-plus', () => addTerminal()],
+      ['Close terminal', 'closeTerminal', 'ph-x', () => { const w = wsp(); if (w && w.activeTermId) removeTerminal(w.id, w.activeTermId); }],
+      ['Split horizontal', 'splitH', 'ph-columns', () => split('row')],
+      ['Split vertical', 'splitV', 'ph-rows', () => split('column')],
+      ['New browser tab', 'browserTab', 'ph-globe-hemisphere-west', () => { const w = wsp(), t = act(); const g = w && (t ? findGroupContainingTerm(w.layout, t.id) : findFirstGroup(w.layout)); if (g) addBrowserTab(w.id, g.id); }],
+      ['Search in terminal', 'search', 'ph-magnifying-glass', () => openSearch()],
+      ['Go to tab…', 'tabSearch', 'ph-browsers', () => openPalette('tabs')],
+      ['Snippets…', 'snippets', 'ph-lightning', () => openPalette('snips')],
+      ['Next tab', 'nextTab', 'ph-arrow-right', () => nextTab()],
+      ['Previous tab', 'prevTab', 'ph-arrow-left', () => prevTab()],
+      ['Next workspace', 'nextWorkspace', 'ph-caret-double-down', () => nextWorkspace()],
+      ['Previous workspace', 'prevWorkspace', 'ph-caret-double-up', () => prevWorkspace()],
+      ['Maximize / restore tab', 'maximizeTab', 'ph-arrows-out', () => { const w = wsp(); if (w && w.activeTermId) toggleMaximizeTerminal(w.id, w.activeTermId); }],
+      ['Toggle sidebar', 'toggleSidebar', 'ph-sidebar-simple', () => toggleSidebar()],
+      ['Switch profile…', 'profiles', 'ph-user-switch', () => openProfilePicker()],
+      ['Detach terminal to window', null, 'ph-arrow-square-out', () => { const w = wsp(); if (w && w.activeTermId) detachTerminal(w.id, w.activeTermId); }],
+      ['New workspace', null, 'ph-folder-plus', () => createWorkspace()],
+      ['Open settings', null, 'ph-gear', () => openSettingsGlobal()],
+    ].map(([label, sc, icon, run]) => ({ label, meta: sc ? key(sc) : '', icon, run }));
+    for (const w of workspaces) {
+      cmds.push({ label: 'Workspace: ' + w.label, meta: '', icon: 'ph-squares-four', run: () => activateWorkspace(w.id) });
+    }
+    for (const c of _pluginCommands.values()) {
+      cmds.push({ label: c.label, meta: 'plugin', icon: 'ph-puzzle-piece', run: () => { try { c.handler(); } catch (e) { console.error('[plugin] command failed:', c.id, e); } } });
+    }
+    return cmds;
+  }
+
+  // ── Snippets (saved commands). Enter = insert, Ctrl+Enter = insert and run.
+  const SNIP_KEY = 'terminalvibe.snippets';
+  function loadSnippets() {
+    try { const a = JSON.parse(localStorage.getItem(SNIP_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+  }
+  function saveSnippets(list) { try { localStorage.setItem(SNIP_KEY, JSON.stringify(list)); } catch { } }
+
+  function collectSnippetItems() {
+    const list = loadSnippets();
+    const items = list.map((sn, i) => ({
+      label: sn.name, meta: sn.cmd, icon: 'ph-lightning',
+      run: e => {
+        const t = activeTerminal();
+        if (!t || t.type === 'browser' || !t.term) return;
+        t.term.paste(sn.cmd);
+        if (e && e.ctrlKey) sendStdin(t.id, new TextEncoder().encode('\r'));
+      },
+      del: () => { list.splice(i, 1); saveSnippets(list); openPalette('snips', tsInput.value); },
+    }));
+    items.push({
+      label: 'New snippet…', meta: '', icon: 'ph-plus', pin: true,
+      run: () => showPrompt('Snippet name', '', {}, name => {
+        if (!name.trim()) return;
+        showPrompt('Command to insert', '', {}, cmd => {
+          if (!cmd) return;
+          list.push({ name: name.trim(), cmd });
+          saveSnippets(list);
+          openPalette('snips');
+        });
+      }),
+    });
+    return items;
+  }
+
   function renderTabSearch() {
     const q = tsInput.value;
-    const scored = tsItems
-      .map(it => ({ it, score: fuzzyScore(q, it.label) }))
+    tsShown = tsItems
+      .map(it => ({ it, score: it.pin ? (q ? Infinity : 1e9) : fuzzyScore(q, it.label) }))
       .filter(x => x.score !== Infinity)
-      .sort((a, b) => a.score - b.score || a.it.label.localeCompare(b.it.label));
+      .sort((a, b) => a.score - b.score || a.it.label.localeCompare(b.it.label))
+      .map(x => x.it);
     tsResults.innerHTML = '';
-    if (!scored.length) {
+    if (!tsShown.length) {
       const empty = document.createElement('div');
       empty.className = 'ts-empty';
-      empty.textContent = 'No tabs match';
+      empty.textContent = 'No matches';
       tsResults.appendChild(empty);
       tsSelected = -1;
       return;
     }
-    scored.forEach(({ it }, i) => {
+    tsShown.forEach((it, i) => {
       const row = document.createElement('div');
       row.className = 'ts-item';
-      row.innerHTML = `<i class="ph ${it.type === 'browser' ? 'ph-globe-hemisphere-west' : 'ph-terminal-window'}"></i>
-            <span class="ts-label"></span>
-            <span class="ts-ws">${it.wsLabel}</span>
-            <span class="ts-type">${it.type}</span>`;
+      row.innerHTML = `<i class="ph ${it.icon}"></i><span class="ts-label"></span><span class="ts-ws"></span>`;
       row.querySelector('.ts-label').textContent = it.label;
-      row.dataset.idx = i;
-      row.addEventListener('mousedown', e => { e.preventDefault(); tsPick(i); });
+      row.querySelector('.ts-ws').textContent = it.meta;
+      if (it.del) {
+        const d = document.createElement('i');
+        d.className = 'ph ph-trash ts-del';
+        d.title = 'Delete snippet';
+        d.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); it.del(); });
+        row.appendChild(d);
+      }
+      row.addEventListener('mousedown', e => { e.preventDefault(); tsPick(i, e); });
       row.addEventListener('mouseenter', () => setTsSelected(i));
       tsResults.appendChild(row);
     });
@@ -7139,22 +7562,25 @@
     tsResults.children[i].scrollIntoView({ block: 'nearest' });
   }
 
-  function tsPick(i) {
-    if (i < 0 || i >= tsItems.length) return;
-    const item = tsItems[i];
+  function tsPick(i, e) {
+    if (i < 0 || i >= tsShown.length) return;
+    const item = tsShown[i];
     closeTabSearch();
-    activateTerminal(item.wsId, item.id);
-    activateWorkspace(item.wsId);
+    item.run(e);
   }
 
-  function openTabSearch() {
+  const TS_PLACEHOLDERS = { tabs: 'Search tabs…', cmds: 'Type a command…', snips: 'Search snippets… (Ctrl+Enter runs)' };
+  function openPalette(mode, query) {
     if (!tabSearchEl || tsResults.contains(document.activeElement)) return;
-    tsItems = collectTabItems();
+    tsMode = mode;
+    tsItems = mode === 'cmds' ? collectCommandItems() : mode === 'snips' ? collectSnippetItems() : collectTabItems();
+    tsInput.placeholder = TS_PLACEHOLDERS[mode];
     tabSearchEl.style.display = 'flex';
-    tsInput.value = '';
+    tsInput.value = query || '';
     renderTabSearch();
     tsInput.focus();
   }
+  function openTabSearch() { openPalette('tabs'); }
 
   function closeTabSearch() {
     if (!tabSearchEl) return;
@@ -7168,7 +7594,7 @@
     if (e.key === 'Escape') { e.stopPropagation(); closeTabSearch(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); setTsSelected(Math.min(tsSelected + 1, tsResults.children.length - 1)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setTsSelected(Math.max(tsSelected - 1, 0)); }
-    else if (e.key === 'Enter') { e.preventDefault(); tsPick(tsSelected); }
+    else if (e.key === 'Enter') { e.preventDefault(); tsPick(tsSelected, e); }
   });
   tabSearchEl.addEventListener('mousedown', e => { if (e.target === tabSearchEl) closeTabSearch(); });
 
@@ -8238,6 +8664,8 @@
     }
     if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
     if (matchShortcut(e, 'tabSearch')) { e.preventDefault(); e.stopPropagation(); openTabSearch(); return; }
+    if (matchShortcut(e, 'commandPalette')) { e.preventDefault(); e.stopPropagation(); openPalette('cmds'); return; }
+    if (matchShortcut(e, 'snippets')) { e.preventDefault(); e.stopPropagation(); openPalette('snips'); return; }
     if (matchShortcut(e, 'browserTab')) {
       e.preventDefault();
       const wsp = activeWs();
@@ -8399,7 +8827,9 @@
             }
           } else {
             window.externalDragTermId = null;
-            stopResizing();
+            // tab-drag:start broadcasts {id:null} to every window (incl. this one)
+            // right after our own dragstart — don't tear down a local drag's shield.
+            if (!window.draggedTermId) stopResizing();
             if (window._clearExternalDragTimer) clearTimeout(window._clearExternalDragTimer);
             window._clearExternalDragTimer = setTimeout(() => {
               window.lastExternalDragTermId = null;
@@ -8551,7 +8981,9 @@
       } catch { }
     };
     captureClip();
-    setInterval(captureClip, 1000);
+    // Capture on focus / every 3s while visible instead of every second forever.
+    window.addEventListener('focus', captureClip);
+    setInterval(() => { if (!document.hidden) captureClip(); }, 3000);
     const showClipboardPage = async () => {
       sbrMain.style.display = 'none';
       sbrClip.style.display = 'flex';
@@ -9258,12 +9690,23 @@
    R E*SIZE OBSERVER
    ═══════════════════════════════════════════════════════════════ */
   /* ── Resizing overlay controllers ── */
-  function startResizing() {
+  // dragTab=true: a tab is being dragged. Native browser views paint above the
+  // DOM and swallow drag events (no split highlight / drop), so detach them for
+  // the duration of the drag and restore them afterwards.
+  function startResizing(dragTab) {
     document.body.classList.add('resizing');
+    if (dragTab && !document.body.classList.contains('tab-dragging')) {
+      document.body.classList.add('tab-dragging');
+      syncBrowserSlots();
+    }
   }
 
   function stopResizing() {
     document.body.classList.remove('resizing');
+    if (document.body.classList.contains('tab-dragging')) {
+      document.body.classList.remove('tab-dragging');
+      syncBrowserSlots();
+    }
   }
 
   let resizeRaf = null;
@@ -9463,7 +9906,7 @@
     setInterval(saveState, 30000);
 
     // Keep the workspace buttons' running-process lists up to date
-    setInterval(refreshAllWorkspaceProcs, 5000);
+    setInterval(() => { if (!document.hidden) refreshAllWorkspaceProcs(); }, 5000);
 
     // Save on close (browser)
     window.addEventListener('beforeunload', (e) => {
@@ -9485,6 +9928,7 @@
     // the slot must be highlighted even though the host DOM sees no mousedown.
     let _lastActiveIframe = null;
     setInterval(() => {
+      if (document.hidden) return;
       const ae = document.activeElement;
       if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'WEBVIEW')) {
         if (ae !== _lastActiveIframe) {

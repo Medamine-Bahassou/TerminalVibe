@@ -137,3 +137,6 @@ settings.local.json
 # Node
 .npminstall
 release_notes.md
+
+# Local CDP test profiles
+.tmp-cdp-*/

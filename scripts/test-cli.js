@@ -10,12 +10,13 @@ const cp = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const MAIN = path.join(ROOT, 'electron', 'main.js');
 const APP = path.join(ROOT, 'app.js');
+const PROC = path.join(ROOT, 'electron', 'proc.js');
 
 let pass = 0, fail = 0;
 const assert = (cond, msg) => (cond ? pass++ : (fail++, console.log('  FAIL:', msg)));
 
 // ── 1. syntax check the edited sources ──
-for (const f of [MAIN, APP]) {
+for (const f of [MAIN, APP, PROC]) {
   try { cp.execFileSync(process.execPath, ['--check', f], { stdio: 'pipe' }); assert(true, `syntax ${path.basename(f)}`); }
   catch (e) { assert(false, `syntax ${path.basename(f)}: ${e.stderr}`); }
 }
@@ -120,6 +121,14 @@ assert(webSplit.children[1].terminals[0].argv.join(',') === 'tail,-f,log.txt', '
 const filt = sandbox.buildStateFromYaml({ cmd: 'create', file: wfile, filters: ['Ops'], cwd: null });
 assert(filt.workspaces.length === 1 && filt.workspaces[0].label === 'Ops', 'yaml: -w filter');
 fs.unlinkSync(wfile);
+
+// ── 11. proc module exports & non-blocking behavior ──
+const proc = require(PROC);
+assert(typeof proc.runningProcessInfo === 'function', 'proc: runningProcessInfo export');
+assert(typeof proc.hasRunningProcess === 'function', 'proc: hasRunningProcess export');
+assert(typeof proc.refreshWindowsProcessTable === 'function', 'proc: refreshWindowsProcessTable export');
+const dummyInfo = proc.runningProcessInfo(0);
+assert(dummyInfo.running === false && dummyInfo.name === null, 'proc: dummy PID 0 returns not running');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

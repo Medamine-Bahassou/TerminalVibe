@@ -915,6 +915,30 @@ isolation: isolate;
 }
 #statusbar [data-plugin-widget] button:hover { background: var(--tab-hover-bg); color: var(--fg); }
 
+/* Obsidian-style plugin widgets: status-bar items + sidebar ribbon icons */
+.tv-plugin-statusbar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.tv-plugin-ribbon-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--dim-text);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.tv-plugin-ribbon-icon:hover { color: var(--fg); border-color: var(--border); background: var(--tab-hover-bg); }
+.tv-plugin-ribbon-icon svg { width: 15px; height: 15px; }
+
 /* Split container */
 .split-container {
   display: flex;
@@ -2591,3 +2615,10 @@ body.roundless .slider::-moz-range-thumb {
 .ts-item .ts-type { font-size: 11px; color: var(--muted-text); text-transform: capitalize; flex-shrink: 0; }
 .ts-item .ts-ws { font-size: 11px; color: var(--muted-text); flex-shrink: 0; }
 .ts-empty { padding: 16px; text-align: center; color: var(--muted-text); font-size: 13px; }
+
+.ts-item .ts-del { color: var(--muted-text); font-size: 14px; padding: 2px; }
+.ts-item .ts-del:hover { color: #f38ba8; }
+.ts-item .ts-ws { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Tab drag: let drops reach the group body (and its split highlight) beneath the browser overlay */
+body.tab-dragging .browser-slot { pointer-events: none !important; }

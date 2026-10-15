@@ -1,0 +1,12 @@
+/* Clock (Obsidian-style) — auto-injected by TerminalVibe on load.
+   No import needed: styles.css in the plugin folder is loaded like
+   Obsidian does. Removed automatically when the plugin is disabled. */
+.clock-obsidian-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-text);
+  cursor: default;
+}
+
+.clock-obsidian-time:hover {
+  color: var(--fg);
+}

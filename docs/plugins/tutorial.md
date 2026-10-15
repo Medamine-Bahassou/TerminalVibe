@@ -170,10 +170,12 @@ deactivate() {
 }
 ```
 
-## 9. Restart and verify
+## 9. Open the Plugins page and verify
 
 ```bash
-# restart the app, then open the developer console (F12) and look for:
+# Copy the plugin into place, then open Settings → Plugins
+# (new folders activate automatically — no restart needed).
+# Open the developer console (F12) and look for:
 #   [plugin:hello-terminalvibe] activated
 #   [plugin:hello-terminalvibe] ready — press Ctrl+Shift+H
 ```
@@ -192,6 +194,10 @@ Now:
 
 - Read the [API Reference](./api-reference.md) for every available method.
 - See [Troubleshooting](./troubleshooting.md) for common gotchas.
+- Prefer the Obsidian shape for new plugins? See
+  `examples/clock-obsidian/` (`manifest.json` + `class extends
+  TerminalVibe.Plugin` + `styles.css` + `src/main.ts`) and the
+  [Plugin Development guide](../plugin-development.md).
 
 ## Related
 

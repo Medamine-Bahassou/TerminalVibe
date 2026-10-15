@@ -103,40 +103,100 @@ function runningProcessInfo(pid) {
 // Names that alone mean "idle at a prompt" — never reported as busy.
 const WIN_IDLE_RE = /^(powershell|pwsh|cmd|wsl|bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|nu|conhost|openconsole|windowsterminal)$/i;
 
-// Cached whole-system process table: parentPid -> [{pid, name}]. One
-// powershell spawn per TTL window no matter how many tabs are checked.
+// Cached whole-system process table: parentPid -> [{pid, name}].
+// ponytail: async background refresh avoids blocking main event loop with powershell/wmic
 let _winTable = null; // { ts: number, byParent: Map<number, Array<{pid:number,name:string}>> | null }
-const WIN_CACHE_TTL = 2000;
+let _winUpdating = false;
+let _hasWmic = true;
+const WIN_CACHE_TTL = 3000;
+
+function refreshWindowsProcessTable() {
+  if (_winUpdating) return;
+  _winUpdating = true;
+  const { execFile } = require('child_process');
+
+  const onOutput = (out) => {
+    _winUpdating = false;
+    if (!out) return;
+    const byParent = new Map();
+    for (const line of out.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (trimmed.includes(':')) {
+        const m = /^(\d+):(\d+):(.+)$/.exec(trimmed);
+        if (!m) continue;
+        const pid = parseInt(m[1], 10);
+        const ppid = parseInt(m[2], 10);
+        const name = m[3].trim();
+        if (!name || isNaN(pid) || isNaN(ppid)) continue;
+        if (!byParent.has(ppid)) byParent.set(ppid, []);
+        byParent.get(ppid).push({ pid, name });
+      } else if (trimmed.includes(',')) {
+        const parts = trimmed.split(',');
+        if (parts.length >= 4) {
+          const pid = parseInt(parts[parts.length - 1], 10);
+          const ppid = parseInt(parts[parts.length - 2], 10);
+          const name = parts.slice(1, parts.length - 2).join(',').trim();
+          if (!name || isNaN(pid) || isNaN(ppid)) continue;
+          if (!byParent.has(ppid)) byParent.set(ppid, []);
+          byParent.get(ppid).push({ pid, name });
+        }
+      }
+    }
+    _winTable = { ts: Date.now(), byParent };
+  };
+
+  const tryPowershell = () => {
+    try {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command',
+          'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name | ForEach-Object { "$($_.ProcessId):$($_.ParentProcessId):$($_.Name)" }'],
+        { timeout: 5000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+        (err, stdout) => {
+          _winUpdating = false;
+          if (err || !stdout) return;
+          onOutput(stdout);
+        }
+      );
+    } catch {
+      _winUpdating = false;
+    }
+  };
+
+  try {
+    if (_hasWmic) {
+      execFile(
+        'wmic',
+        ['process', 'get', 'ProcessId,ParentProcessId,Name', '/format:csv'],
+        { timeout: 3000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+        (err, stdout) => {
+          if (err || !stdout || !stdout.includes(',')) {
+            _hasWmic = false;
+            tryPowershell();
+            return;
+          }
+          onOutput(stdout);
+        }
+      );
+    } else {
+      tryPowershell();
+    }
+  } catch {
+    _winUpdating = false;
+  }
+}
 
 function windowsProcessTable() {
   const now = Date.now();
-  if (_winTable && now - _winTable.ts < WIN_CACHE_TTL) return _winTable.byParent;
-  let byParent = null;
-  try {
-    const { execFileSync } = require('child_process');
-    const out = execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command',
-        "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId):$($_.ParentProcessId):$($_.Name)\" }"],
-      { timeout: 4000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 * 1024 * 1024 }
-    ).toString();
-    byParent = new Map();
-    for (const line of out.split(/\r?\n/)) {
-      const m = /^(\d+):(\d+):(.+)$/.exec(line.trim());
-      if (!m) continue;
-      const pid = parseInt(m[1], 10);
-      const ppid = parseInt(m[2], 10);
-      const name = m[3].trim();
-      if (!name) continue;
-      if (!byParent.has(ppid)) byParent.set(ppid, []);
-      byParent.get(ppid).push({ pid, name });
-    }
-  } catch {
-    byParent = null;
+  if (!_winTable || (now - _winTable.ts >= WIN_CACHE_TTL)) {
+    refreshWindowsProcessTable();
   }
-  // Bound cache growth: single slot already, just refresh timestamp.
-  _winTable = { ts: now, byParent };
-  return byParent;
+  return _winTable ? _winTable.byParent : null;
+}
+
+if (process.platform === 'win32') {
+  refreshWindowsProcessTable();
 }
 
 function windowsProcessInfo(pid) {
@@ -175,4 +235,4 @@ function windowsProcessInfo(pid) {
   return { running: false, name: null };
 }
 
-module.exports = { hasRunningProcess, runningProcessInfo };
+module.exports = { hasRunningProcess, runningProcessInfo, refreshWindowsProcessTable };

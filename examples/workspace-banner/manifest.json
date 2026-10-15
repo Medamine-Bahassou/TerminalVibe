@@ -1,0 +1,32 @@
+{
+  "id": "workspace-banner",
+  "name": "Workspace Banner",
+  "version": "1.0.0",
+  "minAppVersion": "0.5.10",
+  "description": "Shows an image banner above the workspaces list in the sidebar. Pick the artwork, height, and corner rounding.",
+  "author": "TerminalVibe",
+  "settings": [
+    {
+      "key": "art",
+      "label": "Artwork",
+      "type": "select",
+      "default": "waves",
+      "options": ["waves", "peaks", "terminal"],
+      "description": "Which banner image to show above the workspaces."
+    },
+    {
+      "key": "height",
+      "label": "Height (px)",
+      "type": "number",
+      "default": 72,
+      "description": "Banner height in pixels (24–240)."
+    },
+    {
+      "key": "rounded",
+      "label": "Rounded corners",
+      "type": "boolean",
+      "default": true,
+      "description": "Round the banner corners to match the theme."
+    }
+  ]
+}

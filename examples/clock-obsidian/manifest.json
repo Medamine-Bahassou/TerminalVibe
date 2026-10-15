@@ -1,0 +1,25 @@
+{
+  "id": "clock-obsidian",
+  "name": "Clock (Obsidian-style)",
+  "version": "1.0.0",
+  "minAppVersion": "0.5.10",
+  "description": "Obsidian-style example: status-bar clock, greet command, and live settings. Shows the Plugin class + styles.css + TypeScript entry shapes.",
+  "author": "TerminalVibe",
+  "settings": [
+    {
+      "key": "format",
+      "label": "Clock format",
+      "type": "select",
+      "default": "time",
+      "options": ["time", "time-seconds", "date-time"],
+      "description": "What the status-bar clock shows."
+    },
+    {
+      "key": "greeting",
+      "label": "Greeting",
+      "type": "text",
+      "default": "hello",
+      "description": "The word printed by the greet command."
+    }
+  ]
+}

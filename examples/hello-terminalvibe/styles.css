@@ -1,0 +1,11 @@
+/* Hello TerminalVibe — auto-injected by the app on load (styles.css /
+   style.css need no import, same as Obsidian). Removed on unload. */
+.hello-terminalvibe-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-text);
+  cursor: default;
+}
+
+.hello-terminalvibe-clock:hover {
+  color: var(--fg);
+}

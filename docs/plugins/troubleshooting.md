@@ -14,10 +14,10 @@ timestamp: 2026-08-20T00:00:00Z
 |------------|---------|
 | Desktop only | Plugins load only in the Electron app. Browser dev mode (`npm run dev`) has no plugin host. |
 | No marketplace | Install by copying a folder into `~/.terminalvibe/plugins/`. No network install. |
-| No hot reload | Plugins load at startup. Restart the app after adding or editing a plugin. |
+| Hot reload | Newly added folders activate when you open Settings → Plugins. Toggling off/on re-reads the entry + stylesheet. A full restart still works too. |
 | No Node access | Plugins run in the sandboxed renderer — no `require`, no filesystem. Use `window.electronAPI.*` for app capabilities. |
-| `style.css` not auto-loaded | A plugin stylesheet is not injected automatically. Inject styles via `document.createElement('style')` in `activate` if needed. |
-| `deactivate` on app exit | `deactivate()` runs on unload/reload paths, not guaranteed on window close. |
+| Plain CSS only | `styles.css` is injected as-is; no preprocessors or `@import` of npm packages (bundle them into the file first). |
+| `deactivate` on app exit | `deactivate()`/`onunload()` runs on unload/reload paths, not guaranteed on window close. |
 
 ## Debugging
 
@@ -28,14 +28,15 @@ is prefixed with `[plugin:<id>]`.
 
 ### Plugin did not load
 
-Check the console for these warnings:
+Settings → Plugins shows an **Error** badge with the reason; the console has
+the stack. Common messages:
 
 | Message | Meaning |
 |---------|---------|
-| `missing "main" entry` | `plugin.json` has no `main` field |
-| `entry not readable` | The file named by `main` is missing or unreadable |
+| `missing entry (looked for …)` | No readable entry file (`"main"`, else `main.js`, else `plugin.js`) |
+| `entry registered nothing …` | The entry neither called `TerminalVibe.register` nor assigned `module.exports` |
 | `failed to evaluate <id>` | The entry threw while executing. The error follows on the same line. |
-| `activate failed for <id>` | `activate(api)` threw. The error follows on the same line. |
+| `activate failed for <id>` | `activate(api)`/`onload()` threw. The error follows on the same line. |
 
 Also confirm:
 

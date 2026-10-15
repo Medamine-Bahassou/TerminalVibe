@@ -78,9 +78,10 @@
         ui: { accent: '#4dabf7' }
       });
 
-      // 5. Status bar widget — a live clock
+      // 5. Status bar widget — a live clock (styled by styles.css, which
+      // the app auto-injects — no import needed, same as Obsidian).
       const clock = document.createElement('span');
-      clock.style.fontVariantNumeric = 'tabular-nums';
+      clock.classList.add('hello-terminalvibe-clock');
       const tick = () => {
         clock.textContent = cfg.showClock ? new Date().toLocaleTimeString() : '';
       };

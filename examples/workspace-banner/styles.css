@@ -1,0 +1,24 @@
+/* Workspace Banner — auto-injected by TerminalVibe on load (styles.css needs
+   no import, same as Obsidian). Removed automatically on unload. */
+.workspace-banner {
+  width: 100%;
+  overflow: hidden;
+  border-radius: 0;
+  flex-shrink: 0;
+}
+
+.workspace-banner.is-rounded {
+  border-radius: 10px;
+}
+
+.workspace-banner svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The collapsed rail has no room for a banner — only show it when the
+   sidebar is expanded (where the WORKSPACES header is visible). */
+#sidebar:not(.expanded) .workspace-banner {
+  display: none;
+}

@@ -8,52 +8,65 @@ timestamp: 2026-08-20T00:00:00Z
 
 # TerminalVibe Plugin System
 
-> Extend TerminalVibe with JavaScript plugins — commands, keybindings, terminal
-> lifecycle hooks, context-menu items, themes, configurable settings, and UI widgets.
+> Extend TerminalVibe with Obsidian-style plugins — JavaScript + CSS
+> (TypeScript via build): commands, keybindings, terminal lifecycle hooks,
+> context-menu items, themes, terminal output, configurable settings, and UI
+> widgets.
 
 ## What are plugins?
 
-A plugin is a small folder placed inside `~/.terminalvibe/plugins/`. Each plugin
-ships a `plugin.json` manifest and a JavaScript entry file. On startup the app
-finds every enabled plugin, evaluates its entry, and calls `activate(api)` with
-a per-plugin API object that exposes the app's extension points.
+A plugin is a small folder placed inside `~/.terminalvibe/plugins/`. Each
+plugin ships a manifest (`manifest.json`, or legacy `plugin.json`), a
+JavaScript entry (`main.js`, or legacy `plugin.js`), and an optional
+stylesheet (`styles.css`, auto-injected). On startup the app finds every
+enabled plugin, injects its stylesheet, evaluates its entry, and activates it
+with a per-plugin API object that exposes the app's extension points. The
+folder name is the plugin id (as in Obsidian).
 
 ```
 ~/.terminalvibe/
 ├── plugins/
 │   └── my-plugin/
-│       ├── plugin.json      # manifest (required)
-│       └── plugin.js        # JS entry (required, path from "main")
-│       └── style.css        # optional — not auto-injected yet
+│       ├── manifest.json      # manifest (or plugin.json)
+│       ├── main.js            # JS entry ("main" field, else main.js, else plugin.js)
+│       └── styles.css         # optional — auto-injected
 ```
+
+Two examples: `examples/hello-terminalvibe/` (legacy `register` style) and
+`examples/clock-obsidian/` (Obsidian style: `Plugin` subclass + TS source).
 
 ## What can plugins do?
 
 | Capability | API |
 |---|---|
 | Commands + keybindings | `api.commands.register({ id, combo, handler })` |
-| Terminal lifecycle hooks | `api.events.on('terminal:add' | ...)` |
-| Context-menu items | `api.menus.add('terminal' | 'workspace' | 'folder', item)` |
+| Terminal lifecycle hooks | `api.events.on('terminal:add' \| ...)` |
+| Context-menu items | `api.menus.add('terminal' \| 'workspace' \| 'folder', item)` |
 | Custom themes | `api.themes.register(name, theme)` |
+| Terminal output (display-only) | `api.terminal.write(id, text)` |
 | Configurable settings | `api.config.get/set` + manifest `settings` |
-| UI widgets (status bar / sidebar) | `api.ui.addWidget({ id, position, el })` |
+| UI widgets (status bar / sidebar / banner) | `api.ui.addWidget({ id, position, el })` |
 | Read-only state access | `api.state.getActiveTerminal()`, `getWorkspaces()`, ... |
 
 ## How loading works
 
 1. The Electron **main process** scans `~/.terminalvibe/plugins/` for
-   `plugin.json` manifests and serves entry files over IPC
-   (`config:listPlugins`, `config:readPluginFile`).
-2. The **renderer** evaluates each enabled entry with
-   `new Function('TerminalVibe', code)`, so plugins only touch the DOM + API —
-   no Node access.
-3. The entry calls `TerminalVibe.register({ id, activate, deactivate })`.
-4. The app calls `activate(api)` and the plugin registers what it needs.
+   manifests (`manifest.json`, else `plugin.json`) and serves entry/stylesheet
+   files over IPC (`config:listPlugins`, `config:readPluginFile`).
+2. The **renderer** auto-injects the stylesheet (`"styles"`, else
+   `styles.css`, else `style.css`), then evaluates each enabled entry with a
+   CommonJS `module`/`exports` shim, so bundled (TS-compiled) output works —
+   plugins only touch the DOM + API, no Node access.
+3. The entry either calls `TerminalVibe.register({ id, activate, deactivate })`
+   or exports a `TerminalVibe.Plugin` subclass (`onload`/`onunload`) — or a
+   plain `{ activate }` / `{ onload }` object.
+4. The app activates the plugin and it registers what it needs.
 5. Enable/disable state is persisted in `state.json` under `pluginStates`;
    config values under `pluginConfigs`.
 
 Plugins load in **both** the main window and the Settings window, so config
-changes made in the Settings window apply live in the main window.
+changes made in the Settings window apply live in the main window. Toggling a
+plugin off/on reloads it without a restart.
 
 ## Install a plugin
 
@@ -61,7 +74,8 @@ changes made in the Settings window apply live in the main window.
 # Copy the example plugin into the plugins directory
 cp -r examples/hello-terminalvibe ~/.terminalvibe/plugins/
 
-# Restart the app. Check the developer console for:
+# Open Settings → Plugins (new folders activate on page open).
+# Check the developer console for:
 #   [plugin:hello-terminalvibe] activated
 ```
 
@@ -103,7 +117,8 @@ TerminalVibe.register({
 });
 ```
 
-Restart the app — the plugin logs on boot and whenever a terminal is added.
+Open Settings → Plugins — the plugin activates on page open and logs on boot
+and whenever a terminal is added.
 
 ## Doc pages
 
@@ -124,5 +139,7 @@ in any browser:
 ## Related
 
 - [Plugin Development](../plugin-development.md) — condensed single-page reference
-- `examples/hello-terminalvibe/` — working example plugin
+- `examples/hello-terminalvibe/` — legacy-style example plugin
+- `examples/clock-obsidian/` — Obsidian-style example (manifest + Plugin class + styles.css + TS)
+- `examples/plugin-api.d.ts` — TypeScript definitions for plugin authors
 - [Architecture](../okf/architecture/frontend.md) — how the frontend boots

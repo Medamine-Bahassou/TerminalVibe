@@ -8,9 +8,14 @@ timestamp: 2026-08-20T00:00:00Z
 
 # Plugin API Reference
 
-Every plugin entry calls `TerminalVibe.register({ id, activate, deactivate })`.
-The app then invokes `activate(api)` with a per-plugin `api` object. Everything
-a plugin can do goes through this object.
+Every plugin activates with a per-plugin `api` object — via
+`TerminalVibe.register({ id, activate(api) })`, `module.exports = { activate }`,
+or `this.api` inside a `TerminalVibe.Plugin` subclass (`onload`). Everything
+a plugin can do goes through this object. Entry shapes, stylesheets, and the
+TypeScript workflow are covered in the
+[Plugin Development guide](../plugin-development.md); the `Plugin`-class
+sugar (`addCommand`, `addStatusBarItem`, `addRibbonIcon`, `registerEvent`,
+`loadData`/`saveData`) maps 1:1 onto the members below.
 
 ## Identity & logging
 
@@ -198,6 +203,7 @@ api.ui.addWidget({ id: 'clock', position: 'statusbar', el: clock });
 |-------|-----------|
 | `'statusbar'` | A strip below the pane area; the strip is hidden until a plugin adds the first widget |
 | `'sidebar'` | The bottom of the sidebar |
+| `'sidebar-top'` | Above the WORKSPACES header — e.g. a banner image (see `examples/workspace-banner/`) |
 
 ## Read-only state access
 

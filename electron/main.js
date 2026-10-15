@@ -877,12 +877,16 @@ ipcMain.handle('config:listThemeFiles', () => {
 });
 
 // ── IPC: plugins (~/.terminalvibe/plugins/<id>/) ──
-// Each plugin is a directory containing plugin.json + a JS entry. The renderer
-// reads manifests + entry sources over IPC and evaluates them in a sandboxed
-// (contextIsolation) page, so only these read handlers are exposed — never a
-// generic write. Enable/disable state is persisted in state.json by the renderer.
+// Obsidian-style layout: each plugin is a directory containing a manifest
+// (manifest.json, or legacy plugin.json) + a JS entry (main.js, or the
+// "main" field, or legacy plugin.js) + an optional stylesheet
+// (styles.css, or legacy style.css). The renderer reads manifests + files
+// over IPC and evaluates them in a sandboxed (contextIsolation) page, so
+// only these read handlers are exposed — never a generic write.
+// Enable/disable state is persisted in state.json by the renderer.
 
-const PLUGIN_MANIFEST = 'plugin.json';
+// Manifest filenames probed in order (Obsidian name first).
+const PLUGIN_MANIFESTS = ['manifest.json', 'plugin.json'];
 
 function pluginDir(id) {
   const safe = String(id || '').replace(/[^a-zA-Z0-9_.-]/g, '');
@@ -891,6 +895,8 @@ function pluginDir(id) {
 }
 
 // Scan ~/.terminalvibe/plugins/ for plugin manifests.
+// The folder name is the canonical id (as in Obsidian); a manifest-level
+// "id" that disagrees is ignored in favour of the folder name.
 ipcMain.handle('config:listPlugins', () => {
   try {
     if (!fs.existsSync(CONFIG_PLUGINS_DIR)) return [];
@@ -898,11 +904,16 @@ ipcMain.handle('config:listPlugins', () => {
     for (const id of fs.readdirSync(CONFIG_PLUGINS_DIR)) {
       const dir = pluginDir(id);
       if (!dir) continue;
-      const manifestPath = path.join(dir, PLUGIN_MANIFEST);
-      if (!fs.existsSync(manifestPath)) continue;
-      const manifest = readConfigFile(manifestPath);
-      if (!manifest || typeof manifest !== 'object') continue;
-      out.push({ ...manifest, id });
+      let manifest = null;
+      let manifestFile = null;
+      for (const name of PLUGIN_MANIFESTS) {
+        const manifestPath = path.join(dir, name);
+        if (!fs.existsSync(manifestPath)) continue;
+        const parsed = readConfigFile(manifestPath);
+        if (parsed && typeof parsed === 'object') { manifest = parsed; manifestFile = name; break; }
+      }
+      if (!manifest) continue;
+      out.push({ ...manifest, id, manifestFile });
     }
     return out;
   } catch (err) {
@@ -937,7 +948,7 @@ ipcMain.handle('config:readPluginFile', (_e, id, relPath) => {
   const rel = String(relPath || '').replace(/^\/+/, '');
   if (!rel || rel.includes('..')) return null;
   const fp = path.join(dir, rel);
-  if (!fp.startsWith(dir + path.sep) && fp !== path.join(dir, PLUGIN_MANIFEST)) return null;
+  if (!fp.startsWith(dir + path.sep)) return null;
   try {
     if (!fs.existsSync(fp)) return null;
     return fs.readFileSync(fp, 'utf-8');
@@ -1015,6 +1026,7 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
     ptys.set(id, t);
     t.onData((data) => sendToRenderer('terminal:data', { id, data }));
     t.onExit(({ exitCode }) => {
+      notifyBusy.delete(id);
       if (ptys.get(id) !== t) return;
       ptys.delete(id);
       sendToRenderer('terminal:exit', { id, code: exitCode });
@@ -1058,6 +1070,7 @@ ipcMain.on('terminal:attached', (_e, id) => {
 });
 
 ipcMain.on('terminal:close', (_e, id) => {
+  notifyBusy.delete(id);
   const t = ptys.get(id);
   if (t) { try { t.kill(); } catch {} ptys.delete(id); }
 });
@@ -1066,6 +1079,7 @@ ipcMain.handle('terminal:hasRunningProcess', (_e, id) => {
   return t ? runningProcessInfo(t.pid) : { running: false, name: null };
 });
 ipcMain.on('terminal:kill-all', () => {
+  notifyBusy.clear();
   for (const t of ptys.values()) { try { t.kill(); } catch {} }
   ptys.clear();
   for (const [id, dw] of detachedWindows) { try { if (!dw.isDestroyed()) dw.close(); } catch {} }
@@ -1087,10 +1101,22 @@ function anyAppFocused() {
   }
   return false;
 }
+// Re-parse state.json only when its mtime changes (this runs every second).
+let _notifyCache = { path: null, mtime: 0, enabled: false };
+function notifyEnabled() {
+  const fp = currentStatePath();
+  let mtime = 0;
+  try { mtime = fs.statSync(fp).mtimeMs; } catch { return false; }
+  if (_notifyCache.path !== fp || _notifyCache.mtime !== mtime) {
+    const state = readConfigFile(fp);
+    // Default ON to match the Settings toggle (absent key ≠ disabled).
+    _notifyCache = { path: fp, mtime, enabled: !!state && state.notifyOnCommandFinish !== false };
+  }
+  return _notifyCache.enabled;
+}
 setInterval(() => {
-  const state = readConfigFile(currentStatePath());
-  // Default ON to match the Settings toggle (absent key ≠ disabled).
-  if (!state || state.notifyOnCommandFinish === false) return;
+  if (ptys.size === 0) return;
+  if (!notifyEnabled()) return;
   for (const [id, t] of ptys) {
     const info = runningProcessInfo(t.pid);
     const cur = notifyBusy.get(id) || { wasBusy: false, name: null };
