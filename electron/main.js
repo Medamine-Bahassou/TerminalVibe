@@ -347,7 +347,15 @@ function createWindow() {
     }
   });
 
-  mainWindow.on('closed', () => { destroyAllBrowserViews(); mainWindow = null; allowWindowClose = false; });
+  // Detached windows are children of the main window's session: closing the
+  // main window closes them too (and kills their PTYs) instead of leaving
+  // orphans that keep the app alive.
+  mainWindow.on('closed', () => {
+    destroyAllBrowserViews();
+    mainWindow = null;
+    allowWindowClose = false;
+    ipcMain.emit('terminal:kill-all');
+  });
 
   // Intercept the OS "X" close button so the renderer's quit-confirmation
   // modal runs first (same flow as the Ctrl+Shift+Q shortcut). We hold the
