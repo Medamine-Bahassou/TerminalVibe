@@ -1440,6 +1440,17 @@ ipcMain.on('tab-drag:drop', (e, p) => {
 // WebContentsView is owned here in main, placed by renderer-reported bounds.
 const bviews = new Map(); // id -> WebContentsView
 const bviewOwner = new WeakMap(); // guest webContents -> id
+// Keys pressed inside a <webview> guest never reach the renderer's keydown
+// listeners, so app shortcuts (pushed here by the renderer) are matched on the
+// guest and replayed in the main window.
+let browserShortcuts = [];
+ipcMain.on('browser:shortcuts', (_e, list) => { browserShortcuts = Array.isArray(list) ? list : []; });
+function matchBrowserShortcut(input) {
+  return browserShortcuts.some(s => s && s.key
+    && (s.key.length === 1 ? input.key.toLowerCase() === s.key.toLowerCase() : input.key === s.key || input.code === s.key)
+    && !!input.control === !!s.ctrl && !!input.shift === !!s.shift
+    && !!input.alt === !!s.alt && !!input.meta === !!s.meta);
+}
 
 function destroyAllBrowserViews() {
   for (const [id, view] of bviews) {
@@ -1533,6 +1544,18 @@ app.whenReady().then(() => {
     wc.on('did-fail-load', (_e2, code) => {
       if (code === -3) _e2.preventDefault();
     });
+    if (wc.getType() === 'webview') {
+      wc.on('before-input-event', (event, input) => {
+        const host = wc.hostWebContents;
+        if (input.type !== 'keyDown' || !host || host.isDestroyed() || !matchBrowserShortcut(input)) return;
+        event.preventDefault();
+        host.focus();
+        host.send('browser:key', {
+          key: input.key, code: input.code,
+          ctrlKey: input.control, shiftKey: input.shift, altKey: input.alt, metaKey: input.meta,
+        });
+      });
+    }
   });
 });
 

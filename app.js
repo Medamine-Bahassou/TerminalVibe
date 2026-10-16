@@ -112,6 +112,15 @@
       && !!e.metaKey === !!s.meta;
   }
 
+  // Push shortcuts to main so they still fire while a native browser view has
+  // focus (plus the hardcoded Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+, combos).
+  function syncBrowserShortcuts() {
+    window.electronAPI?.browserSetShortcuts?.([
+      ...Object.values(customShortcuts),
+      { ctrl: true, key: 'Tab' }, { ctrl: true, shift: true, key: 'Tab' }, { ctrl: true, key: ',' },
+    ]);
+  }
+
   function matchShortcutMouse(e, action) {
     const s = customShortcuts[action];
     if (!s || !s.key) return false;
@@ -335,9 +344,18 @@
     }
   }
 
+  // A real text field (prompts, search boxes, panel editors) owns its paste;
+  // xterm's hidden helper textarea does not — that one routes to the terminal.
+  function isTextField(el) {
+    return el instanceof Element
+      && el.matches('input, textarea, [contenteditable=""], [contenteditable="true"]')
+      && !el.classList.contains('xterm-helper-textarea');
+  }
+
   // Fallback paste handler for native paste (middle-click, OS context menu)
   document.addEventListener('paste', e => {
     if (Date.now() < _suppressPasteUntil) { e.preventDefault(); e.stopPropagation(); return; }
+    if (isTextField(e.target)) return;
     const t = activeTerminal();
     if (!t || t.type === 'browser') return;
     e.preventDefault();
@@ -1377,6 +1395,8 @@
   const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
   if (isDesktop() && window.electronAPI) {
     window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
+    window.electronAPI.onBrowserKey?.(d => document.dispatchEvent(new KeyboardEvent('keydown', { ...d, bubbles: true, cancelable: true })));
+    syncBrowserShortcuts();
   }
   const browserSlotRo = new ResizeObserver(() => {
     if (_browserSyncRaf) return;
@@ -1621,15 +1641,23 @@
   }
 
   function sendControl(obj) {
+    // Auto-run tabs: type the startup command into the fresh shell, once.
+    // ponytail: written as typeahead right after spawn; the tty buffers it until the shell reads.
+    const entry = obj.type === 'create' ? findTermById(obj.id)?.term : null;
+    const runCmd = entry && entry.runCmd;
+    if (runCmd) delete entry.runCmd;
+    const typeCmd = () => { if (runCmd) _sendStdinRaw(obj.id, new TextEncoder().encode(runCmd + '\r')); };
     if (isDesktop() && window.electronAPI && nativePtyReady) {
       const api = window.electronAPI;
-      if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null });
+      if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null }).then(typeCmd);
       else if (obj.type === 'resize') api.terminalResize({ id: obj.id, cols: obj.cols, rows: obj.rows });
       else if (obj.type === 'close') api.terminalClose(obj.id);
       return;
     }
-    if (ws && ws.readyState === WebSocket.OPEN)
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(obj));
+      typeCmd();
+    }
   }
 
   function _sendStdinRaw(sid, data) {
@@ -2227,6 +2255,7 @@
           if (t.bgImage) o.bgImage = t.bgImage;
           if (t.dead) o.dead = true;
           if (t.locked) o.locked = true;
+          if (t.pinLabel) o.pinLabel = true;
           return o;
         })
       };
@@ -2263,9 +2292,11 @@
         if (tData.color) entry.color = tData.color;
         if (tData.cwd) entry.cwd = tData.cwd;
         if (tData.argv) entry.argv = tData.argv;
+        if (tData.cmd) entry.runCmd = tData.cmd; // auto-run launch only; never serialized
         if (tData.bgImage) entry.bgImage = tData.bgImage;
         if (tData.dead) entry.dead = true;
         if (tData.locked) entry.locked = true;
+        if (tData.pinLabel) entry.pinLabel = true;
         group.terminals.push(entry);
       }
       return group;
@@ -2446,6 +2477,7 @@
     }
 
 
+    syncBrowserShortcuts();
     const key = DETACHED_ONLY ? DETACHED_STATE_KEY : STATE_KEY;
     const state = {
       theme: currentThemeName,
@@ -2549,6 +2581,7 @@
         for (const k of Object.keys(DEFAULT_SHORTCUTS)) {
           if (!(k in customShortcuts)) customShortcuts[k] = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS[k]));
         }
+        syncBrowserShortcuts();
       }
       if (state.pluginStates) {
         for (const [k, v] of Object.entries(state.pluginStates)) _pluginStates.set(k, !!v);
@@ -3382,7 +3415,7 @@
       if (t) {
         // CLI-spawned terminals carry an explicit command + label from the
         // tab spec — pin that label; don't let the shell title clobber it.
-        if (!t.argv) t.label = shortTitle(title) || t.label;
+        if (!t.argv && !t.pinLabel) t.label = shortTitle(title) || t.label;
         // Lightweight update: just change the tab label in the DOM
         const tabEl = document.querySelector(`.tg-tab[data-termid="${id}"] .tg-tab-name`);
         if (tabEl) tabEl.textContent = t.label;
@@ -5399,6 +5432,11 @@
         btnOpenExt.title = 'Open in new tab';
         btnOpenExt.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
 
+        const btnHistory = document.createElement('button');
+        btnHistory.className = 'browser-btn';
+        btnHistory.title = 'History';
+        btnHistory.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 109-9 9.7 9.7 0 00-6.7 2.8L3 8"/><polyline points="3 3 3 8 8 8"/><polyline points="12 7 12 12 16 14"/></svg>';
+
         const urlInput = document.createElement('input');
         urlInput.className = 'browser-url';
         urlInput.type = 'text';
@@ -5414,6 +5452,7 @@
         toolbar.appendChild(btnFwd);
         toolbar.appendChild(btnReload);
         toolbar.appendChild(urlInput);
+        toolbar.appendChild(btnHistory);
         toolbar.appendChild(btnOpenExt);
 
         // ── Content area ──
@@ -5536,6 +5575,7 @@
               surface.addEventListener('focus', () => {
                 if (entry.type === 'browser') focusSlot(entry);
               });
+              surface.addEventListener('dom-ready', () => { surface._guestReady = true; }, { once: true });
               surface.addEventListener('did-start-loading', () => showLoading(true));
               surface.addEventListener('did-stop-loading', () => {
                 entry._retryCount = 0;
@@ -5545,12 +5585,13 @@
               });
               surface.addEventListener('did-navigate', e => syncUrl(e.url));
               surface.addEventListener('did-navigate-in-page', e => syncUrl(e.url));
+              surface.addEventListener('page-title-updated', e => setBrowserHistoryTitle(entry.url, e.title));
               surface.addEventListener('did-fail-load', (e, errorCode) => {
                 if (errorCode === -3) return; // ERR_ABORTED = redirect, not real error
                 // Retry a few times before giving up
                 entry._retryCount = (entry._retryCount || 0) + 1;
                 if (entry._retryCount <= 3) {
-                  setTimeout(() => { surface.src = targetUrl(entry.url); }, 500);
+                  setTimeout(() => setSurfaceUrl(surface, targetUrl(entry.url)), 500);
                   return;
                 }
                 clearTimeout(entry._loadTimer);
@@ -5668,6 +5709,8 @@
             entry._history.push(url);
             entry._historyIdx = entry._history.length - 1;
           }
+          // Electron records the final (post-redirect) URL via did-navigate → syncUrl.
+          if (!(isDesktop() && window.electronAPI)) recordBrowserHistory(url);
           updateNavButtons();
           entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
           renderSidebar();
@@ -5688,7 +5731,16 @@
           entry.url = url;
           const surface = getBrowserSurface();
           if (!surface) return;
-          surface.src = targetUrl(url);
+          setSurfaceUrl(surface, targetUrl(url));
+        }
+
+        // Setting webview.src makes Electron call loadURL() un-awaited, so every
+        // navigation superseded mid-load (page JS redirect, user typing a new URL)
+        // logs an ERR_ABORTED stack in main. Once the guest is attached, call
+        // loadURL ourselves and swallow the benign abort.
+        function setSurfaceUrl(surface, url) {
+          if (surface._guestReady && surface.loadURL) surface.loadURL(url).catch(() => { });
+          else surface.src = url;
         }
 
         entry._loadUrl = loadUrl;
@@ -5702,6 +5754,7 @@
             entry._history.push(url);
             entry._historyIdx = entry._history.length - 1;
           }
+          recordBrowserHistory(url);
           updateNavButtons();
           renderSidebar();
         }
@@ -5745,6 +5798,7 @@
           if (loading && !entry._suspended) return;
           loadUrl(entry.url);
         });
+        btnHistory.addEventListener('click', () => { focusSlot(entry); openPalette('history'); });
         btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') openExternalUrl(entry.url); });
 
         bc.addEventListener('mousedown', (e) => {
@@ -7465,6 +7519,7 @@
       ['Search in terminal', 'search', 'ph-magnifying-glass', () => openSearch()],
       ['Go to tab…', 'tabSearch', 'ph-browsers', () => openPalette('tabs')],
       ['Snippets…', 'snippets', 'ph-lightning', () => openPalette('snips')],
+      ['Browser history…', null, 'ph-clock-counter-clockwise', () => openPalette('history')],
       ['Next tab', 'nextTab', 'ph-arrow-right', () => nextTab()],
       ['Previous tab', 'prevTab', 'ph-arrow-left', () => prevTab()],
       ['Next workspace', 'nextWorkspace', 'ph-caret-double-down', () => nextWorkspace()],
@@ -7485,10 +7540,68 @@
     return cmds;
   }
 
+  // ── Browser history (global, most recent first, deduped by URL).
+  const BH_KEY = 'terminalvibe.browserHistory';
+  const BH_MAX = 1000;
+  function loadBrowserHistory() {
+    try { const a = JSON.parse(localStorage.getItem(BH_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+  }
+  function saveBrowserHistory(list) { try { localStorage.setItem(BH_KEY, JSON.stringify(list.slice(0, BH_MAX))); } catch { } }
+  function recordBrowserHistory(url, title) {
+    if (!url || url === 'about:blank') return;
+    const list = loadBrowserHistory();
+    const i = list.findIndex(h => h.url === url);
+    const prev = i >= 0 ? list.splice(i, 1)[0] : null;
+    list.unshift({ url, title: title || (prev && prev.title) || '', ts: Date.now() });
+    saveBrowserHistory(list);
+  }
+  function setBrowserHistoryTitle(url, title) {
+    const list = loadBrowserHistory();
+    const h = list.find(x => x.url === url);
+    if (h && title && h.title !== title) { h.title = title; saveBrowserHistory(list); }
+  }
+
+  function collectHistoryItems() {
+    const list = loadBrowserHistory();
+    const items = list.map((h, i) => ({
+      label: h.title || h.url, meta: h.url.replace(/^https?:\/\/(www\.)?/, ''), search: (h.title || '') + ' ' + h.url,
+      icon: 'ph-clock-counter-clockwise', delTitle: 'Remove from history',
+      run: () => {
+        const t = activeTerminal();
+        if (t && t.type === 'browser' && t._loadUrl) { t._loadUrl(h.url); return; }
+        const w = activeWs();
+        const g = w && (t ? findGroupContainingTerm(w.layout, t.id) : findFirstGroup(w.layout));
+        if (w) addBrowserTab(w.id, g && g.id, h.url);
+      },
+      del: () => { list.splice(i, 1); saveBrowserHistory(list); openPalette('history', tsInput.value); },
+    }));
+    if (list.length) items.push({
+      label: 'Clear browsing history', meta: list.length + ' entries', icon: 'ph-trash', pin: true,
+      run: () => { saveBrowserHistory([]); },
+    });
+    return items;
+  }
+
   // ── Snippets (saved commands). Enter = insert, Ctrl+Enter = insert and run.
   const SNIP_KEY = 'terminalvibe.snippets';
+  // Seeded only until the user saves their own list (deleting them all sticks).
+  const DEFAULT_SNIPPETS = [
+    { name: 'Git status', cmd: 'git status' },
+    { name: 'Git log (graph)', cmd: 'git log --oneline --graph --decorate -20' },
+    { name: 'Git pull', cmd: 'git pull' },
+    { name: 'List files', cmd: 'ls -la' },
+    { name: 'Disk usage', cmd: 'df -h' },
+    { name: 'Docker containers', cmd: 'docker ps' },
+    { name: 'npm install', cmd: 'npm install' },
+    { name: 'npm run dev', cmd: 'npm run dev' },
+  ];
   function loadSnippets() {
-    try { const a = JSON.parse(localStorage.getItem(SNIP_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+    try {
+      const raw = localStorage.getItem(SNIP_KEY);
+      if (raw === null) return DEFAULT_SNIPPETS.map(s => ({ ...s }));
+      const a = JSON.parse(raw);
+      return Array.isArray(a) ? a : [];
+    } catch { return []; }
   }
   function saveSnippets(list) { try { localStorage.setItem(SNIP_KEY, JSON.stringify(list)); } catch { } }
 
@@ -7522,9 +7635,10 @@
   function renderTabSearch() {
     const q = tsInput.value;
     tsShown = tsItems
-      .map(it => ({ it, score: it.pin ? (q ? Infinity : 1e9) : fuzzyScore(q, it.label) }))
+      .map((it, i) => ({ it, i, score: it.pin ? (q ? Infinity : 1e9) : fuzzyScore(q, it.search || it.label) }))
       .filter(x => x.score !== Infinity)
-      .sort((a, b) => a.score - b.score || a.it.label.localeCompare(b.it.label))
+      // History keeps recency order on ties; other modes sort alphabetically.
+      .sort((a, b) => a.score - b.score || (tsMode === 'history' ? a.i - b.i : a.it.label.localeCompare(b.it.label)))
       .map(x => x.it);
     tsResults.innerHTML = '';
     if (!tsShown.length) {
@@ -7544,7 +7658,7 @@
       if (it.del) {
         const d = document.createElement('i');
         d.className = 'ph ph-trash ts-del';
-        d.title = 'Delete snippet';
+        d.title = it.delTitle || 'Delete snippet';
         d.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); it.del(); });
         row.appendChild(d);
       }
@@ -7569,11 +7683,12 @@
     item.run(e);
   }
 
-  const TS_PLACEHOLDERS = { tabs: 'Search tabs…', cmds: 'Type a command…', snips: 'Search snippets… (Ctrl+Enter runs)' };
+  const TS_PLACEHOLDERS = { tabs: 'Search tabs…', cmds: 'Type a command…', snips: 'Search snippets… (Ctrl+Enter runs)', history: 'Search browser history…' };
   function openPalette(mode, query) {
     if (!tabSearchEl || tsResults.contains(document.activeElement)) return;
     tsMode = mode;
-    tsItems = mode === 'cmds' ? collectCommandItems() : mode === 'snips' ? collectSnippetItems() : collectTabItems();
+    tsItems = mode === 'cmds' ? collectCommandItems() : mode === 'snips' ? collectSnippetItems()
+      : mode === 'history' ? collectHistoryItems() : collectTabItems();
     tsInput.placeholder = TS_PLACEHOLDERS[mode];
     tabSearchEl.style.display = 'flex';
     tsInput.value = query || '';
@@ -8544,6 +8659,7 @@
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
         }
+        syncBrowserShortcuts();
       }
       if (state.pluginStates) {
         for (const [k, v] of Object.entries(state.pluginStates)) _pluginStates.set(k, !!v);
@@ -8602,10 +8718,11 @@
       }
       return;
     }
-    // Paste
+    // Paste — leave it to the focused text field
+    const inTextField = isTextField(e.target);
     if (matchShortcut(e, 'paste')) {
       const t = activeTerminal();
-      if (t && t.type !== 'browser') {
+      if (t && t.type !== 'browser' && !inTextField) {
         e.preventDefault(); e.stopPropagation();
         doPaste(t);
       }
@@ -8614,7 +8731,7 @@
     // Ctrl+V paste (non-shift variant)
     if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') {
       const t = activeTerminal();
-      if (t && t.type !== 'browser') {
+      if (t && t.type !== 'browser' && !inTextField) {
         e.preventDefault(); e.stopPropagation();
         doPaste(t);
       }
@@ -8994,6 +9111,138 @@
     sbrBack.addEventListener('click', () => {
       sbrClip.style.display = 'none';
       sbrMain.style.display = 'flex';
+    });
+  }
+
+  // ── Auto-run workspaces: a saved workspace layout whose tabs each start a
+  // command (or open a URL) when launched from the right panel.
+  const AR_KEY = 'terminalvibe.autorunWorkspaces';
+  const loadAutoRuns = () => { try { const a = JSON.parse(localStorage.getItem(AR_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
+  const saveAutoRuns = list => { try { localStorage.setItem(AR_KEY, JSON.stringify(list)); } catch { } };
+
+  function autoRunFromWorkspace(wsp) {
+    const strip = node => node.type === 'split'
+      ? { type: 'split', direction: node.direction, sizes: node.sizes, children: node.children.map(strip) }
+      : { type: 'group', terminals: node.terminals.map(t => t.type === 'browser'
+          ? { label: t.label, type: 'browser', url: t.url }
+          : { label: t.label, cwd: t.cwd || '', cmd: '' }) };
+    return { id: uuid(), name: wsp.label, layout: strip(serializeLayout(wsp.layout)) };
+  }
+
+  function launchAutoRun(tpl) {
+    const withIds = node => {
+      if (node.type === 'split') return { ...node, id: 'split-' + uuid(), children: node.children.map(withIds) };
+      const terminals = node.terminals.map(t => ({ ...t, id: uuid(), pinLabel: true }));
+      return { type: 'group', id: 'group-' + uuid(), activeTermId: terminals[0] && terminals[0].id, terminals };
+    };
+    const wsp = { id: uuid(), label: tpl.name, layout: null, activeTermId: null };
+    wsp.layout = deserializeLayout(withIds(tpl.layout), wsp);
+    const terms = getWorkspaceTerminals(wsp);
+    if (!terms.length) return;
+    wsp.activeTermId = terms[0].id;
+    workspaces.push(wsp);
+    sideOrder.push({ type: 'ws', id: wsp.id });
+    renderSidebar();
+    activateWorkspace(wsp.id);
+    for (const t of terms) {
+      if (!t.pending) continue;
+      const slot = getSlotDimensions(t);
+      sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null });
+      t.pending = false;
+    }
+  }
+
+  const arPage = document.getElementById('sbr-autorun');
+  const arList = document.getElementById('sbr-autorun-list');
+  if (arPage && arList && sbrMain) {
+    let arOpenId = null; // template whose editor is expanded
+    const arField = (placeholder, value, onChange, cls) => {
+      const i = document.createElement('input');
+      i.className = 'ar-input' + (cls ? ' ' + cls : '');
+      i.placeholder = placeholder;
+      i.value = value || '';
+      i.spellcheck = false;
+      i.autocomplete = 'off';
+      i.addEventListener('change', () => onChange(i.value.trim()));
+      return i;
+    };
+    const renderAutoRuns = () => {
+      const list = loadAutoRuns();
+      const save = () => saveAutoRuns(list);
+      arList.textContent = '';
+      if (!list.length) {
+        arList.innerHTML = '<div class="sbr-empty">No auto-run workspaces yet.<br>Arrange a workspace with the splits and tabs you want, then press <b>+</b> to save its layout and set what each tab runs.</div>';
+        return;
+      }
+      for (const tpl of list) {
+        const card = document.createElement('div');
+        card.className = 'ar-card' + (tpl.id === arOpenId ? ' open' : '');
+        const head = document.createElement('div');
+        head.className = 'ar-head';
+        head.innerHTML = '<i class="ph ph-caret-right ar-caret"></i><span class="ar-name"></span>'
+          + '<button class="sbr-btn" data-act="run" title="Launch"><i class="ph ph-play"></i></button>'
+          + '<button class="sbr-btn" data-act="del" title="Delete"><i class="ph ph-trash"></i></button>';
+        const nameEl = head.querySelector('.ar-name');
+        nameEl.textContent = nameEl.title = tpl.name;
+        head.addEventListener('click', e => {
+          const act = e.target.closest('[data-act]')?.dataset.act;
+          if (act === 'run') launchAutoRun(tpl);
+          else if (act === 'del') showConfirm(`Delete auto-run workspace "${tpl.name}"?`, () => {
+            list.splice(list.indexOf(tpl), 1); save(); renderAutoRuns();
+          });
+          else { arOpenId = arOpenId === tpl.id ? null : tpl.id; renderAutoRuns(); }
+        });
+
+        const editor = document.createElement('div');
+        editor.className = 'ar-editor';
+        editor.appendChild(arField('Workspace name', tpl.name, v => {
+          tpl.name = v || tpl.name; save(); nameEl.textContent = nameEl.title = tpl.name;
+        }));
+        let pane = 0;
+        const walk = node => {
+          if (node.type === 'split') { node.children.forEach(walk); return; }
+          pane++;
+          for (const t of node.terminals) {
+            const box = document.createElement('div');
+            box.className = 'ar-tab';
+            const title = document.createElement('div');
+            title.className = 'ar-tab-title';
+            title.innerHTML = `<i class="ph ${t.type === 'browser' ? 'ph-globe-hemisphere-west' : 'ph-terminal-window'}"></i>Split ${pane}`;
+            box.appendChild(title);
+            box.appendChild(arField('Tab name', t.label, v => { t.label = v || t.label; save(); }));
+            if (t.type === 'browser') {
+              box.appendChild(arField('URL', t.url === 'about:blank' ? '' : t.url, v => { t.url = v || 'about:blank'; save(); }));
+            } else {
+              box.appendChild(arField('Directory (default: home)', t.cwd, v => { t.cwd = v; save(); }));
+              box.appendChild(arField('Command to run, e.g. npm run dev', t.cmd, v => { t.cmd = v; save(); }, 'ar-cmd'));
+            }
+            editor.appendChild(box);
+          }
+        };
+        walk(tpl.layout);
+        card.appendChild(head);
+        card.appendChild(editor);
+        arList.appendChild(card);
+      }
+    };
+    document.getElementById('sbr-open-autorun').addEventListener('click', () => {
+      sbrMain.style.display = 'none';
+      arPage.style.display = 'flex';
+      renderAutoRuns();
+    });
+    document.getElementById('sbr-autorun-back').addEventListener('click', () => {
+      arPage.style.display = 'none';
+      sbrMain.style.display = 'flex';
+    });
+    document.getElementById('sbr-autorun-add').addEventListener('click', () => {
+      const wsp = activeWs();
+      if (!wsp || !wsp.layout) return;
+      const list = loadAutoRuns();
+      const tpl = autoRunFromWorkspace(wsp);
+      list.push(tpl);
+      saveAutoRuns(list);
+      arOpenId = tpl.id;
+      renderAutoRuns();
     });
   }
   document.getElementById('settings-close').addEventListener('click', closeSettings);

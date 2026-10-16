@@ -76,6 +76,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   browserReload: (id) => ipcRenderer.send('browser:reload', id),
   browserZoom: (id, level) => ipcRenderer.send('browser:zoom', id, level),
   browserDestroy: (id) => ipcRenderer.send('browser:destroy', id),
+  browserSetShortcuts: (list) => ipcRenderer.send('browser:shortcuts', list),
+  onBrowserKey: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('browser:key', l);
+    return () => ipcRenderer.removeListener('browser:key', l);
+  },
   onBrowserEvent: (cb) => {
     const l = (_e, d) => cb(d);
     ipcRenderer.on('browser:event', l);
