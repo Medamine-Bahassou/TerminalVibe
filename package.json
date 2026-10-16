@@ -4,7 +4,10 @@
   "private": true,
   "description": "Terminal multiplexer with native browser tabs",
   "main": "electron/main.js",
-  "author": "TerminalVibe",
+  "author": {
+    "name": "TerminalVibe",
+    "email": "md.amine.com@gmail.com"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node electron/dev-server.js & node server.js & wait",
