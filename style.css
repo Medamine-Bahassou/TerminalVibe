@@ -804,7 +804,7 @@ display: none;
   font-size: 14px; flex-shrink: 0;
 }
 .sbr-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
-.sbr-body { padding: 10px; display: flex; gap: 8px; }
+.sbr-body { padding: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
 .sbr-big-btn {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
   flex: 0 1 calc(50% - 4px); padding: 12px 8px; border: 1px solid var(--border); border-radius: 8px;

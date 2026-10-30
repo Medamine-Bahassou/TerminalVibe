@@ -147,6 +147,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   configReadPluginFile: (id, relPath) => ipcRenderer.invoke('config:readPluginFile', id, relPath),
   configOpenPluginFolder: (id) => ipcRenderer.invoke('config:openPluginFolder', id),
   configOpenPluginsDir: () => ipcRenderer.invoke('config:openPluginsDir'),
+  // Read-only file access for plugins (api.fs)
+  pluginFsList: (dir) => ipcRenderer.invoke('plugin-fs:list', dir),
+  pluginFsRead: (file, opts) => ipcRenderer.invoke('plugin-fs:read', file, opts),
 
   // Images stored as files in ~/.terminalvibe/images/ (backgrounds, icons)
   configWriteImages: (images) => ipcRenderer.invoke('config:writeImages', images),

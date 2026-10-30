@@ -95,6 +95,7 @@ handler() {
 | Member | Signature | Description |
 |--------|-----------|-------------|
 | `api.terminal.write` | `(id, data) => boolean` | Write directly to a terminal's **screen buffer** (xterm display). `data` is a string or `Uint8Array`. Returns `false` if the terminal is missing. |
+| `api.terminal.open` | `({ cwd?, cmd?, label? }) => id` | Open a new terminal tab in the active pane. `cmd` is typed into the fresh shell; `label` pins the tab name. Returns the new terminal id. |
 | `window.electronAPI.terminalWrite` | `({ id, data })` | Send bytes to the **PTY stdin** — i.e. as if typed by the user into the shell. Only use for real input/keystrokes. |
 
 Prefer `api.terminal.write` for messages/notifications: it renders on the
@@ -204,6 +205,24 @@ api.ui.addWidget({ id: 'clock', position: 'statusbar', el: clock });
 | `'statusbar'` | A strip below the pane area; the strip is hidden until a plugin adds the first widget |
 | `'sidebar'` | The bottom of the sidebar |
 | `'sidebar-top'` | Above the WORKSPACES header — e.g. a banner image (see `examples/workspace-banner/`) |
+
+### Right-panel pages
+
+| Member | Signature | Description |
+|--------|-----------|-------------|
+| `api.ui.addPanel` | `({ id, label, icon?, el, onShow? }) => void` | Add a button to the right panel's main page that opens `el` as a full page (with a back button). `icon` is a phosphor class (`'ph-chat-circle-text'`); `onShow` runs each time the page opens. Remove with `api.ui.removeWidget(id)`. |
+
+See `examples/claude-chats/` for a complete panel plugin.
+
+## Files (read-only)
+
+Electron only — both resolve `null` in browser mode or on error. `~` expands
+to the home directory.
+
+| Member | Signature | Description |
+|--------|-----------|-------------|
+| `api.fs.list` | `(dir) => Promise<[{ name, dir, size, mtime }] \| null>` | List a directory (`mtime` in ms) |
+| `api.fs.read` | `(file, { maxBytes?, fromEnd? }) => Promise<string \| null>` | Read up to `maxBytes` (default 1 MiB) as UTF-8 from the start, or from the end with `fromEnd: true` |
 
 ## Read-only state access
 
