@@ -185,14 +185,27 @@ class PTYSession {
     const sidBuf = Buffer.alloc(ID_LEN);
     sidBuf.write(this.id, 0, ID_LEN, "utf-8");
 
+    // Coalesce output: first chunk sent immediately (echo latency), bursts
+    // within 5ms batched into one frame.
+    let outBuf = "", outTimer = null;
+    const sendOut = (data) => this._send(Buffer.concat([sidBuf, Buffer.from(data, "utf-8")]));
+    const flushOut = () => {
+      if (!outBuf || !this._running) { outTimer = null; return; }
+      sendOut(outBuf);
+      outBuf = "";
+      outTimer = setTimeout(flushOut, 5);
+    };
     this._proc.onData((data) => {
       if (!this._running) return;
-      const dataBuf = Buffer.from(data, "utf-8");
-      const msg = Buffer.concat([sidBuf, dataBuf]);
-      this._send(msg);
+      if (outTimer) { outBuf += data; return; }
+      sendOut(data);
+      outTimer = setTimeout(flushOut, 5);
     });
 
     this._proc.onExit(({ exitCode, signal }) => {
+      clearTimeout(outTimer);
+      if (outBuf && this._running) sendOut(outBuf);
+      outBuf = "";
       this._running = false;
       const code =
         exitCode != null ? exitCode : signal != null ? -signal : null;

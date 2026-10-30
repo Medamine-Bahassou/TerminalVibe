@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clipboardWrite: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   clipboardRead: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardPasteImage: () => ipcRenderer.invoke('clipboard:paste-image'),
+
+  // Drag & drop: real disk path of a dropped File ('' when it has none,
+  // e.g. an image dragged out of a web page), else save its bytes to temp.
+  getPathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
+  saveTempFile: (name, bytes) => ipcRenderer.invoke('file:save-temp', name, bytes),
 
   // Local file path resolution
   resolveLocalPath: (p) => ipcRenderer.invoke('file:resolve', p),
@@ -23,6 +28,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalHasRunningProcess: (id) => ipcRenderer.invoke('terminal:hasRunningProcess', id),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),
   terminalAttached: (id) => ipcRenderer.send('terminal:attached', id),
+  attachWindow: (o) => ipcRenderer.send('terminal:attach-window', o),
+  onTerminalReattachLayout: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('terminal:reattach-layout', l);
+    return () => ipcRenderer.removeListener('terminal:reattach-layout', l);
+  },
   onTerminalDetachedClosed: (cb) => {
     const l = (_e, d) => cb(d);
     ipcRenderer.on('terminal:detached-closed', l);

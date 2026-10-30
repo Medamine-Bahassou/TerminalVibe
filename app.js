@@ -327,6 +327,36 @@
     }
   }
 
+  // Quote a path for pasting into a shell (POSIX '…'\''…', PowerShell '…''…').
+  function shellQuote(p) {
+    if (/^[\w@%+=:,./~-]+$/.test(p)) return p;
+    return window.electronAPI?.platform === 'win32'
+      ? `'${p.replace(/'/g, "''")}'`
+      : `'${p.replace(/'/g, "'\\''")}'`;
+  }
+
+  // Dropped files (e.g. an image from the file manager or a web page) →
+  // paste their quoted paths into the terminal, like other terminals do.
+  // Files without a disk path (dragged out of a browser) are saved to temp.
+  const isFileDrag = e => !!e.dataTransfer?.types?.includes('Files');
+  async function dropFilesIntoTerminal(entry, files) {
+    const api = window.electronAPI;
+    if (!entry || !entry.term || entry.type === 'browser' || !api?.getPathForFile) return;
+    const paths = [];
+    for (const f of files) {
+      let p = api.getPathForFile(f);
+      if (!p) p = await api.saveTempFile(f.name, new Uint8Array(await f.arrayBuffer()));
+      if (p) paths.push(shellQuote(p));
+    }
+    if (!paths.length) return;
+    entry.term.paste(paths.join(' ') + ' ');
+    entry.term.focus();
+  }
+
+  // Never let a file dropped outside a pane navigate the window to it.
+  document.addEventListener('dragover', e => { if (isFileDrag(e)) e.preventDefault(); });
+  document.addEventListener('drop', e => { if (isFileDrag(e)) e.preventDefault(); });
+
   // Single paste chokepoint: text first; if the clipboard holds an image,
   // save it to the OS temp dir and paste the file path.
   function doPaste(entry) {
@@ -336,7 +366,7 @@
       window.electronAPI.clipboardRead().then(text => {
         if (text) return pasteText(text);
         return window.electronAPI.clipboardPasteImage().then(path => {
-          if (path) pasteText(path.includes(' ') ? `'${path}'` : path);
+          if (path) pasteText(shellQuote(path));
         });
       }).catch(() => { });
     } else {
@@ -1726,6 +1756,11 @@
       if (api.onTerminalReattach) {
         api.onTerminalReattach(({ id, cols, rows, cwd, placement }) => {
           try { reattachTerminal(id, cols, rows, cwd, placement); } catch (e) { console.error('[reattach] failed:', e); }
+        });
+      }
+      if (api.onTerminalReattachLayout) {
+        api.onTerminalReattachLayout(({ layout, focusId }) => {
+          try { reattachLayout(layout, focusId); } catch (e) { console.error('[reattach-layout] failed:', e); }
         });
       }
       // While such a tab is being dragged, highlight the tab bars as a drop target.
@@ -4029,26 +4064,11 @@
         if (ws.layout && findGroupById(ws.layout, placement.targetGroupId)) { wsp = ws; break; }
       }
     }
-    if (!wsp) wsp = workspaces.find(w => w.id === activeWsId) || workspaces[0];
-    if (!wsp) {
-      // All workspaces were closed while the tab was detached — make a fresh
-      // one manually (createWorkspace would spawn a new terminal/PTY).
-      wsp = { id: uuid(), label: 'Workspace 1', layout: null, activeTermId: null };
-      workspaces.push(wsp);
-      sideOrder.push({ type: 'ws', id: wsp.id });
-      activeWsId = wsp.id;
-      const empty = document.getElementById('empty-state');
-      if (empty) empty.style.display = 'none';
-    }
+    if (!wsp) wsp = _attachTargetWorkspace();
 
     // Read the stashed buffer first so the tab can keep its name; the PTY is
     // re-attached, the content replayed from this snapshot.
-    let stash = null;
-    try {
-      const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
-      localStorage.removeItem(DETACH_BUFFER_KEY(termId));
-      if (raw) stash = JSON.parse(raw);
-    } catch { }
+    const stash = _takeDetachStash(termId);
 
     const entry = _createTermEntry(wsp, termId, (stash && stash.label) || 'terminal');
     entry.cwd = cwd;
@@ -4092,17 +4112,45 @@
     wsp.activeTermId = termId;
     renderPaneArea();
     activateTerminal(wsp.id, termId);
+    _finishReattach(entry, termId, cols, rows, stash, true);
 
-    // Open at the size the PTY is running at so replayed lines don't wrap,
-    // replay the stashed screen/scrollback, then announce the attach so main
-    // flushes output buffered while the detached window was closing.
+    renderSidebar();
+    saveState();
+  }
+
+  // Workspace a re-attached terminal lands in: the active one, or a fresh
+  // empty one when all were closed while the tab was detached
+  // (createWorkspace would spawn a new terminal/PTY).
+  function _attachTargetWorkspace() {
+    let wsp = workspaces.find(w => w.id === activeWsId) || workspaces[0];
+    if (wsp) return wsp;
+    wsp = { id: uuid(), label: 'Workspace 1', layout: null, activeTermId: null };
+    workspaces.push(wsp);
+    sideOrder.push({ type: 'ws', id: wsp.id });
+    activeWsId = wsp.id;
+    const empty = document.getElementById('empty-state');
+    if (empty) empty.style.display = 'none';
+    return wsp;
+  }
+
+  function _takeDetachStash(termId) {
+    try {
+      const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
+      localStorage.removeItem(DETACH_BUFFER_KEY(termId));
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }
+
+  // Open at the size the PTY is running at so replayed lines don't wrap,
+  // replay the stashed screen/scrollback, then announce the attach so main
+  // flushes output buffered while the source window was closing. Finally fit
+  // to the new layout and sync the PTY to the fitted size.
+  function _finishReattach(entry, termId, cols, rows, stash, focus) {
     try { entry.term.resize(cols || 80, rows || 24); } catch { }
     if (stash) { try { restoreTermBuffer(entry, stash); } catch { } }
     if (window.electronAPI && window.electronAPI.terminalAttached) {
       window.electronAPI.terminalAttached(termId);
     }
-
-    // Fit to the new layout, then sync the PTY to the fitted size.
     setTimeout(() => {
       try {
         fitTerm(entry);
@@ -4110,11 +4158,70 @@
           window.electronAPI.terminalResize({ id: termId, cols: entry.term.cols, rows: entry.term.rows });
         }
       } catch { }
-      try { entry.term && entry.term.focus(); } catch { }
+      if (focus) { try { entry.term && entry.term.focus(); } catch { } }
     }, 80);
+  }
 
+  // A whole detached window was attached back: rebuild its split layout here
+  // with fresh xterm entries bound to the same live PTYs, docked to the right
+  // of the active pane (or as the whole layout of an empty workspace).
+  function reattachLayout(layout, focusId) {
+    const wsp = _attachTargetWorkspace();
+    const moved = [];
+    const build = node => {
+      if (node.type === 'split') {
+        return { type: 'split', id: 'split-' + uuid(), direction: node.direction, sizes: node.sizes, children: node.children.map(build) };
+      }
+      const terminals = node.terminals.map(t => {
+        const stash = _takeDetachStash(t.id);
+        const entry = _createTermEntry(wsp, t.id, (stash && stash.label) || t.label || 'terminal');
+        entry.cwd = t.cwd;
+        moved.push({ entry, t, stash });
+        return entry;
+      });
+      const activeTermId = terminals.some(e => e.id === node.activeTermId) ? node.activeTermId : terminals[0]?.id || null;
+      return { type: 'group', id: 'group-' + uuid(), terminals, activeTermId };
+    };
+    const tree = removeEmptyGroups(build(layout));
+    if (!tree || !moved.length) return;
+
+    const cur = wsp.layout && activeTerminal();
+    const anchor = wsp.layout && ((cur && findGroupContainingTerm(wsp.layout, cur.id)) || findFirstGroup(wsp.layout));
+    if (wsp._maximizedGroupId) wsp._maximizedGroupId = null;
+    wsp.layout = anchor ? splitGroupNodeInTree(wsp.layout, anchor.id, tree, 'row', false) : tree;
+
+    const focus = moved.some(m => m.t.id === focusId) ? focusId : moved[0].t.id;
+    wsp.activeTermId = focus;
+    renderPaneArea();
+    activateTerminal(wsp.id, focus);
+    for (const { entry, t, stash } of moved) _finishReattach(entry, t.id, t.cols, t.rows, stash, t.id === focus);
     renderSidebar();
     saveState();
+  }
+
+  // Detached window → send every live terminal (with the split layout) back
+  // to the main window. Buffers are stashed like a single-tab move.
+  function attachWindowToMain() {
+    const wsp = activeWs();
+    const api = window.electronAPI;
+    if (!wsp || !wsp.layout || !api || !api.attachWindow) return;
+    const ids = [];
+    const strip = node => {
+      if (node.type === 'split') {
+        return { type: 'split', direction: node.direction, sizes: node.sizes, children: node.children.map(strip) };
+      }
+      const terminals = node.terminals.filter(t => t.term && t.type !== 'browser' && !t.dead).map(t => {
+        const payload = serializeTermBuffer(t);
+        try { if (payload) localStorage.setItem(DETACH_BUFFER_KEY(t.id), JSON.stringify(payload)); } catch { }
+        ids.push(t.id);
+        return { id: t.id, label: t.label, cwd: t.cwd, cols: t.term.cols, rows: t.term.rows };
+      });
+      return { type: 'group', terminals, activeTermId: node.activeTermId };
+    };
+    const layout = strip(wsp.layout);
+    if (!ids.length) return;
+    const cur = activeTerminal();
+    api.attachWindow({ layout, ids, focusId: cur && ids.includes(cur.id) ? cur.id : ids[0] });
   }
 
   const _processCheckPending = new Set(); // termIds with an in-flight running-process check
@@ -5032,6 +5139,10 @@
         });
         tab.addEventListener('dragend', e => {
           tab.classList.remove('dragging');
+          // Reset the drag source: a stale id makes the next cross-window drop
+          // onto a pane look like a local drag (→ no left/right/top/bottom split).
+          window.draggedTermId = null;
+          window.dragSourceGroupId = null;
           tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
             el.classList.remove('drop-left', 'drop-right');
           });
@@ -5964,7 +6075,10 @@
       return 'bottom';
     };
 
+    // Files dropped on a split go to that split's active terminal (no split overlay).
+    const dropTarget = () => groupNode.terminals.find(t => t.id === groupNode.activeTermId) || groupNode.terminals[0];
     bodyEl.addEventListener('dragenter', e => {
+      if (isFileDrag(e)) { e.preventDefault(); return; }
       const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
       if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
@@ -5973,6 +6087,11 @@
     });
 
     bodyEl.addEventListener('dragover', e => {
+      if (isFileDrag(e)) {
+        const t = dropTarget();
+        if (t && t.type !== 'browser') { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
+        return;
+      }
       const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
       if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
@@ -6020,6 +6139,7 @@
     bodyEl.addEventListener('drop', e => {
       e.preventDefault();
       e.stopPropagation();
+      if (isFileDrag(e)) { dropFilesIntoTerminal(dropTarget(), [...e.dataTransfer.files]).catch(err => console.error('[drop] failed:', err)); return; }
       dragDepth = 0;
       overlay.classList.remove('active');
       if (window.electronAPI && window.electronAPI.tabDragHover) {
@@ -8867,6 +8987,7 @@
     // Show the titlebar so the window is draggable
     const tb = document.getElementById('titlebar');
     if (tb) tb.classList.add('active');
+    document.getElementById('btn-attach-main')?.addEventListener('click', attachWindowToMain);
 
     // Hide sidebar
     const sidebar = document.getElementById('sidebar');
@@ -8883,14 +9004,9 @@
           result.term.term.write(data);
         }
       });
-      api.onTerminalExit(({ id, code }) => {
-        const result = findTermById(id);
-        if (result) {
-          result.dead = true;
-          result.term = null;
-        }
-        window.close();
-      });
+      // A split's shell exiting removes just that tab; handleExit closes
+      // the window only when it was the last one.
+      api.onTerminalExit(({ id, code }) => handleExit(id, code));
       // Main process accepted a cross-window move for a tab living in
       // THIS window — snapshot its buffer, remove the tab locally, and
       // report how many tabs remain (main closes this window at 0).

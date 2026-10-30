@@ -484,6 +484,13 @@ ipcMain.handle('clipboard:paste-image', () => {
 });
 
 // ── IPC: local files ──
+ipcMain.handle('file:save-temp', (_e, name, bytes) => {
+  try {
+    const fp = path.join(require('os').tmpdir(), `terminalvibe-${Date.now()}-${path.basename(String(name || 'drop'))}`);
+    fs.writeFileSync(fp, Buffer.from(bytes));
+    return fp;
+  } catch (err) { console.error('[drop] save-temp failed:', err); return null; }
+});
 ipcMain.handle('file:resolve', (_e, p) => {
   try {
     const resolved = path.resolve(p);
@@ -1032,9 +1039,27 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
       env: { ...process.env, TERM: 'xterm-256color' },
     });
     ptys.set(id, t);
-    t.onData((data) => sendToRenderer('terminal:data', { id, data }));
+    // Coalesce PTY output: the first chunk goes out immediately (zero-latency
+    // keystroke echo), anything arriving within the next 5ms is batched into
+    // one IPC message. Floods (cat, builds) drop from thousands of IPC
+    // messages/sec to ~200, which is where the renderer was spending its time.
+    let outBuf = '', outTimer = null;
+    const flushOut = () => {
+      if (!outBuf) { outTimer = null; return; }
+      sendToRenderer('terminal:data', { id, data: outBuf });
+      outBuf = '';
+      outTimer = setTimeout(flushOut, 5);
+    };
+    t.onData((data) => {
+      if (outTimer) { outBuf += data; return; }
+      sendToRenderer('terminal:data', { id, data });
+      outTimer = setTimeout(flushOut, 5);
+    });
     t.onExit(({ exitCode }) => {
       notifyBusy.delete(id);
+      clearTimeout(outTimer);
+      if (outBuf && ptys.get(id) === t) sendToRenderer('terminal:data', { id, data: outBuf });
+      outBuf = '';
       if (ptys.get(id) !== t) return;
       ptys.delete(id);
       sendToRenderer('terminal:exit', { id, code: exitCode });
@@ -1222,6 +1247,29 @@ ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {
   });
 
   return true;
+});
+
+// ── IPC: attach a whole detached window back into the main window ──
+// Every terminal moves at once with its split layout intact. PTYs stay alive:
+// their output is buffered until the main renderer attaches each terminal.
+ipcMain.on('terminal:attach-window', (e, { layout, ids, focusId } = {}) => {
+  if (!mainWindow || mainWindow.isDestroyed() || !layout || !Array.isArray(ids)) return;
+  let dw = null;
+  for (const w of detachedWindows.values()) {
+    if (w && !w.isDestroyed() && w.webContents.id === e.sender.id) { dw = w; break; }
+  }
+  if (!dw) return;
+  const moving = ids.filter(id => ptys.has(id) && detachedWindows.get(id) === dw);
+  for (const id of moving) {
+    reattachingIds.add(id);       // keeps the PTY alive + suppresses detached-closed
+    detachedWindows.delete(id);   // stop routing output to the closing window
+    detachedPending.set(id, []);  // buffer until main attaches it
+  }
+  dw.once('closed', () => moving.forEach(id => reattachingIds.delete(id)));
+  mainWindow.webContents.send('terminal:reattach-layout', { layout, focusId });
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+  dw.close();
 });
 
 // ── IPC: cross-window tab drag (detach / re-attach / move between windows) ──
