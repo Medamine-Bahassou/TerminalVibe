@@ -1134,7 +1134,8 @@ isolation: isolate;
 }
 .tg-tab.active .tg-tab-dot { opacity: 1; }
 .tg-tab.active .tg-tab-icon { opacity: 0.9; }
-.tg-tab.dead { opacity: 0.45; pointer-events: none; }
+/* Exited terminals retain output; their tabs must still be selectable/closable. */
+.tg-tab.dead { opacity: 0.45; }
 .tg-tab-name {
   flex: 1;
   overflow: hidden;

@@ -22,7 +22,7 @@ fs.mkdirSync(vendor, { recursive: true });
 const xtermDst = path.join(vendor, 'xterm');
 cp(path.join(root, 'node_modules/xterm/lib/xterm.js'), path.join(xtermDst, 'xterm.js'));
 cp(path.join(root, 'node_modules/xterm/css/xterm.css'), path.join(xtermDst, 'xterm.css'));
-for (const addon of ['fit', 'web-links', 'search', 'unicode11', 'webgl']) {
+for (const addon of ['fit', 'web-links', 'search', 'unicode11', 'webgl', 'canvas']) {
   const name = `xterm-addon-${addon}`;
   cp(path.join(root, `node_modules/${name}/lib/${name}.js`), path.join(xtermDst, `${name}.js`));
 }

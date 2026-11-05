@@ -39,7 +39,19 @@ async function startAgentControl({ directory, dispatch }) {
 
 // Validate the entire launch plan before creating UI or processes.
 function validateLaunch(plan) {
-  if (!plan || typeof plan.name !== 'string' || !plan.name.trim()) throw new Error('name is required');
+  if (!plan || typeof plan !== 'object') throw new Error('A launch plan is required');
+  const existing = plan.workspaceId !== undefined || plan.anchorPaneId !== undefined;
+  if (!existing && (typeof plan.name !== 'string' || !plan.name.trim())) throw new Error('name is required for a new workspace');
+  if (plan.workspaceId !== undefined && (typeof plan.workspaceId !== 'string' || !plan.workspaceId.trim())) throw new Error('workspaceId must be an ID or current');
+  if (plan.anchorPaneId !== undefined && (typeof plan.anchorPaneId !== 'string' || !plan.anchorPaneId.trim())) throw new Error('anchorPaneId must be a pane ID');
+  if (existing && plan.name !== undefined) throw new Error('Use name for a new workspace, or workspaceId/anchorPaneId for an existing workspace');
+  if (plan.placement !== undefined) {
+    const p = plan.placement;
+    if (!existing || !p || typeof p !== 'object' || Array.isArray(p)) throw new Error('placement requires an existing workspace');
+    if (p.split !== undefined && !['row', 'column'].includes(p.split)) throw new Error('placement.split must be row or column');
+    if (p.before !== undefined && typeof p.before !== 'boolean') throw new Error('placement.before must be boolean');
+    if (p.sizes !== undefined && (!Array.isArray(p.sizes) || p.sizes.length !== 2 || p.sizes.some(n => !Number.isFinite(n) || n <= 0) || Math.abs(p.sizes[0] + p.sizes[1] - 100) > 0.01)) throw new Error('placement.sizes must be two positive percentages totaling 100');
+  }
   const names = new Set();
   let count = 0;
   function visit(node, depth) {

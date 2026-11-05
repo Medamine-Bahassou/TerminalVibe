@@ -1,6 +1,6 @@
 # Agent orchestration
 
-TerminalVibe's Electron app exposes an authenticated local control channel for
+TerminalVibe's desktop app and browser dev server expose an authenticated local control channel for
 agents. Each agent gets a real PTY in a visible, named split. Launchers are
 provider agnostic: supply an executable and arguments, a working directory,
 and a recursive layout. No API keys are managed by TerminalVibe; each installed
@@ -14,8 +14,10 @@ use `.claude/skills/terminalvibe-orchestration/` in the project. For Codex use
 `.agents/skills/terminalvibe-orchestration/`. Agents without skill discovery can
 read `SKILL.md` directly and invoke the included client with Node.js 18+.
 
-Start the updated Electron desktop app. Launch your orchestrator agent in a
-TerminalVibe terminal so it inherits the correct control descriptor. Then ask:
+Start the updated Electron desktop app, or run `npm run dev` and open one
+TerminalVibe browser tab. Restart the dev server and refresh the tab after an
+update. Launch your orchestrator agent in a TerminalVibe terminal so it inherits
+the correct control descriptor. Then ask:
 
 > Use the TerminalVibe orchestration skill. Launch Claude Code, my Codex terminal
 > agent, and my configured Antigravity terminal adapter in separate visible
@@ -57,6 +59,50 @@ node skills/terminalvibe-orchestration/scripts/tv.js launch --file team.json
 node skills/terminalvibe-orchestration/scripts/tv.js list
 ```
 
+## Launch into the current workspace
+
+No manual pane creation is needed. Pass `workspaceId` instead of `name` to add
+the agents to an existing workspace. Use an ID returned by `list`, or `current`
+to resolve the active workspace when the request starts. Existing terminals and
+their processes are retained, and only the new panes are spawned.
+
+For example, keep existing panes across the top 35% and add two reviewers side
+by side below them:
+
+```json
+{
+  "workspaceId": "current",
+  "placement": { "split": "column", "sizes": [35, 65] },
+  "layout": {
+    "split": "row",
+    "children": [
+      { "name": "Reviewer A", "cwd": "/absolute/project", "argv": ["/bin/bash"] },
+      { "name": "Reviewer B", "cwd": "/absolute/project", "argv": ["/bin/bash"] }
+    ]
+  }
+}
+```
+
+Run this plan with the same `tv.js launch --file plan.json` command. Replace the
+shells with verified agent launch commands and task arguments. Optionally pass
+`anchorPaneId` to split beside a specific pane's group instead of the full
+workspace layout; when no `workspaceId` is supplied, the anchor's workspace is
+used. When both are supplied, they must refer to the same workspace.
+
+`placement.split` defaults to `row` (existing left, new right); `column` means
+existing top, new bottom. `placement.before: true` reverses child order. The two
+`placement.sizes` percentages follow that order and default to `[50,50]`.
+The added agents' internal arrangement comes from `layout`. The parent pane and
+existing tabs remain intact; existing processes are not restarted or respawned.
+
+`list` includes `activeWorkspaceId`, `activePaneId`, and capability flags
+`launchIntoWorkspace` and `launchBesidePane`. Match the parent terminal's
+`TERMINALVIBE_PANE_ID` to a workspace where possible, and then use its concrete
+ID to avoid a focus change selecting another workspace. A missing capability
+flag means the running app/page needs updating; it is not a reason to create
+panes manually. Restarting dev mode or refreshing a browser tab closes its dev
+terminals, so save work before loading an update.
+
 Outside TerminalVibe, run `tv.js instances`, then supply `--instance FILE`.
 Run the client on the same OS as Electron (Windows and WSL have different
 home directories and executable paths). For multiple instances, select one
@@ -75,8 +121,8 @@ file private. Browser Origin requests are rejected. There is no remote binding.
 
 | Method | Parameters | Result |
 | --- | --- | --- |
-| `list` | none | Workspaces, layouts, pane IDs and dead state |
-| `launch` | `name`, `layout` | Workspace and individual spawn results |
+| `list` | none | Active workspace/pane IDs, capabilities, workspaces, layouts, pane IDs and dead state |
+| `launch` | `layout`; `name` for new, or `workspaceId`/`anchorPaneId` for existing; optional `placement` | Workspace and new panes' individual spawn results |
 | `read` | `paneId`, optional `lines` (1–2000) | Rendered terminal text and dead state |
 | `send` | `paneId`, `text`, optional `enter` | Input delivery acknowledgment |
 | `focus` | `paneId` | Selected pane ID |
@@ -91,7 +137,11 @@ This does not provide automatic worktrees, provider APIs, structured task
 completion, or a cross-agent message bus: the orchestrator coordinates tasks
 through launch arguments, terminal input, and output inspection.
 
-The control channel is desktop-only; `npm run dev` browser mode has no endpoint.
+In browser mode, control requests pass through the PTY WebSocket to the ready
+page, which owns the visible layout. The dev server starts the same authenticated
+loopback control endpoint as the desktop app. With no ready tab, requests return
+an explicit error; with multiple ready tabs, requests are rejected to avoid
+changing an arbitrary workspace. Keep one TerminalVibe browser tab open.
 The CLI client and skill work independently of npm dependencies and can be
 distributed together from this repository. The desktop build includes the
 control server through `electron/**/*`.

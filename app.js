@@ -1327,7 +1327,7 @@
    ═══════════════════════════════════════════════════════════════ */
   let currentThemeName = 'graphite';
   let currentTheme = THEMES[currentThemeName];
-  let currentFontSize = 13;
+  let currentFontSize = 14;
   let cornerStyle = 'sharp'; // 'rounded' | 'sharp'
   let currentFontFamily = "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace";
   let customFonts = {}; // name -> { name, dataUrl, format }
@@ -1343,7 +1343,7 @@
     { name: 'Consolas', family: "'Consolas', 'Courier New', monospace" },
     { name: 'Courier New', family: "'Courier New', monospace" },
   ];
-  let currentLineHeight = 1.4;
+  let currentLineHeight = 1.0;
   let currentCursorStyle = 'block';
   let currentCursorBlink = true;
   let currentScrollback = 10000;
@@ -1436,6 +1436,8 @@
   let ws = null;             // WebSocket
   let wsReady = false;
   let nativePtyReady = false; // native PTY backend ready (Electron main process)
+  let agentBrowserReady = false;
+  const agentCreates = new Map();
 
   let _browserSyncRaf = null;
   const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
@@ -1587,6 +1589,7 @@
 
     ws.onopen = () => {
       wsReady = true;
+      if (agentBrowserReady) ws.send(JSON.stringify({ type: 'agent:ready' }));
 
       if (workspaces.length) {
         for (const ws of workspaces) {
@@ -1619,7 +1622,16 @@
       } else {
         try {
           const msg = JSON.parse(e.data);
-          if (msg.type === 'ready') {
+          if (msg.type === 'agent:request') {
+            const connection = ws;
+            handleAgentRequest(msg).then(
+              result => { if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ type: 'agent:result', id: msg.id, result })); },
+              error => { if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ type: 'agent:result', id: msg.id, error: error.message })); }
+            );
+          } else if (msg.type === 'agent:created') {
+            const pending = agentCreates.get(msg.requestId);
+            if (pending) { clearTimeout(pending.timer); agentCreates.delete(msg.requestId); pending.resolve(msg.started); }
+          } else if (msg.type === 'ready') {
             if (msg.port) { WS_PORT = msg.port; }
           } else if (msg.type === 'exit') handleExit(msg.id, msg.code);
           else if (msg.type === 'error') handleError(msg.id, msg.msg);
@@ -1630,6 +1642,8 @@
 
     ws.onclose = () => {
       wsReady = false;
+      for (const pending of agentCreates.values()) { clearTimeout(pending.timer); pending.reject(new Error('Terminal backend disconnected')); }
+      agentCreates.clear();
       setTimeout(connectWS, 2000);
     };
 
@@ -3461,6 +3475,43 @@
   // Below Chromium's ~16 context cap; keeps WebGL available to the active and
   // recently-active terminals without ever exhausting the pool (blank canvas).
   const _WEBGL_MAX = 8;
+  // Keep an explicitly selected Courier font, but don't fall back to its thin,
+  // serif glyphs just because the preferred coding font isn't installed.
+  function terminalFontFamily(family) {
+    if (family.trim().startsWith("'Courier New'")) return family;
+    return family.replace("'Courier New', monospace",
+      "'Cascadia Mono', 'Menlo', 'DejaVu Sans Mono', 'Liberation Mono', monospace");
+  }
+
+  function _useCanvas(entry) {
+    const term = entry.term;
+    if (term._canvasAddon) return;
+    try {
+      const addon = new CanvasAddon.CanvasAddon();
+      term.loadAddon(addon);
+      term._canvasAddon = addon;
+    } catch (e) {
+      console.warn('[terminal] Canvas renderer unavailable', e);
+    }
+  }
+
+  function _releaseWebgl(entry) {
+    const term = entry.term;
+    try { term._webglAddon?.dispose(); } catch (e) { }
+    term._webglAddon = null;
+    // Disposing WebGL restores xterm's DOM renderer, not the previous addon.
+    // Canvas draws continuous block/box glyphs even with extra line spacing.
+    _useCanvas(entry);
+  }
+
+  function _disposeTermRenderers(term) {
+    // xterm 5 disposes its core before its addons. Release renderers first,
+    // while the core can still restore the default renderer during cleanup.
+    term._webglAddon?.dispose();
+    term._webglAddon = null;
+    term._canvasAddon?.dispose();
+    term._canvasAddon = null;
+  }
   // Attach WebGL on first show and KEEP it while hidden (dispose+recreate on
   // every tab switch paid a full context/shaders rebuild each time and stalled
   // switching). Contexts are only released when the live count hits _WEBGL_MAX,
@@ -3469,7 +3520,10 @@
   function _syncWebgl(entry, visible) {
     if (!entry || entry.type === 'browser' || !entry.term) return;
     const term = entry.term;
-    if (!visible) return; // keep alive: switching back is instant
+    if (!visible || entry._webglUnavailable) {
+      if (!term._webglAddon) _useCanvas(entry);
+      return;
+    }
     if (term._webglAddon) { entry._webglLastUse = performance.now(); return; }
     let live = 0, oldest = null, oldestT = Infinity;
     for (const wsp of workspaces) {
@@ -3481,16 +3535,32 @@
       }
     }
     if (live >= _WEBGL_MAX && oldest && oldest.term._webglAddon) {
-      try { oldest.term._webglAddon.dispose(); } catch (e) { }
-      oldest.term._webglAddon = null;
+      _releaseWebgl(oldest);
     }
-    try { term._webglAddon = new WebglAddon.WebglAddon(); term.loadAddon(term._webglAddon); entry._webglLastUse = performance.now(); } catch (e) { term._webglAddon = null; }
+    try {
+      if (term._canvasAddon) {
+        term._canvasAddon.dispose();
+        term._canvasAddon = null;
+      }
+      const addon = new WebglAddon.WebglAddon();
+      term._webglAddon = addon;
+      addon.onContextLoss(() => {
+        entry._webglUnavailable = true;
+        _releaseWebgl(entry);
+      });
+      term.loadAddon(addon);
+      entry._webglLastUse = performance.now();
+    } catch (e) {
+      entry._webglUnavailable = true;
+      _releaseWebgl(entry);
+      console.warn('[terminal] WebGL unavailable; using Canvas', e);
+    }
   }
 
   function _createTermEntry(wsp, id, label) {
     const term = new Terminal({
       theme: makeXtermTheme(currentTheme),
-      fontFamily: currentFontFamily,
+      fontFamily: terminalFontFamily(currentFontFamily),
       fontSize: currentFontSize,
       lineHeight: currentLineHeight,
       cursorBlink: currentCursorBlink,
@@ -3501,7 +3571,7 @@
       macOptionIsMeta: true,
       drawBoldTextInBrightColors: true,
       minimumContrastRatio: 1,
-      drawWideChars: true,
+      customGlyphs: true,
     });
 
     const fitAddon = new FitAddon.FitAddon();
@@ -4407,7 +4477,12 @@
     if (entry.type !== 'browser') {
       if (!skipPtyClose) {
         sendControl({ type: 'close', id: termId });
-        try { if (entry.term) entry.term.dispose(); } catch { }
+        try {
+          if (entry.term) {
+            _disposeTermRenderers(entry.term);
+            entry.term.dispose();
+          }
+        } catch { }
       }
     } else {
       if (entry._msgCleanup) entry._msgCleanup();
@@ -8805,7 +8880,7 @@
       if (t.type === 'browser') continue;
       t._customFontSize = currentFontSize; // Reset temporary zoom on global change
       t.term.options.fontSize = currentFontSize;
-      t.term.options.fontFamily = currentFontFamily;
+      t.term.options.fontFamily = terminalFontFamily(currentFontFamily);
       t.term.options.lineHeight = currentLineHeight;
       t.term.options.cursorStyle = currentCursorStyle;
       t.term.options.cursorBlink = currentCursorBlink;
@@ -9327,14 +9402,41 @@
   // command (or open a URL) when launched from the right panel.
   // Live agent orchestration. Launch arguments are passed directly to the PTY,
   // never typed into an interactive shell. Running entries survive rearrangement.
+  function createAgentTerminal(spec) {
+    if (nativePtyReady) return window.electronAPI.terminalCreate(spec);
+    if (!wsReady) return Promise.reject(new Error('Terminal backend is not connected'));
+    return new Promise((resolve, reject) => {
+      const requestId = uuid();
+      const timer = setTimeout(() => { agentCreates.delete(requestId); reject(new Error('Terminal creation timed out; inspect list before retrying')); }, 10000);
+      agentCreates.set(requestId, { resolve, reject, timer });
+      ws.send(JSON.stringify({ ...spec, type: 'create', requestId }));
+    });
+  }
+
   async function handleAgentRequest({ method, params: p = {} }) {
     const describe = wsp => ({ id: wsp.id, name: wsp.label, layout: serializeLayout(wsp.layout),
       panes: getWorkspaceTerminals(wsp).map(t => ({ id: t.id, name: t.label, cwd: t.cwd, dead: !!t.dead, type: t.type || 'terminal' })) });
-    if (method === 'list') return { workspaces: workspaces.map(describe) };
+    if (method === 'list') return {
+      capabilities: { launchIntoWorkspace: true, launchBesidePane: true },
+      activeWorkspaceId: activeWsId,
+      activePaneId: findWs(activeWsId)?.activeTermId || null,
+      workspaces: workspaces.map(describe)
+    };
     if (method === 'launch') {
-      if (!nativePtyReady) throw new Error('Native terminal backend is not ready');
-      const wsp = { id: uuid(), label: p.name, layout: null, activeTermId: null };
+      if (!nativePtyReady && !wsReady) throw new Error('Terminal backend is not ready');
+      const existing = p.workspaceId !== undefined || p.anchorPaneId !== undefined;
+      const anchor = p.anchorPaneId !== undefined ? findTermById(p.anchorPaneId) : null;
+      if (p.anchorPaneId !== undefined && !anchor) throw new Error('Unknown anchorPaneId');
+      const wsp = existing
+        ? (p.workspaceId !== undefined ? findWs(p.workspaceId === 'current' ? activeWsId : p.workspaceId) : anchor.ws)
+        : { id: uuid(), label: p.name, layout: null, activeTermId: null };
+      if (!wsp) throw new Error('Unknown workspaceId; list workspaces before retrying');
+      if (anchor && anchor.ws !== wsp) throw new Error('anchorPaneId does not belong to the target workspace');
+      const anchorGroup = anchor ? findGroupContainingTerm(wsp.layout, p.anchorPaneId) : null;
+      // Resolve the destination before the first await so focus changes cannot
+      // redirect a launch. Existing terminal entries and PTYs are reused.
       const specs = new Map();
+      const terms = [];
       const build = node => {
         if (node.split) return { type: 'split', id: uuid(), direction: node.split, sizes: node.sizes || [50, 50], children: node.children.map(build) };
         const id = uuid();
@@ -9343,19 +9445,31 @@
         entry.cwd = node.cwd;
         entry.pinLabel = true;
         entry.agentManaged = true;
+        terms.push(entry);
         return { type: 'group', id: uuid(), activeTermId: id, terminals: [entry] };
       };
-      wsp.layout = build(p.layout);
-      const terms = getWorkspaceTerminals(wsp);
-      wsp.activeTermId = terms[0].id;
-      workspaces.push(wsp);
-      sideOrder.push({ type: 'ws', id: wsp.id });
+      const additions = build(p.layout);
+      const placement = p.placement || {};
+      const dock = node => ({ type: 'split', id: uuid(), direction: placement.split || 'row',
+        sizes: placement.sizes || [50, 50], children: placement.before ? [additions, node] : [node, additions] });
+      if (existing && wsp.layout) {
+        const insert = node => node === anchorGroup ? dock(node) : node.type === 'split' ? { ...node, children: node.children.map(insert) } : node;
+        wsp.layout = anchorGroup ? insert(wsp.layout) : dock(wsp.layout);
+      } else wsp.layout = additions;
+      if (!wsp.activeTermId) wsp.activeTermId = terms[0].id;
+      delete wsp._maximizedGroupId;
+      if (!existing) {
+        workspaces.push(wsp);
+        sideOrder.push({ type: 'ws', id: wsp.id });
+      }
       renderSidebar();
       activateWorkspace(wsp.id);
+      // activateWorkspace is a no-op when already current: rebuild its splits.
+      if (existing) renderPaneArea();
       const launches = [];
       for (const t of terms) {
         const spec = specs.get(t.id), slot = getSlotDimensions(t);
-        const started = await window.electronAPI.terminalCreate({ id: t.id, ...slot, cwd: spec.cwd, executable: spec.argv[0], argv: spec.argv.slice(1) });
+        const started = await createAgentTerminal({ id: t.id, ...slot, cwd: spec.cwd, executable: spec.argv[0], argv: spec.argv.slice(1) });
         if (!started) {
           t.dead = true;
           t.term.write('\r\n[Could not launch agent. Check executable and cwd.]\r\n');
@@ -10511,6 +10625,9 @@
 
     if (!DETACHED_ONLY && !SETTINGS_ONLY && window.electronAPI?.onAgentRequest) {
       window.electronAPI.onAgentRequest(handleAgentRequest);
+    } else if (!isDesktop() && !DETACHED_ONLY && !SETTINGS_ONLY) {
+      agentBrowserReady = true;
+      if (wsReady) ws.send(JSON.stringify({ type: 'agent:ready' }));
     }
   })(); // async boot
 })();

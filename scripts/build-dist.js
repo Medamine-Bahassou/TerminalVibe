@@ -29,7 +29,7 @@ function ensureVendorFile(vendorRel, nmRel) {
 
 ensureVendorFile(path.join('xterm', 'xterm.js'), path.join('node_modules', 'xterm', 'lib', 'xterm.js'));
 ensureVendorFile(path.join('xterm', 'xterm.css'), path.join('node_modules', 'xterm', 'css', 'xterm.css'));
-for (const addon of ['fit', 'web-links', 'search', 'unicode11', 'webgl']) {
+for (const addon of ['fit', 'web-links', 'search', 'unicode11', 'webgl', 'canvas']) {
   const name = `xterm-addon-${addon}`;
   ensureVendorFile(path.join('xterm', `${name}.js`), path.join('node_modules', name, 'lib', `${name}.js`));
 }

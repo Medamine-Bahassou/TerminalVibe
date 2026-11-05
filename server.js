@@ -15,6 +15,36 @@ const os = require("os");
 const { WebSocketServer } = require("ws");
 const pty = require("node-pty");
 const { hasRunningProcess, runningProcessInfo } = require("./electron/proc");
+const { startAgentControl, validateLaunch } = require('./electron/agent-control');
+const { randomUUID } = require('crypto');
+let agentControl;
+const agentClients = new Set();
+const agentRequests = new Map();
+const controlReady = startAgentControl({
+  directory: path.join(os.homedir(), '.terminalvibe', 'control'),
+  dispatch(request) {
+    if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange'].includes(request.method)) throw new Error('Unknown method');
+    if (request.method === 'launch') validateLaunch(request.params);
+    const clients = [...agentClients].filter(client => client.readyState === client.OPEN);
+    if (clients.length !== 1) throw new Error(clients.length ? 'Multiple browser tabs connected. Keep one TerminalVibe browser tab open for orchestration.' : 'No ready browser tab. Open or refresh TerminalVibe in your browser.');
+    const client = clients[0], id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        agentRequests.delete(id);
+        reject(new Error('Browser request timed out; inspect list before retrying a mutation'));
+      }, 15000);
+      agentRequests.set(id, { client, resolve, reject, timer });
+      client.send(JSON.stringify({ ...request, id, type: 'agent:request' }));
+    });
+  }
+}).then(control => {
+  agentControl = control;
+  console.log(`[agent-control] Ready: ${control.file}`);
+  return control;
+}).catch(err => {
+  console.error('[agent-control]', err.message);
+  process.exit(1);
+});
 
 const HOST = "127.0.0.1";
 const PORT = parseInt(process.env.WS_PORT || "7681", 10); // WebSocket PTY
@@ -97,7 +127,7 @@ const appServer = http.createServer((req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 class PTYSession {
-  constructor(sessionId, cols, rows, sendCb, cwd) {
+  constructor(sessionId, cols, rows, sendCb, cwd, executable, argv) {
     this.id = sessionId;
     this.cols = cols;
     this.rows = rows;
@@ -107,6 +137,8 @@ class PTYSession {
     this.shell = process.env.SHELL || (process.platform === "win32" ? "powershell.exe" : "/bin/bash");
     this.cwd = cwd;
     this._tmpDir = null;
+    this.executable = executable;
+    this.argv = argv;
   }
 
   start() {
@@ -126,7 +158,7 @@ class PTYSession {
     let shellArgs = ["-l"]; // default: login shell
     const extraEnv = {};
 
-    if (shellName === "bash") {
+    if (!this.executable && shellName === "bash") {
       // Create a temp rc file that sources user's init and adds OSC 7
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tv-sh-"));
       this._tmpDir = tmpDir;
@@ -146,7 +178,7 @@ class PTYSession {
       ].join('\n');
       fs.writeFileSync(path.join(tmpDir, "bashrc"), rcContent, "utf-8");
       shellArgs = ["--rcfile", path.join(tmpDir, "bashrc")];
-    } else if (shellName === "zsh") {
+    } else if (!this.executable && shellName === "zsh") {
       // For zsh, set ZDOTDIR to a temp dir with a custom .zshrc
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tv-zsh-"));
       this._tmpDir = tmpDir;
@@ -167,7 +199,7 @@ class PTYSession {
       shellArgs = ["-l"];
     }
 
-    this._proc = pty.spawn(this.shell, shellArgs, {
+    this._proc = pty.spawn(this.executable || this.shell, this.executable ? this.argv || [] : shellArgs, {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
@@ -177,6 +209,8 @@ class PTYSession {
         ...extraEnv,
         TERM: "xterm-256color",
         COLORTERM: "truecolor",
+        TERMINALVIBE_PANE_ID: this.id,
+        ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}),
       },
     });
 
@@ -247,14 +281,23 @@ class PTYSession {
 //  WEBSOCKET HANDLER
 // ─────────────────────────────────────────────────────────────
 
-const wss = new WebSocketServer({ port: PORT, host: HOST, maxPayload: 0 });
+const wss = new WebSocketServer({ port: PORT, host: HOST, maxPayload: 1024 * 1024,
+  verifyClient: ({ origin }) => {
+    if (!origin) return true; // Local CLI/test clients do not send Origin.
+    try {
+      const parsed = new URL(origin);
+      return parsed.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname) &&
+        [String(APP_PORT), process.env.DEV_APP_PORT || '7769'].includes(parsed.port);
+    } catch { return false; }
+  }
+});
 
 wss.on("connection", (ws) => {
   const localSessions = [];
 
   ws.send(JSON.stringify({ type: "ready", port: PORT }));
 
-  ws.on("message", (message, isBinary) => {
+  ws.on("message", async (message, isBinary) => {
     if (isBinary) {
       const buf = Buffer.isBuffer(message) ? message : Buffer.from(message);
       if (buf.length <= ID_LEN) return;
@@ -271,7 +314,19 @@ wss.on("connection", (ws) => {
       }
 
       switch (msg.type) {
+        case 'agent:ready':
+          agentClients.add(ws);
+          break;
+        case 'agent:result': {
+          const pending = agentRequests.get(msg.id);
+          if (!pending || pending.client !== ws) break;
+          clearTimeout(pending.timer);
+          agentRequests.delete(msg.id);
+          if (msg.error) pending.reject(new Error(msg.error)); else pending.resolve(msg.result);
+          break;
+        }
         case "create": {
+          await controlReady;
           const sid = msg.id || "";
           const cols = parseInt(msg.cols) || 80;
           const rows = parseInt(msg.rows) || 24;
@@ -280,14 +335,16 @@ wss.on("connection", (ws) => {
             try {
               const session = new PTYSession(sid, cols, rows, (data) => {
                 if (ws.readyState === ws.OPEN) ws.send(data);
-              }, cwd);
+              }, cwd, msg.executable, msg.argv);
               session.start();
               SESSIONS[sid] = session;
               localSessions.push(sid);
+              if (msg.requestId) ws.send(JSON.stringify({ type: 'agent:created', requestId: msg.requestId, started: true }));
             } catch (e) {
               ws.send(JSON.stringify({ type: "error", id: sid, msg: e.message }));
+              if (msg.requestId) ws.send(JSON.stringify({ type: 'agent:created', requestId: msg.requestId, started: false }));
             }
-          }
+          } else if (msg.requestId) ws.send(JSON.stringify({ type: 'agent:created', requestId: msg.requestId, started: false }));
           break;
         }
         case "resize": {
@@ -325,6 +382,13 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
+    agentClients.delete(ws);
+    for (const [id, pending] of agentRequests) {
+      if (pending.client !== ws) continue;
+      clearTimeout(pending.timer);
+      agentRequests.delete(id);
+      pending.reject(new Error('Browser disconnected; inspect list before retrying a mutation'));
+    }
     for (const sid of localSessions) {
       const session = SESSIONS[sid];
       if (session) {
@@ -340,6 +404,7 @@ wss.on("connection", (ws) => {
 // ─────────────────────────────────────────────────────────────
 
 function shutdownGracefully() {
+  if (agentControl) agentControl.close();
   console.log("[server] Shutting down gracefully...");
 
   // Close all PTY sessions
