@@ -167,7 +167,10 @@ both minima also follow the docking axis when rendered. Explicit
 percentages are respected unless compact is explicitly enabled. `arrange`
 leaves/subtrees may include `size:{height:"min"}` for a bottom row,
 `size:{width:"min"}` for a side column, or explicit pixel values.
-Sizes persist with the workspace, and manual sash dragging releases them.
+Sizes persist with the workspace. Manual sash dragging releases size requests
+in the adjacent subtrees and their ancestors, including nested agent panes,
+while preserving their current proportions so the divider does not jump.
+After dragging, panes scale proportionally with the window.
 
 `list` advertises `paneSizing`, `panePlacement` and `compactPanes`, the minimum
 pane dimensions, each pane's group ID, requested group size, `agentManaged` flag

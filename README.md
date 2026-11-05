@@ -21,6 +21,7 @@
 - **Built-in browser** - embedded web browsing with URL bar, navigation (back/forward/reload), history, and local file support
 - **Running servers** - titlebar dropdown showing listening ports and process names; refresh the list or open a server in a browser tab
 - **PDF viewer** - open PDFs directly in a tab via the browser's native viewer
+- **Terminal image previews** - native SIXEL and iTerm2 inline images in terminal panes, including Yazi previews
 - **Image viewer** - display images inline in a browser tab via the browser's native viewer
 - **Background images** - set terminal background images in global or per-tab mode, with adjustable opacity
 - **Shell integration** - automatic current working directory (CWD) reporting via OSC 7 for bash and zsh, persisted across sessions
@@ -169,6 +170,22 @@ npm run electron:dev   # Electron dev mode (native PTY via node-pty)
 `npm install` also generates the frontend assets in `vendor/`. Run one dev mode
 at a time, since both use the static server on port 7769. To open Electron while
 `npm run dev` is already running, use `npm run electron`.
+
+## Terminal image previews
+
+Terminal panes support SIXEL and iTerm2 inline images. Yazi detects SIXEL through
+terminal capability queries; no Yazi wrapper or terminal-name spoofing is needed.
+TerminalVibe sets its own terminal identity and clears inherited graphics markers
+from launchers such as Konsole and Kitty.
+
+After updating, restart TerminalVibe (and the backend in browser dev mode), open a
+new terminal and relaunch Yazi. Existing shells retain their original environment.
+Save running work before restarting. Custom shell startup files must not override
+`TERM_PROGRAM` or restore another terminal's identity variables.
+
+Run `npm run test:images` for protocol and rendering checks, or
+`npm run test:images:yazi` to additionally test the installed Yazi with a real PTY
+and an isolated temporary configuration.
 
 ## Build
 

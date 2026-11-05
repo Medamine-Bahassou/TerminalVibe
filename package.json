@@ -16,6 +16,8 @@
     "electron:dev": "node electron/dev-server.js & DEV_PID=$!; trap \"kill $DEV_PID 2>/dev/null\" EXIT INT TERM; electron .; kill $DEV_PID 2>/dev/null",
     "test": "node scripts/test-cli.js && node scripts/test-agent-control.js && node scripts/test-servers.js",
     "test:rendering": "node scripts/test-terminal-rendering.js",
+    "test:images": "node scripts/test-terminal-images.js",
+    "test:images:yazi": "node scripts/test-terminal-images.js --yazi",
     "build": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux dir --publish never",
     "build:appimage": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux AppImage --publish never",
     "build:deb": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux deb --publish never",

@@ -6,7 +6,7 @@ const root = path.join(__dirname, '..');
 
 if (!process.versions.electron) {
   const { spawnSync } = require('child_process');
-  const result = spawnSync(require('electron'), [__filename, '--no-sandbox'], {
+  const result = spawnSync(require('electron'), [__filename, ...process.argv.slice(2), '--no-sandbox'], {
     stdio: 'inherit', env: { ...process.env, ELECTRON_RUN_AS_NODE: '' },
   });
   process.exit(result.status ?? 1);
@@ -19,7 +19,8 @@ app.commandLine.appendSwitch('enable-unsafe-swiftshader');
 const timeout = setTimeout(() => { console.error('Renderer test timed out'); app.exit(1); }, 30000);
 
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ show: false, width: 800, height: 600 });
+  const win = new BrowserWindow({ show: false, width: 800, height: 600,
+    webPreferences: { offscreen: true, backgroundThrottling: false } });
   await win.loadURL('about:blank');
   await win.webContents.insertCSS(fs.readFileSync(path.join(root, 'vendor/xterm/xterm.css'), 'utf8'));
   for (const file of ['xterm', 'xterm-addon-canvas', 'xterm-addon-webgl']) {
@@ -27,7 +28,7 @@ app.whenReady().then(async () => {
   }
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
   const helpers = source.slice(source.indexOf('  const _WEBGL_MAX ='), source.indexOf('  function _createTermEntry('));
-  const result = await win.webContents.executeJavaScript(`(async () => {
+  const result = !process.argv.includes('--layout-only') && await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw new Error(message); };
     const workspaces = [];
     const getWorkspaceTerminals = wsp => wsp.terminals;
@@ -89,11 +90,12 @@ app.whenReady().then(async () => {
     }
     return 'PASS: font fallback, seamless Canvas blocks, GPU failure, context eviction/loss, renderer switching and disposal';
   })().catch(error => { throw new Error(error.stack); })`);
-  console.log(result);
+  if (result) console.log(result);
   await win.webContents.insertCSS(fs.readFileSync(path.join(root, 'style.css'), 'utf8'));
   const sizing = source.slice(source.indexOf('  function getMinSizes('), source.indexOf('  // ── Tab bar:'));
   const buildStart = source.indexOf('  function buildNodeDom(');
   const splitBuilder = source.slice(buildStart, source.indexOf("    if (node.type === 'group') {", buildStart));
+  const syncSizes = source.slice(source.indexOf('  function syncSplitSizes('), source.indexOf('  const ro = new ResizeObserver('));
   const sash = source.slice(source.indexOf('  function makeSashDraggableTree('), source.indexOf('   D R*AG AND DROP HANDLERS'));
   // The extraction ends inside the following section comment.
   const sashFunction = sash.slice(0, sash.lastIndexOf('  /*'));
@@ -105,6 +107,7 @@ app.whenReady().then(async () => {
     const getWorkspaceTerminals = () => [];
     const fitTerm = () => {}, saveState = () => {}, startResizing = () => {}, stopResizing = () => {};
     ${sizing}
+    ${syncSizes}
     ${sashFunction}
     ${splitBuilder}
       const el = document.createElement('div');
@@ -144,8 +147,28 @@ app.whenReady().then(async () => {
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: 450 }));
     document.dispatchEvent(new MouseEvent('mouseup'));
     check(bounds('worker-a').width >= 200 && bounds('worker-b').width >= 200, 'Manual drag violated pane minimums');
+    // An outer divider must release explicit sizes inside the worker subtree.
+    workerA.size = { height: 300 };
+    workerB.size = { height: 300 };
+    workers.size = { height: 'min' };
+    render();
+    const outerHandle = document.getElementById('split-root').querySelector(':scope > .sash');
+    const before = bounds('parent');
+    const beforeWorker = bounds('worker-a');
+    outerHandle.dispatchEvent(new MouseEvent('mousedown', { clientY: before.bottom }));
+    check(Math.abs(bounds('parent').height - before.height) < 1, 'Divider jumps on mouse-down');
+    check(Math.abs(bounds('worker-a').height - beforeWorker.height) < 1, 'Workers jump on mouse-down');
+    check(!workerA.size && !workerB.size && !workers.size, 'Nested size requests still lock the outer divider');
+    document.dispatchEvent(new MouseEvent('mousemove', { clientY: before.bottom + 60 }));
+    document.dispatchEvent(new MouseEvent('mouseup'));
+    check(Math.abs(bounds('worker-a').height - (beforeWorker.height - 60)) < 1, 'Outer divider cannot shrink explicitly sized workers');
+    const draggedHeight = bounds('worker-a').height;
+    render();
+    check(Math.abs(bounds('worker-a').height - draggedHeight) < 1, 'Rerender restores the old locked size');
+    host.style.height = '700px';
+    check(bounds('worker-a').height > draggedHeight, 'Released workers do not scale with the window');
     host.remove();
-    return 'PASS: bottom workers fill width at minimum height, side workers fill height at minimum width, legacy compact layouts, pixel resizing and manual sash override';
+    return 'PASS: nested agent sizing releases on drag without jumping, persists on rerender and scales with the window; bottom workers fill width at minimum height, side workers fill height at minimum width, legacy compact layouts, pixel resizing and manual sash override';
   })()`);
   console.log(layoutResult);
   const dropdownSetup = source.slice(source.indexOf('  function setupServersDropdown('), source.indexOf('  setupServersDropdown();'));

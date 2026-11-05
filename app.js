@@ -3515,6 +3515,8 @@
   function _disposeTermRenderers(term) {
     // xterm 5 disposes its core before its addons. Release renderers first,
     // while the core can still restore the default renderer during cleanup.
+    term._imageAddon?.dispose();
+    term._imageAddon = null;
     term._webglAddon?.dispose();
     term._webglAddon = null;
     term._canvasAddon?.dispose();
@@ -3565,6 +3567,19 @@
     }
   }
 
+  function _loadTerminalImages(term) {
+    // Install before processing PTY output so capability probes advertise SIXEL
+    // and Yazi can select native previews. The addon also enables pixel reports.
+    const addon = new ImageAddon.ImageAddon({
+      sixelSupport: true,
+      iipSupport: true,
+      enableSizeReports: true,
+      storageLimit: 32,
+    });
+    term.loadAddon(addon);
+    term._imageAddon = addon;
+  }
+
   function _createTermEntry(wsp, id, label) {
     const term = new Terminal({
       theme: makeXtermTheme(currentTheme),
@@ -3589,6 +3604,7 @@
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
     term.loadAddon(webLinksAddon);
+    _loadTerminalImages(term);
     // WebGL attached lazily via _syncWebgl only while the terminal is VISIBLE.
     // Chromium caps concurrent WebGL contexts (~16); giving every terminal its
     // own context at creation exhausted the pool when many tabs were added
@@ -6180,8 +6196,20 @@
       const isRow = node.direction === 'row';
       startPos = isRow ? e.clientX : e.clientY;
 
-      // A manual sash drag takes over from requested compact/pixel sizing.
-      const release = (current, parent, index) => {
+      // Capture the visible layout before releasing requested sizes. Otherwise
+      // switching back to old flex weights makes the divider jump on mouse-down.
+      const panes = [...container.children].filter(c => !c.classList.contains('sash'));
+      startSizes = panes.map(p => isRow ? p.offsetWidth : p.offsetHeight);
+      const wsp = activeWs();
+      if (wsp) syncSplitSizes(wsp.layout);
+
+      // Nested size requests also contribute to an ancestor's minimum size.
+      // Release the adjacent subtrees as well as the path to this divider so
+      // a worker's requested pixels cannot keep the whole row/column locked.
+      const release = (current, parent, index, subtree = false) => {
+        if (subtree && current.type === 'split') {
+          current.children.forEach((child, i) => release(child, current, i, true));
+        }
         const sized = !!current.size;
         delete current.size;
         const el = document.getElementById((current.type === 'split' ? 'split-' : 'group-') + current.id);
@@ -6190,24 +6218,25 @@
         const mins = getMinSizes(current);
         el.style.minWidth = mins.minW + 'px';
         el.style.minHeight = mins.minH + 'px';
-        if (sized && parent) el.style.flex = `${parent.sizes[index]} 1 0%`;
+        if (parent) el.style.flex = `${parent.sizes[index]} 1 0%`;
       };
       const releasePath = (current, parent, index) => {
         if (current !== node && (current.type !== 'split' || !current.children.some((child, i) => releasePath(child, current, i)))) return false;
         if (current === node) {
-          release(current.children[childIdx - 1], current, childIdx - 1);
-          release(current.children[childIdx], current, childIdx);
+          release(current.children[childIdx - 1], current, childIdx - 1, true);
+          release(current.children[childIdx], current, childIdx, true);
         }
         release(current, parent, index);
         return true;
       };
-      const wsp = activeWs();
       if (wsp) releasePath(wsp.layout, null, 0);
 
-      const panes = [...container.children].filter(c => !c.classList.contains('sash'));
-      startSizes = panes.map(p => isRow ? p.offsetWidth : p.offsetHeight);
       const dim = isRow ? 'width' : 'height';
-      for (const p of panes) p.style.willChange = dim;
+      panes.forEach((p, i) => {
+        p.style.willChange = dim;
+        p.style.flex = 'none';
+        p.style[dim] = startSizes[i] + 'px';
+      });
       _suppressResize = true;
       startResizing();
 

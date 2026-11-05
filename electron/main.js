@@ -6,6 +6,7 @@ const yaml = require('js-yaml');
 const { hasRunningProcess, runningProcessInfo } = require('./proc');
 const { startAgentControl, validateLaunch } = require('./agent-control');
 const { listRunningServers } = require('./servers');
+const { terminalEnv } = require('./terminal-env');
 let agentControl = null;
 const agentRequests = new Map();
 ipcMain.on('agent:result', (event, { id, result, error }) => {
@@ -1062,7 +1063,7 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv, executable }
       cols: cols || 80,
       rows: rows || 24,
       cwd: spawnCwd,
-      env: { ...process.env, TERM: 'xterm-256color', TERMINALVIBE_PANE_ID: id,
+      env: { ...terminalEnv(), TERMINALVIBE_PANE_ID: id,
         ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}) },
     });
     ptys.set(id, t);

@@ -17,6 +17,7 @@ const pty = require("node-pty");
 const { hasRunningProcess, runningProcessInfo } = require("./electron/proc");
 const { startAgentControl, validateLaunch } = require('./electron/agent-control');
 const { listRunningServers } = require('./electron/servers');
+const { terminalEnv } = require('./electron/terminal-env');
 const { randomUUID } = require('crypto');
 let agentControl;
 const agentClients = new Set();
@@ -218,10 +219,8 @@ class PTYSession {
       rows: this.rows,
       cwd: spawnCwd,
       env: {
-        ...process.env,
+        ...terminalEnv(),
         ...extraEnv,
-        TERM: "xterm-256color",
-        COLORTERM: "truecolor",
         TERMINALVIBE_PANE_ID: this.id,
         ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}),
       },
