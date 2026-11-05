@@ -155,7 +155,7 @@ const appServer = http.createServer((req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 class PTYSession {
-  constructor(sessionId, cols, rows, sendCb, cwd, executable, argv) {
+  constructor(sessionId, cols, rows, sendCb, cwd, executable, argv, returnToShell = false) {
     this.id = sessionId;
     this.cols = cols;
     this.rows = rows;
@@ -167,6 +167,7 @@ class PTYSession {
     this._tmpDir = null;
     this.executable = executable;
     this.argv = argv;
+    this.returnToShell = returnToShell;
   }
 
   start() {
@@ -225,8 +226,18 @@ class PTYSession {
       clearTimeout(outTimer);
       if (outBuf && this._running) sendOut(outBuf);
       outBuf = "";
+      const wasRunning = this._running;
       this._running = false;
       if (SESSIONS[this.id] && SESSIONS[this.id] !== this) return;
+      // History replaces the shell with Claude. Once Claude exits, keep the
+      // same pane alive with a shell; explicit close/replacement must stay closed.
+      if (wasRunning && this.executable && this.returnToShell) {
+        this.executable = null;
+        this.argv = null;
+        this.returnToShell = false;
+        try { this.start(); return; }
+        catch (error) { this._send(JSON.stringify({ type: 'error', id: this.id, msg: error.message })); }
+      }
       const code =
         exitCode != null ? exitCode : signal != null ? -signal : null;
       this._send(
@@ -281,7 +292,7 @@ const wss = new WebSocketServer({ port: PORT, host: HOST, maxPayload: 1024 * 102
 wss.on("connection", (ws) => {
   const localSessions = [];
 
-  ws.send(JSON.stringify({ type: "ready", port: PORT }));
+  ws.send(JSON.stringify({ type: "ready", port: PORT, sessionContextDrop:true }));
 
   ws.on("message", async (message, isBinary) => {
     if (isBinary) {
@@ -300,6 +311,16 @@ wss.on("connection", (ws) => {
       }
 
       switch (msg.type) {
+        case 'session-context': {
+          try {
+            if (!localSessions.includes(msg.id)) throw new Error('Unknown chat target');
+            const result=await require('./electron/session-context').attachSessionContext({sessionId:msg.sessionId,
+              getTarget:()=>{const session=SESSIONS[msg.id];return session && {token:session,info:runningProcessInfo(session._proc?.pid || 0)};},
+              write:(session,text)=>session.write(text)});
+            ws.send(JSON.stringify({type:'session-context:result',requestId:msg.requestId,result}));
+          } catch(error) {ws.send(JSON.stringify({type:'session-context:result',requestId:msg.requestId,error:error.message}));}
+          break;
+        }
         case 'agent:ready':
           agentClients.add(ws);
           break;
@@ -328,7 +349,7 @@ wss.on("connection", (ws) => {
             try {
               const session = new PTYSession(sid, cols, rows, (data) => {
                 if (ws.readyState === ws.OPEN) ws.send(data);
-              }, cwd, msg.executable, msg.argv);
+              }, cwd, msg.executable, msg.argv, msg.returnToShell === true);
               session.start();
               SESSIONS[sid] = session;
               if (!localSessions.includes(sid)) localSessions.push(sid);

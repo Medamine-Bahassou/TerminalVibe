@@ -1438,6 +1438,8 @@
   let nativePtyReady = false; // native PTY backend ready (Electron main process)
   let agentBrowserReady = false;
   const agentCreates = new Map();
+  const sessionContextRequests = new Map();
+  let sessionContextReady = false;
 
   let _browserSyncRaf = null;
   const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
@@ -1633,11 +1635,15 @@
               result => { if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ type: 'agent:result', id: msg.id, result })); },
               error => { if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ type: 'agent:result', id: msg.id, error: error.message })); }
             );
+          } else if (msg.type === 'session-context:result') {
+            const pending=sessionContextRequests.get(msg.requestId);
+            if(pending) {clearTimeout(pending.timer);sessionContextRequests.delete(msg.requestId);if(msg.error) pending.reject(new Error(msg.error));else pending.resolve(msg.result);}
           } else if (msg.type === 'agent:created') {
             const pending = agentCreates.get(msg.requestId);
             if (pending) { clearTimeout(pending.timer); agentCreates.delete(msg.requestId); pending.resolve(msg.started); }
           } else if (msg.type === 'ready') {
             if (msg.port) { WS_PORT = msg.port; }
+            sessionContextReady = msg.sessionContextDrop === true;
           } else if (msg.type === 'exit') handleExit(msg.id, msg.code);
           else if (msg.type === 'error') handleError(msg.id, msg.msg);
           else if (msg.type === 'pong') { }
@@ -1649,6 +1655,9 @@
       wsReady = false;
       for (const pending of agentCreates.values()) { clearTimeout(pending.timer); pending.reject(new Error('Terminal backend disconnected')); }
       agentCreates.clear();
+      sessionContextReady = false;
+      for(const pending of sessionContextRequests.values()) {clearTimeout(pending.timer);pending.reject(new Error('Terminal backend disconnected'));}
+      sessionContextRequests.clear();
       setTimeout(connectWS, 2000);
     };
 
@@ -3738,6 +3747,7 @@
             tab.dataset.termid = entry.id;
             tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
             tab.title = entry.label;
+            addTabSessionHistory(tab, wsp, entry);
             applyTabColor(tab, entry.color);
             tab.draggable = true;
             tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
@@ -5317,6 +5327,7 @@
         <span class="tg-tab-close" title="Close">✕</span>
         `;
         tab.title = t.label;
+        addTabSessionHistory(tab, wsp, t);
         applyTabColor(tab, t.color);
 
         tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, t.id); } });
@@ -5585,14 +5596,6 @@
       maxBtn.onclick = () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); };
 
       actions.appendChild(addTabBtn);
-      const sessionHistory = document.createElement('button');
-      sessionHistory.type = 'button'; sessionHistory.className = 'tg-btn session-history-trigger';
-      sessionHistory.dataset.claudeHistory = node.id;
-      sessionHistory.title = 'Claude session history'; sessionHistory.setAttribute('aria-label', 'Claude session history');
-      sessionHistory.innerHTML = '<i class="ph ph-clock-counter-clockwise"></i>';
-      sessionHistory.hidden = !node.terminals.some(t => t.id === node.activeTermId && (t.toolProvider === 'claude' || /claude/i.test(t.label)));
-      sessionHistory.onclick = () => openClaudeHistory(wsp, node.terminals.find(t => t.id === node.activeTermId));
-      actions.appendChild(sessionHistory);
 
       // Collapsible buttons (hidden in compact mode via CSS)
       addBrowserBtn.classList.add('tg-btn-collapse');
@@ -6334,6 +6337,74 @@
 
     // Files dropped on a split go to that split's active terminal (no split overlay).
     const dropTarget = () => groupNode.terminals.find(t => t.id === groupNode.activeTermId) || groupNode.terminals[0];
+    const isSessionDrag = e => e.dataTransfer?.types.includes('application/x-terminalvibe-session');
+    let sessionDropProcess=null, sessionDropProbe=null, lastSessionHover=null;
+    const inSessionDropArea = e => {
+      const terminal=dropTarget();
+      if(!terminal?.el || terminal.type==='browser' || terminal.locked || terminal.dead) return false;
+      if(e.target.closest?.('.session-overlay')) return false;
+      const inside = rect => e.clientX>=rect.left && e.clientX<rect.right && e.clientY>=rect.top && e.clientY<rect.bottom;
+      if(!inside(terminal.el.getBoundingClientRect())) return false;
+      const sidebar=terminal.el.querySelector('.session-overlay');
+      return !sidebar || !inside(sidebar.getBoundingClientRect());
+    };
+    const acceptsSessionDrop = e => inSessionDropArea(e) &&
+      sessionDropProcess?.terminal===dropTarget() && Date.now()-sessionDropProcess.checkedAt<1000 &&
+      /^(claude|claude-code)(\.exe)?$/i.test(sessionDropProcess.name || '');
+    let sessionDropEffect = null;
+    const clearSessionDropEffect = () => {sessionDropEffect?.remove();sessionDropEffect=null;};
+    const showSessionDropEffect = () => {
+      const terminal=dropTarget();
+      if(!terminal?.el) return;
+      if(!sessionDropEffect?.isConnected) {
+        sessionDropEffect=document.createElement('div');sessionDropEffect.className='session-context-drop-effect';
+        sessionDropEffect.setAttribute('aria-hidden','true');
+        sessionDropEffect.innerHTML='<div class="session-context-drop-card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></svg><span>Add session context</span></div>';
+        terminal.el.append(sessionDropEffect);
+      }
+      const rect=terminal.el.getBoundingClientRect();
+      const sidebar=terminal.el.querySelector('.session-overlay')?.getBoundingClientRect();
+      sessionDropEffect.style.left=Math.max(0,sidebar && sidebar.width ? sidebar.right-rect.left : 0)+'px';
+    };
+    const probeSessionDropTarget = e => {
+      lastSessionHover=inSessionDropArea(e) ? e : null;
+      if(!lastSessionHover) return;
+      const terminal=dropTarget();
+      if(sessionDropProbe || (sessionDropProcess?.terminal===terminal && Date.now()-sessionDropProcess.checkedAt<500)) return;
+      const probe=checkTerminalRunning(terminal.id);sessionDropProbe=probe;
+      probe.then(name=>{
+        if(sessionDropProbe!==probe) return;
+        sessionDropProbe=null;sessionDropProcess={terminal,name,checkedAt:Date.now()};
+        if(lastSessionHover && dropTarget()===terminal && document.querySelector('.session-overlay.session-dragging') && acceptsSessionDrop(lastSessionHover)) showSessionDropEffect();
+        else clearSessionDropEffect();
+      }).catch(()=>{sessionDropProbe=null;sessionDropProcess=null;clearSessionDropEffect();});
+    };
+    // Capture session drags before the terminal's textarea/default drop handlers.
+    bodyEl.addEventListener('dragenter', e => {
+      if(!isSessionDrag(e)) return;
+      probeSessionDropTarget(e);
+      e.stopPropagation();if(acceptsSessionDrop(e)) {e.preventDefault();showSessionDropEffect();}else clearSessionDropEffect();
+    }, true);
+    bodyEl.addEventListener('dragover', e => {
+      if(!isSessionDrag(e)) return;
+      probeSessionDropTarget(e);
+      e.stopPropagation();
+      if(acceptsSessionDrop(e)) {e.preventDefault();e.dataTransfer.dropEffect='copy';showSessionDropEffect();}
+      else {e.dataTransfer.dropEffect='none';clearSessionDropEffect();}
+    }, true);
+    bodyEl.addEventListener('dragleave', e => {
+      if(!isSessionDrag(e)) return;
+      e.stopPropagation();
+      if(!e.relatedTarget || !bodyEl.contains(e.relatedTarget) || e.relatedTarget.closest?.('.session-overlay')) {lastSessionHover=null;clearSessionDropEffect();}
+    }, true);
+    bodyEl.addEventListener('drop', e => {
+      if(!isSessionDrag(e)) return;
+      e.preventDefault();e.stopPropagation();
+      lastSessionHover=null;
+      clearSessionDropEffect();
+      if(!acceptsSessionDrop(e)) return;
+      attachContextToChat(dropTarget(),e.dataTransfer.getData('application/x-terminalvibe-session'));
+    }, true);
     bodyEl.addEventListener('dragenter', e => {
       if (isFileDrag(e)) { e.preventDefault(); return; }
       const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
@@ -9642,11 +9713,39 @@
   // command (or open a URL) when launched from the right panel.
   // Live agent orchestration. Launch arguments are passed directly to the PTY,
   // never typed into an interactive shell. Running entries survive rearrangement.
+  async function attachContextToChat(entry, sessionId) {
+    const notice=document.createElement('div');notice.className='session-drop-feedback';notice.setAttribute('role','status');
+    const host=entry?.el; if(!host) return;
+    notice.textContent='Adding saved session context…';host.append(notice);
+    try {
+      if(entry.type==='browser' || entry.locked || entry.dead) throw new Error('Choose an unlocked, running Claude terminal');
+      let result;
+      if(window.electronAPI?.attachSessionContext) result=await window.electronAPI.attachSessionContext(entry.id,sessionId);
+      else {
+        if(isDesktop()) throw new Error('Save active work and restart Electron to enable session context drops.');
+        if(!wsReady) throw new Error('Terminal backend is disconnected');
+        if(!sessionContextReady) throw new Error('Save active work, restart the dev backend, and reload TerminalVibe to enable session context drops.');
+        result=await new Promise((resolve,reject)=>{
+          const requestId=uuid();const timer=setTimeout(()=>{sessionContextRequests.delete(requestId);reject(new Error('Context attachment timed out. Update the backend if it does not support session drops.'));},15000);
+          sessionContextRequests.set(requestId,{resolve,reject,timer});
+          ws.send(JSON.stringify({type:'session-context',id:entry.id,sessionId,requestId}));
+        });
+      }
+      notice.textContent='Session context added successfully';
+      document.dispatchEvent(new CustomEvent('session-context:attached',{detail:result}));
+      entry.term?.focus();
+    } catch(error) {
+      notice.textContent=error.message;
+      document.dispatchEvent(new CustomEvent('session-context:attached',{detail:{error:error.message}}));
+    }
+    setTimeout(()=>notice.remove(),2000);
+  }
+
   async function openClaudeHistory(wsp, entry) {
     if (!entry || entry.type === 'browser') return;
     const cwd = entry.cwd;
     let history;
-    window.openSessionDrawer({ host:entry.el, cwd: 'Claude Code · All projects', currentId: entry.claudeSessionId,
+    window.openSessionDrawer({ host:entry.el, cwd: 'Claude Code · All projects', project: cwd, currentId: entry.claudeSessionId,
       load: async () => {
         if (window.electronAPI?.claudeSessions) history = await window.electronAPI.claudeSessions(cwd);
         else {
@@ -9675,7 +9774,7 @@
           const process = await checkTerminalRunning(entry.id);
           if (entry.locked || (process !== null && !/^(claude|claude-code)(\.exe)?$/i.test(process || ''))) throw new Error('This terminal is running another process. Stop it before resuming a conversation here.');
           const started = await createAgentTerminal({ id:entry.id, ...getSlotDimensions(entry), cwd:sessionCwd,
-            executable:history.executable, argv, replaceIdle:true, replaceClaude:true });
+            executable:history.executable, argv, returnToShell:true, replaceIdle:true, replaceClaude:true });
           if (!started) {
             if (await checkTerminalRunning(entry.id) === null) {
               const restored = await createAgentTerminal({ id:entry.id, ...getSlotDimensions(entry), cwd:cwd || history.cwd });
@@ -9687,7 +9786,7 @@
           target.term.write('\r\n[Claude session started]\r\n');
         } else {
           const result = await handleAgentRequest({ method:'launch', params:{ workspaceId:wsp.id, anchorPaneId:entry.id,
-            placement:{split:'row',compact:false}, layout:{ name:session?.title || 'Claude', cwd:sessionCwd, argv:[history.executable,...argv] } } });
+            placement:{split:'row',compact:false}, layout:{ name:session?.title || 'Claude', cwd:sessionCwd, argv:[history.executable,...argv], returnToShell:true } } });
           target = findTermById(result.launches[0].id)?.term;
           if (!result.launches[0].started) throw new Error('Claude failed to start. Inspect the new terminal for details.');
         }
@@ -9696,15 +9795,35 @@
       }
     });
   }
+  function addTabSessionHistory(tab, wsp, entry) {
+    if (entry.type === 'browser') return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'session-history-trigger';
+    button.dataset.claudeHistory = entry.id;
+    button.title = 'Claude session history';
+    button.setAttribute('aria-label', 'Claude session history');
+    button.innerHTML = '<i class="ph ph-clock-counter-clockwise"></i>';
+    button.hidden = !(entry.toolProvider === 'claude' || /claude/i.test(entry.label));
+    button.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); });
+    button.addEventListener('dblclick', e => e.stopPropagation());
+    button.addEventListener('dragstart', e => { e.preventDefault(); e.stopPropagation(); });
+    button.addEventListener('click', e => {
+      e.stopPropagation();
+      openClaudeHistory(wsp, entry);
+    });
+    tab.prepend(button);
+  }
+
   setInterval(async () => {
     if (document.hidden) return;
     const wsp = activeWs(); if (!wsp) return;
     for (const button of document.querySelectorAll('[data-claude-history]')) {
-      const group = findGroupById(wsp.layout, button.dataset.claudeHistory);
-      const entry = group?.terminals.find(t => t.id === group.activeTermId);
+      const entry = getWorkspaceTerminals(wsp).find(t => t.id === button.dataset.claudeHistory);
       if (!entry || entry.type === 'browser') { button.hidden=true; continue; }
+      if (!button.closest('.tg-tab.active')) continue;
       const name = await checkTerminalRunning(entry.id);
-      if (button.isConnected && group.activeTermId === entry.id) button.hidden = !(/claude/i.test(name || '') || entry.toolProvider === 'claude');
+      if (button.isConnected) button.hidden = !(/claude/i.test(name || '') || entry.toolProvider === 'claude');
     }
   }, 4000);
 
@@ -9810,7 +9929,7 @@
           continue;
         }
         const spec = specs.get(t.id), slot = getSlotDimensions(t);
-        const started = await createAgentTerminal({ id: t.id, ...slot, cwd: spec.cwd, executable: spec.argv[0], argv: spec.argv.slice(1) });
+        const started = await createAgentTerminal({ id: t.id, ...slot, cwd: spec.cwd, executable: spec.argv[0], argv: spec.argv.slice(1), returnToShell: spec.returnToShell === true });
         if (!started) {
           t.dead = true;
           t.term.write('\r\n[Could not launch agent. Check executable and cwd.]\r\n');

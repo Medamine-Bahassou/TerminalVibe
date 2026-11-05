@@ -1029,7 +1029,13 @@ const sendToRenderer = (channel, payload) => {
 };
 
 ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-sessions').listClaudeSessions(cwd));
-ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude }) => {
+ipcMain.handle('terminal:session-context', (event, id, sessionId) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized chat target');
+  return require('./session-context').attachSessionContext({sessionId,
+    getTarget: () => { const terminal=ptys.get(id); return terminal && {token:terminal,info:runningProcessInfo(terminal.pid)}; },
+    write: (terminal,text) => terminal.write(text) });
+});
+function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell }) {
   try {
     if (replaceIdle && ptys.has(id) && !canReplaceSession(runningProcessInfo(ptys.get(id).pid), replaceClaude === true)) return false;
     if (ptys.has(id)) {
@@ -1094,6 +1100,11 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv, executable, 
       outBuf = '';
       if (ptys.get(id) !== t) return;
       ptys.delete(id);
+      // Only natural agent exit returns to a shell. Close/replacement removes
+      // this PTY from the map, so its stale exit callback cannot resurrect it.
+      if (executable && returnToShell === true && createTerminal(_e, {
+        id, cols: t.cols || cols, rows: t.rows || rows, cwd: spawnCwd,
+      })) return;
       sendToRenderer('terminal:exit', { id, code: exitCode });
     });
 
@@ -1111,7 +1122,8 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv, executable, 
     console.error('[pty] create failed:', err);
     return false;
   }
-});
+}
+ipcMain.handle('terminal:create', createTerminal);
 ipcMain.on('terminal:resize', (_e, { id, cols, rows }) => {
   const t = ptys.get(id);
   if (t) { try { t.resize(cols, rows); } catch {} }

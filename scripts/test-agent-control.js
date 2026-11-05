@@ -320,7 +320,7 @@ async function main() {
     const browserHome = path.join(temp, 'browser-home');
     fs.mkdirSync(browserHome);
     browserServer = cp.spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-      env: { ...process.env, HOME: browserHome, USERPROFILE: browserHome, WS_PORT: String(wsPort), APP_PORT: String(appPort) },
+      env: { ...process.env, HOME: browserHome, USERPROFILE: browserHome, CLAUDE_CONFIG_DIR:path.join(browserHome,'.claude'), WS_PORT: String(wsPort), APP_PORT: String(appPort) },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let logs = '';
@@ -416,8 +416,20 @@ async function main() {
     await waitOutput('RECEIVED:still alive after refused resume');
     const claudeGuardId = '01234567-1234-1234-1234-123456789abc';
     assert.equal(await sandbox.createAgentTerminal({ id:claudeGuardId,cwd:temp,executable:process.execPath,
-      argv:['-e',"process.title='claude'; console.log('TV-CLAUDE-GUARD-READY'); setInterval(()=>{},1000)"] }), true);
+      argv:['-e',"process.title='claude'; process.stdin.setRawMode(true); process.stdin.resume(); let draft='';process.stdin.on('data',b=>{draft+=b.toString();if(draft.includes('\\x1b[201~')) console.log(draft.startsWith('\\x1b[200~') && draft.endsWith('\\x1b[201~') && draft.includes('Fixture context') ? 'TV-CONTEXT-DRAFT-OK' : 'TV-CONTEXT-DRAFT-BAD');});console.log('TV-CLAUDE-GUARD-READY'); setInterval(()=>{},1000)"] }), true);
     await waitOutput('TV-CLAUDE-GUARD-READY');
+    const contextDir=path.join(browserHome,'.claude','projects','fixture');fs.mkdirSync(contextDir,{recursive:true});
+    fs.writeFileSync(path.join(contextDir,claudeGuardId+'.jsonl'),JSON.stringify({type:'user',cwd:temp,message:{content:'Fixture context'}}));
+    const sendContext = (id,sessionId) => new Promise((resolve,reject)=>{
+      const requestId='context-'+Math.random();
+      const timer=setTimeout(()=>{browserClient.off('message',listener);reject(new Error('Context reply timed out'));},3000);
+      const listener=(data,binary)=>{if(binary)return;const msg=JSON.parse(data.toString());if(msg.type==='session-context:result'&&msg.requestId===requestId){clearTimeout(timer);browserClient.off('message',listener);resolve(msg);}};
+      browserClient.on('message',listener);browserClient.send(JSON.stringify({type:'session-context',id,sessionId,requestId}));
+    });
+    const attached=await sendContext(claudeGuardId,claudeGuardId);
+    assert(attached.result.chars>0);await waitOutput('TV-CONTEXT-DRAFT-OK');
+    assert.match((await sendContext(liveId,claudeGuardId)).error,/running Claude/);
+    assert.match((await sendContext('unknown-pane',claudeGuardId)).error,/Unknown chat target/);
     assert.equal(await sandbox.createAgentTerminal({ id:claudeGuardId,cwd:temp,executable:process.execPath,
       argv:['-e',"console.log('TV-SAME-PANE-RESUMED'); setInterval(()=>{},1000)"],replaceIdle:true }), false);
     assert.equal(await sandbox.createAgentTerminal({ id:claudeGuardId,cwd:temp,executable:process.execPath,

@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalClose: (id) => ipcRenderer.send('terminal:close', id),
   terminalHasRunningProcess: (id) => ipcRenderer.invoke('terminal:hasRunningProcess', id),
   claudeSessions: (cwd) => ipcRenderer.invoke('history:claude-sessions', cwd),
+  attachSessionContext: (id, sessionId) => ipcRenderer.invoke('terminal:session-context', id, sessionId),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),
   terminalAttached: (id) => ipcRenderer.send('terminal:attached', id),
   attachWindow: (o) => ipcRenderer.send('terminal:attach-window', o),
