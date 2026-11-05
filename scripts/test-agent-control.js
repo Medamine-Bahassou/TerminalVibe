@@ -130,6 +130,70 @@ async function main() {
     const output = await new Promise((resolve, reject) => cp.execFile(process.execPath, [cli, 'list', '--instance', bridge.file], (err, stdout) => err ? reject(err) : resolve(stdout)));
     assert.equal(JSON.parse(output).workspaces.length, 2);
 
+    const { linuxPath, wslInvocation } = require(cli);
+    assert.equal(linuxPath('C:\\Users\\A B\\plan.json', 'Ubuntu'), '/mnt/c/Users/A B/plan.json');
+    assert.equal(linuxPath('\\\\wsl.localhost\\Ubuntu\\home\\med', 'Ubuntu'), '/home/med');
+    assert.throws(() => linuxPath('\\\\wsl$\\Debian\\home\\med', 'Ubuntu'), /different WSL/);
+    const literalPrompt = 'test "quotes"; $(no expansion) & spaces';
+    const relay = wslInvocation(['pair', '--provider', 'claude', '--prompt', literalPrompt, '--cwd', 'C:\\Project'],
+      '\\\\wsl.localhost\\Ubuntu\\home\\med', { USERPROFILE: 'C:\\Users\\A B', TERMINALVIBE_PANE_ID: 'parent' },
+      'C:\\Users\\A B\\skills\\tv.js');
+    assert(relay.includes(literalPrompt), 'Prompt stays a single literal process argument');
+    assert(relay.includes('/mnt/c/Users/A B/skills/tv.js'));
+    assert(relay.includes('TERMINALVIBE_WINDOWS_HOME=/mnt/c/Users/A B'));
+    assert(relay.includes('/mnt/c/Project'));
+    assert.equal(wslInvocation([], 'C:\\Project'), null);
+
+    const clientHome = path.join(temp, 'client-home');
+    const clientDirectory = path.join(clientHome, '.terminalvibe', 'control');
+    fs.mkdirSync(clientDirectory, { recursive: true });
+    const selectedFile = path.join(clientDirectory, path.basename(bridge.file));
+    fs.copyFileSync(bridge.file, selectedFile);
+    fs.writeFileSync(path.join(clientDirectory, 'instance-123.json'), 'truncated JSON');
+    const clientEnv = { ...process.env, HOME: clientHome, USERPROFILE: clientHome };
+    delete clientEnv.TERMINALVIBE_CONTROL_FILE;
+    delete clientEnv.TERMINALVIBE_PANE_ID;
+    const client = (args, options = {}) => new Promise((resolve, reject) => {
+      cp.execFile(process.execPath, [cli, ...args], { env: clientEnv, ...options },
+        (error, stdout) => error ? reject(error) : resolve(JSON.parse(stdout)));
+    });
+    assert.equal((await client(['context'])).instance, selectedFile, 'Sole live instance is automatic; broken descriptors ignored');
+    const duplicateFile = path.join(clientDirectory, 'instance-456.json');
+    fs.copyFileSync(bridge.file, duplicateFile);
+    await assert.rejects(client(['list']), /Multiple live instances/);
+    fs.unlinkSync(duplicateFile);
+
+    const bomPlan = path.join(temp, 'bom-plan.json');
+    fs.writeFileSync(bomPlan, '\uFEFF' + JSON.stringify({ workspaceId: target.id, layout: pane('BOM plan') }));
+    const bomLaunch = await client(['launch', '--inspect', '--file', bomPlan]);
+    assert.equal(bomLaunch.snapshots.length, 1);
+    assert.equal(bomLaunch.snapshots[0].text, 'line 0\nline 1\nline 2');
+
+    if (process.platform !== 'win32') {
+      // A fake installed launcher verifies the one-command path without paid
+      // provider sessions, logins or actual agent processes.
+      const bin = path.join(clientHome, 'bin');
+      fs.mkdirSync(bin);
+      fs.writeFileSync(path.join(bin, 'claude'), '#!' + process.execPath + '\nconsole.log("test-claude 1.0");\n', { mode: 0o755 });
+      clientEnv.PATH = bin;
+      clientEnv.TERMINALVIBE_PANE_ID = ids[0];
+      sandbox.activeWsId = workspaces[1].id; // Parent environment wins over focus.
+      const beforePair = spawns.length;
+      const pairResult = await client(['pair', '--provider', 'claude', '--cwd', temp, '--prompt', literalPrompt]);
+      assert.equal(pairResult.workspace.id, target.id);
+      assert.equal(pairResult.launches.length, 2);
+      assert.equal(pairResult.snapshots.length, 2);
+      assert.equal(pairResult.launcher.version, 'test-claude 1.0');
+      assert.equal(spawns.length, beforePair + 2);
+      assert(spawns.slice(-2).every(spec => spec.argv[0] === literalPrompt));
+      assert.equal(target.activeTermId, oldActive, 'Fast pair preserves the parent pane');
+      assert.equal(target.layout.children[1].direction, 'row', 'Workers are side by side');
+      await assert.rejects(client(['pair', '--provider', 'missing']), /provider claude or codex/);
+      await assert.rejects(client(['pair', '--provider', 'codex']), /launcher unavailable/);
+      assert.equal(spawns.length, beforePair + 2, 'Unavailable providers never create or substitute agents');
+    }
+    console.log('Fast client: WSL path relay, literal args, auto-selection, ambiguity, BOM plans, pair launch and snapshots passed');
+
     // Real browser transport and real PTY in an isolated server/home. No user
     // dev processes, browser sessions, provider logins or workspaces are touched.
     const freePort = async () => {

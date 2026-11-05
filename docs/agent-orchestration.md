@@ -24,7 +24,31 @@ the correct control descriptor. Then ask:
 > panes. Put Claude on the left at 50%, with the other two stacked on the right.
 > Give each a separate task, inspect their output, and summarize their findings.
 
-The agent must discover the installed commands and their prompt flags first.
+For a quick two-agent test in the current workspace, the installed skill now
+uses a single client call:
+
+```sh
+node skills/terminalvibe-orchestration/scripts/tv.js pair --provider claude
+```
+
+Add `--prompt "TASK"` to give both agents work, or `--cwd DIR` to override the
+calling directory. The command selects the owning/sole live instance, checks
+the requested executable, pins the current workspace, creates two side-by-side
+panes below the parent and returns both output snapshots after a bounded 750 ms
+wait. Snapshots do not certify authentication or readiness. Do not relaunch to
+wait for output; use `read` on the returned pane IDs. Providers are never
+substituted, and approval settings remain enabled.
+
+For distinct tasks or custom layouts, `context --provider claude` returns the
+instance, workspace list, selected workspace, cwd and verified launcher in one
+call. Follow it with `launch --inspect --file plan.json`. No backend restart is
+needed to use these client shortcuts with an app supporting workspace launches.
+From PowerShell in a WSL UNC cwd, the client routes itself through `wsl.exe`
+without shell path conversion, translates client/file paths and can verify the
+calling user's Windows native launcher from WSL. It does not scan other users.
+UTF-8 JSON files/stdin may include a PowerShell BOM.
+
+For custom agents, discover the installed command and its prompt syntax first.
 An Antigravity desktop/editor command alone does not provide an interactive
 terminal subagent. If there is no suitable launcher, the agent reports that
 limitation instead of pretending a terminal session is available.
@@ -103,9 +127,10 @@ flag means the running app/page needs updating; it is not a reason to create
 panes manually. Restarting dev mode or refreshing a browser tab closes its dev
 terminals, so save work before loading an update.
 
-Outside TerminalVibe, run `tv.js instances`, then supply `--instance FILE`.
-Run the client on the same OS as Electron (Windows and WSL have different
-home directories and executable paths). For multiple instances, select one
+Outside TerminalVibe, a sole live instance is selected automatically. If several
+exist, run `tv.js instances`, then supply `--instance FILE`.
+Run the client on the backend OS, or use automatic WSL routing from a Windows
+WSL UNC cwd (Windows and WSL have different homes). For multiple instances, select one
 explicitly. Stale descriptors from crashes are labeled by PID liveness; a reused
 PID is not proof of a live app, and connection errors remain authoritative.
 

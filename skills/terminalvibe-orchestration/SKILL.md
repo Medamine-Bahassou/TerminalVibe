@@ -8,24 +8,59 @@ TerminalVibe must be running with agent control support, either the Electron app
 or `npm run dev` with one TerminalVibe browser tab open. The client needs Node.js
 18+. After updating the server, restart dev mode and refresh the browser tab.
 
-Inside a TerminalVibe terminal, `TERMINALVIBE_CONTROL_FILE` selects the owning app
-instance and `TERMINALVIBE_PANE_ID` identifies the current pane. Outside the app,
-run `node scripts/tv.js instances`, then pass `--instance FILE` to each command.
-An empty instance list means this OS/user has no descriptors; it does not prove
-TerminalVibe is stopped on another OS. Windows and WSL use different homes. Prefer
-running the client and orchestrator in the same OS as the TerminalVibe backend.
-If Claude runs on Windows while dev mode runs in WSL, invoke the client through
-`wsl -d DISTRO --exec node /linux/path/to/this/skill/scripts/tv.js instances`
-and use that same prefix for subsequent calls. Discover the actual distro and
-Linux skill path first. In that mode, use Linux cwd/executable paths and check
-launchers inside WSL, even though the parent Claude process runs on Windows.
+## Fast path
+
+For "launch two agents side by side in this workspace", use one command:
+
+```sh
+node /absolute/path/to/this/skill/scripts/tv.js pair --provider claude
+```
+
+Use the requested provider. When unspecified, use the current orchestrator's
+provider (`claude` for Claude Code, `codex` for Codex), not a different provider.
+`pair` is for two agents sharing a prompt: add `--prompt "TASK"` for real work;
+without it both are asked to reply READY and wait. Optional `--cwd DIR` defaults
+to the calling directory. The client selects the owning/sole live instance,
+verifies only that provider's executable with `--version`, pins this workspace,
+preserves the parent pane, launches two workers side by side below it, and
+returns both spawn results and output snapshots. It does not disable approvals.
+Use the returned snapshots; do not issue separate reads unless output is empty
+or needs further inspection. Never relaunch just to wait for readiness.
+
+On Windows use PowerShell directly. From a WSL UNC working directory, the
+client automatically routes to that distro using direct process arguments,
+translates client/file paths, and can use the calling user's native Windows
+Claude executable if no native Linux launcher works. Do not run `wsl -l`, probe
+both OSes, write an adapter, or inspect CLI help before this fast path. Diagnose
+only an actual returned error. A missing provider is reported, never substituted.
+
+For other layouts or distinct worker tasks, start with one call:
+
+```sh
+node /absolute/path/to/this/skill/scripts/tv.js context --provider claude
+```
+
+This returns the workspace list, concrete `workspaceId`, backend OS/cwd and
+verified launcher `argv` in one response. Reuse these for the launch plan; known
+Claude/Codex clients accept a positional prompt. Check help only for an unknown
+adapter or an actual incompatible-command error. Use `launch --inspect --file
+plan.json` to include both workers' snapshots without separate shell calls.
+
+## Instance and workspace selection
+
+Inside a terminal, `TERMINALVIBE_CONTROL_FILE` selects the owning instance and
+`TERMINALVIBE_PANE_ID` identifies the parent pane. Outside it, a sole live
+instance is automatic. Only if multiple instances exist, run `instances` and
+select with `--instance FILE`. Windows and WSL have separate homes; automatic
+WSL routing requires a WSL UNC cwd. Otherwise run the client in the backend OS.
 For browser mode the backend is `server.js`, and the browser tab must be open
 and refreshed after an update. Multiple ready tabs are rejected to avoid
 controlling the wrong workspace; keep one tab open during orchestration.
 Do not choose an arbitrary instance if several are running. Descriptor files are
 credentials; do not print their contents or copy tokens into prompts.
 
-Run `node scripts/tv.js list` before creating or changing panes. Preserve the
+`pair` and `context` already perform `list`; do not repeat it. Otherwise run
+`node scripts/tv.js list` before creating or changing panes. Preserve the
 parent/orchestrator terminal. Honor the user's workspace choice: for "in this
 workspace", add new agents to that workspace rather than creating a new one.
 `list` returns `activeWorkspaceId`, `activePaneId`, and `capabilities` alongside
@@ -81,9 +116,9 @@ restart/page refresh, including that those actions close dev terminals, instead
 of claiming the installed feature cannot do it. Do not restart the user's dev
 server or refresh their active terminal session automatically.
 
-Use the user's requested providers and installed launchers. Verify executables
-locally (for example `command -v claude` / `Get-Command claude`) and inspect their
-local help for prompt flags. Pass each argument separately; no shell quoting or
+Use the user's requested providers and installed launchers. Reuse the verified
+launcher from `context` or `pair`. For custom adapters, verify the executable and
+its local prompt syntax. Pass each argument separately; no shell quoting or
 shell expansion occurs. For ChatGPT coding tasks, use Codex only when that is
 the terminal client the user intends. Antigravity requires an actual terminal
 agent entrypoint or a user-configured adapter; opening its editor does not create
@@ -92,7 +127,8 @@ launch commands or substitute providers. Do not disable agent approval controls.
 
 The response contains workspace/pane IDs and per-pane `started` results. A
 successful spawn does not prove authentication, task completion, or a provider's
-readiness. Read each pane to check its actual state. Failed launches remain
+readiness. Inspect the included snapshots, or read each pane when absent, to
+check its actual state. Failed launches remain
 visible. If a mutation times out, list panes before retrying to avoid duplicates.
 
 Follow-up calls take one JSON argument, or `--file FILE` / `--file -` for stdin:

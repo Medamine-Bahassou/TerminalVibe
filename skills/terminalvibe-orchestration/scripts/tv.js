@@ -4,42 +4,87 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const http = require('http');
+const { execFile } = require('child_process');
 
-async function main(args) {
-  const method = args.shift();
-  if (!method || method === '--help') {
-    console.log('tv.js instances | list | launch|arrange --file FILE|- | read|send|focus JSON\nAll RPC commands accept --instance /absolute/instance-PID.json.\nJSON can also be passed using --file FILE|- for any RPC command.');
-    return;
+function run(file, args, options = {}) {
+  const { input, ...settings } = options;
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, args, { timeout: 10000, windowsHide: true, ...settings },
+      (error, stdout) => error ? reject(error) : resolve(stdout.trim()));
+    child.stdin.on('error', () => {}); // The child may exit before consuming input.
+    child.stdin.end(input);
+  });
+}
+
+function linuxPath(value, distro) {
+  const unc = /^\\\\(?:wsl\.localhost|wsl\$)\\([^\\]+)(.*)$/i.exec(value);
+  if (unc) {
+    if (unc[1].toLowerCase() !== distro.toLowerCase()) throw new Error('Paths belong to different WSL distributions');
+    return unc[2].replace(/\\/g, '/') || '/';
   }
-  let descriptor = process.env.TERMINALVIBE_CONTROL_FILE;
-  const index = args.indexOf('--instance');
-  if (index !== -1) {
-    if (!args[index + 1]) throw new Error('--instance needs a file');
-    descriptor = args[index + 1]; args.splice(index, 2);
+  if (/^[A-Za-z]:[\\/]/.test(value)) return `/mnt/${value[0].toLowerCase()}${value.slice(2).replace(/\\/g, '/')}`;
+  return value;
+}
+
+function wslInvocation(args, cwd, env = process.env, script = __filename) {
+  const match = /^\\\\(?:wsl\.localhost|wsl\$)\\([^\\]+)(.*)$/i.exec(cwd);
+  if (!match) return null;
+  const distro = match[1];
+  const forwarded = args.map((arg, i) => ['--file', '--instance', '--cwd'].includes(args[i - 1]) && arg !== '-'
+    ? linuxPath(arg, distro) : arg);
+  const vars = [];
+  for (const name of ['TERMINALVIBE_CONTROL_FILE', 'TERMINALVIBE_PANE_ID']) {
+    if (env[name]) vars.push(`${name}=${linuxPath(env[name], distro)}`);
   }
-  const directory = path.join(os.homedir(), '.terminalvibe', 'control');
-  const files = () => fs.existsSync(directory) ? fs.readdirSync(directory).filter(f => /^instance-\d+\.json$/.test(f)).map(f => path.join(directory, f)) : [];
-  if (method === 'instances') {
-    // Never print the bearer token.
-    console.log(JSON.stringify(files().map(file => {
-      const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (env.USERPROFILE) vars.push(`TERMINALVIBE_WINDOWS_HOME=${linuxPath(env.USERPROFILE, distro)}`);
+  return ['--distribution', distro, '--cd', linuxPath(cwd, distro), '--exec', '/usr/bin/env', ...vars,
+    'node', linuxPath(script, distro), ...forwarded];
+}
+
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+}
+
+function instances(directory) {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory).filter(f => /^instance-\d+\.json$/.test(f)).flatMap(name => {
+    const file = path.join(directory, name);
+    try {
+      const d = readJson(file);
       let alive = true;
       try { process.kill(d.pid, 0); } catch (e) { alive = e.code === 'EPERM'; }
-      return { file, pid: d.pid, alive };
-    }), null, 2));
-    return;
+      return [{ file, pid: d.pid, alive }];
+    } catch { return []; } // Ignore a partially written/crashed descriptor.
+  });
+}
+
+async function resolveLauncher(provider) {
+  if (!['claude', 'codex'].includes(provider)) throw new Error('Use --provider claude or codex; use launch with explicit argv for other agents');
+  const home = os.homedir();
+  const names = process.platform === 'win32' ? [`${provider}.exe`, provider] : [provider];
+  const dirs = [...(process.env.PATH || '').split(path.delimiter), path.join(home, '.local', 'bin')];
+  const candidates = dirs.filter(Boolean).flatMap(dir => names.map(name => path.join(dir, name)));
+  // WSL can use the Windows native launcher without a temporary shell adapter.
+  // Use the calling user's home, never scan other Windows users' installations.
+  const windowsHome = process.env.TERMINALVIBE_WINDOWS_HOME || /^\/mnt\/[a-z]\/Users\/[^/]+/i.exec(__filename)?.[0];
+  if (process.platform === 'linux' && windowsHome) candidates.push(path.join(windowsHome, '.local', 'bin', `${provider}.exe`));
+  const failures = [];
+  for (const file of new Set(candidates)) {
+    try { fs.accessSync(file, fs.constants.X_OK); } catch { continue; }
+    try {
+      const version = await run(file, ['--version'], { timeout: 4000 });
+      return { provider, argv: [file], promptStyle: 'positional', version };
+    } catch { failures.push(file); }
   }
-  if (!['list', 'launch', 'arrange', 'read', 'send', 'focus'].includes(method)) throw new Error('Unknown method (use --help)');
-  if (!descriptor) throw new Error('No instance selected. Run instances, then use --instance FILE (automatic inside TerminalVibe terminals).');
-  let params = {};
-  if (args[0] === '--file' && args.length === 2) params = JSON.parse(fs.readFileSync(args[1] === '-' ? 0 : args[1], 'utf8'));
-  else if (args.length === 1) params = JSON.parse(args[0]);
-  else if (args.length) throw new Error('Pass one JSON argument or --file FILE|-');
-  const d = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+  throw new Error(`${provider} launcher unavailable${failures.length ? ` (failed --version: ${failures.join(', ')})` : ''}. No provider was substituted.`);
+}
+
+async function rpc(descriptor, method, params = {}) {
+  const d = readJson(descriptor);
   const url = new URL(d.url);
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== '/rpc') throw new Error('Invalid local control endpoint');
   const body = JSON.stringify({ method, params });
-  const result = await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const req = http.request(url, { method: 'POST', headers: { Authorization: `Bearer ${d.token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => {
       let output = '';
       res.setEncoding('utf8');
@@ -56,7 +101,96 @@ async function main(args) {
     req.on('error', reject);
     req.end(body);
   });
+}
+
+async function snapshots(descriptor, launches) {
+  // One bounded snapshot, not a provider-specific readiness/authentication poll.
+  await new Promise(resolve => setTimeout(resolve, 750));
+  return Promise.all(launches.map(async pane => {
+    try { return { paneId: pane.id, ...await rpc(descriptor, 'read', { paneId: pane.id, lines: 40 }) }; }
+    catch (error) { return { paneId: pane.id, error: error.message }; }
+  }));
+}
+
+async function main(args) {
+  const originalArgs = [...args];
+  const method = args.shift();
+  if (!method || method === '--help') {
+    console.log('tv.js pair --provider claude|codex [--prompt TEXT] [--cwd DIR]\ntv.js context [--provider claude|codex]\ntv.js instances | list | launch|arrange --file FILE|- | read|send|focus JSON\nA sole live instance is selected automatically. Use --instance FILE if several are running.\nlaunch --inspect includes pane snapshots. JSON also accepts --file FILE|- (UTF-8 BOM supported).');
+    return;
+  }
+  let descriptor = process.env.TERMINALVIBE_CONTROL_FILE;
+  const index = args.indexOf('--instance');
+  if (index !== -1) {
+    if (!args[index + 1]) throw new Error('--instance needs a file');
+    descriptor = args[index + 1]; args.splice(index, 2);
+  }
+  const directory = path.join(os.homedir(), '.terminalvibe', 'control');
+  const found = instances(directory);
+  // Resolve the distro from the actual UNC cwd; never ask the agent to probe
+  // both OSes or feed Linux paths through a Git Bash shell.
+  if (process.platform === 'win32' && (descriptor?.startsWith('/') || (!descriptor && !found.some(d => d.alive)))) {
+    const relay = wslInvocation(originalArgs, process.cwd());
+    if (relay) {
+      const fromStdin = originalArgs.some((arg, i) => arg === '--file' && originalArgs[i + 1] === '-');
+      console.log(await run('wsl.exe', relay, { timeout: 45000, maxBuffer: 4 * 1024 * 1024,
+        input: fromStdin ? fs.readFileSync(0) : undefined }));
+      return;
+    }
+  }
+  if (method === 'instances') {
+    // Never print the bearer token.
+    console.log(JSON.stringify(found, null, 2));
+    return;
+  }
+  if (!['context', 'pair', 'list', 'launch', 'arrange', 'read', 'send', 'focus'].includes(method)) throw new Error('Unknown method (use --help)');
+  if (!descriptor) {
+    const live = found.filter(d => d.alive);
+    if (live.length > 1) throw new Error('Multiple live instances; select one with --instance FILE.');
+    if (live.length === 1) descriptor = live[0].file;
+  }
+  if (!descriptor) throw new Error('No live instance found. Start TerminalVibe or pass --instance FILE from the backend OS.');
+  if (method === 'context' || method === 'pair') {
+    const options = {};
+    while (args.length) {
+      const key = args.shift();
+      if (!['--provider', '--prompt', '--cwd'].includes(key) || !args.length || options[key] !== undefined) throw new Error('Use --provider NAME, --prompt TEXT and --cwd DIR');
+      options[key] = args.shift();
+    }
+    if (method === 'pair' && !options['--provider']) throw new Error('pair requires an explicit --provider claude|codex');
+    const [state, launcher] = await Promise.all([
+      rpc(descriptor, 'list'), options['--provider'] ? resolveLauncher(options['--provider']) : null
+    ]);
+    const parentPaneId = process.env.TERMINALVIBE_PANE_ID;
+    const workspaceId = state.workspaces.find(w => w.panes.some(p => p.id === parentPaneId))?.id || state.activeWorkspaceId;
+    const cwd = path.resolve(options['--cwd'] || process.cwd());
+    if (method === 'context') {
+      console.log(JSON.stringify({ instance: descriptor, platform: process.platform, cwd, workspaceId, launcher, ...state }, null, 2));
+      return;
+    }
+    if (!state.capabilities?.launchIntoWorkspace) throw new Error('Running app is older than this skill; update/restart the backend and refresh the page (closes dev terminals).');
+    if (!workspaceId) throw new Error('No active workspace; select one in TerminalVibe first.');
+    const prompt = options['--prompt'] || 'Reply with READY, then wait for further instructions.';
+    const result = await rpc(descriptor, 'launch', {
+      workspaceId, placement: { split: 'column', sizes: [35, 65] },
+      layout: { split: 'row', children: [1, 2].map(n => ({ name: `${launcher.provider} ${n}`, cwd, argv: [...launcher.argv, prompt] })) }
+    });
+    console.log(JSON.stringify({ ...result, launcher, snapshots: await snapshots(descriptor, result.launches),
+      note: 'Spawn results and output snapshots only; authentication/readiness is not inferred. Do not retry this launch to wait for output.' }, null, 2));
+    return;
+  }
+  const inspect = args.includes('--inspect');
+  if (inspect) {
+    if (method !== 'launch') throw new Error('--inspect is only supported for launch');
+    args.splice(args.indexOf('--inspect'), 1);
+  }
+  let params = {};
+  if (args[0] === '--file' && args.length === 2) params = readJson(args[1] === '-' ? 0 : args[1]);
+  else if (args.length === 1) params = JSON.parse(args[0]);
+  else if (args.length) throw new Error('Pass one JSON argument or --file FILE|-');
+  const result = await rpc(descriptor, method, params);
+  if (inspect) result.snapshots = await snapshots(descriptor, result.launches);
   console.log(JSON.stringify(result, null, 2));
 }
 if (require.main === module) main(process.argv.slice(2)).catch(err => { console.error(err.message); process.exitCode = 1; });
-module.exports = { main };
+module.exports = { main, linuxPath, wslInvocation, instances, resolveLauncher };
