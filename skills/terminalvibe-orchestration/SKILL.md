@@ -22,8 +22,12 @@ provider (`claude` for Claude Code, `codex` for Codex), not a different provider
 without it both are asked to reply READY and wait. Optional `--cwd DIR` defaults
 to the calling directory. The client selects the owning/sole live instance,
 verifies only that provider's executable with `--version`, pins this workspace,
-preserves the parent pane, launches two workers side by side below it, and
+preserves the parent pane, launches two compact workers side by side below it, and
 returns both spawn results and output snapshots. It does not disable approvals.
+Preserve normal split filling. Minimize only the docking axis where practical:
+workers below/above the parent use minimum height (currently 200 px) and share
+the full width; workers to its left/right use minimum width and fill the height.
+Do not force both minima or leave unused strips. Honor user-requested dimensions.
 Use the returned snapshots; do not issue separate reads unless output is empty
 or needs further inspection. Never relaunch just to wait for readiness.
 
@@ -91,13 +95,17 @@ entire workspace layout. With only `anchorPaneId`, its workspace is inferred.
 `sizes` to `[50,50]`, and `before` to `false`. Percentages follow child order:
 existing then new, or new then existing when `before` is true. The `layout`
 contains only new agents; never include or relaunch the parent terminal.
+Prefer `"compact":true` in `placement`: a `column` dock minimizes only height,
+and a `row` dock minimizes only width. The other dimension fills normally.
+Compact sizing is also the default when placement percentages are omitted.
+For proportional/filling panes, set `"compact":false` and specify `sizes`.
 
 For two reviewers side by side below the existing panes:
 
 ```json
 {
   "workspaceId": "WORKSPACE_ID_FROM_LIST",
-  "placement": { "split": "column", "sizes": [35,65] },
+  "placement": { "split": "column", "compact": true },
   "layout": {
     "split": "row",
     "children": [
@@ -146,9 +154,36 @@ can send `"\u0003"` for Ctrl+C when stopping a task is authorized. Inspect outpu
 before sending so task text is not accidentally executed by a shell after an
 agent exits. Do not infer that a visible shell is still an active agent.
 
-To rearrange live panes, use `arrange --file plan.json` with `workspaceId` and
+## Resize and move already-open panes
+
+Use pane IDs from `list`/`context`/launch results. Do not close or relaunch an
+agent to change its size or position. These commands retain its live PTY:
+
+```sh
+node scripts/tv.js resize '{"paneId":"BOTTOM_WORKER","width":"auto","height":"min"}'
+node scripts/tv.js place '{"paneId":"WORKER","anchorPaneId":"PARENT","side":"right"}'
+```
+
+`place` moves an existing tab beside the anchor (`left`, `right`, `top`, or
+`bottom`) within the same workspace. Top/bottom placements default to minimum
+height with full width; left/right placements to minimum width with full height;
+use `"compact":false` for a filling pane, or add explicit `width`/`height`.
+Other tabs in the source group remain intact. `resize` affects the pane's group
+(tabs share a rectangle), accepts positive pixels, `"min"`, or `"auto"` to release
+that axis to normal flex sizing. Values below the pane minimum are clamped.
+Sizing is saved with the layout; a manual sash drag overrides the constraints.
+`list` includes `minimumPaneSize`, group IDs, requested sizes, actual `bounds`
+and `agentManaged` flags. Hidden panes may have zero/null bounds. Prefer the
+targeted commands to rebuilding the whole workspace. Check `paneSizing` and
+`panePlacement` capabilities; if missing, report the required app/backend update
+instead of restarting sessions. Do not refresh/restart active terminals yourself.
+
+For a complete rearrangement, use `arrange --file plan.json` with `workspaceId` and
 `layout`, using `{"paneId":"ID"}` leaves and the same split syntax. Include
 every pane in that workspace exactly once. This keeps processes alive and gives
 each terminal its own visible slice. Use `focus` to switch back to the parent
 pane after inspection if needed. Read worker output and summarize findings for
 the user; pane visibility alone does not coordinate work or collect results.
+Leaves and split subtrees in `arrange` accept `"size":{"height":"min"}` or `"size":{"width":"min"}`
+or positive pixel values. Choose just the axis appropriate to the docking
+direction. Keep the other axis filling so the workspace has no unused strips.

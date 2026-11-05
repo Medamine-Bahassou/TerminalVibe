@@ -189,6 +189,33 @@ user-select: none;
 .titlebar-btn:active { color: var(--dim-text); }
 .titlebar-btn svg { width: 15px; height: 15px; pointer-events: none; }
 
+#servers-dropdown {
+  position: fixed;
+  z-index: 10000;
+  width: min(340px, calc(100vw - 16px));
+  max-height: min(420px, calc(100vh - 60px));
+  overflow: auto;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px #0005;
+  font-size: 12px;
+  -webkit-app-region: no-drag;
+}
+#servers-dropdown[hidden] { display: none; }
+.servers-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: 600; }
+#servers-refresh { display: grid; place-items: center; width: 26px; height: 26px; border: 0; background: transparent; color: var(--dim-text); cursor: pointer; }
+#servers-refresh:hover, .server-row:hover { background: var(--tab-hover-bg); color: var(--fg); }
+#servers-refresh:disabled { opacity: .5; cursor: wait; }
+.server-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: inherit; text-decoration: none; border-bottom: 1px solid var(--border); }
+.server-row > i { font-size: 16px; color: var(--dim-text); }
+.server-details { flex: 1; min-width: 0; }
+.server-name, .server-address { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-address { color: var(--dim-text); font-size: 11px; margin-top: 3px; }
+.server-port { font-variant-numeric: tabular-nums; color: var(--dim-text); }
+.servers-message { padding: 16px 12px; color: var(--dim-text); line-height: 1.5; margin: 0; }
+#servers-dropdown :focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+
 /* ──────────────────────────────────────────
  *   APP LAYOUT
  * ────────────────────────────────────────── */

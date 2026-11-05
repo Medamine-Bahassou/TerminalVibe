@@ -90,6 +90,103 @@ app.whenReady().then(async () => {
     return 'PASS: font fallback, seamless Canvas blocks, GPU failure, context eviction/loss, renderer switching and disposal';
   })().catch(error => { throw new Error(error.stack); })`);
   console.log(result);
+  await win.webContents.insertCSS(fs.readFileSync(path.join(root, 'style.css'), 'utf8'));
+  const sizing = source.slice(source.indexOf('  function getMinSizes('), source.indexOf('  // ── Tab bar:'));
+  const buildStart = source.indexOf('  function buildNodeDom(');
+  const splitBuilder = source.slice(buildStart, source.indexOf("    if (node.type === 'group') {", buildStart));
+  const sash = source.slice(source.indexOf('  function makeSashDraggableTree('), source.indexOf('   D R*AG AND DROP HANDLERS'));
+  // The extraction ends inside the following section comment.
+  const sashFunction = sash.slice(0, sash.lastIndexOf('  /*'));
+  const layoutResult = await win.webContents.executeJavaScript(`(() => {
+    const check = (ok, message) => { if (!ok) throw new Error(message); };
+    const SPLIT_MIN_PX = 200;
+    let _suppressResize = false;
+    const activeWs = () => ({ layout });
+    const getWorkspaceTerminals = () => [];
+    const fitTerm = () => {}, saveState = () => {}, startResizing = () => {}, stopResizing = () => {};
+    ${sizing}
+    ${sashFunction}
+    ${splitBuilder}
+      const el = document.createElement('div');
+      el.className = 'term-group'; el.id = 'group-' + node.id;
+      applyLayoutNodeSize(el, node, parentDirection);
+      return el;
+    }
+    const group = id => ({ type: 'group', id });
+    const workerA = group('worker-a'), workerB = group('worker-b');
+    const workers = { type: 'split', id: 'workers', direction: 'row', sizes: [50,50],
+      size: { width: 'min', height: 'min' }, children: [workerA, workerB] };
+    const layout = { type: 'split', id: 'root', direction: 'column', sizes: [50,50], children: [group('parent'), workers] };
+    const host = document.createElement('div');
+    Object.assign(host.style, { position: 'fixed', left: '0', top: '0', width: '100%', height: '100%' });
+    document.body.appendChild(host);
+    const render = () => host.replaceChildren(buildNodeDom(layout, activeWs()));
+    const bounds = id => document.getElementById('group-' + id).getBoundingClientRect();
+    render();
+    check(bounds('worker-a').height === 200 && bounds('worker-b').height === 200, 'Bottom row is not minimum height');
+    check(bounds('worker-a').left === bounds('parent').left && bounds('worker-b').right === bounds('parent').right, 'Bottom workers leave unused width');
+    check(Math.abs(bounds('worker-a').width - bounds('worker-b').width) < 1, 'Bottom workers are not equal width');
+    check(bounds('worker-a').right <= bounds('worker-b').left, 'Worker panes overlap');
+    layout.direction = 'row'; workers.direction = 'column';
+    render();
+    check(bounds('worker-a').width === 200 && bounds('worker-b').width === 200, 'Side column is not minimum width');
+    check(bounds('worker-a').top === bounds('parent').top && bounds('worker-b').bottom === bounds('parent').bottom, 'Side workers leave unused height');
+    layout.direction = 'column'; workers.direction = 'row';
+    workerA.size = { width: 300, height: 240 };
+    render();
+    check(bounds('worker-a').width === 300 && bounds('worker-a').height === 240, 'Live pixel size not applied');
+    workerA.size = { width: 10, height: 10 };
+    render();
+    check(bounds('worker-a').width === 200 && bounds('worker-a').height === 200, 'Minimum size not enforced');
+    const handle = document.getElementById('split-workers').querySelector('.sash');
+    handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: bounds('worker-a').right }));
+    check(!workers.size && !workerA.size, 'Manual drag did not release compact sizing');
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 450 }));
+    document.dispatchEvent(new MouseEvent('mouseup'));
+    check(bounds('worker-a').width >= 200 && bounds('worker-b').width >= 200, 'Manual drag violated pane minimums');
+    host.remove();
+    return 'PASS: bottom workers fill width at minimum height, side workers fill height at minimum width, legacy compact layouts, pixel resizing and manual sash override';
+  })()`);
+  console.log(layoutResult);
+  const dropdownSetup = source.slice(source.indexOf('  function setupServersDropdown('), source.indexOf('  setupServersDropdown();'));
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const toolbar = html.slice(html.indexOf('  <div id="titlebar">'), html.indexOf('  <div id="app">'));
+  const dropdownResult = await win.webContents.executeJavaScript(`(async () => {
+    const check = (ok, text) => { if (!ok) throw new Error(text); };
+    const host = document.createElement('div'); host.innerHTML = ${JSON.stringify(toolbar)}; document.body.appendChild(host);
+    document.getElementById('titlebar').classList.add('active');
+    let data = [{ process: '<script>unsafe</script>', port: 3000, pid: 12, url: 'http://127.0.0.1:3000' }];
+    let fail = false, hiddenViews = false, opened = null;
+    window.electronAPI = { listRunningServers: async () => { if (fail) throw new Error('Test failure'); return data; } };
+    const syncBrowserSlots = () => { hiddenViews = !document.getElementById('servers-dropdown').hidden; };
+    const activeWs = () => ({ id: 'workspace' });
+    const addBrowserTab = (ws, group, url) => { opened = { ws, url }; };
+    const openExternalUrl = () => { throw new Error('Expected an internal browser tab'); };
+    ${dropdownSetup}
+    setupServersDropdown();
+    const button = document.getElementById('btn-servers'), dropdown = document.getElementById('servers-dropdown');
+    const refresh = document.getElementById('servers-refresh');
+    const settled = () => new Promise(resolve => setTimeout(resolve, 0));
+    check(dropdown.hidden, 'Dropdown starts visible');
+    button.click(); await settled();
+    check(!dropdown.hidden && hiddenViews, 'Dropdown does not hide native browser views');
+    check(button.getAttribute('aria-expanded') === 'true', 'Expanded state is missing');
+    check(dropdown.querySelector('.server-name').textContent === '<script>unsafe</script>' && !dropdown.querySelector('script'), 'Process name is treated as HTML');
+    dropdown.querySelector('.server-row').click();
+    check(dropdown.hidden && !hiddenViews && opened.ws === 'workspace' && opened.url === 'http://127.0.0.1:3000/', 'Server did not open in an internal browser tab');
+    data = []; button.click(); await settled();
+    check(dropdown.textContent.includes('No listening servers'), 'Missing empty state');
+    fail = true; refresh.click(); await settled();
+    check(dropdown.textContent.includes('Could not load servers') && !refresh.disabled, 'Missing error/retry state');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check(dropdown.hidden && document.activeElement === button, 'Escape did not close and restore focus');
+    fail = false; button.click(); await settled();
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    check(dropdown.hidden, 'Outside click did not close dropdown');
+    host.remove();
+    return 'PASS: server dropdown toggle, native view overlay, safe labels, browser opening, empty/error/refresh states and dismissal';
+  })()`);
+  console.log(dropdownResult);
   clearTimeout(timeout);
   win.destroy();
   app.exit(0);

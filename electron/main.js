@@ -5,6 +5,7 @@ const pty = require('node-pty');
 const yaml = require('js-yaml');
 const { hasRunningProcess, runningProcessInfo } = require('./proc');
 const { startAgentControl, validateLaunch } = require('./agent-control');
+const { listRunningServers } = require('./servers');
 let agentControl = null;
 const agentRequests = new Map();
 ipcMain.on('agent:result', (event, { id, result, error }) => {
@@ -15,7 +16,7 @@ ipcMain.on('agent:result', (event, { id, result, error }) => {
   if (error) pending.reject(new Error(error)); else pending.resolve(result);
 });
 function dispatchAgentRequest(request) {
-  if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange'].includes(request.method)) throw new Error('Unknown method');
+  if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange', 'resize', 'place'].includes(request.method)) throw new Error('Unknown method');
   if (request.method === 'launch') validateLaunch(request.params);
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) throw new Error('Main window is not ready');
   return new Promise((resolve, reject) => {
@@ -492,6 +493,7 @@ ipcMain.handle('shell:open-external', (_e, url) => {
 });
 
 // ── IPC: clipboard (terminal text; navigator.clipboard also works) ──
+ipcMain.handle('servers:list', () => listRunningServers());
 ipcMain.handle('clipboard:write-text', (_e, text) => clipboard.writeText(String(text ?? '')));
 ipcMain.handle('clipboard:read-text', () => clipboard.readText());
 

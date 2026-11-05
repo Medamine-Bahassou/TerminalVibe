@@ -16,6 +16,7 @@ const { WebSocketServer } = require("ws");
 const pty = require("node-pty");
 const { hasRunningProcess, runningProcessInfo } = require("./electron/proc");
 const { startAgentControl, validateLaunch } = require('./electron/agent-control');
+const { listRunningServers } = require('./electron/servers');
 const { randomUUID } = require('crypto');
 let agentControl;
 const agentClients = new Set();
@@ -23,7 +24,7 @@ const agentRequests = new Map();
 const controlReady = startAgentControl({
   directory: path.join(os.homedir(), '.terminalvibe', 'control'),
   dispatch(request) {
-    if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange'].includes(request.method)) throw new Error('Unknown method');
+    if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange', 'resize', 'place'].includes(request.method)) throw new Error('Unknown method');
     if (request.method === 'launch') validateLaunch(request.params);
     const clients = [...agentClients].filter(client => client.readyState === client.OPEN);
     if (clients.length !== 1) throw new Error(clients.length ? 'Multiple browser tabs connected. Keep one TerminalVibe browser tab open for orchestration.' : 'No ready browser tab. Open or refresh TerminalVibe in your browser.');
@@ -76,6 +77,18 @@ const MIME_TYPES = {
 
 const appServer = http.createServer((req, res) => {
   const parsed = url.parse(req.url, true);
+  if (parsed.pathname === '/api/servers') {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-store');
+    if (req.method !== 'GET') { res.writeHead(405); res.end(JSON.stringify({ error: 'Use GET' })); return; }
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://${req.headers.host}`) { res.writeHead(403); res.end(JSON.stringify({ error: 'Invalid origin' })); return; }
+    listRunningServers().then(servers => res.end(JSON.stringify({ servers })), error => {
+      console.error('[servers]', error.message);
+      res.writeHead(500); res.end(JSON.stringify({ error: 'Could not list servers. Check that the system network tools are available.' }));
+    });
+    return;
+  }
 
   // Local file serving: /local/<encoded-path>
   if (parsed.pathname.startsWith("/local/")) {

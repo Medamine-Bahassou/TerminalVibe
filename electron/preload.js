@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  listRunningServers: () => ipcRenderer.invoke('servers:list'),
   onAgentRequest: (cb) => {
     const listener = async (_event, request) => {
       try { ipcRenderer.send('agent:result', { id: request.id, result: await cb(request) }); }

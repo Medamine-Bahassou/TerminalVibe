@@ -27,9 +27,9 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 .titlebar-btn { color: var(--muted-text); }
 .titlebar-spacer { min-width: 8px; }
 .workspace-new {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   border: 1px solid var(--ui-line); border-radius: 4px;
-  font-size: 11px; font-weight: 500; height: 26px; padding: 0 10px;
+  font-size: 11px; font-weight: 500; height: 24px; padding: 0 8px;
   color: var(--fg); background: var(--ui-surface); flex-shrink: 0;
   -webkit-app-region: no-drag;
   transition: background-color 140ms, border-color 140ms, transform 140ms;
@@ -38,33 +38,35 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 .workspace-new > span:first-child { font-size: 16px; line-height: 1; }
 .workspace-new:hover { background: var(--ui-hover); border-color: var(--accent); }
 .workspace-new:active { transform: translateY(1px); }
-#sidebar-inner { background: color-mix(in srgb, var(--bg) 92%, #000); padding: 12px 0 8px; gap: 4px; }
+#sidebar-inner { background: color-mix(in srgb, var(--bg) 92%, #000); padding: 6px 0; gap: 2px; }
 #sidebar.expanded #sidebar-inner { align-items: stretch; }
-.ws-header { padding: 0 12px; min-height: 36px; }
+.ws-header { padding: 0 8px; min-height: 30px; margin-bottom: 4px; }
 .ws-header-title { font-size: 10px; font-weight: 600; letter-spacing: 1.3px; color: var(--dim-text); }
-#sidebar.expanded .ws-btn { padding: 10px 12px; min-height: 44px; gap: 10px; }
-.ws-btn .ws-name { font-size: 13px; font-weight: 500; }
-.ws-btn .ws-info { line-height: 1.45; }
-.ws-btn .ws-proc { font-size: 10px; line-height: 1.5; }
+.ws-btn { height: 30px; }
+#sidebar.expanded .ws-btn { padding: 5px 8px; min-height: 32px; gap: 6px; }
+.ws-btn .ws-name { font-size: 12px; font-weight: 500; }
+.ws-btn .ws-info { line-height: 1.25; }
+.ws-btn .ws-proc { font-size: 10px; line-height: 1.3; }
 .ws-btn.active { background: color-mix(in srgb, var(--accent) 9%, transparent); }
-.ws-btn .ws-count { font-size: 10px; min-width: 20px; height: 20px; }
+.ws-btn .ws-count { font-size: 10px; min-width: 16px; height: 16px; }
 .ws-folder-name { font-size: 12px; }
-.ws-folder-header { min-height: 36px; }
+#sidebar.expanded .ws-folder-header { min-height: 30px; gap: 6px; }
+.ws-add, .ws-folder-add-btn { height: 30px; }
 .sidebar-actions { border-top: 1px solid var(--border); padding-top: 10px; }
 .sidebar-actions .sa-btn { color: var(--muted-text); }
 #btn-settings { background: transparent; border: 0; }
 #btn-settings:hover { background: var(--ui-hover); }
 #sidebar.expanded .sidebar-actions .sa-btn { width: 100%; justify-content: flex-start; gap: 10px; padding: 0 12px; }
 #sidebar.expanded #btn-settings::after { content: 'Settings'; font-size: 12px; }
-.term-group-header { height: 40px; min-height: 40px; background: var(--ui-surface); }
-.tg-tab { min-width: 110px; max-width: 200px; padding: 0 12px 0 16px; gap: 10px; font-size: 12px; border-right-color: var(--border); }
+.term-group-header { height: 32px; min-height: 32px; background: var(--ui-surface); }
+.tg-tab { min-width: 90px; max-width: 160px; padding: 0 8px; gap: 6px; font-size: 12px; border-right-color: var(--border); }
 .tg-tab.active { font-weight: 500; background: var(--bg); }
 .focused-group .tg-tab.active { color: var(--fg); }
-.tg-tab-close { width: 20px; height: 20px; font-size: 10px; }
+.tg-tab-close { width: 16px; height: 16px; font-size: 10px; }
 .tg-tab.active .tg-tab-close, .tg-tab:focus-within .tg-tab-close { opacity: 1; }
 .tg-tab-close:hover { background: color-mix(in srgb, #ed8993 20%, var(--bg)); color: #ed8993 !important; }
-.term-group-actions { gap: 2px; padding: 0 8px; }
-.tg-btn { width: 28px; height: 28px; color: var(--muted-text); }
+.term-group-actions { gap: 2px; padding: 0 4px; }
+.tg-btn { width: 24px; height: 24px; color: var(--muted-text); }
 .tg-btn svg, .tg-btn i { width: 15px; height: 15px; font-size: 15px; }
 .tg-chevron { background: var(--ui-surface); }
 .sash, .gutter { background-color: color-mix(in srgb, var(--bg) 90%, var(--fg)); }
@@ -103,8 +105,9 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 .custom-dropdown-option { min-height: 32px; }
 #statusbar { font-size: 11px; background: var(--ui-surface); min-height: 26px; }
 /* Respect both saved corner styles and the existing terminal font controls. */
-body:not(.roundless) .term-group-tabs { padding: 4px; }
-body:not(.roundless) .tg-tab { height: 100%; }
+body:not(.roundless) #sidebar-inner { gap: 2px; }
+body:not(.roundless) .term-group-tabs { padding: 2px; }
+body:not(.roundless) .tg-tab { height: 100%; margin: 0 1px; padding: 0 8px; }
 body:not(.roundless) .focused-group .tg-tab.active { box-shadow: inset 0 -2px var(--accent); }
 @media (max-width: 560px) {
   #sidebar.expanded { min-width: 150px; }

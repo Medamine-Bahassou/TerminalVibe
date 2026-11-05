@@ -116,7 +116,7 @@ async function main(args) {
   const originalArgs = [...args];
   const method = args.shift();
   if (!method || method === '--help') {
-    console.log('tv.js pair --provider claude|codex [--prompt TEXT] [--cwd DIR]\ntv.js context [--provider claude|codex]\ntv.js instances | list | launch|arrange --file FILE|- | read|send|focus JSON\nA sole live instance is selected automatically. Use --instance FILE if several are running.\nlaunch --inspect includes pane snapshots. JSON also accepts --file FILE|- (UTF-8 BOM supported).');
+    console.log('tv.js pair --provider claude|codex [--prompt TEXT] [--cwd DIR]\ntv.js context [--provider claude|codex]\ntv.js instances | list | launch|arrange --file FILE|- | read|send|focus|resize|place JSON\nresize: {paneId,width:"min"|"auto"|PIXELS,height:"min"|"auto"|PIXELS}\nplace: {paneId,anchorPaneId,side:"left"|"right"|"top"|"bottom",compact:true}\nA sole live instance is selected automatically. Use --instance FILE if several are running.\nlaunch --inspect includes pane snapshots. JSON also accepts --file FILE|- (UTF-8 BOM supported).');
     return;
   }
   let descriptor = process.env.TERMINALVIBE_CONTROL_FILE;
@@ -143,7 +143,7 @@ async function main(args) {
     console.log(JSON.stringify(found, null, 2));
     return;
   }
-  if (!['context', 'pair', 'list', 'launch', 'arrange', 'read', 'send', 'focus'].includes(method)) throw new Error('Unknown method (use --help)');
+  if (!['context', 'pair', 'list', 'launch', 'arrange', 'read', 'send', 'focus', 'resize', 'place'].includes(method)) throw new Error('Unknown method (use --help)');
   if (!descriptor) {
     const live = found.filter(d => d.alive);
     if (live.length > 1) throw new Error('Multiple live instances; select one with --instance FILE.');
@@ -172,7 +172,8 @@ async function main(args) {
     if (!workspaceId) throw new Error('No active workspace; select one in TerminalVibe first.');
     const prompt = options['--prompt'] || 'Reply with READY, then wait for further instructions.';
     const result = await rpc(descriptor, 'launch', {
-      workspaceId, placement: { split: 'column', sizes: [35, 65] },
+      workspaceId, placement: { split: 'column', compact: !!state.capabilities?.compactPanes,
+        ...(state.capabilities?.compactPanes ? {} : { sizes: [35, 65] }) },
       layout: { split: 'row', children: [1, 2].map(n => ({ name: `${launcher.provider} ${n}`, cwd, argv: [...launcher.argv, prompt] })) }
     });
     console.log(JSON.stringify({ ...result, launcher, snapshots: await snapshots(descriptor, result.launches),

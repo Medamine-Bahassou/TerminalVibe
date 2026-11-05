@@ -50,6 +50,7 @@ function validateLaunch(plan) {
     if (!existing || !p || typeof p !== 'object' || Array.isArray(p)) throw new Error('placement requires an existing workspace');
     if (p.split !== undefined && !['row', 'column'].includes(p.split)) throw new Error('placement.split must be row or column');
     if (p.before !== undefined && typeof p.before !== 'boolean') throw new Error('placement.before must be boolean');
+    if (p.compact !== undefined && typeof p.compact !== 'boolean') throw new Error('placement.compact must be boolean');
     if (p.sizes !== undefined && (!Array.isArray(p.sizes) || p.sizes.length !== 2 || p.sizes.some(n => !Number.isFinite(n) || n <= 0) || Math.abs(p.sizes[0] + p.sizes[1] - 100) > 0.01)) throw new Error('placement.sizes must be two positive percentages totaling 100');
   }
   const names = new Set();

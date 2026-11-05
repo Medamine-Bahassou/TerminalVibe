@@ -1465,6 +1465,7 @@
     const profilePicker = document.getElementById('profile-picker');
     const overlayOpen = settingsWindowOpen ||
       (profilePicker && profilePicker.style.display !== 'none') ||
+      (document.getElementById('servers-dropdown')?.hidden === false) ||
       (document.getElementById('settings-overlay')?.classList.contains('open') === true);
     if (overlayOpen || document.body.classList.contains('tab-dragging')) {
       if (window.electronAPI) {
@@ -1994,7 +1995,10 @@
       }
 
       if (node.children.length === 0) return null;
-      if (node.children.length === 1) return node.children[0];
+      if (node.children.length === 1) {
+        if (node.size) node.children[0].size = { ...node.size, ...node.children[0].size };
+        return node.children[0];
+      }
     }
     return node;
   }
@@ -2305,6 +2309,7 @@
         id: node.id,
         direction: node.direction,
         sizes: node.sizes,
+        ...(node.size ? { size: node.size } : {}),
         children: node.children.map(serializeLayout)
       };
     }
@@ -2313,6 +2318,7 @@
         type: 'group',
         id: node.id,
         activeTermId: node.activeTermId,
+        ...(node.size ? { size: node.size } : {}),
         history: node._history || [],
         terminals: node.terminals.map(t => {
           const o = { id: t.id, label: t.label };
@@ -2338,6 +2344,7 @@
         id: data.id,
         direction: data.direction,
         sizes: data.sizes,
+        ...(data.size ? { size: data.size } : {}),
         children: data.children.map(c => deserializeLayout(c, ws))
       };
     }
@@ -2346,6 +2353,7 @@
         type: 'group',
         id: data.id,
         activeTermId: data.activeTermId,
+        ...(data.size ? { size: data.size } : {}),
         _history: data.history || [],
         terminals: []
       };
@@ -4996,7 +5004,9 @@
 ═══════════════════════════════════════════════════════════════ */
   function getMinSizes(node) {
     if (!node) return { minW: 0, minH: 0 };
-    if (node.type === 'group') return { minW: SPLIT_MIN_PX, minH: SPLIT_MIN_PX };
+    const requestedW = typeof node.size?.width === 'number' ? node.size.width : 0;
+    const requestedH = typeof node.size?.height === 'number' ? node.size.height : 0;
+    if (node.type === 'group') return { minW: Math.max(SPLIT_MIN_PX, requestedW), minH: Math.max(SPLIT_MIN_PX, requestedH) };
     if (node.type === 'split') {
       let minW = 0, minH = 0;
       node.children.forEach((c, idx) => {
@@ -5011,9 +5021,25 @@
           minW = Math.max(minW, s.minW);
         }
       });
-      return { minW, minH };
+      return { minW: Math.max(minW, requestedW), minH: Math.max(minH, requestedH) };
     }
     return { minW: 0, minH: 0 };
+  }
+
+  function applyLayoutNodeSize(el, node, parentDirection) {
+    if (!node.size) return;
+    const legacyCompact = node.size.width === 'min' && node.size.height === 'min';
+    const mins = getMinSizes(node);
+    for (const [axis, minimum] of [['width', mins.minW], ['height', mins.minH]]) {
+      if (node.size[axis] === undefined) continue;
+      // Old compact layouts stored both minima. Keep the cross axis filling
+      // its split instead of leaving a blank strip beside the worker panes.
+      if (legacyCompact && (!parentDirection || axis !== (parentDirection === 'row' ? 'width' : 'height'))) continue;
+      const value = Math.max(minimum, node.size[axis] === 'min' ? 0 : node.size[axis]);
+      el.style[axis] = value + 'px';
+      el.style[axis === 'width' ? 'maxWidth' : 'maxHeight'] = value + 'px';
+    }
+    el.style.alignSelf = 'flex-end';
   }
 
   // ── Tab bar: reveal active tab & refresh chevron overflow state ──
@@ -5050,7 +5076,7 @@
     applyBackground();
   }
 
-  function buildNodeDom(node, wsp) {
+  function buildNodeDom(node, wsp, parentDirection) {
     if (!node) return null;
 
     if (node.type === 'split') {
@@ -5061,6 +5087,7 @@
       const mins = getMinSizes(node);
       container.style.minWidth = mins.minW + 'px';
       container.style.minHeight = mins.minH + 'px';
+      applyLayoutNodeSize(container, node, parentDirection);
 
       node.children.forEach((child, idx) => {
         if (idx > 0) {
@@ -5070,10 +5097,12 @@
           container.appendChild(sash);
         }
 
-        const childDom = buildNodeDom(child, wsp);
+        const childDom = buildNodeDom(child, wsp, node.direction);
         if (childDom) {
           const size = node.sizes[idx] !== undefined ? node.sizes[idx] : (100 / node.children.length);
           childDom.style.flex = `${size} 1 0%`;
+          const axis = node.direction === 'row' ? 'width' : 'height';
+          if (child.size?.[axis] !== undefined) childDom.style.flex = `0 0 ${childDom.style[axis]}`;
           container.appendChild(childDom);
         }
       });
@@ -5086,6 +5115,7 @@
       groupEl.className = 'term-group';
       groupEl.id = 'group-' + node.id;
       groupEl.dataset.groupId = node.id;
+      applyLayoutNodeSize(groupEl, node, parentDirection);
 
       const header = document.createElement('div');
       header.className = 'term-group-header';
@@ -6149,6 +6179,30 @@
       sash.classList.add('dragging');
       const isRow = node.direction === 'row';
       startPos = isRow ? e.clientX : e.clientY;
+
+      // A manual sash drag takes over from requested compact/pixel sizing.
+      const release = (current, parent, index) => {
+        const sized = !!current.size;
+        delete current.size;
+        const el = document.getElementById((current.type === 'split' ? 'split-' : 'group-') + current.id);
+        if (!el) return;
+        if (sized) for (const key of ['width', 'height', 'maxWidth', 'maxHeight', 'alignSelf']) el.style[key] = '';
+        const mins = getMinSizes(current);
+        el.style.minWidth = mins.minW + 'px';
+        el.style.minHeight = mins.minH + 'px';
+        if (sized && parent) el.style.flex = `${parent.sizes[index]} 1 0%`;
+      };
+      const releasePath = (current, parent, index) => {
+        if (current !== node && (current.type !== 'split' || !current.children.some((child, i) => releasePath(child, current, i)))) return false;
+        if (current === node) {
+          release(current.children[childIdx - 1], current, childIdx - 1);
+          release(current.children[childIdx], current, childIdx);
+        }
+        release(current, parent, index);
+        return true;
+      };
+      const wsp = activeWs();
+      if (wsp) releasePath(wsp.layout, null, 0);
 
       const panes = [...container.children].filter(c => !c.classList.contains('sash'));
       startSizes = panes.map(p => isRow ? p.offsetWidth : p.offsetHeight);
@@ -9325,6 +9379,95 @@
   if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
 
   // Detached-terminal bootstrap: minimal terminal-only window.
+  function setupServersDropdown() {
+    const button = document.getElementById('btn-servers');
+    const dropdown = document.getElementById('servers-dropdown');
+    const list = document.getElementById('servers-list');
+    const refresh = document.getElementById('servers-refresh');
+    if (!button || !dropdown || !list || !refresh) return;
+    let loading = false;
+    const message = text => {
+      const el = document.createElement('p');
+      el.className = 'servers-message'; el.textContent = text;
+      list.replaceChildren(el);
+    };
+    const position = () => {
+      const rect = button.getBoundingClientRect();
+      dropdown.style.top = (rect.bottom + 6) + 'px';
+      dropdown.style.right = Math.max(8, window.innerWidth - rect.right) + 'px';
+    };
+    const close = () => {
+      dropdown.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
+      syncBrowserSlots();
+    };
+    const load = async () => {
+      if (loading) return;
+      loading = true; refresh.disabled = true;
+      list.setAttribute('aria-busy', 'true');
+      message('Checking listening ports…');
+      try {
+        let servers;
+        if (window.electronAPI?.listRunningServers) servers = await window.electronAPI.listRunningServers();
+        else {
+          const response = await fetch('/api/servers');
+          if (!response.ok) throw new Error('Server discovery failed');
+          servers = (await response.json()).servers;
+        }
+        list.replaceChildren();
+        if (!Array.isArray(servers)) throw new Error('Invalid server list');
+        if (!servers.length) message('No listening servers found.');
+        for (const server of servers) {
+          const url = new URL(server.url);
+          if (!['http:', 'https:'].includes(url.protocol)) continue;
+          const row = document.createElement('a');
+          row.className = 'server-row'; row.href = url.href;
+          row.title = `Open ${url.origin}${server.pid ? ' · PID ' + server.pid : ''}`;
+          const icon = document.createElement('i'); icon.className = 'ph ph-globe'; icon.setAttribute('aria-hidden', 'true');
+          const details = document.createElement('span'); details.className = 'server-details';
+          const name = document.createElement('span'); name.className = 'server-name'; name.textContent = server.process || 'Listening server';
+          const address = document.createElement('span'); address.className = 'server-address'; address.textContent = url.origin;
+          const port = document.createElement('span'); port.className = 'server-port'; port.textContent = ':' + server.port;
+          details.append(name, address); row.append(icon, details, port);
+          row.addEventListener('click', event => {
+            event.preventDefault(); close();
+            const wsp = activeWs();
+            if (wsp) addBrowserTab(wsp.id, null, url.href);
+            else openExternalUrl(url.href);
+          });
+          list.appendChild(row);
+        }
+      } catch (error) {
+        console.warn('[servers]', error);
+        message('Could not load servers. Refresh to try again.');
+      } finally {
+        loading = false; refresh.disabled = false; list.setAttribute('aria-busy', 'false');
+      }
+    };
+    button.addEventListener('click', () => {
+      if (!dropdown.hidden) { close(); return; }
+      dropdown.hidden = false;
+      button.setAttribute('aria-expanded', 'true');
+      position(); syncBrowserSlots(); load();
+    });
+    refresh.addEventListener('click', load);
+    document.addEventListener('mousedown', event => {
+      if (!dropdown.hidden && !dropdown.contains(event.target) && !button.contains(event.target)) close();
+    });
+    document.addEventListener('keydown', event => {
+      if (dropdown.hidden) return;
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); button.focus(); }
+      if (['ArrowDown', 'ArrowUp'].includes(event.key) && (dropdown.contains(document.activeElement) || document.activeElement === button)) {
+        event.preventDefault();
+        const items = [...dropdown.querySelectorAll('button:not(:disabled), a')];
+        const index = items.indexOf(document.activeElement);
+        items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+      }
+    });
+    window.addEventListener('resize', () => { if (!dropdown.hidden) position(); });
+  }
+  setupServersDropdown();
+
   if (DETACHED_ONLY) { detachedOnlyBoot(); return; }
 
   // Open/close
@@ -9413,11 +9556,30 @@
     });
   }
 
+  function agentNodeSize(size, previous = {}) {
+    if (!size || typeof size !== 'object' || Array.isArray(size)) throw new Error('size must contain width and/or height');
+    const result = { ...previous };
+    for (const axis of Object.keys(size)) {
+      const value = size[axis];
+      if (!['width', 'height'].includes(axis) || (value !== 'min' && value !== 'auto' && (!Number.isFinite(value) || value <= 0))) throw new Error('Use positive pixel sizes, min, or auto');
+      if (value === 'auto') delete result[axis];
+      else result[axis] = value;
+    }
+    return Object.keys(result).length ? result : undefined;
+  }
+
   async function handleAgentRequest({ method, params: p = {} }) {
     const describe = wsp => ({ id: wsp.id, name: wsp.label, layout: serializeLayout(wsp.layout),
-      panes: getWorkspaceTerminals(wsp).map(t => ({ id: t.id, name: t.label, cwd: t.cwd, dead: !!t.dead, type: t.type || 'terminal' })) });
+      panes: getWorkspaceTerminals(wsp).map(t => {
+        const group = findGroupContainingTerm(wsp.layout, t.id);
+        const rect = document.getElementById('group-' + group?.id)?.getBoundingClientRect();
+        return { id: t.id, name: t.label, cwd: t.cwd, dead: !!t.dead, type: t.type || 'terminal',
+          agentManaged: !!t.agentManaged, groupId: group?.id, size: group?.size,
+          bounds: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null };
+      }) });
     if (method === 'list') return {
-      capabilities: { launchIntoWorkspace: true, launchBesidePane: true },
+      capabilities: { launchIntoWorkspace: true, launchBesidePane: true, paneSizing: true, panePlacement: true, compactPanes: true },
+      minimumPaneSize: { width: SPLIT_MIN_PX, height: SPLIT_MIN_PX },
       activeWorkspaceId: activeWsId,
       activePaneId: findWs(activeWsId)?.activeTermId || null,
       workspaces: workspaces.map(describe)
@@ -9450,6 +9612,7 @@
       };
       const additions = build(p.layout);
       const placement = p.placement || {};
+      if (existing && (placement.compact ?? !placement.sizes)) additions.size = { [placement.split === 'column' ? 'height' : 'width']: 'min' };
       const dock = node => ({ type: 'split', id: uuid(), direction: placement.split || 'row',
         sizes: placement.sizes || [50, 50], children: placement.before ? [additions, node] : [node, additions] });
       if (existing && wsp.layout) {
@@ -9492,11 +9655,13 @@
           if (!['row', 'column'].includes(node.split) || !Array.isArray(node.children) || node.children.length !== 2) throw new Error('Invalid split');
           const sizes = node.sizes || [50, 50];
           if (!Array.isArray(sizes) || sizes.length !== 2 || sizes.some(n => !Number.isFinite(n) || n <= 0) || Math.abs(sizes[0] + sizes[1] - 100) > 0.01) throw new Error('Invalid sizes');
-          return { type: 'split', id: uuid(), direction: node.split, sizes, children: node.children.map(n => build(n, depth + 1)) };
+          return { type: 'split', id: uuid(), direction: node.split, sizes,
+            ...(node.size ? { size: agentNodeSize(node.size) } : {}), children: node.children.map(n => build(n, depth + 1)) };
         }
         if (!entries.has(node.paneId) || used.has(node.paneId)) throw new Error('Unknown or repeated paneId');
         used.add(node.paneId);
-        return { type: 'group', id: uuid(), activeTermId: node.paneId, terminals: [entries.get(node.paneId)] };
+        return { type: 'group', id: uuid(), activeTermId: node.paneId, terminals: [entries.get(node.paneId)],
+          ...(node.size ? { size: agentNodeSize(node.size) } : {}) };
       };
       const layout = build(p.layout);
       if (used.size !== entries.size) throw new Error('Include every workspace pane exactly once');
@@ -9511,6 +9676,47 @@
     if (!found) throw new Error('Unknown paneId');
     const t = found.term;
     const wsp = workspaces.find(w => getWorkspaceTerminals(w).some(entry => entry.id === t.id));
+    if (method === 'resize' || method === 'place') {
+      const group = findGroupContainingTerm(wsp.layout, t.id);
+      const requested = Object.fromEntries(['width', 'height'].filter(axis => p[axis] !== undefined).map(axis => [axis, p[axis]]));
+      if (method === 'resize') {
+        if (!Object.keys(requested).length) throw new Error('resize needs width and/or height');
+        group.size = agentNodeSize(requested, group.size);
+      } else {
+        if (!['left', 'right', 'top', 'bottom'].includes(p.side)) throw new Error('side must be left, right, top, or bottom');
+        if (p.compact !== undefined && typeof p.compact !== 'boolean') throw new Error('compact must be boolean');
+        const anchor = findTermById(p.anchorPaneId);
+        if (!anchor || anchor.ws !== wsp || p.anchorPaneId === t.id) throw new Error('Use a different anchorPaneId in the same workspace');
+        const size = agentNodeSize(requested, p.compact === false ? {} : { [['left', 'right'].includes(p.side) ? 'width' : 'height']: 'min' });
+        // Build a new tree before committing. Entries/PTYs and sibling tabs survive.
+        const detach = node => {
+          if (node.type === 'group') {
+            const terminals = node.terminals.filter(entry => entry.id !== t.id);
+            return terminals.length ? { ...node, terminals,
+              activeTermId: terminals.some(entry => entry.id === node.activeTermId) ? node.activeTermId : terminals[0].id } : null;
+          }
+          const survivors = node.children.map((child, i) => ({ node: detach(child), weight: node.sizes[i] })).filter(child => child.node);
+          if (survivors.length === 1) return { ...survivors[0].node,
+            ...(node.size ? { size: { ...node.size, ...survivors[0].node.size } } : {}) };
+          const total = survivors.reduce((sum, child) => sum + child.weight, 0);
+          return { ...node, children: survivors.map(child => child.node), sizes: survivors.map(child => child.weight * 100 / total) };
+        };
+        const remaining = detach(wsp.layout);
+        const anchorGroup = findGroupContainingTerm(remaining, p.anchorPaneId);
+        const moved = { type: 'group', id: uuid(), activeTermId: t.id, terminals: [t], ...(size ? { size } : {}) };
+        const before = p.side === 'left' || p.side === 'top';
+        const insert = node => node.id === anchorGroup.id
+          ? { type: 'split', id: uuid(), direction: ['left', 'right'].includes(p.side) ? 'row' : 'column',
+            sizes: [50, 50], children: before ? [moved, node] : [node, moved] }
+          : node.type === 'split' ? { ...node, children: node.children.map(insert) } : node;
+        wsp.layout = insert(remaining);
+      }
+      delete wsp._maximizedGroupId;
+      activateWorkspace(wsp.id);
+      renderPaneArea();
+      saveState();
+      return describe(wsp);
+    }
     if (method === 'focus') {
       activateWorkspace(wsp.id);
       activateTerminal(wsp.id, t.id);

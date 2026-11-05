@@ -70,11 +70,18 @@
     <button id="btn-profiles" class="titlebar-btn no-drag" title="Profiles" aria-label="Choose a profile">
       <i class="ph ph-users"></i>
     </button>
+    <button id="btn-servers" class="titlebar-btn no-drag" title="Running servers" aria-label="Running servers" aria-expanded="false" aria-controls="servers-dropdown">
+      <i class="ph ph-hard-drives"></i>
+    </button>
     <button id="btn-sidebar-right" class="titlebar-btn no-drag" title="Toggle right sidebar" aria-label="Toggle tools panel">
       <i class="ph ph-sidebar-simple" style="transform:scaleX(-1)"></i>
     </button>
     <div class="titlebar-overlay-gap"></div>
   </div>
+  <section id="servers-dropdown" class="no-drag" aria-label="Running servers" hidden>
+    <div class="servers-heading"><span>Running servers</span><button id="servers-refresh" type="button" title="Refresh servers" aria-label="Refresh servers"><i class="ph ph-arrow-clockwise"></i></button></div>
+    <div id="servers-list" aria-live="polite"></div>
+  </section>
   <div id="app">
     <!-- ── Sidebar ── -->
     <nav id="sidebar" class="expanded" aria-label="Workspaces">

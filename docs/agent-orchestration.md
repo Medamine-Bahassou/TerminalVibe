@@ -34,10 +34,13 @@ node skills/terminalvibe-orchestration/scripts/tv.js pair --provider claude
 Add `--prompt "TASK"` to give both agents work, or `--cwd DIR` to override the
 calling directory. The command selects the owning/sole live instance, checks
 the requested executable, pins the current workspace, creates two side-by-side
-panes below the parent and returns both output snapshots after a bounded 750 ms
+compact panes below the parent and returns both output snapshots after a bounded 750 ms
 wait. Snapshots do not certify authentication or readiness. Do not relaunch to
 wait for output; use `read` on the returned pane IDs. Providers are never
 substituted, and approval settings remain enabled.
+On updated apps the bottom worker row defaults to 200 px high and fills the
+workspace width, with equal-width workers. Side docks minimize width instead
+and fill the available height. Older apps retain the percentage layout.
 
 For distinct tasks or custom layouts, `context --provider claude` returns the
 instance, workspace list, selected workspace, cwd and verified launcher in one
@@ -136,6 +139,42 @@ PID is not proof of a live app, and connection errors remain authoritative.
 
 ## Protocol
 
+### Resize or move live panes
+
+Use `resize` to size an already-open terminal group without restarting it:
+
+```sh
+node skills/terminalvibe-orchestration/scripts/tv.js resize '{"paneId":"BOTTOM_WORKER","width":"auto","height":"min"}'
+node skills/terminalvibe-orchestration/scripts/tv.js resize '{"paneId":"WORKER","width":420,"height":280}'
+node skills/terminalvibe-orchestration/scripts/tv.js place '{"paneId":"WORKER","anchorPaneId":"PARENT","side":"right"}'
+```
+
+`resize` accepts `min`, positive pixels, or `auto` per axis. Tabs in one group
+share its dimensions. `place` moves only the selected tab within its workspace,
+preserving sibling tabs and processes. Its sides are `left`, `right`, `top` and
+`bottom`. Moving defaults to compact sizing along the docking axis only:
+top/bottom minimize height and fill width, left/right minimize width and fill
+height. `compact:false` fills the split proportionally,
+and explicit `width`/`height` override the compact dimensions. Requests below
+200 px are clamped; a layout still needs sufficient viewport space to fit its
+minimums. Pixel dimensions include the tab header.
+
+Compact subtrees retain normal split filling in the other dimension, so a
+bottom worker row does not leave a blank strip beside narrow workers.
+`placement.compact:true` uses this for new workers; it is the default when
+placement percentages are omitted. Previously saved compact layouts requesting
+both minima also follow the docking axis when rendered. Explicit
+percentages are respected unless compact is explicitly enabled. `arrange`
+leaves/subtrees may include `size:{height:"min"}` for a bottom row,
+`size:{width:"min"}` for a side column, or explicit pixel values.
+Sizes persist with the workspace, and manual sash dragging releases them.
+
+`list` advertises `paneSizing`, `panePlacement` and `compactPanes`, the minimum
+pane dimensions, each pane's group ID, requested group size, `agentManaged` flag
+and measured bounds. Hidden groups can have zero/null bounds. These capabilities
+require the updated backend/app page; restarting dev mode or refreshing the
+page closes its dev terminals, so load the update after saving active work.
+
 POST JSON `{ "method": "list", "params": {} }` to the descriptor's loopback
 `url`, with `Authorization: Bearer TOKEN`. Success is `{ "result": ... }`;
 failure is `{ "error": "..." }` with a non-200 status. The client handles this
@@ -152,6 +191,8 @@ file private. Browser Origin requests are rejected. There is no remote binding.
 | `send` | `paneId`, `text`, optional `enter` | Input delivery acknowledgment |
 | `focus` | `paneId` | Selected pane ID |
 | `arrange` | `workspaceId`, `layout` | Updated workspace |
+| `resize` | `paneId`, `width` and/or `height` (`min`, `auto`, or pixels) | Updated workspace with measured bounds |
+| `place` | `paneId`, `anchorPaneId`, `side`; optional `compact`, `width`, `height` | Updated workspace; live processes preserved |
 
 For `arrange`, use `{ "paneId": "ID" }` leaves, including every pane in the
 workspace exactly once. Processes stay alive. Invalid launch plans and invalid

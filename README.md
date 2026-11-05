@@ -19,6 +19,7 @@
 - **Split panes** - recursive horizontal and vertical splits with drag-and-drop terminal reordering between panes
 - **Tabbed groups** - each pane holds a tab bar for terminals or browser sessions
 - **Built-in browser** - embedded web browsing with URL bar, navigation (back/forward/reload), history, and local file support
+- **Running servers** - titlebar dropdown showing listening ports and process names; refresh the list or open a server in a browser tab
 - **PDF viewer** - open PDFs directly in a tab via the browser's native viewer
 - **Image viewer** - display images inline in a browser tab via the browser's native viewer
 - **Background images** - set terminal background images in global or per-tab mode, with adjustable opacity

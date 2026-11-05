@@ -31,6 +31,7 @@ async function main() {
     const all = node => node.type === 'split' ? node.children.flatMap(all) : node.terminals;
     const sandbox = {
       workspaces, sideOrder: [], activeWsId: null, nativePtyReady: true, TextEncoder,
+      SPLIT_MIN_PX: 200, document: { getElementById: () => null },
       uuid: () => `id-${++sequence}`,
       getWorkspaceTerminals: wsp => all(wsp.layout),
       serializeLayout: node => JSON.parse(JSON.stringify(node, (key, value) => key === 'term' ? undefined : value)),
@@ -188,11 +189,64 @@ async function main() {
       assert(spawns.slice(-2).every(spec => spec.argv[0] === literalPrompt));
       assert.equal(target.activeTermId, oldActive, 'Fast pair preserves the parent pane');
       assert.equal(target.layout.children[1].direction, 'row', 'Workers are side by side');
+      assert.equal(target.layout.children[1].size.width, undefined, 'Bottom workers fill available width');
+      assert.equal(target.layout.children[1].size.height, 'min', 'Fast pair minimizes worker subtree height');
       await assert.rejects(client(['pair', '--provider', 'missing']), /provider claude or codex/);
       await assert.rejects(client(['pair', '--provider', 'codex']), /launcher unavailable/);
       assert.equal(spawns.length, beforePair + 2, 'Unavailable providers never create or substitute agents');
     }
     console.log('Fast client: WSL path relay, literal args, auto-selection, ambiguity, BOM plans, pair launch and snapshots passed');
+
+    const beforePlacementSpawns = spawns.length;
+    const workerId = added.result.launches[0].id;
+    const worker = all(target.layout).find(t => t.id === workerId);
+    const beforePlacementEntries = all(target.layout);
+    const resized = await call('resize', { paneId: workerId, width: 'min', height: 240 });
+    assert.equal(resized.status, 200);
+    let workerGroup = sandbox.findGroupContainingTerm(target.layout, workerId);
+    assert.equal(workerGroup.size.width, 'min');
+    assert.equal(workerGroup.size.height, 240);
+    for (const side of ['left', 'right', 'top', 'bottom']) {
+      const moved = await call('place', { paneId: workerId, anchorPaneId: ids[0], side });
+      assert.equal(moved.status, 200);
+      const beside = sandbox.findGroupContainingTerm(target.layout, ids[0]);
+      const findParent = n => n.type === 'split' ? n.children.includes(beside) ? n : n.children.map(findParent).find(Boolean) : null;
+      const split = findParent(target.layout);
+      assert.equal(split.direction, ['left', 'right'].includes(side) ? 'row' : 'column');
+      assert.equal(split.children[['left', 'top'].includes(side) ? 0 : 1].terminals[0], worker);
+      workerGroup = sandbox.findGroupContainingTerm(target.layout, workerId);
+      assert.equal(workerGroup.size.width, ['left', 'right'].includes(side) ? 'min' : undefined);
+      assert.equal(workerGroup.size.height, ['top', 'bottom'].includes(side) ? 'min' : undefined);
+      assert.equal(target.activeTermId, oldActive);
+      assert(beforePlacementEntries.every(entry => all(target.layout).includes(entry)));
+    }
+    const stableLayout = target.layout;
+    for (const [method, params] of [
+      ['resize', { paneId: workerId, width: -1 }], ['resize', { paneId: workerId }],
+      ['place', { paneId: workerId, anchorPaneId: workerId, side: 'left' }],
+      ['place', { paneId: workerId, anchorPaneId: 'missing', side: 'left' }],
+      ['place', { paneId: workerId, anchorPaneId: ids[0], side: 'diagonal' }],
+      ['place', { paneId: workerId, anchorPaneId: workspaces[1].activeTermId, side: 'right' }]
+    ]) assert.equal((await call(method, params)).status, 400);
+    assert.equal(target.layout, stableLayout, 'Invalid resizing/placement leaves the layout intact');
+    await call('resize', { paneId: workerId, width: 'auto', height: 'auto' });
+    assert.equal(workerGroup.size, undefined, 'auto releases compact constraints');
+    const tab = sandbox._createTermEntry(target, 'existing-tab', 'Existing tab');
+    const tabGroup = sandbox.findGroupContainingTerm(target.layout, ids[0]);
+    tabGroup.terminals.push(tab);
+    await call('place', { paneId: tab.id, anchorPaneId: ids[0], side: 'right', compact: false });
+    assert.equal(sandbox.findGroupContainingTerm(target.layout, ids[0]).id, tabGroup.id, 'Moving one tab preserves sibling group');
+    assert.equal(sandbox.findGroupContainingTerm(target.layout, tab.id).size, undefined);
+    assert.equal(spawns.length, beforePlacementSpawns, 'Resizing and moving live panes never spawn/kill agents');
+    await client(['resize', JSON.stringify({ paneId: workerId, width: 'min', height: 'min' })]);
+    assert.equal(sandbox.findGroupContainingTerm(target.layout, workerId).size.width, 'min');
+    console.log('Live pane control: resize, four placements, minimum sizing, tab preservation, validation and no respawn passed');
+    const persistence = { _createTermEntry: (_ws, id, label) => ({ id, label }) };
+    vm.createContext(persistence);
+    vm.runInContext(source.slice(source.indexOf('  function serializeLayout('), source.indexOf('  /* Backgrounds and workspace icons')), persistence);
+    const saved = persistence.serializeLayout(target.layout);
+    const restored = persistence.deserializeLayout(JSON.parse(JSON.stringify(saved)), target);
+    assert.equal(JSON.stringify(persistence.serializeLayout(restored)), JSON.stringify(saved), 'Compact/pixel sizing survives a real save/restore roundtrip');
 
     // Real browser transport and real PTY in an isolated server/home. No user
     // dev processes, browser sessions, provider logins or workspaces are touched.
@@ -225,6 +279,11 @@ async function main() {
       });
     });
     const browserDirectory = path.join(browserHome, '.terminalvibe', 'control');
+    const serversUrl = `http://127.0.0.1:${appPort}/api/servers`;
+    const discovered = await (await fetch(serversUrl)).json();
+    assert(discovered.servers.some(server => server.port === appPort), 'Server discovery HTTP API finds its own listening app port');
+    assert.equal((await fetch(serversUrl, { headers: { Origin: 'https://untrusted.example' } })).status, 403);
+    assert.equal((await fetch(serversUrl, { method: 'POST' })).status, 405);
     const browserDescriptor = JSON.parse(fs.readFileSync(path.join(browserDirectory, fs.readdirSync(browserDirectory)[0]), 'utf8'));
     const browserCall = async (method, params) => {
       const response = await fetch(browserDescriptor.url, { method: 'POST', headers: { Authorization: `Bearer ${browserDescriptor.token}` }, body: JSON.stringify({ method, params }) });
@@ -294,6 +353,8 @@ async function main() {
     assert.equal(browserAdded.result.launches.length, 1);
     assert.equal(browserAdded.result.workspace.panes.length, 2);
     await waitOutput('TV-SECOND-OK');
+    assert.equal((await browserCall('resize', { paneId: liveId, width: 'min', height: 'min' })).status, 200);
+    assert.equal((await browserCall('place', { paneId: browserAdded.result.launches[0].id, anchorPaneId: liveId, side: 'right' })).status, 200);
     await browserCall('send', { paneId: liveId, text: 'parent still running', enter: true });
     await waitOutput('RECEIVED:parent still running');
     extraClient = new WebSocket(`ws://127.0.0.1:${wsPort}`);
