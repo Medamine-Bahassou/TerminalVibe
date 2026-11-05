@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="vendor/xterm/xterm.css">
   <link rel="stylesheet" href="vendor/coloris.min.css">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="workspace.css">
   <script src="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="vendor/xterm/xterm.js"></script>
@@ -65,27 +66,27 @@
     <div id="btn-attach-main" class="titlebar-btn no-drag" title="Attach to main window (keeps splits)">
       <i class="ph ph-arrow-square-in"></i>
     </div>
-    <div id="btn-profiles" class="titlebar-btn no-drag" title="Profiles">
+    <button id="btn-profiles" class="titlebar-btn no-drag" title="Profiles" aria-label="Choose a profile">
       <i class="ph ph-users"></i>
-    </div>
-    <div id="btn-sidebar-right" class="titlebar-btn no-drag" title="Toggle right sidebar">
+    </button>
+    <button id="btn-sidebar-right" class="titlebar-btn no-drag" title="Toggle right sidebar" aria-label="Toggle tools panel">
       <i class="ph ph-sidebar-simple" style="transform:scaleX(-1)"></i>
-    </div>
+    </button>
     <div class="titlebar-overlay-gap"></div>
   </div>
   <div id="app">
     <!-- ── Sidebar ── -->
-    <nav id="sidebar">
+    <nav id="sidebar" class="expanded" aria-label="Workspaces">
       <div id="sidebar-inner">
         <!-- workspace buttons injected here -->
         <div class="sidebar-actions">
-          <div class="sa-btn" id="btn-settings" title="Settings">
+          <button class="sa-btn" id="btn-settings" title="Settings" aria-label="Open settings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <circle cx="12" cy="12" r="3" />
               <path
                 d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
             </svg>
-          </div>
+          </button>
         </div>
       </div>
     </nav>
@@ -99,7 +100,10 @@
             <polyline points="8,9 4.5,12 8,15" />
             <line x1="12" y1="15" x2="16" y2="15" />
           </svg>
-          <p>No terminal open — press <kbd>Ctrl+Shift+T</kbd> or click <kbd>+</kbd></p>
+          <h1>Your next session starts here.</h1>
+          <p>Open a terminal to get back to work.</p>
+          <button id="empty-new-terminal" class="workspace-new">Open a terminal <span aria-hidden="true">↗</span></button>
+          <span class="empty-hint">Use the command palette to find tabs and actions.</span>
         </div>
         <!-- split containers injected here -->
 

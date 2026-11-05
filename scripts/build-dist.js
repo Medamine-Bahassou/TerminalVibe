@@ -37,7 +37,7 @@ ensureVendorFile('split.min.js', path.join('node_modules', 'split.js', 'dist', '
 ensureVendorFile('coloris.min.js', path.join('node_modules', '@melloware', 'coloris', 'dist', 'umd', 'coloris.min.js'));
 ensureVendorFile('coloris.min.css', path.join('node_modules', '@melloware', 'coloris', 'dist', 'coloris.min.css'));
 
-const assets = ['index.html', 'app.js', 'style.css', 'logo.png', 'logo-app.svg'];
+const assets = ['index.html', 'app.js', 'style.css', 'workspace.css', 'logo.png', 'logo-app.svg'];
 
 fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist, { recursive: true });

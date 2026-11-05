@@ -223,6 +223,13 @@ z-index: 20;
 min-width: fit-content;
 --sb-rail-w: 37px;
 }
+/* Split.js retains its expanded minimum when setSizes([0, 100]) runs.
+   A collapsed rail must not inherit that inline flex-basis. */
+#sidebar:not(.expanded) {
+  flex: 0 0 var(--sb-rail-w) !important;
+  width: var(--sb-rail-w);
+  min-width: var(--sb-rail-w);
+}
 #sidebar-inner {
 --sidebar-expanded-w: 200px;
 background: color-mix(in srgb, var(--bg) 80%, #000 20%);

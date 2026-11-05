@@ -153,6 +153,22 @@
    T H*EMES — mirror Python THEMES dict exactly
    ═══════════════════════════════════════════════════════════════ */
   const THEMES = {
+    'graphite': {
+      label: 'Graphite',
+      bg: '#15191d', fg: '#dce3e6', cursor: '#8ddbb8', selection: '#344c46',
+      swatches: ['#15191d', '#dce3e6', '#8ddbb8'],
+      palette: [
+        '#20262c', '#ed8993', '#8ddbb8', '#e6c788',
+        '#8bb9e8', '#c1a6d9', '#89cdd3', '#dce3e6',
+        '#65727c', '#f3a2aa', '#abe8cc', '#f0d7a4',
+        '#accff0', '#d5bfe7', '#a8dfe3', '#f2f5f6',
+      ],
+      ui: {
+        accent: '#8ddbb8', border: '#2c343b',
+        tabActiveBg: '#252d33', tabHoverBg: '#20272d',
+        dimText: '#87959e', mutedText: '#a3afb7',
+      },
+    },
     'catppuccin-mocha': {
       label: 'Catppuccin Mocha',
       bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#585b70',
@@ -1309,7 +1325,7 @@
   /* ═══════════════════════════════════════════════════════════════
    S T*ATE
    ═══════════════════════════════════════════════════════════════ */
-  let currentThemeName = 'catppuccin-mocha';
+  let currentThemeName = 'graphite';
   let currentTheme = THEMES[currentThemeName];
   let currentFontSize = 13;
   let cornerStyle = 'sharp'; // 'rounded' | 'sharp'
@@ -1444,7 +1460,9 @@
     // the in-window overlay fallback). Native views paint above the window's DOM,
     // so detach them all (alive, not destroyed) on every sync — they must never
     // re-raise above the settings layer.
+    const profilePicker = document.getElementById('profile-picker');
     const overlayOpen = settingsWindowOpen ||
+      (profilePicker && profilePicker.style.display !== 'none') ||
       (document.getElementById('settings-overlay')?.classList.contains('open') === true);
     if (overlayOpen || document.body.classList.contains('tab-dragging')) {
       if (window.electronAPI) {
@@ -2289,6 +2307,7 @@
           else if (t.cwd) o.cwd = t.cwd;
           if (t.bgImage) o.bgImage = t.bgImage;
           if (t.dead) o.dead = true;
+          if (t.agentManaged) o.agentManaged = true;
           if (t.locked) o.locked = true;
           if (t.pinLabel) o.pinLabel = true;
           return o;
@@ -2330,6 +2349,7 @@
         if (tData.cmd) entry.runCmd = tData.cmd; // auto-run launch only; never serialized
         if (tData.bgImage) entry.bgImage = tData.bgImage;
         if (tData.dead) entry.dead = true;
+        if (tData.agentManaged) entry.agentManaged = true;
         if (tData.locked) entry.locked = true;
         if (tData.pinLabel) entry.pinLabel = true;
         group.terminals.push(entry);
@@ -2628,7 +2648,7 @@
       }
 
       if (!state.workspaces?.length) return false;
-      if (state.sidebarExpanded) document.getElementById('sidebar').classList.add('expanded');
+      if (typeof state.sidebarExpanded === 'boolean') document.getElementById('sidebar').classList.toggle('expanded', state.sidebarExpanded);
       if (state.sidebarWidth) {
         savedSidebarWidth = Math.max(state.sidebarWidth, SB_EXPANDED_MIN);
         if (state.sidebarExpanded && sidebarSplit) {
@@ -2690,6 +2710,67 @@
   let _profileSwitching = false; // suppress beforeunload save during a profile switch
   let ppNavHandler = null; // single live keydown handler for the profile picker
 
+  // Browser profiles use the same picker and namespaced state as desktop,
+  // without exposing an Electron bridge to the rest of the app.
+  const BROWSER_PROFILES_KEY = 'terminalvibe.browserProfiles';
+  function readBrowserProfiles() {
+    const raw = localStorage.getItem(BROWSER_PROFILES_KEY);
+    if (raw) return JSON.parse(raw);
+    const meta = {
+      profiles: [{ id: 'default', name: 'Default', avatar: '' }],
+      active: 'default', default: 'default',
+    };
+    const legacy = localStorage.getItem('ghostterm-state-v2');
+    if (legacy && !localStorage.getItem('ghostterm-state-v2:default')) {
+      localStorage.setItem('ghostterm-state-v2:default', legacy);
+    }
+    return writeBrowserProfiles(meta);
+  }
+  function writeBrowserProfiles(meta) {
+    localStorage.setItem(BROWSER_PROFILES_KEY, JSON.stringify(meta));
+    return meta;
+  }
+  async function switchBrowserProfile(id) {
+    const meta = readBrowserProfiles();
+    if (!meta.profiles.some(p => p.id === id)) return false;
+    meta.active = id;
+    writeBrowserProfiles(meta);
+    return true;
+  }
+  const browserProfilesApi = {
+    profilesList: async () => readBrowserProfiles(),
+    profilesCreate: async ({ name, avatar }) => {
+      const meta = readBrowserProfiles();
+      meta.profiles.push({ id: uuid(), name: String(name || 'Profile').slice(0, 40), avatar: avatar || '' });
+      return writeBrowserProfiles(meta);
+    },
+    profilesUpdate: async ({ id, name, avatar }) => {
+      const meta = readBrowserProfiles();
+      const p = meta.profiles.find(p => p.id === id);
+      if (p && name !== undefined) p.name = String(name).slice(0, 40);
+      if (p && avatar !== undefined) p.avatar = avatar;
+      return writeBrowserProfiles(meta);
+    },
+    profilesDelete: async id => {
+      const meta = readBrowserProfiles();
+      if (meta.profiles.length <= 1) return meta;
+      meta.profiles = meta.profiles.filter(p => p.id !== id);
+      if (meta.active === id) meta.active = meta.profiles[0].id;
+      if (meta.default === id) meta.default = meta.profiles[0].id;
+      writeBrowserProfiles(meta);
+      localStorage.removeItem('ghostterm-state-v2:' + id);
+      return meta;
+    },
+    profilesSetDefault: async id => {
+      const meta = readBrowserProfiles();
+      if (meta.profiles.some(p => p.id === id)) meta.default = id;
+      return writeBrowserProfiles(meta);
+    },
+    profilesSwitch: switchBrowserProfile,
+    profilesSwitchInPlace: switchBrowserProfile,
+  };
+  function profilesApi() { return configApi() || browserProfilesApi; }
+
   // Namespaces every localStorage key used by state persistence so profiles
   // never collide in plain-browser mode either.
   function applyProfileKey(p) {
@@ -2698,8 +2779,8 @@
   }
 
   async function initActiveProfile() {
-    const api = configApi();
-    if (!api || !api.profilesList) return null; // plain browser: single implicit profile
+    const api = profilesApi();
+    if (!api || !api.profilesList) return null;
     try {
       const meta = await api.profilesList();
       const p = meta.profiles.find(x => x.id === meta.active) || null;
@@ -2711,7 +2792,7 @@
   function editProfile(p) {
     showPrompt('Edit profile', p.name, { icon: p.avatar || '' }, async (name, _color, avatar) => {
       if (!name) return;
-      const api = configApi();
+      const api = profilesApi();
       if (!api || !api.profilesUpdate) return;
       const meta = await api.profilesUpdate({ id: p.id, name, avatar });
       const updated = meta.profiles.find(x => x.id === p.id);
@@ -2726,19 +2807,19 @@
 
   function deleteProfile(p) {
     showConfirm(`Delete profile "${p.name}"?`, async () => {
-      const api = configApi();
+      const api = profilesApi();
       if (!api || !api.profilesDelete) return;
       const meta = await api.profilesDelete(p.id);
       // Deleting the active profile moved the active pointer server-side; a
       // reload picks up the new active profile and fresh state. Otherwise
       // just re-render the grid.
-      if (_activeProfile && _activeProfile.id === p.id) { location.reload(); return; }
+      if (_activeProfile && _activeProfile.id === p.id) { _profileSwitching = true; location.reload(); return; }
       renderProfilePicker(meta, _activeProfile, (np) => { confirmProfileSwitch(np); });
     });
   }
 
   function setDefaultProfile(p) {
-    const api = configApi();
+    const api = profilesApi();
     if (!api || !api.profilesSetDefault) return;
     api.profilesSetDefault(p.id).then(meta => {
       const wrap = document.getElementById('profile-picker');
@@ -2805,8 +2886,7 @@
     add.addEventListener('click', () => {
       showPrompt('Profile name', '', { icon: '' }, async (name, _color, avatar) => {
         if (!name) return;
-        const api = configApi();
-        const meta = await api.profilesCreate({ name, avatar });
+        const meta = await profilesApi().profilesCreate({ name, avatar });
         const created = meta.profiles[meta.profiles.length - 1];
         wrap.style.display = 'none';
         confirmProfileSwitch(created);
@@ -2847,7 +2927,7 @@
   // Single profile (or legacy state.json) auto-activates with no UI.
   async function profileGate() {
     const res = await initActiveProfile();
-    if (!res) return; // no profile system (plain browser)
+    if (!res) return; // profile storage unavailable
     const { meta, current } = res;
     // Auto-open the active profile at boot — no picker. If none is active yet,
     // fall back to the first (default) profile. Switching only happens via the
@@ -2856,7 +2936,7 @@
       const target = meta.profiles.find(x => x.id === meta.default) || meta.profiles[0];
       if (!target) return;
       applyProfileKey(target);
-      await configApi().profilesSwitch(target.id);
+      await profilesApi().profilesSwitch(target.id);
     }
   }
 
@@ -2878,7 +2958,7 @@
     const splash = document.getElementById('splash');
     if (splash) { splash.style.transition = 'none'; splash.classList.remove('hide'); }
     teardownAllWorkspaces();
-    return configApi().profilesSwitchInPlace(p.id).then(async ok => {
+    return profilesApi().profilesSwitchInPlace(p.id).then(async ok => {
       try {
         if (ok) {
           // Custom themes + plugins are global (already loaded at boot) — do NOT
@@ -2904,7 +2984,7 @@
   }
 
   function openProfilePicker() {
-    const api = configApi();
+    const api = profilesApi();
     if (!api || !api.profilesList) return;
     api.profilesList().then(meta => {
       renderProfilePicker(meta, _activeProfile, (p) => {
@@ -4541,6 +4621,13 @@
     const { ws, term: t } = result;
     t.dead = true;
     pluginEmit('terminal:exit', { termId: id, code });
+    if (t.agentManaged) {
+      t.term.write(`\r\n[Agent process exited: ${code}]\r\n`);
+      t.term.options.disableStdin = true;
+      renderPaneArea();
+      saveState();
+      return;
+    }
     if (getWorkspaceTerminals(ws).length <= 1) {
       if (DETACHED_ONLY) {
         window.close();
@@ -6989,7 +7076,7 @@
       item('<i class="ph ph-pencil-simple"></i>', 'Edit profile', '', () => editProfile(p));
       if (p.id !== defaultId) item('<i class="ph ph-star"></i>', 'Set as default profile', '', () => setDefaultProfile(p));
       if (p.avatar) item('<i class="ph ph-image"></i>', 'Remove picture', '', async () => {
-        const api = configApi();
+        const api = profilesApi();
         if (!api || !api.profilesUpdate) return;
         const meta = await api.profilesUpdate({ id: p.id, avatar: '' });
         const updated = meta.profiles.find(x => x.id === p.id);
@@ -7000,7 +7087,7 @@
       if (p.id && (typeof p === 'object')) {
         sep();
         item('<i class="ph ph-trash"></i>', 'Delete profile', '', () => {
-          configApi().profilesList().then(m => {
+          profilesApi().profilesList().then(m => {
             if (m.profiles.length <= 1) return; // never delete the last profile
             deleteProfile(p);
           });
@@ -9167,8 +9254,14 @@
 
   // Open/close
   document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
+  const startSession = () => activeWs() ? addTerminal() : createWorkspace();
+  document.getElementById('empty-new-terminal').addEventListener('click', startSession);
   const btnProfiles = document.getElementById('btn-profiles');
   if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
+  // Native browser views sit above DOM overlays; hide them while the picker
+  // is visible and restore them when it closes, including Escape and switching.
+  const profilePickerObserver = new MutationObserver(() => syncBrowserSlots());
+  profilePickerObserver.observe(document.getElementById('profile-picker'), { attributes: true, attributeFilter: ['style'] });
   const btnSidebarRight = document.getElementById('btn-sidebar-right');
   if (btnSidebarRight) btnSidebarRight.addEventListener('click', () => document.body.classList.toggle('sb-right-hidden'));
 
@@ -9232,6 +9325,100 @@
 
   // ── Auto-run workspaces: a saved workspace layout whose tabs each start a
   // command (or open a URL) when launched from the right panel.
+  // Live agent orchestration. Launch arguments are passed directly to the PTY,
+  // never typed into an interactive shell. Running entries survive rearrangement.
+  async function handleAgentRequest({ method, params: p = {} }) {
+    const describe = wsp => ({ id: wsp.id, name: wsp.label, layout: serializeLayout(wsp.layout),
+      panes: getWorkspaceTerminals(wsp).map(t => ({ id: t.id, name: t.label, cwd: t.cwd, dead: !!t.dead, type: t.type || 'terminal' })) });
+    if (method === 'list') return { workspaces: workspaces.map(describe) };
+    if (method === 'launch') {
+      if (!nativePtyReady) throw new Error('Native terminal backend is not ready');
+      const wsp = { id: uuid(), label: p.name, layout: null, activeTermId: null };
+      const specs = new Map();
+      const build = node => {
+        if (node.split) return { type: 'split', id: uuid(), direction: node.split, sizes: node.sizes || [50, 50], children: node.children.map(build) };
+        const id = uuid();
+        specs.set(id, node);
+        const entry = _createTermEntry(wsp, id, node.name);
+        entry.cwd = node.cwd;
+        entry.pinLabel = true;
+        entry.agentManaged = true;
+        return { type: 'group', id: uuid(), activeTermId: id, terminals: [entry] };
+      };
+      wsp.layout = build(p.layout);
+      const terms = getWorkspaceTerminals(wsp);
+      wsp.activeTermId = terms[0].id;
+      workspaces.push(wsp);
+      sideOrder.push({ type: 'ws', id: wsp.id });
+      renderSidebar();
+      activateWorkspace(wsp.id);
+      const launches = [];
+      for (const t of terms) {
+        const spec = specs.get(t.id), slot = getSlotDimensions(t);
+        const started = await window.electronAPI.terminalCreate({ id: t.id, ...slot, cwd: spec.cwd, executable: spec.argv[0], argv: spec.argv.slice(1) });
+        if (!started) {
+          t.dead = true;
+          t.term.write('\r\n[Could not launch agent. Check executable and cwd.]\r\n');
+          t.term.options.disableStdin = true;
+        }
+        launches.push({ id: t.id, name: t.label, started });
+      }
+      renderPaneArea();
+      saveState();
+      return { workspace: describe(wsp), launches };
+    }
+    if (method === 'arrange') {
+      const wsp = findWs(p.workspaceId);
+      if (!wsp) throw new Error('Unknown workspaceId');
+      const entries = new Map(getWorkspaceTerminals(wsp).map(t => [t.id, t]));
+      const used = new Set();
+      const build = (node, depth = 0) => {
+        if (!node || depth > 8) throw new Error('Invalid layout');
+        if (node.split) {
+          if (!['row', 'column'].includes(node.split) || !Array.isArray(node.children) || node.children.length !== 2) throw new Error('Invalid split');
+          const sizes = node.sizes || [50, 50];
+          if (!Array.isArray(sizes) || sizes.length !== 2 || sizes.some(n => !Number.isFinite(n) || n <= 0) || Math.abs(sizes[0] + sizes[1] - 100) > 0.01) throw new Error('Invalid sizes');
+          return { type: 'split', id: uuid(), direction: node.split, sizes, children: node.children.map(n => build(n, depth + 1)) };
+        }
+        if (!entries.has(node.paneId) || used.has(node.paneId)) throw new Error('Unknown or repeated paneId');
+        used.add(node.paneId);
+        return { type: 'group', id: uuid(), activeTermId: node.paneId, terminals: [entries.get(node.paneId)] };
+      };
+      const layout = build(p.layout);
+      if (used.size !== entries.size) throw new Error('Include every workspace pane exactly once');
+      wsp.layout = layout;
+      delete wsp._maximizedGroupId;
+      activateWorkspace(wsp.id);
+      renderPaneArea();
+      saveState();
+      return describe(wsp);
+    }
+    const found = findTermById(p.paneId);
+    if (!found) throw new Error('Unknown paneId');
+    const t = found.term;
+    const wsp = workspaces.find(w => getWorkspaceTerminals(w).some(entry => entry.id === t.id));
+    if (method === 'focus') {
+      activateWorkspace(wsp.id);
+      activateTerminal(wsp.id, t.id);
+      return { paneId: t.id };
+    }
+    if (t.type === 'browser') throw new Error('Expected a terminal pane');
+    if (method === 'send') {
+      if (t.locked || t.dead) throw new Error('Pane is locked or exited');
+      if (typeof p.text !== 'string' || (p.enter !== undefined && typeof p.enter !== 'boolean')) throw new Error('text must be a string; enter must be boolean');
+      _sendStdinRaw(t.id, new TextEncoder().encode(p.text + (p.enter ? '\r' : '')));
+      return { paneId: t.id, sent: true };
+    }
+    if (method === 'read') {
+      const lines = p.lines === undefined ? 100 : p.lines;
+      if (!Number.isInteger(lines) || lines < 1 || lines > 2000) throw new Error('lines must be 1–2000');
+      const buffer = t.term.buffer.active, output = [];
+      for (let i = Math.max(0, buffer.length - lines); i < buffer.length; i++) output.push(buffer.getLine(i)?.translateToString(true) || '');
+      return { paneId: t.id, dead: !!t.dead, text: output.join('\n') };
+    }
+    throw new Error('Unknown method');
+  }
+
   const AR_KEY = 'terminalvibe.autorunWorkspaces';
   const loadAutoRuns = () => { try { const a = JSON.parse(localStorage.getItem(AR_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
   const saveAutoRuns = list => { try { localStorage.setItem(AR_KEY, JSON.stringify(list)); } catch { } };
@@ -10322,5 +10509,8 @@
       }, 50);
     });
 
+    if (!DETACHED_ONLY && !SETTINGS_ONLY && window.electronAPI?.onAgentRequest) {
+      window.electronAPI.onAgentRequest(handleAgentRequest);
+    }
   })(); // async boot
 })();

@@ -2,6 +2,14 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  onAgentRequest: (cb) => {
+    const listener = async (_event, request) => {
+      try { ipcRenderer.send('agent:result', { id: request.id, result: await cb(request) }); }
+      catch (err) { ipcRenderer.send('agent:result', { id: request.id, error: err.message }); }
+    };
+    ipcRenderer.on('agent:request', listener);
+    return () => ipcRenderer.removeListener('agent:request', listener);
+  },
 
   // External links
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),

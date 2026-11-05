@@ -4,6 +4,30 @@ const path = require('path');
 const pty = require('node-pty');
 const yaml = require('js-yaml');
 const { hasRunningProcess, runningProcessInfo } = require('./proc');
+const { startAgentControl, validateLaunch } = require('./agent-control');
+let agentControl = null;
+const agentRequests = new Map();
+ipcMain.on('agent:result', (event, { id, result, error }) => {
+  const pending = agentRequests.get(id);
+  if (!pending || event.sender !== pending.sender) return;
+  clearTimeout(pending.timer);
+  agentRequests.delete(id);
+  if (error) pending.reject(new Error(error)); else pending.resolve(result);
+});
+function dispatchAgentRequest(request) {
+  if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange'].includes(request.method)) throw new Error('Unknown method');
+  if (request.method === 'launch') validateLaunch(request.params);
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) throw new Error('Main window is not ready');
+  return new Promise((resolve, reject) => {
+    const id = require('crypto').randomUUID();
+    const timer = setTimeout(() => {
+      agentRequests.delete(id);
+      reject(new Error('Control request timed out; inspect list before retrying a mutation'));
+    }, 15000);
+    agentRequests.set(id, { resolve, reject, timer, sender: mainWindow.webContents });
+    mainWindow.webContents.send('agent:request', { ...request, id });
+  });
+}
 
 // ── Helpers ──
 
@@ -999,7 +1023,7 @@ const sendToRenderer = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
 
-ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
+ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv, executable }) => {
   try {
     if (ptys.has(id)) {
       // Replace old PTY — remove exit listener first to avoid sending
@@ -1031,12 +1055,13 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
       spawnCwd = homeDir;
     }
     const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
-    const t = pty.spawn(shell, argv && argv.length ? argv : [], {
+    const t = pty.spawn(executable || shell, argv && argv.length ? argv : [], {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
       cwd: spawnCwd,
-      env: { ...process.env, TERM: 'xterm-256color' },
+      env: { ...process.env, TERM: 'xterm-256color', TERMINALVIBE_PANE_ID: id,
+        ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}) },
     });
     ptys.set(id, t);
     // Coalesce PTY output: the first chunk goes out immediately (zero-latency
@@ -1567,7 +1592,7 @@ ipcMain.on('browser:destroy', (_e, id) => {
 // ── App lifecycle ──
 const cliArgs = parseCli();
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (cliArgs.cmd === 'help') { console.log(CLI_USAGE); app.quit(); return; }
   ensureConfigDir();
   initActiveProfile();
@@ -1582,12 +1607,16 @@ app.whenReady().then(() => {
     return;
   }
   if (cliArgs.cmd === 'attach') {
-    if (headlessAttach(cliArgs)) createWindow();
+    if (headlessAttach(cliArgs)) {
+      agentControl = await startAgentControl({ directory: path.join(CONFIG_DIR, 'control'), dispatch: dispatchAgentRequest });
+      createWindow();
+    }
     else app.quit();
     return;
   }
   // new / create / no-subcommand → open the GUI (new/create pre-build state)
   if (cliArgs.cmd === 'new' || cliArgs.cmd === 'create') setupCliLaunch(cliArgs);
+  agentControl = await startAgentControl({ directory: path.join(CONFIG_DIR, 'control'), dispatch: dispatchAgentRequest });
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1621,6 +1650,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
+  if (agentControl) agentControl.close();
   ipcMain.emit('terminal:kill-all');
   if (_cliTempProfile) {
     const meta = readProfilesMeta();

@@ -36,6 +36,7 @@
 - **Frameless window** - custom titlebar with logo, sidebar toggle, and window controls (minimize/maximize/close)
 - **Status bar** - shows active workspace, terminal name, terminal dimensions + font size, connection status, multi-select count, and real-time clock
 - **Command line** - launch workspaces and build terminal/browser layouts from the terminal: `new`, `create` (YAML), `list`, `close`, `attach` (see [docs/cli.md](docs/cli.md))
+- **Agent orchestration skill** - let an agent launch other agents in named terminal splits, arrange running panes, read output, and send follow-up input through a local control channel (see [docs/agent-orchestration.md](docs/agent-orchestration.md))
 
 ## Screenshots
 
@@ -142,6 +143,20 @@ All shortcuts are rebindable in Settings → Shortcuts.
 - Node.js 18+
 - npm
 
+On Ubuntu/Debian (including WSL), install the native build tools before running
+`npm install`. `node-pty` needs Python, `make`, and a C++ compiler when a prebuilt
+binary is unavailable:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential python3
+```
+
+Electron on WSL also needs GUI support through WSLg. If `npm install` fails,
+resolve the error and rerun it before starting the app; an incomplete install
+can leave the `electron` command unavailable. Deprecation warnings alone do not
+stop installation.
+
 ## Development
 
 ```bash
@@ -149,6 +164,10 @@ npm install
 npm run dev            # browser dev mode (Node backend on ports 7681/7682/6969)
 npm run electron:dev   # Electron dev mode (native PTY via node-pty)
 ```
+
+`npm install` also generates the frontend assets in `vendor/`. Run one dev mode
+at a time, since both use the static server on port 7769. To open Electron while
+`npm run dev` is already running, use `npm run electron`.
 
 ## Build
 
