@@ -69,6 +69,14 @@ function validateLaunch(plan) {
     } else {
       if (++count > 16 || typeof node.name !== 'string' || !node.name.trim() || names.has(node.name)) throw new Error('Use 1–16 uniquely named panes');
       names.add(node.name);
+      if (node.type !== undefined && !['terminal', 'browser'].includes(node.type)) throw new Error('Pane type must be terminal or browser');
+      if (node.type === 'browser' || node.url !== undefined) {
+        if (node.type === 'terminal' || node.argv !== undefined || node.cwd !== undefined) throw new Error('Browser panes use url, not argv or cwd');
+        let url;
+        try { url = typeof node.url === 'string' && new URL(node.url); } catch {}
+        if (!url || !['http:', 'https:'].includes(url.protocol)) throw new Error('Browser url must be an absolute http(s) URL');
+        return;
+      }
       if (!Array.isArray(node.argv) || !node.argv.length || node.argv.some(x => typeof x !== 'string' || x.includes('\0')) || !node.argv[0]) throw new Error('Each pane needs a nonempty argv array');
       if (typeof node.cwd !== 'string' || !path.isAbsolute(node.cwd) || !fs.statSync(node.cwd).isDirectory()) throw new Error('Each pane needs an existing absolute cwd');
     }
@@ -77,4 +85,23 @@ function validateLaunch(plan) {
   return plan;
 }
 
-module.exports = { startAgentControl, validateLaunch };
+// An updated backend may still be connected to a pre-update page. Never send
+// it a browser mutation: old launch handlers build terminal slots before failing.
+async function dispatchWithCapabilities(request, dispatch) {
+  const hasBrowser = node => !!node && (node.type === 'browser' || node.url !== undefined ||
+    (Array.isArray(node.children) && node.children.some(hasBrowser)));
+  const capability = request.method === 'navigate' ? 'browserNavigate'
+    : request.method === 'launch' && hasBrowser(request.params?.layout) ? 'browserLaunch' : null;
+  if (capability) {
+    const state = await dispatch({ method: 'list', params: {} });
+    if (!state.capabilities?.[capability]) throw new Error(
+      `The running TerminalVibe page lacks ${capability}. No panes were changed. Save active terminal work, then refresh the page or restart the Electron app to load the update.`);
+  }
+  return dispatch(request);
+}
+
+function canReplaceSession(info, allowClaude = false) {
+  return info?.running === false || (allowClaude && info?.running === true && /^(claude|claude-code)(\.exe)?$/i.test(info.name || ''));
+}
+
+module.exports = { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession };

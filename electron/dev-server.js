@@ -24,6 +24,20 @@ const MIME = {
 };
 
 http.createServer((req, res) => {
+  // npm run dev also serves the UI from this origin. Keep local history
+  // available here rather than letting /api requests fall through to files.
+  const parsed = new URL(req.url, `http://${HOST}:${PORT}`);
+  if (parsed.pathname === '/api/claude-sessions') {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-store');
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://${req.headers.host}`) { res.writeHead(403); res.end(JSON.stringify({ error:'Invalid origin' })); return; }
+    if (req.method !== 'GET') { res.writeHead(405); res.end(JSON.stringify({ error:'Use GET' })); return; }
+    require('./claude-sessions').listClaudeSessions(parsed.searchParams.get('cwd')).then(
+      data => res.end(JSON.stringify(data)),
+      error => { res.writeHead(400); res.end(JSON.stringify({ error:error.message })); });
+    return;
+  }
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.join(ROOT, path.normalize(urlPath));

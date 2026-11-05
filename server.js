@@ -15,9 +15,10 @@ const os = require("os");
 const { WebSocketServer } = require("ws");
 const pty = require("node-pty");
 const { hasRunningProcess, runningProcessInfo } = require("./electron/proc");
-const { startAgentControl, validateLaunch } = require('./electron/agent-control');
+const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession } = require('./electron/agent-control');
 const { listRunningServers } = require('./electron/servers');
 const { terminalEnv } = require('./electron/terminal-env');
+const { prepareShellStartup } = require('./electron/shell-startup');
 const { randomUUID } = require('crypto');
 let agentControl;
 const agentClients = new Set();
@@ -25,19 +26,21 @@ const agentRequests = new Map();
 const controlReady = startAgentControl({
   directory: path.join(os.homedir(), '.terminalvibe', 'control'),
   dispatch(request) {
-    if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange', 'resize', 'place'].includes(request.method)) throw new Error('Unknown method');
+    if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange', 'resize', 'place', 'navigate'].includes(request.method)) throw new Error('Unknown method');
     if (request.method === 'launch') validateLaunch(request.params);
     const clients = [...agentClients].filter(client => client.readyState === client.OPEN);
     if (clients.length !== 1) throw new Error(clients.length ? 'Multiple browser tabs connected. Keep one TerminalVibe browser tab open for orchestration.' : 'No ready browser tab. Open or refresh TerminalVibe in your browser.');
-    const client = clients[0], id = randomUUID();
-    return new Promise((resolve, reject) => {
+    const client = clients[0];
+    return dispatchWithCapabilities(request, request => new Promise((resolve, reject) => {
+      if (client.readyState !== client.OPEN || !agentClients.has(client) || agentClients.size !== 1) return reject(new Error('Browser connection changed; inspect list before retrying'));
+      const id = randomUUID();
       const timer = setTimeout(() => {
         agentRequests.delete(id);
         reject(new Error('Browser request timed out; inspect list before retrying a mutation'));
       }, 15000);
       agentRequests.set(id, { client, resolve, reject, timer });
       client.send(JSON.stringify({ ...request, id, type: 'agent:request' }));
-    });
+    }));
   }
 }).then(control => {
   agentControl = control;
@@ -78,6 +81,17 @@ const MIME_TYPES = {
 
 const appServer = http.createServer((req, res) => {
   const parsed = url.parse(req.url, true);
+  if (parsed.pathname === '/api/claude-sessions') {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-store');
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://${req.headers.host}`) { res.writeHead(403); res.end(JSON.stringify({ error: 'Invalid origin' })); return; }
+    if (req.method !== 'GET') { res.writeHead(405); res.end(JSON.stringify({ error: 'Use GET' })); return; }
+    require('./electron/claude-sessions').listClaudeSessions(parsed.query.cwd).then(
+      data => res.end(JSON.stringify(data)),
+      error => { res.writeHead(400); res.end(JSON.stringify({ error: error.message })); });
+    return;
+  }
   if (parsed.pathname === '/api/servers') {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');
@@ -167,51 +181,10 @@ class PTYSession {
       if (!fs.existsSync(spawnCwd)) spawnCwd = homeDir;
     } catch {}
 
-    // ── Shell integration: configure OSC 7 cwd reporting ──
-    const shellName = path.basename(this.shell).toLowerCase();
-    let shellArgs = ["-l"]; // default: login shell
-    const extraEnv = {};
-
-    if (!this.executable && shellName === "bash") {
-      // Create a temp rc file that sources user's init and adds OSC 7
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tv-sh-"));
-      this._tmpDir = tmpDir;
-      const rcContent = [
-        '# TerminalVibe OSC 7 shell integration',
-        '# Source user\'s startup files',
-        '[ -f ~/.bashrc ] && source ~/.bashrc 2>/dev/null || true',
-        '[ -f ~/.bash_profile ] && source ~/.bash_profile 2>/dev/null || true',
-        '[ -f ~/.profile ] && source ~/.profile 2>/dev/null || true',
-        '',
-        '# Report cwd on every prompt via OSC 7',
-        '__terminal_vibe_cwd() {',
-        '  printf "\\e]7;file://${HOSTNAME:-localhost}${PWD// /%20}\\a"',
-        '}',
-        'PROMPT_COMMAND="__terminal_vibe_cwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"',
-        '',
-      ].join('\n');
-      fs.writeFileSync(path.join(tmpDir, "bashrc"), rcContent, "utf-8");
-      shellArgs = ["--rcfile", path.join(tmpDir, "bashrc")];
-    } else if (!this.executable && shellName === "zsh") {
-      // For zsh, set ZDOTDIR to a temp dir with a custom .zshrc
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tv-zsh-"));
-      this._tmpDir = tmpDir;
-      const zshrcContent = [
-        '# TerminalVibe OSC 7 shell integration',
-        '# Source user\'s startup files',
-        '[ -f ~/.zshrc ] && source ~/.zshrc 2>/dev/null || true',
-        '',
-        '# Report cwd on every prompt via OSC 7',
-        '__terminal_vibe_cwd() {',
-        '  printf "\\e]7;file://${HOST:-localhost}${PWD}\\a"',
-        '}',
-        'precmd_functions+=(__terminal_vibe_cwd)',
-        '',
-      ].join('\n');
-      fs.writeFileSync(path.join(tmpDir, ".zshrc"), zshrcContent, "utf-8");
-      extraEnv.ZDOTDIR = tmpDir;
-      shellArgs = ["-l"];
-    }
+    const { args: shellArgs, env: extraEnv, tmpDir } = this.executable
+      ? { args: [], env: {}, tmpDir: null }
+      : prepareShellStartup(this.shell);
+    this._tmpDir = tmpDir;
 
     this._proc = pty.spawn(this.executable || this.shell, this.executable ? this.argv || [] : shellArgs, {
       name: "xterm-256color",
@@ -253,6 +226,7 @@ class PTYSession {
       if (outBuf && this._running) sendOut(outBuf);
       outBuf = "";
       this._running = false;
+      if (SESSIONS[this.id] && SESSIONS[this.id] !== this) return;
       const code =
         exitCode != null ? exitCode : signal != null ? -signal : null;
       this._send(
@@ -343,6 +317,13 @@ wss.on("connection", (ws) => {
           const cols = parseInt(msg.cols) || 80;
           const rows = parseInt(msg.rows) || 24;
           const cwd = msg.cwd || null;
+          if (sid && msg.replaceIdle && SESSIONS[sid]) {
+            if (!canReplaceSession(runningProcessInfo(SESSIONS[sid]._proc?.pid || 0), msg.replaceClaude === true)) {
+              if (msg.requestId) ws.send(JSON.stringify({ type: 'agent:created', requestId: msg.requestId, started: false }));
+              break;
+            }
+            const previous = SESSIONS[sid]; delete SESSIONS[sid]; previous._send = () => {}; previous.close();
+          }
           if (sid && !SESSIONS[sid]) {
             try {
               const session = new PTYSession(sid, cols, rows, (data) => {
@@ -350,7 +331,7 @@ wss.on("connection", (ws) => {
               }, cwd, msg.executable, msg.argv);
               session.start();
               SESSIONS[sid] = session;
-              localSessions.push(sid);
+              if (!localSessions.includes(sid)) localSessions.push(sid);
               if (msg.requestId) ws.send(JSON.stringify({ type: 'agent:created', requestId: msg.requestId, started: true }));
             } catch (e) {
               ws.send(JSON.stringify({ type: "error", id: sid, msg: e.message }));

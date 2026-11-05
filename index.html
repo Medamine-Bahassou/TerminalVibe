@@ -5,6 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TerminalVibe</title>
+  <link rel="icon" type="image/png" href="logo.png">
   <link rel="stylesheet" href="vendor/xterm/xterm.css">
   <link rel="stylesheet" href="vendor/coloris.min.css">
   <link rel="stylesheet" href="style.css">
@@ -44,12 +45,20 @@
   </div>
   <!-- Tab search overlay (Ctrl+Shift+O) -->
   <div id="tab-search" style="display:none">
-    <div class="ts-inner">
+    <div class="ts-inner" role="dialog" aria-modal="true" aria-label="Find tabs and commands">
+      <div class="ts-modes" role="group" aria-label="Search in">
+        <button type="button" data-palette-mode="tabs" aria-pressed="true">Tabs</button>
+        <button type="button" data-palette-mode="cmds" aria-pressed="false">Commands</button>
+        <button type="button" data-palette-mode="snips" aria-pressed="false">Snippets</button>
+        <button type="button" data-palette-mode="history" aria-pressed="false">History</button>
+      </div>
       <div class="ts-input-row">
         <i class="ph ph-magnifying-glass"></i>
-        <input id="ts-input" placeholder="Search tabs…" spellcheck="false" autocomplete="off">
+        <input id="ts-input" role="combobox" aria-label="Search tabs" aria-autocomplete="list" aria-expanded="false" aria-controls="ts-results" placeholder="Search tabs…" spellcheck="false" autocomplete="off">
       </div>
-      <div id="ts-results"></div>
+      <div id="ts-results" role="listbox" aria-label="Search results"></div>
+      <div class="ts-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate <kbd>Enter</kbd> Open</span><span><kbd>Esc</kbd> Close</span></div>
+      <span id="ts-status" class="sr-only" role="status"></span>
     </div>
   </div>
   <div id="titlebar">
@@ -58,7 +67,7 @@
       <rect x="228" y="60" width="237" height="80" />
       <rect x="228" y="260" width="237" height="80" />
     </svg>
-    <button id="btn-sidebar-toggle" class="titlebar-btn" title="Toggle sidebar">
+    <button id="btn-sidebar-toggle" class="titlebar-btn" title="Toggle sidebar" aria-label="Toggle workspaces sidebar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <rect x="3" y="4" width="18" height="16" rx="2" />
         <line x1="9" y1="4" x2="9" y2="20" />
@@ -112,7 +121,8 @@
           <h1>Your next session starts here.</h1>
           <p>Open a terminal to get back to work.</p>
           <button id="empty-new-terminal" class="workspace-new">Open a terminal <span aria-hidden="true">↗</span></button>
-          <span class="empty-hint">Use the command palette to find tabs and actions.</span>
+          <button id="empty-commands" class="empty-commands" type="button">Explore commands <i class="ph ph-arrow-right" aria-hidden="true"></i></button>
+          <span class="empty-hint">Keep terminals and browser tabs together.<br>Split panes when you need more room.</span>
         </div>
         <!-- split containers injected here -->
 
@@ -123,10 +133,10 @@
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input id="search-input" placeholder="Search…" spellcheck="false" autocomplete="off">
-          <span class="sb-nav" id="search-prev" title="Previous">▲</span>
-          <span class="sb-nav" id="search-next" title="Next">▼</span>
-          <span class="sb-close-btn" id="search-close">✕</span>
+          <input id="search-input" aria-label="Find in terminal" placeholder="Search…" spellcheck="false" autocomplete="off">
+          <button type="button" class="sb-nav" id="search-prev" title="Previous match (Shift+Enter)" aria-label="Previous match"><i class="ph ph-caret-up" aria-hidden="true"></i></button>
+          <button type="button" class="sb-nav" id="search-next" title="Next match (Enter)" aria-label="Next match"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+          <button type="button" class="sb-close-btn" id="search-close" title="Close search (Esc)" aria-label="Close search"><i class="ph ph-x" aria-hidden="true"></i></button>
         </div>
       </div>
 
@@ -224,13 +234,13 @@
     class="fixed inset-0 z-[10000] hidden flex flex-col opacity-0 transition-opacity duration-150">
     <div id="settings-modal" class="w-full h-full flex flex-col select-none bg-[var(--bg)]">
       <div class="settings-header flex items-center gap-1.5 pl-3 pr-2 h-8 shrink-0 border-b border-[var(--border)]">
-        <div id="settings-close" class="settings-back-btn no-drag" title="Close settings">
+        <button type="button" id="settings-close" class="settings-back-btn no-drag" title="Close settings" aria-label="Close settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
             stroke-linejoin="round" class="w-[16px] h-[16px]">
             <line x1="19" y1="12" x2="5" y2="12" />
             <polyline points="12 19 5 12 12 5" />
           </svg>
-        </div>
+        </button>
         <h2 class="text-[12.5px] font-semibold text-[var(--fg)] m-0">Settings</h2>
       </div>
       <div class="flex flex-1 min-h-0 overflow-hidden">
@@ -725,6 +735,8 @@ Examples:
   </div>
 
   <script src="vendor/split.min.js"></script>
+  <script src="browser-snapshot.js"></script>
+  <script src="session-drawer.js"></script>
   <script src="app.js"></script>
   <script>
     // Boot watchdog: if app.js never executed (parse error, missing vendor

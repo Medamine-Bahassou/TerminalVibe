@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalWrite: (o) => ipcRenderer.send('terminal:write', o),
   terminalClose: (id) => ipcRenderer.send('terminal:close', id),
   terminalHasRunningProcess: (id) => ipcRenderer.invoke('terminal:hasRunningProcess', id),
+  claudeSessions: (cwd) => ipcRenderer.invoke('history:claude-sessions', cwd),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),
   terminalAttached: (id) => ipcRenderer.send('terminal:attached', id),
   attachWindow: (o) => ipcRenderer.send('terminal:attach-window', o),
@@ -87,6 +88,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Native WebContentsView browser tabs (owned in the main process)
   browserCreate: (id, url) => ipcRenderer.send('browser:create', id, url),
+  browserRead: (id, options) => ipcRenderer.invoke('browser:read', id, options),
   browserResize: (id, rect) => ipcRenderer.send('browser:resize', id, rect),
   browserShow: (id) => ipcRenderer.send('browser:show', id),
   browserHide: (id) => ipcRenderer.send('browser:hide', id),

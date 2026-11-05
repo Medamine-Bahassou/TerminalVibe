@@ -1,0 +1,70 @@
+// Real DOM behavior in an isolated Electron window; no user sessions launched.
+const fs=require('fs'),path=require('path');
+if(!process.versions.electron) {
+  const r=require('child_process').spawnSync(require('electron'),[__filename,'--no-sandbox'],{stdio:'inherit',env:{...process.env,ELECTRON_RUN_AS_NODE:''}});process.exit(r.status??1);
+}
+const {app,BrowserWindow}=require('electron');
+let win;const timer=setTimeout(()=>app.exit(1),20000);
+app.whenReady().then(async()=>{
+  win=new BrowserWindow({show:false,webPreferences:{backgroundThrottling:false}});await win.loadURL('about:blank');
+  await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname,'../workspace.css'),'utf8'));
+  await win.webContents.executeJavaScript(fs.readFileSync(path.join(__dirname,'../session-drawer.js'),'utf8'));
+  console.log(await win.webContents.executeJavaScript(`(async()=>{
+    const check=(ok,msg)=>{if(!ok)throw new Error(msg);};
+    const tick=()=>new Promise(r=>setTimeout(r,20));
+    const host=document.createElement('div');host.style.cssText='position:absolute;left:20px;top:30px;width:360px;height:500px';document.body.append(host);
+    const neighbor=document.createElement('button');neighbor.textContent='Other split';neighbor.style.cssText='position:absolute;left:410px;top:30px';document.body.append(neighbor);
+    let neighborClicks=0;neighbor.onclick=()=>neighborClicks++;
+    const history={sessions:[{id:'one',title:'First <img src=x onerror=alert(1)>',updatedAt:new Date().toISOString(),preview:[{role:'user',text:'<img src=x onerror=alert(1)>'}]},{id:'two',cwd:'/tmp/other-project',title:'Another task',updatedAt:new Date().toISOString(),preview:[]}]};
+    let started;
+    const options={host,cwd:'/tmp/example',load:async()=>history,canReplace:async()=>false,start:async(s,m)=>{started={s,m};}};
+    await openSessionDrawer(options);await tick();
+    check(document.querySelectorAll('.session-row').length===2,'Missing conversations');
+    check(host.querySelector('.session-overlay'),'Drawer is outside the owning pane');
+    check(!document.querySelector('[aria-modal="true"]'),'Pane drawer must not be app-modal');
+    const before=host.getBoundingClientRect(),drawer=document.querySelector('.session-overlay').getBoundingClientRect();
+    check(before.x===drawer.x&&before.y===drawer.y&&before.width===drawer.width&&before.height===drawer.height,'Drawer escapes pane bounds');
+    const panel=document.querySelector('.session-drawer').getBoundingClientRect();
+    check(panel.x===before.x && panel.width===240,'Session sidebar must be narrow and aligned to the left');
+    neighbor.focus();neighbor.click();neighbor.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    check(neighborClicks===1&&host.querySelector('.session-overlay'),'Drawer blocks sibling pane or handles sibling Escape');
+    host.style.width='220px';await tick();
+    check(document.querySelector('.session-drawer').getBoundingClientRect().width<=220,'Drawer ignores pane resize');
+    let parentClicks=0;const parentClick=()=>parentClicks++;host.addEventListener('mousedown',parentClick);
+    document.querySelector('.session-search').dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+    check(parentClicks===0,'Drawer clicks reach terminal focus handlers');host.removeEventListener('mousedown',parentClick);
+
+    check(document.querySelector('.session-row-title').textContent.includes('<img'),'Session title missing');
+    check(!document.querySelector('.session-list img'),'Unsafe title HTML rendered');
+    check(document.querySelector('.session-row').disabled,'Busy resume enabled');
+    document.querySelector('.session-row').click();await tick();
+    check(!started,'Busy terminal resumed a session');
+    const search=document.querySelector('.session-search');search.value='other-project';search.dispatchEvent(new Event('input'));
+    check(document.querySelectorAll('.session-row').length===1,'Search failed');
+    search.value='missing';search.dispatchEvent(new Event('input'));check(document.querySelector('.session-empty'),'Missing empty state');
+    document.querySelector('.session-search').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));check(!document.querySelector('.session-overlay'),'Escape did not close');
+    await openSessionDrawer({...options,canReplace:async()=>true});await tick();document.querySelector('.session-row').click();
+    await tick();
+    check(started.s.id==='one'&&started.m==='here'&&!document.querySelector('.session-overlay'),'Selecting a conversation must immediately resume it in the same split');
+    let finish, launches=0;
+    await openSessionDrawer({...options,canReplace:async()=>true,start:()=>{launches++;return new Promise(r=>finish=r);}});await tick();
+    const chosen=document.querySelector('.session-row');chosen.click();chosen.click();
+    check(launches===1 && chosen.disabled,'Repeated clicks launched multiple sessions');finish();await tick();
+    check(!document.querySelector('.session-overlay'),'Drawer stayed open after resume');
+    await openSessionDrawer({...options,canReplace:async()=>true,start:async()=>{throw new Error('Resume failed');}});await tick();
+    document.querySelector('.session-row').click();await tick();
+    check(document.querySelector('.session-status').textContent==='Resume failed'&&!document.querySelector('.session-row').disabled,'Failed resume must keep the list usable');
+    document.querySelector('.session-close').click();
+    await openSessionDrawer({...options,load:async()=>{throw new Error('Backend unavailable');}});await tick();
+    check(document.querySelector('.session-status').textContent==='Backend unavailable','Error hidden');
+    check(document.querySelector('.session-tools button').disabled,'Action enabled on load failure');
+    check(document.querySelector('.session-search').disabled,'Search can overwrite a loading error with an empty state');
+    document.querySelector('.session-close').click();
+    await openSessionDrawer({...options,canReplace:async()=>true});await tick();document.querySelector('.session-tools button').click();await tick();
+    check(started.s===null&&started.m==='here','New conversation should use the same split');
+    await openSessionDrawer(options);await tick();host.remove();await tick();
+    check(!document.querySelector('.session-overlay'),'Drawer not cleaned up after pane close');
+    return 'PASS: pane containment, resizing, sibling interaction, pane-close cleanup, drawer search, direct resume, text safety, busy-state controls, resume/new actions, Escape and load errors';
+  })()`));
+  clearTimeout(timer);win.destroy();app.quit();
+}).catch(e=>{console.error(e);win?.destroy();app.exit(1);});

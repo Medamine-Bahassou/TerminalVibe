@@ -190,9 +190,10 @@ file private. Browser Origin requests are rejected. There is no remote binding.
 | --- | --- | --- |
 | `list` | none | Active workspace/pane IDs, capabilities, workspaces, layouts, pane IDs and dead state |
 | `launch` | `layout`; `name` for new, or `workspaceId`/`anchorPaneId` for existing; optional `placement` | Workspace and new panes' individual spawn results |
-| `read` | `paneId`, optional `lines` (1–2000) | Rendered terminal text and dead state |
+| `read` | `paneId`; terminal: `lines` (1–2000); browser: `maxChars` (1–100000, default 20000), `offset` (default 0) | Terminal text, or live browser snapshot / explicit access limitation |
 | `send` | `paneId`, `text`, optional `enter` | Input delivery acknowledgment |
 | `focus` | `paneId` | Selected pane ID |
+| `navigate` | Browser `paneId`, absolute HTTP(S) `url` | Navigation request acknowledgment, not confirmed page-load success |
 | `arrange` | `workspaceId`, `layout` | Updated workspace |
 | `resize` | `paneId`, `width` and/or `height` (`min`, `auto`, or pixels) | Updated workspace with measured bounds |
 | `place` | `paneId`, `anchorPaneId`, `side`; optional `compact`, `width`, `height` | Updated workspace; live processes preserved |
@@ -214,3 +215,57 @@ changing an arbitrary workspace. Keep one TerminalVibe browser tab open.
 The CLI client and skill work independently of npm dependencies and can be
 distributed together from this repository. The desktop build includes the
 control server through `electron/**/*`.
+
+## Read browser content
+
+`list.capabilities.browserRead` advertises browser snapshots. Use `tv.js read`
+with a browser pane ID to inspect its live URL, title, rendered main-document
+text, visible links, and current form controls (password values are redacted).
+The stored URL is metadata and can disagree with current page content. For
+example, search results and the search field may say Gmail even when the stored
+URL still contains `q=google`; report the actual snapshot, not a URL guess.
+
+Reads preserve focus, navigation, and page state. Text is paginated with
+`offset` / `maxChars`, `totalChars`, and `truncated`; links and controls have
+100-entry limits and their own truncation flags. Snapshots do not include
+cookies, storage, history, nested-frame text, closed shadow DOM, or image/canvas
+contents. Electron supports both webview guests and native browser views. Web
+mode supports same-origin iframe documents; cross-origin or unloaded pages
+return `accessible:false` and a reason instead of fabricated page text.
+
+## Open and navigate browser panes
+
+`list` advertises `browserLaunch` and `browserNavigate`. Browser launch leaves
+use `{"name":"YouTube","type":"browser","url":"https://www.youtube.com/"}`;
+`type` is optional when `url` is present. Browser leaves cannot include `argv`
+or `cwd`. The URL must be absolute HTTP(S). Mixed terminal/browser layouts use
+the same recursive splits and existing-workspace placement options. Browser
+panes do not spawn PTYs. `started:true` acknowledges pane creation, not remote
+page-load success. Existing panes and the parent selection are preserved.
+
+For example, open a YouTube web search in a filling split beside current panes:
+
+```json
+{
+  "workspaceId": "current",
+  "placement": { "split": "row", "compact": false },
+  "layout": {
+    "name": "YouTube search", "type": "browser",
+    "url": "https://www.google.com/search?q=youtube"
+  }
+}
+```
+
+Run `tv.js launch --file plan.json`. To change an existing browser pane, use
+`tv.js navigate '{"paneId":"ID","url":"https://www.youtube.com/"}'`.
+Navigation preserves focus and uses the existing page loader. Unopened browser
+tabs retain the requested URL until displayed. Terminal panes and non-HTTP(S)
+URLs are rejected. A navigation acknowledgment does not confirm load success.
+
+The client and backend check the connected page's capability before sending a
+browser mutation. This matters when a new backend is paired with an old tab:
+old renderers treat launch leaves as terminals, potentially leaving empty
+placeholder panes before failing. A mismatch now returns an update-required
+error before any layout changes or terminal spawns. Save active terminal work
+before restarting the dev backend and refreshing the page. Do not bypass the
+check with terminal arguments or repeated launches.

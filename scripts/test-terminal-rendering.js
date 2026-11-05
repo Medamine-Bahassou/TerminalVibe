@@ -106,6 +106,8 @@ app.whenReady().then(async () => {
     const activeWs = () => ({ layout });
     const getWorkspaceTerminals = () => [];
     const fitTerm = () => {}, saveState = () => {}, startResizing = () => {}, stopResizing = () => {};
+    let browserSyncs = 0;
+    const syncBrowserSlots = () => { browserSyncs++; };
     ${sizing}
     ${syncSizes}
     ${sashFunction}
@@ -145,6 +147,7 @@ app.whenReady().then(async () => {
     handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: bounds('worker-a').right }));
     check(!workers.size && !workerA.size, 'Manual drag did not release compact sizing');
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: 450 }));
+    check(browserSyncs === 1, 'Browser overlay does not follow the divider immediately');
     document.dispatchEvent(new MouseEvent('mouseup'));
     check(bounds('worker-a').width >= 200 && bounds('worker-b').width >= 200, 'Manual drag violated pane minimums');
     // An outer divider must release explicit sizes inside the worker subtree.

@@ -116,7 +116,7 @@ async function main(args) {
   const originalArgs = [...args];
   const method = args.shift();
   if (!method || method === '--help') {
-    console.log('tv.js pair --provider claude|codex [--prompt TEXT] [--cwd DIR]\ntv.js context [--provider claude|codex]\ntv.js instances | list | launch|arrange --file FILE|- | read|send|focus|resize|place JSON\nresize: {paneId,width:"min"|"auto"|PIXELS,height:"min"|"auto"|PIXELS}\nplace: {paneId,anchorPaneId,side:"left"|"right"|"top"|"bottom",compact:true}\nA sole live instance is selected automatically. Use --instance FILE if several are running.\nlaunch --inspect includes pane snapshots. JSON also accepts --file FILE|- (UTF-8 BOM supported).');
+    console.log('tv.js pair --provider claude|codex [--prompt TEXT] [--cwd DIR]\ntv.js context [--provider claude|codex]\ntv.js instances | list | launch|arrange --file FILE|- | read|send|focus|resize|place|navigate JSON\nnavigate: {paneId,url:"https://example.com/"}\nlaunch browser leaf: {name:"Browser",type:"browser",url:"https://example.com/"}\nread: terminal {paneId,lines:100} or browser {paneId,maxChars:20000,offset:0}\nresize: {paneId,width:"min"|"auto"|PIXELS,height:"min"|"auto"|PIXELS}\nplace: {paneId,anchorPaneId,side:"left"|"right"|"top"|"bottom",compact:true}\nA sole live instance is selected automatically. Use --instance FILE if several are running.\nlaunch --inspect includes pane snapshots. JSON also accepts --file FILE|- (UTF-8 BOM supported).');
     return;
   }
   let descriptor = process.env.TERMINALVIBE_CONTROL_FILE;
@@ -143,7 +143,7 @@ async function main(args) {
     console.log(JSON.stringify(found, null, 2));
     return;
   }
-  if (!['context', 'pair', 'list', 'launch', 'arrange', 'read', 'send', 'focus', 'resize', 'place'].includes(method)) throw new Error('Unknown method (use --help)');
+  if (!['context', 'pair', 'list', 'launch', 'arrange', 'read', 'send', 'focus', 'resize', 'place', 'navigate'].includes(method)) throw new Error('Unknown method (use --help)');
   if (!descriptor) {
     const live = found.filter(d => d.alive);
     if (live.length > 1) throw new Error('Multiple live instances; select one with --instance FILE.');
@@ -189,6 +189,13 @@ async function main(args) {
   if (args[0] === '--file' && args.length === 2) params = readJson(args[1] === '-' ? 0 : args[1]);
   else if (args.length === 1) params = JSON.parse(args[0]);
   else if (args.length) throw new Error('Pass one JSON argument or --file FILE|-');
+  const hasBrowser = node => !!node && (node.type === 'browser' || node.url !== undefined ||
+    (Array.isArray(node.children) && node.children.some(hasBrowser)));
+  const capability = method === 'navigate' ? 'browserNavigate'
+    : method === 'launch' && hasBrowser(params.layout) ? 'browserLaunch' : null;
+  if (capability && !(await rpc(descriptor, 'list')).capabilities?.[capability]) {
+    throw new Error(`The running TerminalVibe backend/page lacks ${capability}. No panes were changed. Save active terminal work, restart the dev backend and refresh the tab (or restart Electron), then retry. Do not relaunch to work around this mismatch.`);
+  }
   const result = await rpc(descriptor, method, params);
   if (inspect) result.snapshots = await snapshots(descriptor, result.launches);
   console.log(JSON.stringify(result, null, 2));

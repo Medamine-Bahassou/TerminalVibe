@@ -1466,6 +1466,7 @@
     const overlayOpen = settingsWindowOpen ||
       (profilePicker && profilePicker.style.display !== 'none') ||
       (document.getElementById('servers-dropdown')?.hidden === false) ||
+      (document.getElementById('tab-search')?.style.display === 'flex') ||
       (document.getElementById('settings-overlay')?.classList.contains('open') === true);
     if (overlayOpen || document.body.classList.contains('tab-dragging')) {
       if (window.electronAPI) {
@@ -1506,8 +1507,7 @@
             if (t._viewCreated) {
               const cw = t.browserContainer.querySelector('.browser-content');
               if (cw) {
-                const r = cw.getBoundingClientRect();
-                viewUpdates.push({ id: t.id, rect: { x: r.left, y: r.top, width: r.width, height: r.height }, show: true });
+                viewUpdates.push({ id: t.id, content: cw, show: true });
               }
             }
           }
@@ -1539,7 +1539,11 @@
     if (window.electronAPI) {
       for (const v of viewUpdates) {
         if (v.show) {
-          window.electronAPI.browserResize(v.id, v.rect);
+          const r = v.content.getBoundingClientRect();
+          window.electronAPI.browserResize(v.id, {
+            x: Math.round(r.left), y: Math.round(r.top),
+            width: Math.round(r.width), height: Math.round(r.height)
+          });
           window.electronAPI.browserShow(v.id);
         } else {
           window.electronAPI.browserHide(v.id);
@@ -2330,6 +2334,8 @@
           if (t.agentManaged) o.agentManaged = true;
           if (t.locked) o.locked = true;
           if (t.pinLabel) o.pinLabel = true;
+          if (t.toolProvider) o.toolProvider = t.toolProvider;
+          if (t.claudeSessionId) o.claudeSessionId = t.claudeSessionId;
           return o;
         })
       };
@@ -2374,6 +2380,8 @@
         if (tData.agentManaged) entry.agentManaged = true;
         if (tData.locked) entry.locked = true;
         if (tData.pinLabel) entry.pinLabel = true;
+        if (tData.toolProvider) entry.toolProvider = tData.toolProvider;
+        if (tData.claudeSessionId) entry.claudeSessionId = tData.claudeSessionId;
         group.terminals.push(entry);
       }
       return group;
@@ -3265,6 +3273,7 @@
         // Update active class in-place to avoid flicker from full sidebar rebuild
         document.querySelectorAll('.ws-btn').forEach(btn => {
           btn.classList.toggle('active', btn.dataset.wsid === id);
+          btn.setAttribute('aria-current', btn.dataset.wsid === id ? 'true' : 'false');
         });
       }
       switchWorkspacePane();
@@ -3846,12 +3855,11 @@
 
     renderSidebar();
 
-    setTimeout(() => {
-      const slot = getSlotDimensions(entry);
-      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd, argv: entry.argv || [] });
-      // Fit again after PTY is connected
-      requestAnimationFrame(() => fitTerm(entry));
-    }, 80);
+    // The slot is already mounted: measuring it settles layout synchronously.
+    // Start the shell now so its init can run while the first frame is painted.
+    const slot = getSlotDimensions(entry);
+    sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd, argv: entry.argv || [] });
+    requestAnimationFrame(() => fitTerm(entry));
 
     saveState();
     pluginEmit('terminal:add', { wsId: wsp.id, termId: id, type: 'terminal', label: entry.label });
@@ -5577,6 +5585,14 @@
       maxBtn.onclick = () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); };
 
       actions.appendChild(addTabBtn);
+      const sessionHistory = document.createElement('button');
+      sessionHistory.type = 'button'; sessionHistory.className = 'tg-btn session-history-trigger';
+      sessionHistory.dataset.claudeHistory = node.id;
+      sessionHistory.title = 'Claude session history'; sessionHistory.setAttribute('aria-label', 'Claude session history');
+      sessionHistory.innerHTML = '<i class="ph ph-clock-counter-clockwise"></i>';
+      sessionHistory.hidden = !node.terminals.some(t => t.id === node.activeTermId && (t.toolProvider === 'claude' || /claude/i.test(t.label)));
+      sessionHistory.onclick = () => openClaudeHistory(wsp, node.terminals.find(t => t.id === node.activeTermId));
+      actions.appendChild(sessionHistory);
 
       // Collapsible buttons (hidden in compact mode via CSS)
       addBrowserBtn.classList.add('tg-btn-collapse');
@@ -5608,12 +5624,15 @@
         return item;
       }
       dropdown.appendChild(makeDropdownItem('Browser tab', addBrowserBtn.innerHTML, () => addBrowserTab(wsp.id, node.id)));
+      const claudeSessionsItem = makeDropdownItem('Claude sessions…', '<i class="ph ph-clock-counter-clockwise"></i>', () => openClaudeHistory(wsp, node.terminals.find(t => t.id === node.activeTermId)));
+      dropdown.appendChild(claudeSessionsItem);
       dropdown.appendChild(makeDropdownItem('Split horizontal', splitH.innerHTML, () => splitGroupDirectly(wsp.id, node.id, 'row')));
       dropdown.appendChild(makeDropdownItem('Split vertical', splitV.innerHTML, () => splitGroupDirectly(wsp.id, node.id, 'column')));
       dropdown.appendChild(makeDropdownItem(isMax ? 'Restore' : 'Maximize', maxBtn.innerHTML, () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); }));
 
       dropdownBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        claudeSessionsItem.hidden = node.terminals.find(t => t.id === node.activeTermId)?.type === 'browser';
         const wasOpen = dropdown.classList.contains('open');
         document.querySelectorAll('.tg-dropdown.open').forEach(d => d.classList.remove('open'));
         if (!wasOpen) dropdown.classList.add('open');
@@ -5872,15 +5891,16 @@
             surface.setAttribute('data-browser-surface-slot', entry.id);
             surface.style.cssText = 'width:100%;height:100% !important;border:0';
             contentWrap.appendChild(surface);
-            // Pin shadow iframe height as soon as the shadow DOM appears
+            // Electron's shadow iframe must stretch on both axes. Keep the
+            // webview a flex container; display:block can leave the guest's
+            // composited surface at its previous width during a split drag.
             const pinIframe = () => {
-              try {
-                const sr = surface.shadowRoot;
-                if (sr) { const f = sr.querySelector('iframe'); if (f) { f.style.height = '100%'; return true; } }
-              } catch { }
-              return false;
+              const frame = surface.shadowRoot?.querySelector('iframe');
+              if (!frame) return false;
+              frame.style.cssText = 'display:block;flex:1 1 auto;width:100%;height:100%;min-width:0;min-height:0;border:0';
+              return true;
             };
-            if (!pinIframe()) {
+            if (isElectron && !pinIframe()) {
               const mo = new MutationObserver(() => { if (pinIframe()) mo.disconnect(); });
               mo.observe(surface, { childList: true, subtree: true });
             }
@@ -5894,7 +5914,7 @@
               surface.addEventListener('focus', () => {
                 if (entry.type === 'browser') focusSlot(entry);
               });
-              surface.addEventListener('dom-ready', () => { surface._guestReady = true; }, { once: true });
+              surface.addEventListener('dom-ready', () => { surface._guestReady = true; pinIframe(); });
               surface.addEventListener('did-start-loading', () => showLoading(true));
               surface.addEventListener('did-stop-loading', () => {
                 entry._retryCount = 0;
@@ -5918,17 +5938,6 @@
                 showError(entry.url, 'Failed to load page.');
               });
               surface.addEventListener('new-window', e => { e.preventDefault(); openExternalUrl(e.url); });
-              // Force the inner iframe (shadow DOM) to fill the webview height
-              // immediately — no flash of small height before resize.
-              const pinShadowIframe = () => {
-                try {
-                  const sr = surface.shadowRoot;
-                  if (sr) { const f = sr.querySelector('iframe'); if (f) f.style.height = '100%'; }
-                } catch { }
-              };
-              // Watch for the shadow root to appear (fires instantly, no flash)
-              new MutationObserver(pinShadowIframe).observe(surface, { childList: true, subtree: true });
-              pinShadowIframe();
             } else {
               surface.addEventListener('load', () => {
                 clearTimeout(entry._loadTimer);
@@ -6260,6 +6269,9 @@
         nextPane.style.flex = 'none';
         prevPane.style[dim] = newPrev + 'px';
         nextPane.style[dim] = newNext + 'px';
+        // Move browser overlays in the same event as their split placeholders.
+        // Waiting for ResizeObserver + another RAF leaves an exposed edge.
+        syncBrowserSlots();
       };
 
       const onUp = () => {
@@ -6589,6 +6601,19 @@
   /* ═══════════════════════════════════════════════════════════════
    S I*DEBAR RENDERING
    ═══════════════════════════════════════════════════════════════ */
+  function makeKeyboardButton(el, label) {
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    if (label) el.setAttribute('aria-label', label);
+    el.addEventListener('keydown', e => {
+      if (e.target === el && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        e.stopPropagation();
+        el.click();
+      }
+    });
+  }
+
   function renderSidebar() {
     const sb = document.getElementById('sidebar-inner') || document.getElementById('sidebar');
     if (!sideOrder.length && (workspaces.length || folders.length)) rebuildSideOrder();
@@ -6688,6 +6713,7 @@
 
     const addBtn = document.createElement('div');
     addBtn.className = 'ws-add';
+    makeKeyboardButton(addBtn, 'New workspace');
     addBtn.title = 'New workspace';
     addBtn.innerHTML = '<i class="ph ph-plus"></i>';
     addBtn.addEventListener('click', () => {
@@ -6720,6 +6746,7 @@
     const folderBtn = document.createElement('div');
     folderBtn.className = 'ws-folder-add-btn';
     folderBtn.title = 'New folder';
+    makeKeyboardButton(folderBtn, 'New folder');
     folderBtn.innerHTML = '<i class="ph ph-folder-plus"></i>';
     folderBtn.addEventListener('click', () => showPrompt('New folder', '', { color: '' }, (value, color) => createFolder(value, color)));
     headerActions.appendChild(folderBtn);
@@ -6767,6 +6794,9 @@
       btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<div class="ws-info"><span class="ws-name">${escHtml(wsp.label)}</span><div class="ws-procs"></div></div><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
       if (wsp.pinned) btn.classList.add('pinned');
       btn.title = wsp.label;
+      makeKeyboardButton(btn, wsp.label);
+      btn.setAttribute('aria-current', isActive ? 'true' : 'false');
+      btn.querySelectorAll('.ws-action').forEach(action => makeKeyboardButton(action, action.title + ' ' + wsp.label));
       if (wsp.color) {
         btn.dataset.color = wsp.color;
         btn.style.setProperty('--ws-color', wsp.color);
@@ -6931,6 +6961,8 @@
       const headerEl = document.createElement('div');
       headerEl.className = 'ws-folder-header';
       headerEl.title = folder.label;
+      makeKeyboardButton(headerEl, folder.label);
+      headerEl.setAttribute('aria-expanded', String(!folder.collapsed));
       headerEl.innerHTML = `
         <span class="ws-folder-icon ws-folder-icon-closed"><i class="ph ph-folder"></i></span>
         <span class="ws-folder-icon ws-folder-icon-open"><i class="ph ph-folder-open"></i></span>
@@ -6943,6 +6975,7 @@
           <span class="ws-folder-action ws-folder-rename" title="Edit folder"><i class="ph ph-pencil-simple"></i></span>
           <span class="ws-folder-action ws-folder-remove" title="Delete folder"><i class="ph ph-x"></i></span>
         </span>`;
+      headerEl.querySelectorAll('.ws-folder-action').forEach(action => makeKeyboardButton(action, action.title + ': ' + folder.label));
       if (folder.pinned) row.classList.add('pinned');
 
       headerEl.addEventListener('click', e => {
@@ -7856,6 +7889,7 @@
   // 'snips' (saved commands). Items: { label, meta, icon, run(e), del?, pin? }.
   let tsMode = 'tabs';
   let tsShown = [];
+  let tsReturnFocus = null;
 
   function collectTabItems() {
     const items = [];
@@ -8006,10 +8040,12 @@
       .sort((a, b) => a.score - b.score || (tsMode === 'history' ? a.i - b.i : a.it.label.localeCompare(b.it.label)))
       .map(x => x.it);
     tsResults.innerHTML = '';
+    tsInput.removeAttribute('aria-activedescendant');
+    document.getElementById('ts-status').textContent = tsShown.length + (tsShown.length === 1 ? ' result' : ' results');
     if (!tsShown.length) {
       const empty = document.createElement('div');
       empty.className = 'ts-empty';
-      empty.textContent = 'No matches';
+      empty.textContent = q ? 'No matches. Try a different search or category.' : tsMode === 'tabs' ? 'No open tabs. Open a terminal to get started.' : 'Nothing here yet.';
       tsResults.appendChild(empty);
       tsSelected = -1;
       return;
@@ -8017,6 +8053,9 @@
     tsShown.forEach((it, i) => {
       const row = document.createElement('div');
       row.className = 'ts-item';
+      row.id = 'ts-result-' + i;
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', 'false');
       row.innerHTML = `<i class="ph ${it.icon}"></i><span class="ts-label"></span><span class="ts-ws"></span>`;
       row.querySelector('.ts-label').textContent = it.label;
       row.querySelector('.ts-ws').textContent = it.meta;
@@ -8035,9 +8074,13 @@
   }
 
   function setTsSelected(i) {
-    if (i < 0 || i >= tsResults.children.length) return;
+    if (i < 0 || i >= tsShown.length) return;
     tsSelected = i;
-    tsResults.querySelectorAll('.ts-item').forEach((el, idx) => el.classList.toggle('selected', idx === i));
+    tsResults.querySelectorAll('.ts-item').forEach((el, idx) => {
+      el.classList.toggle('selected', idx === i);
+      el.setAttribute('aria-selected', String(idx === i));
+    });
+    tsInput.setAttribute('aria-activedescendant', tsResults.children[i].id);
     tsResults.children[i].scrollIntoView({ block: 'nearest' });
   }
 
@@ -8051,11 +8094,16 @@
   const TS_PLACEHOLDERS = { tabs: 'Search tabs…', cmds: 'Type a command…', snips: 'Search snippets… (Ctrl+Enter runs)', history: 'Search browser history…' };
   function openPalette(mode, query) {
     if (!tabSearchEl || tsResults.contains(document.activeElement)) return;
+    if (tabSearchEl.style.display === 'none') tsReturnFocus = document.activeElement;
     tsMode = mode;
+    document.querySelectorAll('[data-palette-mode]').forEach(btn => btn.setAttribute('aria-pressed', String(btn.dataset.paletteMode === mode)));
     tsItems = mode === 'cmds' ? collectCommandItems() : mode === 'snips' ? collectSnippetItems()
       : mode === 'history' ? collectHistoryItems() : collectTabItems();
     tsInput.placeholder = TS_PLACEHOLDERS[mode];
+    tsInput.setAttribute('aria-label', TS_PLACEHOLDERS[mode]);
+    tsInput.setAttribute('aria-expanded', 'true');
     tabSearchEl.style.display = 'flex';
+    syncBrowserSlots();
     tsInput.value = query || '';
     renderTabSearch();
     tsInput.focus();
@@ -8065,10 +8113,29 @@
   function closeTabSearch() {
     if (!tabSearchEl) return;
     tabSearchEl.style.display = 'none';
+    syncBrowserSlots();
+    tsInput.setAttribute('aria-expanded', 'false');
+    tsInput.removeAttribute('aria-activedescendant');
+    if (tsReturnFocus && tsReturnFocus.isConnected && tsReturnFocus.getClientRects().length) {
+      tsReturnFocus.focus();
+      return;
+    }
     const t = activeTerminal();
     if (t && t.type !== 'browser' && t.term) t.term.focus();
   }
 
+  document.querySelectorAll('[data-palette-mode]').forEach(btn => {
+    btn.addEventListener('click', () => openPalette(btn.dataset.paletteMode, tsInput.value));
+  });
+  document.getElementById('empty-commands').addEventListener('click', () => openPalette('cmds'));
+  tabSearchEl.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && e.target !== tsInput) { e.stopPropagation(); closeTabSearch(); }
+    if (e.key !== 'Tab') return;
+    const controls = [...tabSearchEl.querySelectorAll('button, input')];
+    const first = controls[0], last = controls[controls.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
   tsInput.addEventListener('input', renderTabSearch);
   tsInput.addEventListener('keydown', e => {
     if (e.key === 'Escape') { e.stopPropagation(); closeTabSearch(); }
@@ -8948,6 +9015,7 @@
 
   // Category button click handlers
   document.querySelectorAll('.settings-cat-btn').forEach(btn => {
+    makeKeyboardButton(btn);
     btn.addEventListener('click', () => {
       switchSettingsCat(btn.dataset.cat);
       if (btn.dataset.cat === 'theme-editor') restoreThemeEditorState();
@@ -9574,6 +9642,72 @@
   // command (or open a URL) when launched from the right panel.
   // Live agent orchestration. Launch arguments are passed directly to the PTY,
   // never typed into an interactive shell. Running entries survive rearrangement.
+  async function openClaudeHistory(wsp, entry) {
+    if (!entry || entry.type === 'browser') return;
+    const cwd = entry.cwd;
+    let history;
+    window.openSessionDrawer({ host:entry.el, cwd: 'Claude Code · All projects', currentId: entry.claudeSessionId,
+      load: async () => {
+        if (window.electronAPI?.claudeSessions) history = await window.electronAPI.claudeSessions(cwd);
+        else {
+          const response = await fetch('/api/claude-sessions?cwd=' + encodeURIComponent(cwd || ''));
+          if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Session history API is unavailable on this app server. Update the frontend dev server, then reopen this drawer.');
+          const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not load local sessions');
+          if (!Array.isArray(data.sessions) || data.scope !== 'all-projects') throw new Error('Session history backend is outdated. Load the updated server to browse Claude history across projects.');
+          history = data;
+        }
+        return history;
+      },
+      canReplace: async () => {
+        if (entry.locked) return false;
+        const process = await checkTerminalRunning(entry.id);
+        return process === null || /^(claude|claude-code)(\.exe)?$/i.test(process || '');
+      },
+      start: async (session, mode) => {
+        if (!history?.executable) throw new Error('Claude executable not found. Install Claude Code or add it to the backend PATH.');
+        if (findTermById(entry.id)?.term !== entry) throw new Error('The original terminal was closed. Reopen session history from another tab.');
+        const id = session?.id || uuid();
+        const argv = [session ? '--resume' : '--session-id', id];
+        const sessionCwd = session ? session.cwd : history.cwd;
+        if (!sessionCwd) throw new Error('This conversation has no saved working directory and cannot be resumed here.');
+        let target;
+        if (mode === 'here') {
+          const process = await checkTerminalRunning(entry.id);
+          if (entry.locked || (process !== null && !/^(claude|claude-code)(\.exe)?$/i.test(process || ''))) throw new Error('This terminal is running another process. Stop it before resuming a conversation here.');
+          const started = await createAgentTerminal({ id:entry.id, ...getSlotDimensions(entry), cwd:sessionCwd,
+            executable:history.executable, argv, replaceIdle:true, replaceClaude:true });
+          if (!started) {
+            if (await checkTerminalRunning(entry.id) === null) {
+              const restored = await createAgentTerminal({ id:entry.id, ...getSlotDimensions(entry), cwd:cwd || history.cwd });
+              if (restored) { entry.dead=false; entry.term.options.disableStdin=false; }
+            }
+            throw new Error('Could not start Claude here. The terminal may have become busy or the executable failed; inspect the terminal and try a split.');
+          }
+          target = entry; target.dead = false; target.term.options.disableStdin = false;
+          target.term.write('\r\n[Claude session started]\r\n');
+        } else {
+          const result = await handleAgentRequest({ method:'launch', params:{ workspaceId:wsp.id, anchorPaneId:entry.id,
+            placement:{split:'row',compact:false}, layout:{ name:session?.title || 'Claude', cwd:sessionCwd, argv:[history.executable,...argv] } } });
+          target = findTermById(result.launches[0].id)?.term;
+          if (!result.launches[0].started) throw new Error('Claude failed to start. Inspect the new terminal for details.');
+        }
+        target.cwd = sessionCwd; target.toolProvider = 'claude'; target.claudeSessionId = id;
+        saveState(); renderPaneArea();
+      }
+    });
+  }
+  setInterval(async () => {
+    if (document.hidden) return;
+    const wsp = activeWs(); if (!wsp) return;
+    for (const button of document.querySelectorAll('[data-claude-history]')) {
+      const group = findGroupById(wsp.layout, button.dataset.claudeHistory);
+      const entry = group?.terminals.find(t => t.id === group.activeTermId);
+      if (!entry || entry.type === 'browser') { button.hidden=true; continue; }
+      const name = await checkTerminalRunning(entry.id);
+      if (button.isConnected && group.activeTermId === entry.id) button.hidden = !(/claude/i.test(name || '') || entry.toolProvider === 'claude');
+    }
+  }, 4000);
+
   function createAgentTerminal(spec) {
     if (nativePtyReady) return window.electronAPI.terminalCreate(spec);
     if (!wsReady) return Promise.reject(new Error('Terminal backend is not connected'));
@@ -9597,24 +9731,33 @@
     return Object.keys(result).length ? result : undefined;
   }
 
+  function agentBrowserUrl(value) {
+    let url;
+    try { url = typeof value === 'string' && new URL(value); } catch {}
+    if (!url || !['http:', 'https:'].includes(url.protocol)) throw new Error('Browser url must be an absolute http(s) URL');
+    return url.href;
+  }
+
   async function handleAgentRequest({ method, params: p = {} }) {
     const describe = wsp => ({ id: wsp.id, name: wsp.label, layout: serializeLayout(wsp.layout),
       panes: getWorkspaceTerminals(wsp).map(t => {
         const group = findGroupContainingTerm(wsp.layout, t.id);
         const rect = document.getElementById('group-' + group?.id)?.getBoundingClientRect();
         return { id: t.id, name: t.label, cwd: t.cwd, dead: !!t.dead, type: t.type || 'terminal',
+          ...(t.type === 'browser' ? { url: t.url } : {}),
           agentManaged: !!t.agentManaged, groupId: group?.id, size: group?.size,
           bounds: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null };
       }) });
     if (method === 'list') return {
-      capabilities: { launchIntoWorkspace: true, launchBesidePane: true, paneSizing: true, panePlacement: true, compactPanes: true },
+      capabilities: { launchIntoWorkspace: true, launchBesidePane: true, paneSizing: true, panePlacement: true, compactPanes: true, browserRead: true, browserLaunch: true, browserNavigate: true },
       minimumPaneSize: { width: SPLIT_MIN_PX, height: SPLIT_MIN_PX },
       activeWorkspaceId: activeWsId,
       activePaneId: findWs(activeWsId)?.activeTermId || null,
       workspaces: workspaces.map(describe)
     };
     if (method === 'launch') {
-      if (!nativePtyReady && !wsReady) throw new Error('Terminal backend is not ready');
+      const needsPty = node => node.split ? node.children.some(needsPty) : node.type !== 'browser' && node.url === undefined;
+      if (needsPty(p.layout) && !nativePtyReady && !wsReady) throw new Error('Terminal backend is not ready');
       const existing = p.workspaceId !== undefined || p.anchorPaneId !== undefined;
       const anchor = p.anchorPaneId !== undefined ? findTermById(p.anchorPaneId) : null;
       if (p.anchorPaneId !== undefined && !anchor) throw new Error('Unknown anchorPaneId');
@@ -9632,7 +9775,9 @@
         if (node.split) return { type: 'split', id: uuid(), direction: node.split, sizes: node.sizes || [50, 50], children: node.children.map(build) };
         const id = uuid();
         specs.set(id, node);
-        const entry = _createTermEntry(wsp, id, node.name);
+        const entry = node.type === 'browser' || node.url !== undefined
+          ? { id, label: node.name, type: 'browser', url: agentBrowserUrl(node.url), iframe: null, el: null, opened: false }
+          : _createTermEntry(wsp, id, node.name);
         entry.cwd = node.cwd;
         entry.pinLabel = true;
         entry.agentManaged = true;
@@ -9660,6 +9805,10 @@
       if (existing) renderPaneArea();
       const launches = [];
       for (const t of terms) {
+        if (t.type === 'browser') {
+          launches.push({ id: t.id, name: t.label, type: 'browser', url: t.url, started: true });
+          continue;
+        }
         const spec = specs.get(t.id), slot = getSlotDimensions(t);
         const started = await createAgentTerminal({ id: t.id, ...slot, cwd: spec.cwd, executable: spec.argv[0], argv: spec.argv.slice(1) });
         if (!started) {
@@ -9750,6 +9899,38 @@
       activateWorkspace(wsp.id);
       activateTerminal(wsp.id, t.id);
       return { paneId: t.id };
+    }
+    if (method === 'navigate') {
+      if (t.type !== 'browser') throw new Error('Expected a browser pane');
+      const url = agentBrowserUrl(p.url);
+      if (t._loadUrl) await t._loadUrl(url);
+      else t.url = url; // A lazy, unopened tab loads this URL on first display.
+      saveState();
+      return { paneId: t.id, type: 'browser', url, navigated: true,
+        note: 'Navigation requested; page load success is not confirmed.' };
+    }
+    if (t.type === 'browser' && method === 'read') {
+      const options = { maxChars: p.maxChars ?? 20000, offset: p.offset ?? 0 };
+      if (!Number.isInteger(options.maxChars) || options.maxChars < 1 || options.maxChars > 100000 ||
+          !Number.isInteger(options.offset) || options.offset < 0) throw new Error('Use maxChars 1–100000 and a nonnegative integer offset');
+      const metadata = { paneId: t.id, type: 'browser', storedUrl: t.url };
+      try {
+        const surface = t.browserContainer?.querySelector('.browser-surface');
+        let snapshot;
+        if (surface?.tagName?.toLowerCase() === 'webview') {
+          snapshot = await surface.executeJavaScript(`(${snapshotBrowserPage.toString()})(document, ${JSON.stringify(options)})`);
+        } else if (t._viewCreated && window.electronAPI?.browserRead) {
+          snapshot = await window.electronAPI.browserRead(t.id, options);
+        } else if (surface) {
+          const doc = surface.contentDocument;
+          if (!doc) throw new Error('Cross-origin iframe content is inaccessible');
+          snapshot = snapshotBrowserPage(doc, options);
+        } else throw new Error('Browser page has not been opened or loaded');
+        return { ...metadata, accessible: true, ...snapshot };
+      } catch (error) {
+        return { ...metadata, accessible: false, reason: error.message,
+          note: 'Only stored metadata is available; do not infer page content or search terms from it.' };
+      }
     }
     if (t.type === 'browser') throw new Error('Expected a terminal pane');
     if (method === 'send') {
@@ -10606,8 +10787,8 @@
     document.body.classList.remove('resizing');
     if (document.body.classList.contains('tab-dragging')) {
       document.body.classList.remove('tab-dragging');
-      syncBrowserSlots();
     }
+    syncBrowserSlots();
   }
 
   let resizeRaf = null;

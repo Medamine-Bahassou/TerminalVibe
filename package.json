@@ -14,7 +14,9 @@
     "dev": "node electron/dev-server.js & node server.js & wait",
     "electron": "electron .",
     "electron:dev": "node electron/dev-server.js & DEV_PID=$!; trap \"kill $DEV_PID 2>/dev/null\" EXIT INT TERM; electron .; kill $DEV_PID 2>/dev/null",
-    "test": "node scripts/test-cli.js && node scripts/test-agent-control.js && node scripts/test-servers.js",
+    "test": "node scripts/test-cli.js && node scripts/test-agent-control.js && node scripts/test-servers.js && node scripts/test-shell-startup.js && node scripts/test-claude-sessions.js",
+    "test:sessions": "node scripts/test-claude-sessions.js && node scripts/test-history-http.js && node scripts/test-session-drawer.js",
+    "test:browser": "node scripts/test-browser-resizing.js && node scripts/test-browser-snapshot.js",
     "test:rendering": "node scripts/test-terminal-rendering.js",
     "test:images": "node scripts/test-terminal-images.js",
     "test:images:yazi": "node scripts/test-terminal-images.js --yazi",
@@ -60,6 +62,7 @@
     "files": [
       "electron/**/*",
       "dist/**/*",
+      "browser-snapshot.js",
       "node_modules/node-pty/**/*",
       "node_modules/js-yaml/**/*",
       "node_modules/argparse/**/*"

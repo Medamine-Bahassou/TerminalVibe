@@ -8,13 +8,18 @@ const cp = require('child_process');
 const net = require('net');
 const { once } = require('events');
 const WebSocket = require('ws');
-const { startAgentControl, validateLaunch } = require('../electron/agent-control');
+const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession } = require('../electron/agent-control');
 
 async function main() {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-control-'));
   let bridge;
   let browserServer, browserClient, extraClient;
   try {
+    assert.equal(canReplaceSession({running:false}), true);
+    assert.equal(canReplaceSession({running:true,name:'claude'}, true), true);
+    assert.equal(canReplaceSession({running:true,name:'claude'}), false);
+    assert.equal(canReplaceSession({running:true,name:'unknown'}, true), false);
+    assert.equal(canReplaceSession({running:true,name:'vim'}, true), false);
     const pane = name => ({ name, cwd: temp, argv: ['fake-agent', 'literal prompt; $(no expansion)'] });
     const plan = { name: 'Team', layout: { split: 'row', sizes: [60, 40], children: [pane('Lead'), { split: 'column', children: [pane('A'), pane('B')] }] } };
     validateLaunch(plan);
@@ -30,7 +35,7 @@ async function main() {
     const workspaces = [];
     const all = node => node.type === 'split' ? node.children.flatMap(all) : node.terminals;
     const sandbox = {
-      workspaces, sideOrder: [], activeWsId: null, nativePtyReady: true, TextEncoder,
+      workspaces, sideOrder: [], activeWsId: null, nativePtyReady: true, TextEncoder, URL,
       SPLIT_MIN_PX: 200, document: { getElementById: () => null },
       uuid: () => `id-${++sequence}`,
       getWorkspaceTerminals: wsp => all(wsp.layout),
@@ -52,9 +57,11 @@ async function main() {
     };
     vm.createContext(sandbox);
     vm.runInContext(handler, sandbox);
+    let legacyRenderer = false;
     const dispatch = request => {
       if (request.method === 'launch') validateLaunch(request.params);
-      return sandbox.handleAgentRequest(request);
+      return dispatchWithCapabilities(request, req => legacyRenderer && req.method === 'list'
+        ? { capabilities: { browserRead: true } } : sandbox.handleAgentRequest(req));
     };
     bridge = await startAgentControl({ directory: temp, dispatch });
     const descriptor = JSON.parse(fs.readFileSync(bridge.file, 'utf8'));
@@ -248,6 +255,57 @@ async function main() {
     const restored = persistence.deserializeLayout(JSON.parse(JSON.stringify(saved)), target);
     assert.equal(JSON.stringify(persistence.serializeLayout(restored)), JSON.stringify(saved), 'Compact/pixel sizing survives a real save/restore roundtrip');
 
+    const browserLeaf = { name: 'YouTube search', type: 'browser', url: 'https://www.google.com/search?q=youtube' };
+    validateLaunch({ name: 'Browser', layout: browserLeaf });
+    validateLaunch({ name: 'Browser shorthand', layout: { name: 'YouTube', url: 'https://www.youtube.com/' } });
+    const stableBeforeBrowser = target.layout, spawnCount = spawns.length;
+    legacyRenderer = true;
+    const blockedPlan = { workspaceId: target.id, layout: { split: 'row', children: [pane('Would spawn'), browserLeaf] } };
+    assert.match((await call('launch', blockedPlan)).error, /page lacks browserLaunch.*No panes were changed/);
+    assert.equal(target.layout, stableBeforeBrowser, 'Old renderer receives no browser launch or placeholder panes');
+    assert.equal(spawns.length, spawnCount, 'Mixed plans spawn no terminals on an old renderer');
+    const blockedCli = await new Promise(resolve => cp.execFile(process.execPath,
+      [cli, 'launch', JSON.stringify(blockedPlan), '--instance', bridge.file],
+      (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+    assert(blockedCli.error, 'CLI rejects missing browser capabilities');
+    assert.match(blockedCli.stderr, /lacks browserLaunch.*No panes were changed/);
+    assert.equal(target.layout, stableBeforeBrowser);
+    legacyRenderer = false;
+    for (const layout of [
+      { ...browserLeaf, url: 'javascript:alert(1)' }, { ...browserLeaf, url: '/relative' },
+      { ...browserLeaf, url: undefined }, { ...browserLeaf, argv: ['fake-agent'], cwd: temp },
+      { ...browserLeaf, type: 'terminal' }, { ...browserLeaf, type: 'unknown' },
+      { split: 'row', children: [browserLeaf, { name: 'Bad', type: 'browser', url: 'file:///etc/passwd' }] }
+    ]) assert.equal((await call('launch', { workspaceId: target.id, layout })).status, 400);
+    assert.equal(target.layout, stableBeforeBrowser, 'Invalid browser plans leave layout unchanged');
+    const openedBrowser = await call('launch', { workspaceId: target.id, anchorPaneId: ids[0],
+      placement: { split: 'row', compact: false }, layout: browserLeaf });
+    assert.equal(openedBrowser.status, 200);
+    assert.equal(spawns.length, spawnCount, 'Browser launch does not create a PTY');
+    assert.equal(target.activeTermId, oldActive, 'Browser split preserves parent selection');
+    const browserId = openedBrowser.result.launches[0].id;
+    const browserEntry = all(target.layout).find(t => t.id === browserId);
+    assert.equal(browserEntry.type, 'browser');
+    assert.equal(openedBrowser.result.workspace.panes.find(t => t.id === browserId).url, browserLeaf.url);
+    const nextUrl = 'https://www.youtube.com/results?search_query=terminal+vibe';
+    await client(['navigate', JSON.stringify({ paneId: browserId, url: nextUrl })]);
+    assert.equal(browserEntry.url, nextUrl, 'Unopened tabs retain requested URL');
+    let loadedUrl;
+    browserEntry._loadUrl = async url => { loadedUrl = url; browserEntry.url = url; };
+    assert.equal((await call('navigate', { paneId: browserId, url: browserLeaf.url })).status, 200);
+    assert.equal(loadedUrl, browserLeaf.url, 'Open tabs use their existing navigation handler');
+    assert.equal(target.activeTermId, oldActive, 'Navigation does not change focus');
+    assert.equal((await call('navigate', { paneId: ids[0], url: nextUrl })).status, 400);
+    assert.equal((await call('navigate', { paneId: browserId, url: 'javascript:alert(1)' })).status, 400);
+    assert.equal(browserEntry.url, browserLeaf.url, 'Invalid navigation leaves URL unchanged');
+    const mixed = await call('launch', { name: 'Mixed panes', layout: { split: 'row', children: [pane('Agent'), browserLeaf] } });
+    assert.equal(mixed.status, 200);
+    assert.equal(spawns.length, spawnCount + 1, 'Mixed layout spawns only terminal leaves');
+    const browserSaved = persistence.serializeLayout(target.layout);
+    const browserRestored = persistence.deserializeLayout(JSON.parse(JSON.stringify(browserSaved)), target);
+    assert.equal(all(browserRestored).find(t => t.id === browserId).url, browserLeaf.url, 'Browser URL survives save/restore');
+    console.log('Browser panes: launch, mixed layouts, no PTY, navigation, focus preservation, URL validation and persistence passed');
+
     // Real browser transport and real PTY in an isolated server/home. No user
     // dev processes, browser sessions, provider logins or workspaces are touched.
     const freePort = async () => {
@@ -285,6 +343,10 @@ async function main() {
     assert.equal((await fetch(serversUrl, { headers: { Origin: 'https://untrusted.example' } })).status, 403);
     assert.equal((await fetch(serversUrl, { method: 'POST' })).status, 405);
     const browserDescriptor = JSON.parse(fs.readFileSync(path.join(browserDirectory, fs.readdirSync(browserDirectory)[0]), 'utf8'));
+    const historyUrl = `http://127.0.0.1:${appPort}/api/claude-sessions?cwd=${encodeURIComponent(temp)}`;
+    assert.equal((await fetch(historyUrl)).status, 200);
+    assert.equal((await fetch(historyUrl, { headers: { Origin:'https://untrusted.example' } })).status, 403);
+    assert.equal((await fetch(historyUrl, { method:'POST' })).status, 405);
     const browserCall = async (method, params) => {
       const response = await fetch(browserDescriptor.url, { method: 'POST', headers: { Authorization: `Bearer ${browserDescriptor.token}` }, body: JSON.stringify({ method, params }) });
       return { status: response.status, ...await response.json() };
@@ -299,6 +361,7 @@ async function main() {
     sandbox.ws = browserClient;
     sandbox.setTimeout = setTimeout;
     sandbox.clearTimeout = clearTimeout;
+    let legacyWebPage = false, forwardedMutations = 0;
     browserClient.on('message', async (data, binary) => {
       if (binary) { captured += data.subarray(36).toString(); outputEvents.emit('output'); return; }
       const msg = JSON.parse(data.toString());
@@ -306,7 +369,9 @@ async function main() {
         const pending = sandbox.agentCreates.get(msg.requestId);
         if (pending) { clearTimeout(pending.timer); sandbox.agentCreates.delete(msg.requestId); pending.resolve(msg.started); }
       } else if (msg.type === 'agent:request') {
-        try { browserClient.send(JSON.stringify({ type: 'agent:result', id: msg.id, result: await sandbox.handleAgentRequest(msg) })); }
+        if (msg.method !== 'list') forwardedMutations++;
+        try { browserClient.send(JSON.stringify({ type: 'agent:result', id: msg.id, result: legacyWebPage && msg.method === 'list'
+          ? { capabilities: { browserRead: true } } : await sandbox.handleAgentRequest(msg) })); }
         catch (error) { browserClient.send(JSON.stringify({ type: 'agent:result', id: msg.id, error: error.message })); }
       }
     });
@@ -344,6 +409,25 @@ async function main() {
     };
     assert.equal((await browserCall('send', { paneId: liveId, text: 'hello browser', enter: true })).status, 200);
     await waitOutput('RECEIVED:hello browser');
+    const blockedReplace = await sandbox.createAgentTerminal({ id:liveId, cwd:temp, executable:process.execPath,
+      argv:['-e',"console.log('MUST-NOT-START')"], replaceIdle:true });
+    assert.equal(blockedReplace, false, 'Atomic backend guard refuses to replace a running process');
+    await browserCall('send', { paneId:liveId, text:'still alive after refused resume', enter:true });
+    await waitOutput('RECEIVED:still alive after refused resume');
+    const claudeGuardId = '01234567-1234-1234-1234-123456789abc';
+    assert.equal(await sandbox.createAgentTerminal({ id:claudeGuardId,cwd:temp,executable:process.execPath,
+      argv:['-e',"process.title='claude'; console.log('TV-CLAUDE-GUARD-READY'); setInterval(()=>{},1000)"] }), true);
+    await waitOutput('TV-CLAUDE-GUARD-READY');
+    assert.equal(await sandbox.createAgentTerminal({ id:claudeGuardId,cwd:temp,executable:process.execPath,
+      argv:['-e',"console.log('TV-SAME-PANE-RESUMED'); setInterval(()=>{},1000)"],replaceIdle:true }), false);
+    assert.equal(await sandbox.createAgentTerminal({ id:claudeGuardId,cwd:temp,executable:process.execPath,
+      argv:['-e',"console.log('TV-SAME-PANE-RESUMED'); setInterval(()=>{},1000)"],replaceIdle:true,replaceClaude:true }), true);
+    await waitOutput('TV-SAME-PANE-RESUMED');
+    const webBrowser = await browserCall('launch', { workspaceId: browserLaunch.result.workspace.id, layout: browserLeaf });
+    assert.equal(webBrowser.status, 200);
+    const webBrowserId = webBrowser.result.launches[0].id;
+    assert.equal((await browserCall('navigate', { paneId: webBrowserId, url: nextUrl })).status, 200);
+    assert.equal((await browserCall('list')).result.workspaces.flatMap(w => w.panes).find(t => t.id === webBrowserId).url, nextUrl);
     const browserAdded = await browserCall('launch', {
       workspaceId: browserLaunch.result.workspace.id, anchorPaneId: liveId,
       placement: { split: 'column', sizes: [35, 65] },
@@ -351,12 +435,18 @@ async function main() {
     });
     assert.equal(browserAdded.status, 200);
     assert.equal(browserAdded.result.launches.length, 1);
-    assert.equal(browserAdded.result.workspace.panes.length, 2);
+    assert.equal(browserAdded.result.workspace.panes.length, 3);
     await waitOutput('TV-SECOND-OK');
     assert.equal((await browserCall('resize', { paneId: liveId, width: 'min', height: 'min' })).status, 200);
     assert.equal((await browserCall('place', { paneId: browserAdded.result.launches[0].id, anchorPaneId: liveId, side: 'right' })).status, 200);
     await browserCall('send', { paneId: liveId, text: 'parent still running', enter: true });
     await waitOutput('RECEIVED:parent still running');
+    legacyWebPage = true;
+    const mutationsBeforeMismatch = forwardedMutations;
+    assert.match((await browserCall('launch', { workspaceId: browserLaunch.result.workspace.id, layout: browserLeaf })).error, /page lacks browserLaunch/);
+    assert.match((await browserCall('navigate', { paneId: webBrowserId, url: browserLeaf.url })).error, /page lacks browserNavigate/);
+    assert.equal(forwardedMutations, mutationsBeforeMismatch, 'Backend blocks browser mutations before they reach an outdated page');
+    legacyWebPage = false;
     extraClient = new WebSocket(`ws://127.0.0.1:${wsPort}`);
     await once(extraClient, 'open');
     await register(extraClient);

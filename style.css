@@ -2331,7 +2331,7 @@ body.resizing .drag-shield {
   flex-direction: column;
   overflow: hidden;
   display: flex;
-  background: #fff;
+  background: var(--bg);
 }
 
 /* Focus highlight for browser tabs. The webview/iframe paints inside
@@ -2428,8 +2428,14 @@ body.resizing .drag-shield {
   min-width: 0;
   min-height: 0;
   border: none;
-  background: #fff;
+  background: var(--bg);
   z-index: 1;
+}
+
+/* Electron's guest iframe flexes inside the webview. Overriding its host
+   with display:block interrupts guest resizing and exposes stale white edges. */
+webview.browser-surface {
+  display: flex;
 }
 
 /* Page viewers (start / error) paint above the surface slot */
@@ -2444,7 +2450,7 @@ body.resizing .drag-shield {
   overflow: hidden;
   position: relative;
   z-index: 2;
-  background: #fff;
+  background: var(--bg);
   /* When native Electron webview is active, JS sets this to transparent */
   transition: background 0.1s;
 }

@@ -4,7 +4,7 @@ const path = require('path');
 const pty = require('node-pty');
 const yaml = require('js-yaml');
 const { hasRunningProcess, runningProcessInfo } = require('./proc');
-const { startAgentControl, validateLaunch } = require('./agent-control');
+const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession } = require('./agent-control');
 const { listRunningServers } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
 let agentControl = null;
@@ -17,18 +17,20 @@ ipcMain.on('agent:result', (event, { id, result, error }) => {
   if (error) pending.reject(new Error(error)); else pending.resolve(result);
 });
 function dispatchAgentRequest(request) {
-  if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange', 'resize', 'place'].includes(request.method)) throw new Error('Unknown method');
+  if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange', 'resize', 'place', 'navigate'].includes(request.method)) throw new Error('Unknown method');
   if (request.method === 'launch') validateLaunch(request.params);
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) throw new Error('Main window is not ready');
-  return new Promise((resolve, reject) => {
+  const sender = mainWindow.webContents;
+  return dispatchWithCapabilities(request, request => new Promise((resolve, reject) => {
+    if (sender.isDestroyed() || sender.isLoading()) return reject(new Error('Main window is not ready'));
     const id = require('crypto').randomUUID();
     const timer = setTimeout(() => {
       agentRequests.delete(id);
       reject(new Error('Control request timed out; inspect list before retrying a mutation'));
     }, 15000);
-    agentRequests.set(id, { resolve, reject, timer, sender: mainWindow.webContents });
-    mainWindow.webContents.send('agent:request', { ...request, id });
-  });
+    agentRequests.set(id, { resolve, reject, timer, sender });
+    sender.send('agent:request', { ...request, id });
+  }));
 }
 
 // ── Helpers ──
@@ -1026,8 +1028,10 @@ const sendToRenderer = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
 
-ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv, executable }) => {
+ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-sessions').listClaudeSessions(cwd));
+ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude }) => {
   try {
+    if (replaceIdle && ptys.has(id) && !canReplaceSession(runningProcessInfo(ptys.get(id).pid), replaceClaude === true)) return false;
     if (ptys.has(id)) {
       // Replace old PTY — remove exit listener first to avoid sending
       // terminal:exit to the detached window that's about to reuse this id
@@ -1524,6 +1528,13 @@ ipcMain.on('tab-drag:drop', (e, p) => {
 // WebContentsView is owned here in main, placed by renderer-reported bounds.
 const bviews = new Map(); // id -> WebContentsView
 const bviewOwner = new WeakMap(); // guest webContents -> id
+ipcMain.handle('browser:read', async (event, id, options = {}) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized browser reader');
+  const guest = bviews.get(id)?.webContents;
+  if (!guest || guest.isDestroyed()) throw new Error('Browser page is not ready');
+  const snapshot = require('../browser-snapshot');
+  return guest.executeJavaScript(`(${snapshot.toString()})(document, ${JSON.stringify(options)})`);
+});
 // Keys pressed inside a <webview> guest never reach the renderer's keydown
 // listeners, so app shortcuts (pushed here by the renderer) are matched on the
 // guest and replayed in the main window.
