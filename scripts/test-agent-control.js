@@ -170,12 +170,72 @@ async function main() {
     fs.copyFileSync(bridge.file, duplicateFile);
     await assert.rejects(client(['list']), /Multiple live instances/);
     fs.unlinkSync(duplicateFile);
+    // The hosting instance (an ancestor process) beats a stale inherited
+    // descriptor and an unrelated live instance.
+    const { selectInstance } = require(cli);
+    const other = cp.spawn(process.execPath, ['-e', 'setTimeout(()=>{},30000)']);
+    const dead = cp.spawnSync(process.execPath, ['-e', '']).pid;
+    try {
+      const otherFile = path.join(clientDirectory, `instance-${other.pid}.json`);
+      const staleFile = path.join(clientDirectory, `instance-${dead}.json`);
+      for (const [file, pid] of [[otherFile, other.pid], [staleFile, dead]]) fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(bridge.file, 'utf8')), pid }));
+      assert.equal((await client(['context'], { env: { ...clientEnv, TERMINALVIBE_CONTROL_FILE: staleFile } })).instance, selectedFile,
+        'Stale env descriptor falls back to the instance hosting this process');
+      const found = [{ file: selectedFile, pid: 10, alive: true }, { file: otherFile, pid: 20, alive: true }, { file: staleFile, pid: 30, alive: false }];
+      assert.equal(selectInstance(found, otherFile, new Set([10])), selectedFile, 'Hosting instance outranks an inherited descriptor');
+      assert.equal(selectInstance(found, otherFile, new Set()), otherFile, 'Live inherited descriptor is used outside an instance');
+      assert.throws(() => selectInstance(found, staleFile, new Set()), /none hosts this process/);
+      fs.unlinkSync(otherFile); fs.unlinkSync(staleFile);
+    } finally { other.kill(); }
 
     const bomPlan = path.join(temp, 'bom-plan.json');
     fs.writeFileSync(bomPlan, '\uFEFF' + JSON.stringify({ workspaceId: target.id, layout: pane('BOM plan') }));
     const bomLaunch = await client(['launch', '--inspect', '--file', bomPlan]);
     assert.equal(bomLaunch.snapshots.length, 1);
     assert.equal(bomLaunch.snapshots[0].text, 'line 0\nline 1\nline 2');
+
+    // Tab launches must leave the existing split tree, sizes, selection and PTYs intact.
+    const tabTree = target.layout;
+    const groupForTabs = sandbox.findGroupContainingTerm(tabTree, ids[0]);
+    const selectedTab = groupForTabs.activeTermId;
+    const selectedWorkspaceTab = target.activeTermId;
+    const previousTabs = [...groupForTabs.terminals];
+    const tabSpec = { workspaceId: target.id, anchorPaneId: ids[0], placement: { mode: 'tab' }, layout: pane('Same split') };
+    const spawnedBeforeTabs = spawns.length;
+    const tabLaunch = await client(['launch', '--inspect', JSON.stringify(tabSpec)]);
+    assert.equal(tabLaunch.launches[0].started, true);
+    assert.equal(tabLaunch.snapshots.length, 1);
+    assert.equal(target.layout, tabTree, 'Tab launch preserves the split tree');
+    assert.equal(sandbox.findGroupContainingTerm(tabTree, tabLaunch.launches[0].id), groupForTabs);
+    assert.equal(groupForTabs.activeTermId, selectedTab);
+    assert.equal(target.activeTermId, selectedWorkspaceTab);
+    assert(previousTabs.every(t => groupForTabs.terminals.includes(t)));
+    assert.equal(spawns.length, spawnedBeforeTabs + 1);
+    assert.equal(spawns.at(-1).returnToShell, true, 'Ordinary orchestration commands recover a shell on exit');
+    const activeGroup = sandbox.findGroupContainingTerm(tabTree, target.activeTermId);
+    const activeTab = await call('launch', { workspaceId: target.id, placement: { mode: 'tab' }, layout: { ...pane('Active group'), returnToShell: false } });
+    assert.equal(activeTab.status, 200);
+    assert.equal(sandbox.findGroupContainingTerm(tabTree, activeTab.result.launches[0].id), activeGroup);
+    assert.equal(spawns.at(-1).returnToShell, false, 'Explicit exited-pane opt-out is retained');
+    const tabsBeforeInvalid = all(tabTree).length, spawnsBeforeInvalid = spawns.length;
+    for (const invalid of [
+      { ...tabSpec, placement: { mode: 'unknown' } },
+      { ...tabSpec, placement: { mode: 'tab', split: 'row' } },
+      { ...tabSpec, layout: { split: 'row', children: [pane('A'), pane('B')] } },
+      { ...tabSpec, layout: { ...pane('Bad flag'), returnToShell: 'yes' } },
+      { name: 'No target', placement: { mode: 'tab' }, layout: pane('Bad') }
+    ]) assert.equal((await call('launch', invalid)).status, 400);
+    legacyRenderer = true;
+    assert.match((await call('launch', tabSpec)).error, /launchAsTab/);
+    await assert.rejects(client(['launch', JSON.stringify(tabSpec)]), /launchAsTab/);
+    legacyRenderer = false;
+    assert.equal(all(tabTree).length, tabsBeforeInvalid);
+    assert.equal(spawns.length, spawnsBeforeInvalid, 'Invalid or unsupported tab launches create nothing');
+    const browserTab = await call('launch', { ...tabSpec, layout: { name: 'Browser tab', type: 'browser', url: 'https://example.com/' } });
+    assert.equal(browserTab.status, 200);
+    assert.equal(sandbox.findGroupContainingTerm(tabTree, browserTab.result.launches[0].id), groupForTabs);
+    assert.equal(spawns.length, spawnsBeforeInvalid, 'Browser tabs spawn no PTY');
+    console.log('Tab launches: same split, active group, selection, validation, capability guards and shell recovery defaults passed');
 
     if (process.platform !== 'win32') {
       // A fake installed launcher verifies the one-command path without paid
@@ -250,10 +310,13 @@ async function main() {
     console.log('Live pane control: resize, four placements, minimum sizing, tab preservation, validation and no respawn passed');
     const persistence = { _createTermEntry: (_ws, id, label) => ({ id, label }) };
     vm.createContext(persistence);
+    vm.runInContext(source.slice(source.indexOf('  function shortTitle('), source.indexOf('  function renameWorkspace(')), persistence);
     vm.runInContext(source.slice(source.indexOf('  function serializeLayout('), source.indexOf('  /* Backgrounds and workspace icons')), persistence);
     const saved = persistence.serializeLayout(target.layout);
     const restored = persistence.deserializeLayout(JSON.parse(JSON.stringify(saved)), target);
-    assert.equal(JSON.stringify(persistence.serializeLayout(restored)), JSON.stringify(saved), 'Compact/pixel sizing survives a real save/restore roundtrip');
+    // Automatic labels intentionally reset for fresh shells; layout and metadata persist.
+    const withoutLabels = value => JSON.stringify(value, (key, item) => key === 'label' ? undefined : item);
+    assert.equal(withoutLabels(persistence.serializeLayout(restored)), withoutLabels(saved), 'Compact/pixel sizing survives a real save/restore roundtrip');
 
     const browserLeaf = { name: 'YouTube search', type: 'browser', url: 'https://www.google.com/search?q=youtube' };
     validateLaunch({ name: 'Browser', layout: browserLeaf });
@@ -400,6 +463,24 @@ async function main() {
     assert.equal(browserLaunch.status, 200);
     assert.equal(browserLaunch.result.launches[0].started, true);
     await waitOutput('TV-PTY-OK');
+    const inheritedId = require('crypto').randomUUID();
+    const inheritedCreated = new Promise((resolve,reject) => {
+      const timer = setTimeout(()=>reject(new Error('Inherited terminal did not start')),5000);
+      const listener = (data,binary) => {
+        if (binary) return;
+        const msg=JSON.parse(data.toString());
+        if(msg.type==='agent:created' && msg.requestId==='cwd-inheritance') {
+          clearTimeout(timer);browserClient.off('message',listener);resolve(msg.started);
+        }
+      };
+      browserClient.on('message',listener);
+    });
+    browserClient.send(JSON.stringify({type:'create',id:inheritedId,requestId:'cwd-inheritance',
+      inheritFromId:browserLaunch.result.launches[0].id,cwd:os.homedir(),executable:process.execPath,
+      argv:['-e',"console.log('TV_INHERITED_CWD:'+process.cwd());process.stdin.resume();"]}));
+    assert.equal(await inheritedCreated,true);
+    if(process.platform==='linux') await waitOutput('TV_INHERITED_CWD:'+temp);
+
     const liveId = browserLaunch.result.launches[0].id;
     await waitOutput(`${liveId} true`);
     // Use the actual binary stdin framing from the frontend.

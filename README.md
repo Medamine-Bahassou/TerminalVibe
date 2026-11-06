@@ -38,7 +38,7 @@
 - **Frameless window** - custom titlebar with logo, sidebar toggle, and window controls (minimize/maximize/close)
 - **Status bar** - shows active workspace, terminal name, terminal dimensions + font size, connection status, multi-select count, and real-time clock
 - **Command line** - launch workspaces and build terminal/browser layouts from the terminal: `new`, `create` (YAML), `list`, `close`, `attach` (see [docs/cli.md](docs/cli.md))
-- **Agent orchestration skill** - let an agent launch other agents in named terminal splits, arrange running panes, read output, and send follow-up input through a local control channel (see [docs/agent-orchestration.md](docs/agent-orchestration.md))
+- **Agent orchestration skill** - install and activate/deactivate from Settings → Skills, then let an agent launch other agents in named terminal splits, arrange running panes, read output, and send follow-up input through a local control channel (see [docs/agent-orchestration.md](docs/agent-orchestration.md))
 
 ## Screenshots
 

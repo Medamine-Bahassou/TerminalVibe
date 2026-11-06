@@ -30,6 +30,7 @@ function procStatFields(pid) {
   return s.slice(idx + 2).split(' ');
 }
 
+const PF_FORKNOEXEC = 0x40;
 const SHELL_RE = /^(bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|pwsh|powershell|cmd|wsl|nu)$/;
 const INTERP_RE = /^(node|nodejs|python|python3|python2|ruby|perl|php|deno|bun|lua)$/;
 const SCRIPT_EXT_RE = /\.(js|mjs|cjs|ts|py|rb|pl|lua|php|sh)$/i;
@@ -70,6 +71,11 @@ function runningProcessInfo(pid) {
   if (process.platform === 'win32') return windowsProcessInfo(pid);
   if (process.platform !== 'linux') return { running: true, name: null };
   if (!pid || pid <= 1) return { running: false, name: null };
+  const fields = procStatFields(pid);
+  // node-pty returns just after forkpty: the child can still be a copy of
+  // Electron/Node until exec starts the shell. Linux PF_FORKNOEXEC marks that
+  // state explicitly; inherited runtime names are not terminal workloads.
+  if (fields && (Number(fields[6]) & PF_FORKNOEXEC)) return { running: false, name: null };
   const commRaw = readProc(`/proc/${pid}/comm`);
   if (commRaw == null) return { running: true, name: null }; // cannot inspect — assume busy
   const comm = commRaw.trim();
@@ -78,7 +84,6 @@ function runningProcessInfo(pid) {
     // command or an app) — a process is definitely running.
     return { running: true, name: processDisplayName(pid, comm) };
   }
-  const fields = procStatFields(pid);
   if (!fields) return { running: true, name: null };
   // Foreground process group of the terminal. At an idle prompt the shell's
   // own group owns it; when a job runs (foreground, incl. helpers like
@@ -235,4 +240,20 @@ function windowsProcessInfo(pid) {
   return { running: false, name: null };
 }
 
-module.exports = { hasRunningProcess, runningProcessInfo, refreshWindowsProcessTable };
+// Resolve at spawn time: cached OSC cwd can lag behind `cd` or a running TUI.
+// Other systems retain the renderer's last reported cwd as a fallback.
+function processWorkingDirectory(pid) {
+  if (process.platform !== 'linux' || !Number.isInteger(pid) || pid <= 1) return null;
+  const fields = procStatFields(pid);
+  if (fields && (Number(fields[6]) & PF_FORKNOEXEC)) return null;
+  const foreground = fields && Number(fields[5]);
+  for (const candidate of new Set([foreground > 1 ? foreground : pid, pid])) {
+    try {
+      const cwd = fs.readlinkSync(`/proc/${candidate}/cwd`);
+      if (path.isAbsolute(cwd) && fs.statSync(cwd).isDirectory()) return cwd;
+    } catch {}
+  }
+  return null;
+}
+
+module.exports = { hasRunningProcess, runningProcessInfo, refreshWindowsProcessTable, processWorkingDirectory };

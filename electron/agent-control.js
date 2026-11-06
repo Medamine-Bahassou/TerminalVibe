@@ -48,6 +48,8 @@ function validateLaunch(plan) {
   if (plan.placement !== undefined) {
     const p = plan.placement;
     if (!existing || !p || typeof p !== 'object' || Array.isArray(p)) throw new Error('placement requires an existing workspace');
+    if (p.mode !== undefined && !['tab', 'split'].includes(p.mode)) throw new Error('placement.mode must be tab or split');
+    if (p.mode === 'tab' && (plan.layout?.split || ['split', 'sizes', 'before', 'compact'].some(key => p[key] !== undefined))) throw new Error('Tab placement requires one layout leaf and no split sizing options');
     if (p.split !== undefined && !['row', 'column'].includes(p.split)) throw new Error('placement.split must be row or column');
     if (p.before !== undefined && typeof p.before !== 'boolean') throw new Error('placement.before must be boolean');
     if (p.compact !== undefined && typeof p.compact !== 'boolean') throw new Error('placement.compact must be boolean');
@@ -77,6 +79,7 @@ function validateLaunch(plan) {
         if (!url || !['http:', 'https:'].includes(url.protocol)) throw new Error('Browser url must be an absolute http(s) URL');
         return;
       }
+      if (node.returnToShell !== undefined && typeof node.returnToShell !== 'boolean') throw new Error('returnToShell must be boolean');
       if (!Array.isArray(node.argv) || !node.argv.length || node.argv.some(x => typeof x !== 'string' || x.includes('\0')) || !node.argv[0]) throw new Error('Each pane needs a nonempty argv array');
       if (typeof node.cwd !== 'string' || !path.isAbsolute(node.cwd) || !fs.statSync(node.cwd).isDirectory()) throw new Error('Each pane needs an existing absolute cwd');
     }
@@ -90,6 +93,10 @@ function validateLaunch(plan) {
 async function dispatchWithCapabilities(request, dispatch) {
   const hasBrowser = node => !!node && (node.type === 'browser' || node.url !== undefined ||
     (Array.isArray(node.children) && node.children.some(hasBrowser)));
+  if (request.method === 'launch' && request.params?.placement?.mode === 'tab') {
+    const state = await dispatch({ method: 'list', params: {} });
+    if (!state.capabilities?.launchAsTab) throw new Error('The running TerminalVibe page lacks launchAsTab. No panes were changed. Save active terminal work, then refresh the page or restart Electron to load the update.');
+  }
   const capability = request.method === 'navigate' ? 'browserNavigate'
     : request.method === 'launch' && hasBrowser(request.params?.layout) ? 'browserLaunch' : null;
   if (capability) {

@@ -99,7 +99,7 @@ app.whenReady().then(async () => {
   const sash = source.slice(source.indexOf('  function makeSashDraggableTree('), source.indexOf('   D R*AG AND DROP HANDLERS'));
   // The extraction ends inside the following section comment.
   const sashFunction = sash.slice(0, sash.lastIndexOf('  /*'));
-  const layoutResult = await win.webContents.executeJavaScript(`(() => {
+  const layoutResult = await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw new Error(message); };
     const SPLIT_MIN_PX = 200;
     let _suppressResize = false;
@@ -147,7 +147,8 @@ app.whenReady().then(async () => {
     handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: bounds('worker-a').right }));
     check(!workers.size && !workerA.size, 'Manual drag did not release compact sizing');
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: 450 }));
-    check(browserSyncs === 1, 'Browser overlay does not follow the divider immediately');
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    check(browserSyncs === 1, 'Browser overlay does not follow the divider in the next frame');
     document.dispatchEvent(new MouseEvent('mouseup'));
     check(bounds('worker-a').width >= 200 && bounds('worker-b').width >= 200, 'Manual drag violated pane minimums');
     // An outer divider must release explicit sizes inside the worker subtree.
@@ -188,6 +189,7 @@ app.whenReady().then(async () => {
     const activeWs = () => ({ id: 'workspace' });
     const addBrowserTab = (ws, group, url) => { opened = { ws, url }; };
     const openExternalUrl = () => { throw new Error('Expected an internal browser tab'); };
+    const procIconHtml = () => '<i class="ph ph-globe"></i>';
     ${dropdownSetup}
     setupServersDropdown();
     const button = document.getElementById('btn-servers'), dropdown = document.getElementById('servers-dropdown');
@@ -201,9 +203,11 @@ app.whenReady().then(async () => {
     dropdown.querySelector('.server-row').click();
     check(dropdown.hidden && !hiddenViews && opened.ws === 'workspace' && opened.url === 'http://127.0.0.1:3000/', 'Server did not open in an internal browser tab');
     data = []; button.click(); await settled();
+    check(dropdown.querySelector('.server-row'), 'Reopening must retain cached servers');
+    refresh.click(); await settled();
     check(dropdown.textContent.includes('No listening servers'), 'Missing empty state');
     fail = true; refresh.click(); await settled();
-    check(dropdown.textContent.includes('Could not load servers') && !refresh.disabled, 'Missing error/retry state');
+    check(dropdown.textContent.includes('No listening servers') && refresh.title.includes('Could not refresh') && !refresh.disabled, 'Refresh errors must preserve cached results and allow retry');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     check(dropdown.hidden && document.activeElement === button, 'Escape did not close and restore focus');
     fail = false; button.click(); await settled();

@@ -9,6 +9,8 @@ function terminalEnv(base = process.env) {
     'ITERM_PROFILE', 'WEZTERM_EXECUTABLE', 'WEZTERM_PANE', 'WEZTERM_UNIX_SOCKET',
     'GHOSTTY_RESOURCES_DIR', 'WT_Session', 'WT_SESSION', 'WARP_HONOR_PS1',
     'VSCODE_INJECTION', 'TABBY_CONFIG_DIRECTORY',
+    // Let each shell/TUI query its own PTY, not the launcher's stale grid.
+    'COLUMNS', 'LINES',
   ]) delete env[key];
   return { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor',
     TERM_PROGRAM: 'TerminalVibe', TERM_PROGRAM_VERSION: require('../package.json').version };

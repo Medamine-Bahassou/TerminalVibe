@@ -1,6 +1,6 @@
 ---
 name: terminalvibe-orchestration
-description: Open agents or browser tabs in TerminalVibe splits, navigate browser panes, arrange panes, inspect terminal output and browser content, and send follow-up input. Use when the user asks to open, inspect, or coordinate panes, agents, terminals, or embedded browser tabs inside TerminalVibe.
+description: Open agents or browser tabs in existing TerminalVibe splits or new splits, navigate browser panes, arrange panes, inspect terminal output and browser content, and send follow-up input. Use when the user asks to open, inspect, or coordinate panes, agents, terminals, or embedded browser tabs inside TerminalVibe.
 ---
 
 Use the bundled Node.js client `scripts/tv.js` relative to this skill directory.
@@ -8,7 +8,41 @@ TerminalVibe must be running with agent control support, either the Electron app
 or `npm run dev` with one TerminalVibe browser tab open. The client needs Node.js
 18+. After updating the server, restart dev mode and refresh the browser tab.
 
-## Fast path
+## Placement default: reuse the current split
+
+For an ordinary launch, create a **new tab in the existing split**. Preserve the
+orchestrator's tab, process, selected tab, and split dimensions. Run `list` (or
+`context --provider NAME` for an agent launcher), select the workspace containing
+`TERMINALVIBE_PANE_ID`, and use that pane as `anchorPaneId`; otherwise use the
+selected workspace's active pane. Check `capabilities.launchAsTab` before launching.
+
+```json
+{
+  "workspaceId": "WORKSPACE_ID_FROM_LIST",
+  "anchorPaneId": "PARENT_OR_ACTIVE_PANE_ID",
+  "placement": { "mode": "tab" },
+  "layout": { "name": "Worker", "cwd": "/absolute/project", "argv": ["VERIFIED_AGENT", "TASK"] }
+}
+```
+
+Run this with `launch --inspect --file plan.json`. For a browser tab, replace the
+layout leaf with `{"name":"Browser","type":"browser","url":"https://example.com/"}`.
+Tab placement accepts one leaf per launch; multiple sessions can be added to the
+same anchor in separate calls. Read returned IDs without selecting worker tabs;
+use `focus` if the user wants to view one. Navigate an existing browser tab when
+the request is to change that tab's page.
+
+Create a new split only when the user asks for one, a direction, a grid, or
+simultaneously visible sessions. The `pair` shortcut below always creates splits;
+use it only for an explicit side-by-side request. If `launchAsTab` is missing,
+report the required backend/page update instead of silently creating a split.
+
+Terminal launches return to a usable shell after the command exits or Ctrl+C.
+Leave this default enabled. `returnToShell:false` is an explicit opt-out for a
+pane intended to remain exited; it is not needed for ordinary agent sessions.
+Inspect output before sending a follow-up because the pane may now be a shell.
+
+## Fast path for explicit splits
 
 For browser requests such as "search for YouTube in a split tab", use the
 browser launch instructions below. `pair` and provider verification are only
@@ -42,7 +76,8 @@ Claude executable if no native Linux launcher works. Do not run `wsl -l`, probe
 both OSes, write an adapter, or inspect CLI help before this fast path. Diagnose
 only an actual returned error. A missing provider is reported, never substituted.
 
-For other layouts or distinct worker tasks, start with one call:
+For distinct worker tasks, verify the launcher with `context`, then use tabs by
+default as above. For explicitly requested split layouts, start with one call:
 
 ```sh
 node /absolute/path/to/this/skill/scripts/tv.js context --provider claude
@@ -56,10 +91,12 @@ plan.json` to include both workers' snapshots without separate shell calls.
 
 ## Instance and workspace selection
 
-Inside a terminal, `TERMINALVIBE_CONTROL_FILE` selects the owning instance and
-`TERMINALVIBE_PANE_ID` identifies the parent pane. Outside it, a sole live
-instance is automatic. Only if multiple instances exist, run `instances` and
-select with `--instance FILE`. Windows and WSL have separate homes; automatic
+The client always prefers the instance you are running inside: the live
+instance whose process is an ancestor of the client wins, even if
+`TERMINALVIBE_CONTROL_FILE` is stale (an instance that has exited). Then a live
+`TERMINALVIBE_CONTROL_FILE`, then a sole live instance. `TERMINALVIBE_PANE_ID`
+identifies the parent pane. Do not ask the user to pick an instance or pass
+`--instance` unless the client itself reports that none hosts this process. Windows and WSL have separate homes; automatic
 WSL routing requires a WSL UNC cwd. Otherwise run the client in the backend OS.
 For browser mode the backend is `server.js`, and the browser tab must be open
 and refreshed after an update. Multiple ready tabs are rejected to avoid
@@ -95,7 +132,9 @@ For an existing workspace, replace `name` with `workspaceId` (an ID, or
 `"current"` to resolve the active workspace when the request arrives). An
 optional `anchorPaneId` inserts beside that pane's group instead of beside the
 entire workspace layout. With only `anchorPaneId`, its workspace is inferred.
-`placement` controls how the new subtree is docked: `split` defaults to `row`,
+`placement:{"mode":"tab"}` adds one leaf to the anchor's group (or the target
+workspace's active group) without splitting. The following docking options are
+for explicitly requested new splits. `placement` controls how the new subtree is docked: `split` defaults to `row`,
 `sizes` to `[50,50]`, and `before` to `false`. Percentages follow child order:
 existing then new, or new then existing when `before` is true. The `layout`
 contains only new panes; never include or relaunch the parent terminal.
@@ -160,7 +199,9 @@ agent exits. Do not infer that a visible shell is still an active agent.
 
 ## Open browser splits and navigate
 
-Run `list` and reuse the selected workspace ID. Check `browserLaunch` for new
+Prefer a tab in the current split using `placement:{"mode":"tab"}` as above,
+unless the user explicitly requests a new split. Run `list` and reuse the selected
+workspace ID. Check `browserLaunch` for new
 browser panes and `browserNavigate` for changing an existing browser's URL.
 If absent, the running backend/page needs updating; do not claim the current
 API is terminal-only or restart active sessions yourself.

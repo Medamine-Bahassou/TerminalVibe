@@ -11,15 +11,22 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const workspace = { id: 'workspace', layout: null };
 const controls = [], frames = [];
+let sequence = 0;
+const all = node => !node ? [] : node.type === 'group' ? node.terminals : node.children.flatMap(all);
+const first = node => !node ? null : node.type === 'group' ? node : first(node.children[0]);
+const group = (node, predicate) => !node ? null : node.type === 'group' ? predicate(node) ? node : null : node.children.map(n => group(n,predicate)).find(Boolean);
 const context = {
-  activeWsId: workspace.id, defaultTerminalPath: '',
-  findWs: () => workspace, _getFocusedCwd: () => '/project', uuid: () => 'terminal',
-  getWorkspaceTerminals: () => [], activeTerminal: () => null,
+  activeWsId: workspace.id, defaultTerminalPath: '/project',
+  findWs: () => workspace, uuid: () => ++sequence === 1 ? 'terminal' : 'terminal-'+sequence,
+  findFirstGroup: first, findGroupById: (node,id) => group(node,g => g.id === id),
+  findGroupContainingTerm: (node,id) => group(node,g => g.terminals.some(t => t.id === id)),
+  document: { getElementById: () => null },
+  getWorkspaceTerminals: ws => all(ws.layout),
   _createTermEntry: (_ws, id, label) => ({ id, label }),
   renderPaneArea() {}, activateTerminal() {}, renderSidebar() {}, saveState() {}, pluginEmit() {},
   getSlotDimensions: () => ({ cols: 120, rows: 40 }),
   sendControl: message => {
-    assert.equal(workspace.layout.terminals[0].id, message.id);
+    assert(all(workspace.layout).some(t => t.id === message.id));
     controls.push(message);
   },
   requestAnimationFrame: callback => frames.push(callback), fitTerm() {},
@@ -30,10 +37,30 @@ vm.runInContext(source.slice(source.indexOf('  function addTerminal('), source.i
 context.addTerminal();
 assert.equal(controls.length, 1);
 assert.equal(controls[0].cwd, '/project');
+assert.equal(workspace.layout.terminals[0].label, 'project', 'New tab must not inherit a previous CLI title');
 assert.equal(controls[0].cols, 120);
 assert.equal(controls[0].rows, 40);
 assert.equal(frames.length, 1);
-console.log('PASS: new tab spawns immediately with measured dimensions and inherited cwd');
+const left = {type:'group',id:'left',activeTermId:'left-parent',terminals:[{id:'left-parent',cwd:'/repo/left'}]};
+const right = {type:'group',id:'right',activeTermId:'right-parent',terminals:[{id:'right-parent',cwd:'/repo/right'}]};
+workspace.layout = {type:'split',children:[left,right]};workspace.activeTermId = 'left-parent';
+context.defaultTerminalPath = '/configured-default';
+context.addTerminal();
+assert.equal(controls.at(-1).cwd,'/repo/left','Previous tab must take priority over the configured default');
+assert.equal(controls.at(-1).inheritFromId,'left-parent');
+context.addTerminal(workspace.id,'right');
+assert.equal(controls.at(-1).cwd,'/repo/right','A split plus button must use that split, not the focused one');
+assert.equal(controls.at(-1).inheritFromId,'right-parent');
+right.terminals.push({id:'browser',type:'browser'});right.activeTermId='browser';right._history=['right-parent'];
+context.addTerminal(workspace.id,'right');
+assert.equal(controls.at(-1).cwd,'/repo/right','Browser tabs must retain the split’s previous terminal directory');
+const forwarded = [];
+const transport = vm.createContext({isDesktop:()=>true,nativePtyReady:true,findTermById:()=>null,
+  window:{electronAPI:{terminalCreate:spec=>{forwarded.push(spec);return Promise.resolve(true);}}}});
+vm.runInContext(source.slice(source.indexOf('  function sendControl('),source.indexOf('  function _sendStdinRaw(')),transport);
+transport.sendControl({type:'create',id:'new',cols:80,rows:24,cwd:'/cached',inheritFromId:'previous'});
+assert.equal(forwarded[0].inheritFromId,'previous','Native IPC must preserve the source terminal ID');
+console.log('PASS: immediate new tabs, correct split directory, previous-tab precedence, default fallback and native inheritance forwarding');
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-startup-test-'));
 const generated = [];
@@ -57,6 +84,7 @@ try {
     assert.match(bash, /count=1 hooks=__terminal_vibe_cwd,printf user-hook/);
     assert(!bash.includes('UNEXPECTED_LOGIN_PROFILE'));
     assert.match(bash, /\x1b\]7;file:\/\//);
+    assert.match(bash, /\x1b\]133;A\x07/);
 
     if (spawnSync('/bin/zsh', ['--version']).status === 0) {
       const custom = path.join(home, "custom ' dotdir");
@@ -69,6 +97,7 @@ try {
         const zsh = run('/bin/zsh', command);
         assert(zsh.includes(`env=1 rc=1 cache=${home} hooks=user_hook,__terminal_vibe_cwd`), zsh);
         assert.match(zsh, /\x1b\]7;file:\/\//);
+        assert.match(zsh, /\x1b\]133;A\x07/);
       }
       fs.writeFileSync(path.join(custom, '.zshenv'), '(( TV_ENV_COUNT += 1 ))\n');
       fs.writeFileSync(path.join(custom, '.zshrc'), rc);

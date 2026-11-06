@@ -2,7 +2,10 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  listSkills: () => ipcRenderer.invoke('skills:list'),
+  setSkillEnabled: (id, enabled) => ipcRenderer.invoke('skills:set-enabled', id, enabled),
   listRunningServers: () => ipcRenderer.invoke('servers:list'),
+  killRunningServer: (pid, port) => ipcRenderer.invoke('servers:kill', { pid, port }),
   onAgentRequest: (cb) => {
     const listener = async (_event, request) => {
       try { ipcRenderer.send('agent:result', { id: request.id, result: await cb(request) }); }
@@ -38,6 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalHasRunningProcess: (id) => ipcRenderer.invoke('terminal:hasRunningProcess', id),
   claudeSessions: (cwd) => ipcRenderer.invoke('history:claude-sessions', cwd),
   attachSessionContext: (id, sessionId) => ipcRenderer.invoke('terminal:session-context', id, sessionId),
+  attachWorkspaceContext: (id, context) => ipcRenderer.invoke('terminal:workspace-context', id, context),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),
   terminalAttached: (id) => ipcRenderer.send('terminal:attached', id),
   attachWindow: (o) => ipcRenderer.send('terminal:attach-window', o),

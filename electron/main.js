@@ -3,10 +3,11 @@ const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
 const yaml = require('js-yaml');
-const { hasRunningProcess, runningProcessInfo } = require('./proc');
+const { hasRunningProcess, runningProcessInfo, processWorkingDirectory } = require('./proc');
 const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession } = require('./agent-control');
-const { listRunningServers } = require('./servers');
+const { listRunningServers, killServer } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
+const { prepareShellStartup } = require('./shell-startup');
 let agentControl = null;
 const agentRequests = new Map();
 ipcMain.on('agent:result', (event, { id, result, error }) => {
@@ -497,6 +498,16 @@ ipcMain.handle('shell:open-external', (_e, url) => {
 
 // ── IPC: clipboard (terminal text; navigator.clipboard also works) ──
 ipcMain.handle('servers:list', () => listRunningServers());
+ipcMain.handle('servers:kill', (_e, { pid, port } = {}) => killServer(pid, port));
+
+const skillManager = require('./skill-manager').createSkillManager({
+  source: app.isPackaged
+    ? path.join(process.resourcesPath, 'skills', 'terminalvibe-orchestration')
+    : path.join(__dirname, '..', 'skills', 'terminalvibe-orchestration'),
+});
+ipcMain.handle('skills:list', () => skillManager.list());
+ipcMain.handle('skills:set-enabled', (_event, id, enabled) => skillManager.setEnabled(id, enabled));
+
 // ── IPC: native context menu. Renderer sends a plain template; resolves with the clicked item id (or null). ──
 ipcMain.handle('context-menu:popup', (e, template) => new Promise(resolve => {
   const build = items => (Array.isArray(items) ? items : []).map(it => it && it.type === 'separator' ? { type: 'separator' } : {
@@ -528,13 +539,7 @@ ipcMain.handle('clipboard:paste-image', () => {
 });
 
 // ── IPC: local files ──
-ipcMain.handle('file:save-temp', (_e, name, bytes) => {
-  try {
-    const fp = path.join(require('os').tmpdir(), `terminalvibe-${Date.now()}-${path.basename(String(name || 'drop'))}`);
-    fs.writeFileSync(fp, Buffer.from(bytes));
-    return fp;
-  } catch (err) { console.error('[drop] save-temp failed:', err); return null; }
-});
+ipcMain.handle('file:save-temp', (_e, name, bytes) => require('./dropped-files').saveDroppedFile(name, bytes));
 ipcMain.handle('file:resolve', (_e, p) => {
   try {
     const resolved = path.resolve(p);
@@ -1050,7 +1055,14 @@ ipcMain.handle('terminal:session-context', (event, id, sessionId) => {
     getTarget: () => { const terminal=ptys.get(id); return terminal && {token:terminal,info:runningProcessInfo(terminal.pid)}; },
     write: (terminal,text) => terminal.write(text) });
 });
-function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell }) {
+ipcMain.handle('terminal:workspace-context', (event, id, context) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized chat target');
+  return require('./session-context').attachWorkspaceContext({context,
+    getTarget: () => { const terminal=ptys.get(id); return terminal && {token:terminal,info:runningProcessInfo(terminal.pid)}; },
+    write: (terminal,text) => terminal.write(text) });
+});
+function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId }) {
+  let startup;
   try {
     if (replaceIdle && ptys.has(id) && !canReplaceSession(runningProcessInfo(ptys.get(id).pid), replaceClaude === true)) return false;
     if (ptys.has(id)) {
@@ -1060,7 +1072,7 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       try { old.kill(); } catch {}
       ptys.delete(id);
     }
-    let spawnCwd = cwd || undefined;
+    let spawnCwd = processWorkingDirectory(ptys.get(inheritFromId)?.pid) || cwd || undefined;
     const homeDir = require('os').homedir();
     if (spawnCwd && typeof spawnCwd === 'string') {
       spawnCwd = spawnCwd.trim().replace(/^["']|["']$/g, '');
@@ -1083,12 +1095,14 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       spawnCwd = homeDir;
     }
     const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
-    const t = pty.spawn(executable || shell, argv && argv.length ? argv : [], {
+    const env = terminalEnv();
+    startup = executable || argv?.length ? { args: [], env: {}, tmpDir: null } : prepareShellStartup(shell, env);
+    const t = pty.spawn(executable || shell, argv && argv.length ? argv : startup.args, {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
       cwd: spawnCwd,
-      env: { ...terminalEnv(), TERMINALVIBE_PANE_ID: id,
+      env: { ...env, ...startup.env, TERMINALVIBE_PANE_ID: id,
         ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}) },
     });
     ptys.set(id, t);
@@ -1109,6 +1123,9 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       outTimer = setTimeout(flushOut, 5);
     });
     t.onExit(({ exitCode }) => {
+      if (startup.tmpDir) {
+        try { fs.rmSync(startup.tmpDir, { recursive: true, force: true }); } catch {}
+      }
       notifyBusy.delete(id);
       clearTimeout(outTimer);
       if (outBuf && ptys.get(id) === t) sendToRenderer('terminal:data', { id, data: outBuf });
@@ -1134,6 +1151,9 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
 
     return true;
   } catch (err) {
+    if (startup?.tmpDir) {
+      try { fs.rmSync(startup.tmpDir, { recursive: true, force: true }); } catch {}
+    }
     console.error('[pty] create failed:', err);
     return false;
   }

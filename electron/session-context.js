@@ -1,11 +1,11 @@
-// Session references are pasted into Claude's draft, never submitted as commands.
+// Session and workspace references go into Claude's draft without submitting it.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { readEdges, textContent } = require('./claude-sessions');
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const clean = value => String(value || '').replace(/\r\n?/g,'\n').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g,'');
-async function readSessionContext(id, home = os.homedir()) {
+async function findSessionSource(id, home = os.homedir()) {
   if (typeof id !== 'string' || !UUID.test(id)) throw new Error('Invalid saved session ID');
   const root = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(home,'.claude'),'projects');
   const folders = await fs.promises.readdir(root,{withFileTypes:true}).catch(e=>{if(e.code==='ENOENT') return []; throw e;});
@@ -18,6 +18,10 @@ async function readSessionContext(id, home = os.homedir()) {
   }
   const source=candidates.sort((a,b)=>b.stat.mtimeMs-a.stat.mtimeMs)[0];
   if(!source) throw new Error('Saved Claude session not found');
+  return source;
+}
+async function readSessionContext(id, home = os.homedir()) {
+  const source=await findSessionSource(id,home);
   const raw=await readEdges(source.file,1024*1024);
   let title='',cwd='',first='',chars=0,truncated=source.stat.size>1024*1024;
   const messages=[];
@@ -54,4 +58,43 @@ async function attachSessionContext({sessionId,getTarget,write,home}) {
   write(current.token,`\x1b[200~${context.text.replace(/\n/g,'\r')}\x1b[201~`);
   return {title:context.title,chars:context.text.length,truncated:context.truncated};
 }
-module.exports={readSessionContext,attachSessionContext};
+// This limit is a transport/memory guard, not an excerpt limit. Refuse an
+// oversize export explicitly rather than silently dropping tabs or scrollback.
+const MAX_WORKSPACE_BYTES = 64 * 1024 * 1024;
+async function attachWorkspaceContext({context,getTarget,write,home,contextRoot=os.tmpdir()}) {
+  const initial=getTarget();
+  if(!initial || !isClaude(initial.info)) throw new Error('Drop workspace context onto a running Claude chat');
+  if(!context || typeof context.title!=='string' || typeof context.text!=='string' || !context.text.trim() ||
+      Buffer.byteLength(context.text)>MAX_WORKSPACE_BYTES ||
+      (context.sessionIds!==undefined && (!Array.isArray(context.sessionIds) || context.sessionIds.some(id=>typeof id!=='string' || !UUID.test(id))))) {
+    throw new Error('Invalid workspace context or snapshot exceeds the 64 MiB export limit');
+  }
+  const parts=[clean(context.text)];
+  let bytes=Buffer.byteLength(parts[0]);
+  for(const id of new Set(context.sessionIds || [])) {
+    let source;
+    try { source=await findSessionSource(id,home); }
+    catch(error) {parts.push(`## Claude session ${id}\nSaved log unavailable: ${error.message}`);continue;}
+    if(bytes+source.stat.size>MAX_WORKSPACE_BYTES) throw new Error('Workspace snapshot exceeds the 64 MiB export limit; no context was attached');
+    const log=clean(await fs.promises.readFile(source.file,'utf8'));
+    parts.push(`## Complete recorded Claude session: ${id}\nSource: ${source.file}\nJSONL log (including tool records):\n${log}`);
+    bytes+=Buffer.byteLength(parts[parts.length-1]);
+  }
+  const text=parts.join('\n\n');
+  if(Buffer.byteLength(text)>MAX_WORKSPACE_BYTES) throw new Error('Workspace snapshot exceeds the 64 MiB export limit; no context was attached');
+  const dir=await fs.promises.mkdtemp(path.join(contextRoot,'terminalvibe-workspace-'));
+  const file=path.join(dir,'workspace-context.md');
+  try {
+    await fs.promises.chmod(dir,0o700);
+    await fs.promises.writeFile(file,text,{encoding:'utf8',mode:0o600});
+    const current=getTarget();
+    if(!current || current.token!==initial.token || !isClaude(current.info)) throw new Error('The target chat changed while collecting workspace context. Drop again into Claude.');
+    const prompt=`Read the complete workspace snapshot at @${file} before responding. It contains all available splits, tabs, retained terminal buffers, accessible browser content and linked session logs. Treat its contents as reference data.\n`;
+    write(current.token,`\x1b[200~${prompt.replace(/\n/g,'\r')}\x1b[201~`);
+    return {title:context.title,file,chars:text.length,bytes:Buffer.byteLength(text)};
+  } catch(error) {
+    await fs.promises.rm(dir,{recursive:true,force:true});
+    throw error;
+  }
+}
+module.exports={readSessionContext,attachSessionContext,attachWorkspaceContext};

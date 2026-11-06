@@ -7,6 +7,7 @@ const path = require('path');
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.APP_PORT || '7769', 10);
 const ROOT = path.join(__dirname, '..');
+const skillManager = require('./skill-manager').createSkillManager();
 
 const MIME = {
   '.html': 'text/html',
@@ -27,6 +28,10 @@ http.createServer((req, res) => {
   // npm run dev also serves the UI from this origin. Keep local history
   // available here rather than letting /api requests fall through to files.
   const parsed = new URL(req.url, `http://${HOST}:${PORT}`);
+  if (parsed.pathname === '/api/skills') {
+    require('./skill-http').handleSkillRequest(req, res, skillManager);
+    return;
+  }
   if (parsed.pathname === '/api/claude-sessions') {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');

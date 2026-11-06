@@ -14,9 +14,9 @@ const url = require("url");
 const os = require("os");
 const { WebSocketServer } = require("ws");
 const pty = require("node-pty");
-const { hasRunningProcess, runningProcessInfo } = require("./electron/proc");
+const { hasRunningProcess, runningProcessInfo, processWorkingDirectory } = require("./electron/proc");
 const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession } = require('./electron/agent-control');
-const { listRunningServers } = require('./electron/servers');
+const { listRunningServers, killServer } = require('./electron/servers');
 const { terminalEnv } = require('./electron/terminal-env');
 const { prepareShellStartup } = require('./electron/shell-startup');
 const { randomUUID } = require('crypto');
@@ -79,8 +79,14 @@ const MIME_TYPES = {
 //  STATIC APP SERVER (with local file serving)
 // ─────────────────────────────────────────────────────────────
 
+const skillManager = require('./electron/skill-manager').createSkillManager();
+
 const appServer = http.createServer((req, res) => {
   const parsed = url.parse(req.url, true);
+  if (parsed.pathname === '/api/skills') {
+    require('./electron/skill-http').handleSkillRequest(req, res, skillManager);
+    return;
+  }
   if (parsed.pathname === '/api/claude-sessions') {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');
@@ -90,6 +96,23 @@ const appServer = http.createServer((req, res) => {
     require('./electron/claude-sessions').listClaudeSessions(parsed.query.cwd).then(
       data => res.end(JSON.stringify(data)),
       error => { res.writeHead(400); res.end(JSON.stringify({ error: error.message })); });
+    return;
+  }
+  if (parsed.pathname === '/api/servers/kill') {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-store');
+    // JSON content type forces a CORS preflight; a foreign origin is refused outright.
+    if (req.method !== 'POST' || !/^application\/json\b/.test(req.headers['content-type'] || '')) { res.writeHead(405); res.end(JSON.stringify({ error: 'Use POST with JSON' })); return; }
+    if (req.headers.origin !== `http://${req.headers.host}`) { res.writeHead(403); res.end(JSON.stringify({ error: 'Invalid origin' })); return; }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 1024) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const { pid, port } = JSON.parse(body || '{}');
+        await killServer(pid, port);
+        res.end(JSON.stringify({ ok: true }));
+      } catch (error) { res.writeHead(400); res.end(JSON.stringify({ error: error.message })); }
+    });
     return;
   }
   if (parsed.pathname === '/api/servers') {
@@ -278,7 +301,7 @@ class PTYSession {
 //  WEBSOCKET HANDLER
 // ─────────────────────────────────────────────────────────────
 
-const wss = new WebSocketServer({ port: PORT, host: HOST, maxPayload: 1024 * 1024,
+const wss = new WebSocketServer({ port: PORT, host: HOST, maxPayload: 128 * 1024 * 1024, // Workspace exports allow 64 MiB plus JSON escaping.
   verifyClient: ({ origin }) => {
     if (!origin) return true; // Local CLI/test clients do not send Origin.
     try {
@@ -292,7 +315,7 @@ const wss = new WebSocketServer({ port: PORT, host: HOST, maxPayload: 1024 * 102
 wss.on("connection", (ws) => {
   const localSessions = [];
 
-  ws.send(JSON.stringify({ type: "ready", port: PORT, sessionContextDrop:true }));
+  ws.send(JSON.stringify({ type: "ready", port: PORT, sessionContextDrop:true, workspaceContextDrop:true, fileDrop:true, platform:process.platform }));
 
   ws.on("message", async (message, isBinary) => {
     if (isBinary) {
@@ -311,6 +334,25 @@ wss.on("connection", (ws) => {
       }
 
       switch (msg.type) {
+        case 'file:save-temp': {
+          try {
+            if (!localSessions.includes(msg.id) || !SESSIONS[msg.id]?._running) throw new Error('The target terminal is no longer available');
+            const {saveDroppedFile,decodeDroppedFile}=require('./electron/dropped-files');
+            const file=await saveDroppedFile(msg.name,decodeDroppedFile(msg.data));
+            ws.send(JSON.stringify({type:'file:result',requestId:msg.requestId,path:file}));
+          } catch(error) {ws.send(JSON.stringify({type:'file:result',requestId:msg.requestId,error:error.message}));}
+          break;
+        }
+        case 'workspace-context': {
+          try {
+            if (!localSessions.includes(msg.id)) throw new Error('Unknown chat target');
+            const result=await require('./electron/session-context').attachWorkspaceContext({context:msg.workspaceContext,
+              getTarget:()=>{const session=SESSIONS[msg.id];return session && {token:session,info:runningProcessInfo(session._proc?.pid || 0)};},
+              write:(session,text)=>session.write(text)});
+            ws.send(JSON.stringify({type:'workspace-context:result',requestId:msg.requestId,result}));
+          } catch(error) {ws.send(JSON.stringify({type:'workspace-context:result',requestId:msg.requestId,error:error.message}));}
+          break;
+        }
         case 'session-context': {
           try {
             if (!localSessions.includes(msg.id)) throw new Error('Unknown chat target');
@@ -337,7 +379,8 @@ wss.on("connection", (ws) => {
           const sid = msg.id || "";
           const cols = parseInt(msg.cols) || 80;
           const rows = parseInt(msg.rows) || 24;
-          const cwd = msg.cwd || null;
+          const inherited = localSessions.includes(msg.inheritFromId) ? SESSIONS[msg.inheritFromId] : null;
+          const cwd = processWorkingDirectory(inherited?._proc?.pid) || msg.cwd || null;
           if (sid && msg.replaceIdle && SESSIONS[sid]) {
             if (!canReplaceSession(runningProcessInfo(SESSIONS[sid]._proc?.pid || 0), msg.replaceClaude === true)) {
               if (msg.requestId) ws.send(JSON.stringify({ type: 'agent:created', requestId: msg.requestId, started: false }));

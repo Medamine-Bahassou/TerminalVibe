@@ -58,6 +58,35 @@ function instances(directory) {
   });
 }
 
+// PIDs above this process. The TerminalVibe instance hosting the calling pane
+// is one of them, which beats any inherited (possibly stale) descriptor path.
+function ancestorPids(pid = process.ppid) {
+  const pids = new Set();
+  for (let i = 0; pid > 1 && i < 64 && !pids.has(pid); i++) {
+    pids.add(pid);
+    try {
+      pid = process.platform === 'linux'
+        ? Number(fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ').pop().split(' ')[1])
+        : process.platform === 'darwin'
+          ? Number(require('child_process').execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }))
+          : 0;
+    } catch { break; }
+  }
+  return pids;
+}
+
+function selectInstance(found, envDescriptor, ancestors = ancestorPids()) {
+  const live = found.filter(d => d.alive);
+  const own = live.filter(d => ancestors.has(d.pid));
+  if (own.length === 1) return own[0].file;
+  const inherited = envDescriptor && found.find(d => path.resolve(d.file) === path.resolve(envDescriptor));
+  // A descriptor outside the scanned directory (WSL relay, custom path) is trusted as given.
+  if (envDescriptor && (inherited ? inherited.alive : fs.existsSync(envDescriptor))) return envDescriptor;
+  if (live.length === 1) return live[0].file;
+  if (live.length > 1) throw new Error(`Multiple live instances (${live.map(d => d.pid).join(', ')}) and none hosts this process; select one with --instance FILE.`);
+  return null;
+}
+
 async function resolveLauncher(provider) {
   if (!['claude', 'codex'].includes(provider)) throw new Error('Use --provider claude or codex; use launch with explicit argv for other agents');
   const home = os.homedir();
@@ -116,7 +145,7 @@ async function main(args) {
   const originalArgs = [...args];
   const method = args.shift();
   if (!method || method === '--help') {
-    console.log('tv.js pair --provider claude|codex [--prompt TEXT] [--cwd DIR]\ntv.js context [--provider claude|codex]\ntv.js instances | list | launch|arrange --file FILE|- | read|send|focus|resize|place|navigate JSON\nnavigate: {paneId,url:"https://example.com/"}\nlaunch browser leaf: {name:"Browser",type:"browser",url:"https://example.com/"}\nread: terminal {paneId,lines:100} or browser {paneId,maxChars:20000,offset:0}\nresize: {paneId,width:"min"|"auto"|PIXELS,height:"min"|"auto"|PIXELS}\nplace: {paneId,anchorPaneId,side:"left"|"right"|"top"|"bottom",compact:true}\nA sole live instance is selected automatically. Use --instance FILE if several are running.\nlaunch --inspect includes pane snapshots. JSON also accepts --file FILE|- (UTF-8 BOM supported).');
+    console.log('tv.js pair --provider claude|codex [--prompt TEXT] [--cwd DIR]\ntv.js context [--provider claude|codex]\ntv.js instances | list | launch|arrange --file FILE|- | read|send|focus|resize|place|navigate JSON\nnavigate: {paneId,url:"https://example.com/"}\nlaunch in current split: {workspaceId,anchorPaneId,placement:{mode:"tab"},layout:LEAF}\nlaunch browser leaf: {name:"Browser",type:"browser",url:"https://example.com/"}\nread: terminal {paneId,lines:100} or browser {paneId,maxChars:20000,offset:0}\nresize: {paneId,width:"min"|"auto"|PIXELS,height:"min"|"auto"|PIXELS}\nplace: {paneId,anchorPaneId,side:"left"|"right"|"top"|"bottom",compact:true}\nThe instance hosting this process is selected automatically, then TERMINALVIBE_CONTROL_FILE, then a sole live instance. Use --instance FILE otherwise.\nlaunch --inspect includes pane snapshots. JSON also accepts --file FILE|- (UTF-8 BOM supported).');
     return;
   }
   let descriptor = process.env.TERMINALVIBE_CONTROL_FILE;
@@ -144,11 +173,7 @@ async function main(args) {
     return;
   }
   if (!['context', 'pair', 'list', 'launch', 'arrange', 'read', 'send', 'focus', 'resize', 'place', 'navigate'].includes(method)) throw new Error('Unknown method (use --help)');
-  if (!descriptor) {
-    const live = found.filter(d => d.alive);
-    if (live.length > 1) throw new Error('Multiple live instances; select one with --instance FILE.');
-    if (live.length === 1) descriptor = live[0].file;
-  }
+  if (index === -1) descriptor = selectInstance(found, descriptor);
   if (!descriptor) throw new Error('No live instance found. Start TerminalVibe or pass --instance FILE from the backend OS.');
   if (method === 'context' || method === 'pair') {
     const options = {};
@@ -191,6 +216,9 @@ async function main(args) {
   else if (args.length) throw new Error('Pass one JSON argument or --file FILE|-');
   const hasBrowser = node => !!node && (node.type === 'browser' || node.url !== undefined ||
     (Array.isArray(node.children) && node.children.some(hasBrowser)));
+  if (method === 'launch' && params.placement?.mode === 'tab' && !(await rpc(descriptor, 'list')).capabilities?.launchAsTab) {
+    throw new Error('The running TerminalVibe backend/page lacks launchAsTab. No panes were changed. Save active terminal work, restart the backend and refresh the page (or restart Electron), then retry.');
+  }
   const capability = method === 'navigate' ? 'browserNavigate'
     : method === 'launch' && hasBrowser(params.layout) ? 'browserLaunch' : null;
   if (capability && !(await rpc(descriptor, 'list')).capabilities?.[capability]) {
@@ -201,4 +229,4 @@ async function main(args) {
   console.log(JSON.stringify(result, null, 2));
 }
 if (require.main === module) main(process.argv.slice(2)).catch(err => { console.error(err.message); process.exitCode = 1; });
-module.exports = { main, linuxPath, wslInvocation, instances, resolveLauncher };
+module.exports = { main, linuxPath, wslInvocation, instances, resolveLauncher, ancestorPids, selectInstance };

@@ -65,4 +65,16 @@ async function listRunningServers() {
   try { return await pending; } finally { pending = null; }
 }
 
-module.exports = { listRunningServers, parseSs, parseLsof, normalize };
+// Stop a listening server from the list. Re-check the listener first so a
+// recycled PID is never signalled, and never stop TerminalVibe itself.
+async function killServer(pid, port, self = process.pid) {
+  pid = Number(pid); port = Number(port);
+  if (!Number.isInteger(pid) || pid < 2 || !Number.isInteger(port)) throw new Error('Invalid server.');
+  if (pid === self) throw new Error('This server is TerminalVibe itself.');
+  if (!(await listRunningServers()).some(server => server.pid === pid && server.port === port)) {
+    throw new Error('That server is no longer listening.');
+  }
+  process.kill(pid, 'SIGTERM');
+}
+
+module.exports = { listRunningServers, killServer, parseSs, parseLsof, normalize };

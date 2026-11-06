@@ -6,6 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const pty = require('node-pty');
 const { prepareShellStartup } = require('../electron/shell-startup');
+const { processWorkingDirectory } = require('../electron/proc');
 const root = path.join(__dirname, '..');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-history-terminal-'));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -22,9 +23,9 @@ function desktopBackend() {
   const ptys = new Map();
   let output = '', exits = 0, spawns = 0;
   const context = vm.createContext({
-    require, fs, path, process: { env: { SHELL: '/bin/bash' }, platform: process.platform },
+    require, fs, path, processWorkingDirectory, process: { env: { SHELL: '/bin/bash' }, platform: process.platform },
     pty: { spawn(...args) { spawns++; return pty.spawn(...args); } }, ptys,
-    terminalEnv: () => ({ ...process.env, HOME: temp }), agentControl: null,
+    terminalEnv: () => ({ ...process.env, HOME: temp }), prepareShellStartup, agentControl: null,
     detachedWindows: new Map(), notifyBusy: new Map(), console, setTimeout, clearTimeout,
     sendToRenderer(channel, payload) {
       if (channel === 'terminal:data') output += payload.data;
@@ -35,7 +36,7 @@ function desktopBackend() {
   return {
     start(spec) { assert.equal(context.createTerminal({}, spec), true); },
     write(data) { ptys.get('history').write(data); },
-    close() { const terminal = ptys.get('history'); ptys.delete('history'); terminal?.kill(); },
+    close() { for (const [id,terminal] of ptys) { ptys.delete(id);terminal.kill(); } },
     get output() { return output; }, get exits() { return exits; }, get spawns() { return spawns; },
   };
 }
@@ -72,7 +73,7 @@ async function checkHistoryLaunches() {
   const context = vm.createContext({
     window: {
       openSessionDrawer(options) { drawer = options; },
-      electronAPI: { claudeSessions: async () => ({ executable: '/fixture/claude', cwd: temp }) },
+      electronAPI: { claudeSessions: async () => ({ executable: '/fixture/claude', cwd: temp, sessions:[] }) },
     },
     findTermById: () => ({ term: entry }), checkTerminalRunning: async () => null,
     getSlotDimensions: () => ({ cols: 100, rows: 30 }),
@@ -80,7 +81,7 @@ async function checkHistoryLaunches() {
     handleAgentRequest: async request => { launched = request; return { launches: [{ id: entry.id, started: true }] }; },
     saveState() {}, renderPaneArea() {},
   });
-  vm.runInContext(source.slice(source.indexOf('  async function openClaudeHistory('), source.indexOf('  function addTabSessionHistory(')), context);
+  vm.runInContext(source.slice(source.indexOf('  const claudeHistoryCache ='), source.indexOf('  function addTabSessionHistory(')), context);
   await context.openClaudeHistory({ id: 'workspace' }, entry);
   await drawer.load();
   await drawer.start(session, 'here');
@@ -90,6 +91,21 @@ async function checkHistoryLaunches() {
   await drawer.start(session, 'split');
   assert.equal(launched.params.layout.returnToShell, true);
   console.log('PASS: history resumes in place and in splits request a shell after agent exit');
+}
+
+async function checkNativeDirectoryInheritance() {
+  if (process.platform !== 'linux') return;
+  const directory = path.join(temp,'changed project');fs.mkdirSync(directory);
+  const backend = desktopBackend();
+  try {
+    backend.start({id:'source',cwd:temp,cols:100,rows:30,executable:process.execPath,
+      argv:['-e',`process.chdir(${JSON.stringify(directory)});console.log('CWD_SOURCE_READY');process.stdin.resume();`]});
+    await waitFor(()=>backend.output.includes('CWD_SOURCE_READY'),'Cwd fixture did not start');
+    backend.start({id:'history',cwd:temp,inheritFromId:'source',cols:100,rows:30,executable:process.execPath,
+      argv:['-e',"console.log('INHERITED_CWD:'+process.cwd());process.stdin.resume();"]});
+    await waitFor(()=>backend.output.includes('INHERITED_CWD:'+directory),'Native new tab did not inherit the live process cwd');
+    console.log('PASS: Electron inherits a running process directory even without OSC cwd updates');
+  } finally { backend.close(); }
 }
 
 async function checkBackend(name, make) {
@@ -108,6 +124,7 @@ async function checkBackend(name, make) {
       backend.write(mode === 'interrupt' ? '\x03' : 'quit\r');
       await waitFor(() => backend.spawns === 2, `${name}: no shell after ${mode}`);
       assert.equal(backend.exits, 0, `${name}: agent exit leaked to renderer`);
+      await waitFor(() => backend.output.includes('\x1b]133;A\x07'), `${name}: recovered shell has no prompt title reset`);
       backend.write("printf 'SHELL_%s\\n' 'USABLE'; pwd\r");
       await waitFor(() => backend.output.includes('SHELL_USABLE') && backend.output.includes(temp), `${name}: shell is not usable in the session directory`);
       backend.write('exit\r');
@@ -121,6 +138,7 @@ async function checkBackend(name, make) {
 (async () => {
   if (process.platform === 'win32') return console.log('POSIX PTY signal fixtures skipped on Windows');
   await checkHistoryLaunches();
+  await checkNativeDirectoryInheritance();
   await checkBackend('Electron', desktopBackend);
   await checkBackend('WebSocket', webBackend);
 })().catch(error => { console.error(error); process.exitCode = 1; })

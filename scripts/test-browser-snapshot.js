@@ -51,6 +51,16 @@ app.whenReady().then(async () => {
     await surface.executeJavaScript('document.title = "Updated"; document.querySelector("input").value = "draft search"');
     const updated = await read({});
     check(updated.title === 'Updated' && updated.controls[0].value === 'draft search', 'Snapshot is stale');
+    await surface.executeJavaScript(${JSON.stringify(`{
+      const content=document.createElement('div');content.textContent='full document '.repeat(12000);document.body.append(content);
+      for(let i=0;i<120;i++) {const a=document.createElement('a');a.href='https://example.com/'+i;a.textContent='Link '+i;document.body.append(a);}
+      const input=document.createElement('textarea');input.value='complete form value '.repeat(200);document.body.append(input);
+    }`)});
+    const full = await read({full:true});
+    check(full.text.length > 100000 && !full.truncated && full.text.length === full.totalChars, 'Full workspace export clipped browser text');
+    check(full.links.length > 100 && !full.linksTruncated, 'Full workspace export clipped links');
+    check(full.controls.at(-1).value.length > 2000, 'Full workspace export clipped form values');
+    check(!JSON.stringify(full.controls).includes('secret-value'), 'Full export leaked password');
     surface.remove();
     const frame = document.createElement('iframe'); frame.className = 'browser-surface';
     frame.srcdoc = ${JSON.stringify(fixture)};

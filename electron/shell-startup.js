@@ -17,6 +17,7 @@ function prepareShellStartup(shell, env = process.env) {
         '[ ! -r ~/.bashrc ] || source ~/.bashrc',
         '__terminal_vibe_cwd() {',
         '  printf "\\e]7;file://${HOSTNAME:-localhost}${PWD// /%20}\\a"',
+        '  printf "\\e]133;A\\a"',
         '}',
         // Preserve both scalar and array PROMPT_COMMAND configurations.
         'if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == "declare -a "* ]]; then',
@@ -49,6 +50,7 @@ function prepareShellStartup(shell, env = process.env) {
       '[[ ! -r ${ZDOTDIR:-$HOME}/.zshrc ]] || source "${ZDOTDIR:-$HOME}/.zshrc"',
       '__terminal_vibe_cwd() {',
       '  printf "\\e]7;file://${HOST:-localhost}${PWD}\\a"',
+      '  printf "\\e]133;A\\a"',
       '}',
       'precmd_functions+=(__terminal_vibe_cwd)', '',
     ].join('\n'), { mode: 0o600 });

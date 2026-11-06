@@ -1,12 +1,31 @@
 # Agent orchestration
 
 TerminalVibe's desktop app and browser dev server expose an authenticated local control channel for
-agents. Each agent gets a real PTY in a visible, named split. Launchers are
+agents. Each agent gets a real PTY in a named tab. The skill prefers tabs in the current
+split; explicit side-by-side requests create new splits. Launchers are
 provider agnostic: supply an executable and arguments, a working directory,
 and a recursive layout. No API keys are managed by TerminalVibe; each installed
 agent uses its own login and approval settings.
 
-## Give the skill to an agent
+## Install and toggle the skill
+
+Open **Settings → Skills** and choose **Install** next to Claude Code or Codex.
+This installs the bundled instructions and CLI for your user account: Claude
+Code uses `~/.claude/skills/terminalvibe-orchestration` (or `CLAUDE_CONFIG_DIR`),
+and Codex uses `~/.agents/skills/terminalvibe-orchestration`, following the
+[official user-scope skill locations](https://developers.openai.com/api/reference/cli).
+The controls work in both desktop and local browser mode.
+
+An active skill can be selected automatically for relevant requests; no slash
+command is needed. Use **Deactivate** to move it out of the agent's discovery
+folder, or **Activate** to restore it. Existing manual installations in these
+locations can also be toggled, preserving their contents. Disabled copies live
+under `~/.terminalvibe/disabled-skills/<provider>/`.
+Start a new agent session after changing a skill: instructions already loaded
+in a conversation cannot be removed by this toggle. This controls the user-level
+copy only; separate project or other manually installed copies remain available.
+
+For manual or project-scoped installation:
 
 Copy the complete `skills/terminalvibe-orchestration` directory (including
 `scripts/tv.js`) into your agent's skill directory. For Claude Code, for example,
@@ -92,6 +111,17 @@ No manual pane creation is needed. Pass `workspaceId` instead of `name` to add
 the agents to an existing workspace. Use an ID returned by `list`, or `current`
 to resolve the active workspace when the request starts. Existing terminals and
 their processes are retained, and only the new panes are spawned.
+
+For a new tab in the current split, use `placement: {"mode":"tab"}` with a
+single layout leaf and an `anchorPaneId` from `list`. Without an anchor, the
+selected tab group in the target workspace is used. This preserves the split
+tree, dimensions, existing processes, and selected tab. Check `launchAsTab`;
+older pages must be updated before using this mode. Split sizing options and
+split subtrees cannot be combined with tab mode.
+
+Terminal commands return to a shell in the same tab after normal exit or Ctrl+C.
+Set `returnToShell:false` on a terminal leaf only to keep it exited instead.
+Closing a pane or exiting the recovered shell never restarts it.
 
 For example, keep existing panes across the top 35% and add two reviewers side
 by side below them:

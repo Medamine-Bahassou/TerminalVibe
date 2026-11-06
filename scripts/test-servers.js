@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
 const net = require('net');
 const { once } = require('events');
-const { parseSs, parseLsof, normalize, listRunningServers } = require('../electron/servers');
+const { parseSs, parseLsof, normalize, listRunningServers, killServer } = require('../electron/servers');
+const { spawn } = require('child_process');
 
 async function main() {
   const parsed = normalize(parseSs([
@@ -31,7 +32,13 @@ async function main() {
     const found = rows.find(row => row.port === server.address().port && row.address === '127.0.0.1');
     assert(found, 'Actual listening test server is discovered');
     assert.equal(found.pid, process.pid);
-    console.log('Servers: IPv4/IPv6, process metadata, deduplication and real listening port passed');
+    await assert.rejects(killServer(process.pid, server.address().port), /TerminalVibe itself/);
+    const child = spawn(process.execPath, ['-e', "require('net').createServer().listen(0,'127.0.0.1',function(){console.log(this.address().port)})"]);
+    const childPort = Number((await once(child.stdout, 'data'))[0]);
+    await assert.rejects(killServer(child.pid, childPort + 1), /no longer listening/, 'PID and port must match a live listener');
+    await killServer(child.pid, childPort);
+    assert.equal((await once(child, 'exit'))[1], 'SIGTERM');
+    console.log('Servers: IPv4/IPv6, process metadata, deduplication, real listening port and safe stop passed');
   } finally { server.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
