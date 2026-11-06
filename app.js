@@ -197,7 +197,7 @@
     focusLeft: 'Focus left pane', focusDown: 'Focus down pane',
     focusUp: 'Focus up pane', focusRight: 'Focus right pane',
     nextWorkspace: 'Next workspace', prevWorkspace: 'Previous workspace',
-    maximizeTab: 'Maximize / restore tab', profiles: 'Profiles', toggleSidebar: 'Toggle sidebar', quitApp: 'Quit application',
+    maximizeTab: 'Maximize / restore tab', profiles: 'Profiles', toggleSidebar: 'Toggle sidebar', quitApp: 'Quit application (press twice to quit)',
   };
 
   // Alt+N → jump to the workspace at sidebar position N (top-to-bottom order,
@@ -1672,7 +1672,8 @@
   let pinnedCollapsed = false; // "Pinned" section collapsed state
   let sidebarMode = 'normal'; // 'normal' | 'hover' | 'hidden'
   let showWsProcs = true;     // show running processes in workspace buttons
-  let notifyOnCommandFinish = true; // desktop notify when a command finishes
+  let notifyOnCommandFinish = true; // notify when a command / agent response finishes
+  let notificationSound = true;     // play sounds/notify.wav with those notifications
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
@@ -2125,6 +2126,7 @@
         }
       });
       api.onTerminalExit(({ id, code }) => handleExit(id, code));
+      if (api.onTerminalFinished) api.onTerminalFinished(onTerminalFinished);
       if (api.onTerminalDetachedClosed) {
         api.onTerminalDetachedClosed(({ id }) => {
           const result = findTermById(id);
@@ -2418,6 +2420,7 @@
     r.setProperty('--accent', accent);
     r.setProperty('--ws-active-strip', accent);
     r.setProperty('--accent-dim', hexToRgba(accent, 0.15));
+    try { localStorage.setItem('tv-boot-colors', JSON.stringify({ bg: theme.bg, fg: theme.fg, accent })); } catch { }
     const multiColor = (theme.ui && theme.ui.multiSelect) || theme.palette[3] || '#f9e2af';
     r.setProperty('--multi-select', multiColor);
 
@@ -2912,6 +2915,7 @@
         sidebarMode,
         showWsProcs,
         notifyOnCommandFinish,
+        notificationSound,
         terminalLinkTarget,
         backgroundMode,
         globalBackgroundImage,
@@ -2955,6 +2959,7 @@
       sidebarMode,
       showWsProcs,
       notifyOnCommandFinish,
+      notificationSound,
       terminalLinkTarget,
       backgroundMode,
       globalBackgroundImage,
@@ -3031,6 +3036,7 @@
       if (state.sidebarMode) sidebarMode = state.sidebarMode;
       if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
+      if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
@@ -3990,6 +3996,12 @@
       }
       entry._atShellPrompt = false;
       if (/claude/i.test(title)) entry._claudeRunning = true;
+      // Claude Code titles: "◐◓◑◒ <topic>" while working, "✳ <topic>" when idle.
+      if (/^[\u25D0-\u25D3]/.test(title)) entry._agentWorking = true;
+      else if (/^\u2733/.test(title) && entry._agentWorking) {
+        entry._agentWorking = false;
+        onTerminalFinished({ id: entry.id, kind: 'agent', name: 'claude' });
+      }
       setAutomaticTerminalTitle(entry, title);
       syncClaudeHistoryButton(entry);
       scheduleClaudeHistoryRefresh(entry);
@@ -7163,6 +7175,13 @@
     // Keep the moved browser surface correctly positioned even when the target
     // workspace is not active yet (its container rebuilds on switch).
     try { syncBrowserSlots(); } catch { }
+    // Moved the last tab out: drop the now-empty source workspace, same as
+    // closing its last tab. Follow the tab if the source was active.
+    if (!getWorkspaceTerminals(srcWs).length) {
+      if (srcWs.id === activeWsId) activateWorkspace(targetWs.id);
+      _removeWorkspace(srcWs.id);
+      return true;
+    }
     saveState();
     return true;
   }
@@ -7443,7 +7462,14 @@
           e.stopPropagation();
           clearDropMarks();
           if (window.draggedTermId) {
-            moveTabToWorkspace(window.draggedTermId, wsp.id);
+            const termId = window.draggedTermId;
+            const src = findTermById(termId);
+            // Last tab out would leave the source empty → it gets removed, so ask first.
+            if (src && src.ws.id !== wsp.id && getWorkspaceTerminals(src.ws).length === 1) {
+              showConfirm(`Move the last tab and close "${src.ws.label}"?`, () => moveTabToWorkspace(termId, wsp.id));
+            } else {
+              moveTabToWorkspace(termId, wsp.id);
+            }
           } else {
             // Detached-window tab: ask main to re-attach it into this workspace's group.
             const extId = window.externalDragTermId || window.lastExternalDragTermId || tabDragId;
@@ -7827,6 +7853,8 @@
 
   function showCtxMenu(e, type, data) {
     if (!ctxEl.contains(document.activeElement)) ctxPreviousFocus = document.activeElement;
+    // Take focus out of a browser pane so clicking back into it fires focusin (closes the menu).
+    if (document.activeElement?.matches?.('webview, iframe')) document.activeElement.blur();
     ctxEl.innerHTML = '';
 
     const item = (icon, label, key, fn, danger) => {
@@ -7926,12 +7954,12 @@
       if (backgroundMode === 'per-tab') {
         const termEntry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
         if (termEntry && termEntry.bgImage) {
-          item('<i class="ph ph-image"></i>', 'Clear background image', '', () => {
+          item('<i class="ph ph-image"></i>', 'Clear tab background', '', () => {
             setTermBackgroundImage(termEntry, '');
             applyBackground();
           });
         } else {
-          item('<i class="ph ph-image"></i>', 'Set background image…', '', () => {
+          item('<i class="ph ph-image"></i>', 'Set tab background', '', () => {
             const input = document.createElement('input');
             input.type = 'file';
             input.accept = 'image/*';
@@ -7955,7 +7983,7 @@
             saveState();
           });
         } else {
-          item('<i class="ph ph-image"></i>', 'Set workspace background…', '', () => {
+          item('<i class="ph ph-image"></i>', 'Set workspace background', '', () => {
             const input = document.createElement('input');
             input.type = 'file';
             input.accept = 'image/*';
@@ -8034,6 +8062,10 @@
   }
   document.addEventListener('contextmenu', e => { if (!ctxEl.contains(e.target)) hideCtxMenu(); }, true);
   document.addEventListener('click', e => { if (!e.target.closest('#ctx')) hideCtxMenu(); });
+  // Clicks inside a browser pane (webview / iframe / native view) never reach
+  // this document: close when focus moves into one or the window loses focus.
+  document.addEventListener('focusin', e => { if (e.target.matches?.('webview, iframe') && ctxEl.classList.contains('open')) hideCtxMenu(); });
+  window.addEventListener('blur', () => { if (ctxEl.classList.contains('open')) hideCtxMenu(); });
   document.addEventListener('keydown', e => {
     if (!ctxEl.classList.contains('open')) return;
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideCtxMenu(); return; }
@@ -8264,7 +8296,7 @@
   // Shared destructive-style confirmation (red warning icon + red button).
   // `key` optionally enables a "Don't ask again" checkbox; when the user
   // confirms with it checked, future confirmations of that type are skipped.
-  function showDangerConfirm(title, messageHTML, okLabel, callback, onCancel, key) {
+  function showDangerConfirm(title, messageHTML, okLabel, callback, onCancel, key, submitShortcut) {
     onCancel = onCancel || (() => { });
     closeConfirmTitle.textContent = title;
     closeConfirmMessage.innerHTML = messageHTML;
@@ -8300,6 +8332,7 @@
 
     onKey = e => {
       e.stopPropagation();
+      if (submitShortcut && matchShortcut(e, submitShortcut)) { e.preventDefault(); submit(); return; }
       if (e.key === 'Enter') submit();
       if (e.key === 'Escape') cancel();
     };
@@ -8334,21 +8367,64 @@
       : 'All terminals are idle.';
   }
 
+  // ── Finish notifications: main reports a command or an agent (Claude Code /
+  // Codex) response that ended; skip it if you're looking at that tab, else
+  // play the TerminalVibe chime and show a desktop notification. ──
+  let _notifyAudio = null;
+  function playNotifySound() {
+    try {
+      _notifyAudio = _notifyAudio || new Audio('sounds/notify.wav');
+      _notifyAudio.currentTime = 0;
+      _notifyAudio.play().catch(() => { });
+    } catch { }
+  }
+  function isTermOnScreen(ws, termId) {
+    if (ws.id !== activeWsId) return false;
+    const group = findGroupContainingTerm(ws.layout, termId);
+    return !!group && group.activeTermId === termId && (!ws._maximizedGroupId || ws._maximizedGroupId === group.id);
+  }
+  function onTerminalFinished({ id, kind, name }) {
+    if (!notifyOnCommandFinish) return;
+    const found = findTermById(id);
+    if (!found || (document.hasFocus() && isTermOnScreen(found.ws, id))) return;
+    if (notificationSound) playNotifySound();
+    const agent = /^claude/i.test(name || '') ? 'Claude Code' : /^codex/i.test(name || '') ? 'Codex' : null;
+    const title = kind === 'agent' ? `${agent || name} finished responding` : (name ? `${name} finished` : 'Command finished');
+    try {
+      const n = new Notification(title, { body: `${found.term.label} · ${found.ws.label}`, silent: true, icon: 'logo.png' });
+      n.onclick = () => {
+        window.electronAPI?.focusWindow?.();
+        const now = findTermById(id);
+        if (!now) return;
+        if (now.ws.id !== activeWsId) activateWorkspace(now.ws.id);
+        activateTerminal(now.ws.id, id);
+      };
+    } catch { }
+  }
+
   // Count live terminals with a running process (excluding idle shells)
   // across all workspaces, then ask for confirmation before quitting.
+  // Pressing the quit shortcut a second time quits: in the modal (submit
+  // shortcut) or before it opens (_quitPending, while processes are counted).
+  let _quitPending = false;
   function confirmQuitApp() {
+    const quit = () => {
+      _quitPending = false;
+      // Desktop: tell main to release the close it intercepted from the OS
+      // button (window.close() would just re-trigger the intercepted close).
+      if (isDesktop() && window.electronAPI && window.electronAPI.appCloseConfirmed) {
+        window.electronAPI.appCloseConfirmed();
+      } else {
+        window.close();
+      }
+    };
+    if (_quitPending) return quit();
+    _quitPending = true;
     gatherRunningProcesses().then(running => {
-      const quit = () => {
-        // Desktop: tell main to release the close it intercepted from the OS
-        // button (window.close() would just re-trigger the intercepted close).
-        if (isDesktop() && window.electronAPI && window.electronAPI.appCloseConfirmed) {
-          window.electronAPI.appCloseConfirmed();
-        } else {
-          window.close();
-        }
-      };
-      showDangerConfirm('Quit TerminalVibe?', runningMsg(running, 'Quitting will terminate them.'), 'Quit', quit);
-    });
+      if (!_quitPending) return;
+      showDangerConfirm('Quit TerminalVibe?', runningMsg(running, 'Quitting will terminate them.'), 'Quit', quit,
+        () => { _quitPending = false; }, undefined, 'quitApp');
+    }, () => { _quitPending = false; });
   }
 
   // Switching profiles tears down every workspace (closing PTYs), so ask for
@@ -9183,6 +9259,15 @@
         saveState();
       };
     }
+    const notifySoundToggle = document.getElementById('set-notify-sound');
+    if (notifySoundToggle) {
+      notifySoundToggle.checked = notificationSound;
+      notifySoundToggle.onchange = e => {
+        notificationSound = e.target.checked;
+        if (notificationSound) playNotifySound(); // preview
+        saveState();
+      };
+    }
 
     const animationsToggle = document.getElementById('set-animations');
     animationsToggle.checked = animationsEnabled;
@@ -9623,6 +9708,7 @@
       }
       if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
+      if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
@@ -9831,6 +9917,8 @@
         if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
         if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
         if (state.scrollback !== undefined) currentScrollback = state.scrollback;
+        if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
+        if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       }
     } catch { }
     applyTheme(currentThemeName);
@@ -9863,6 +9951,7 @@
       // A split's shell exiting removes just that tab; handleExit closes
       // the window only when it was the last one.
       api.onTerminalExit(({ id, code }) => handleExit(id, code));
+      if (api.onTerminalFinished) api.onTerminalFinished(onTerminalFinished);
       // Main process accepted a cross-window move for a tab living in
       // THIS window — snapshot its buffer, remove the tab locally, and
       // report how many tabs remain (main closes this window at 0).
@@ -10025,8 +10114,8 @@
     const list = document.getElementById('servers-list');
     const refresh = document.getElementById('servers-refresh');
     if (!button || !dropdown || !list || !refresh) return;
-    const CACHE_TTL = 30000;
-    let loading = false, hasResult = false, loadedAt = 0, signature = null;
+    const POLL_MS = 3000;
+    let loading = false, hasResult = false, signature = null, poll = null;
     const message = text => {
       const el = document.createElement('p');
       el.className = 'servers-message'; el.textContent = text;
@@ -10045,6 +10134,7 @@
     dropdown.addEventListener('transitionend', finishClose);
     dropdown.addEventListener('transitioncancel', finishClose);
     const close = () => {
+      clearInterval(poll); poll = null;
       const restoreFocus = dropdown.contains(document.activeElement);
       dropdown.hidden = true;dropdown.inert = true;
       // Keep native browser views behind the painted dropdown during its fade.
@@ -10055,10 +10145,11 @@
       if (restoreFocus) button.focus({preventScroll:true});
       syncBrowserSlots();
     };
-    const load = async (force = false) => {
-      if (loading || (!force && hasResult && Date.now() - loadedAt < CACHE_TTL)) return;
-      loading = true; refresh.disabled = true;refresh.title = 'Refresh servers';
-      list.setAttribute('aria-busy', 'true');
+    // `silent`: background poll — no busy state; the list only re-renders when it changed.
+    const load = async (silent = false) => {
+      if (loading) return;
+      loading = true;
+      if (!silent) { refresh.disabled = true; refresh.title = 'Refresh servers'; list.setAttribute('aria-busy', 'true'); }
       if (!hasResult) message('Checking listening ports…');
       try {
         let servers;
@@ -10109,7 +10200,7 @@
                     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Could not stop the server.');
                   }
                   // Give the process a moment to release its port before re-listing.
-                  setTimeout(() => load(true), 400);
+                  setTimeout(() => load(), 400);
                 } catch (error) {
                   kill.disabled = false;
                   address.textContent = String(error.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
@@ -10127,11 +10218,11 @@
           else message('No listening servers found.');
           signature = nextSignature;
         }
-        hasResult = true;loadedAt = Date.now();
+        hasResult = true;
       } catch (error) {
         console.warn('[servers]', error);
         if (!hasResult) message('Could not load servers. Refresh to try again.');
-        else refresh.title = 'Could not refresh servers. Showing previous results; click to retry.';
+        else if (!silent) refresh.title = 'Could not refresh servers. Showing previous results; click to retry.';
       } finally {
         loading = false; refresh.disabled = false; list.setAttribute('aria-busy', 'false');
       }
@@ -10140,9 +10231,10 @@
       if (!dropdown.hidden) { close(); return; }
       dropdown.classList.remove('closing');dropdown.hidden = false;dropdown.inert = false;
       button.setAttribute('aria-expanded', 'true');
-      position(); syncBrowserSlots(); load();
+      position(); syncBrowserSlots(); load(hasResult);
+      poll = setInterval(() => load(true), POLL_MS);
     });
-    refresh.addEventListener('click', () => load(true));
+    refresh.addEventListener('click', () => load());
     document.addEventListener('mousedown', event => {
       if (!dropdown.hidden && !dropdown.contains(event.target) && !button.contains(event.target)) close();
     });

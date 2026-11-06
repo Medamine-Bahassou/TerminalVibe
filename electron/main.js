@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, Notification, dialog, Menu } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, dialog, Menu } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
@@ -329,6 +329,7 @@ function createWindow() {
       height: 32,
     },
     backgroundColor: '#1e1e2e',
+    show: false, // shown on first paint, already in the saved theme (index.html <head>)
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -339,6 +340,7 @@ function createWindow() {
     },
   });
 
+  mainWindow.once('ready-to-show', () => mainWindow.show());
   if (isDev) {
     mainWindow.loadURL(`http://127.0.0.1:${devPort}`);
   } else {
@@ -497,7 +499,7 @@ ipcMain.handle('shell:open-external', (_e, url) => {
 });
 
 // ── IPC: clipboard (terminal text; navigator.clipboard also works) ──
-ipcMain.handle('servers:list', () => listRunningServers());
+ipcMain.handle('servers:list', () => listRunningServers(process.pid));
 ipcMain.handle('servers:kill', (_e, { pid, port } = {}) => killServer(pid, port));
 
 const skillManager = require('./skill-manager').createSkillManager({
@@ -1066,7 +1068,7 @@ const sendToRenderer = (channel, payload) => {
     return;
   }
   // If this terminal is detached, route to the detached window instead
-  if (channel === 'terminal:data' || channel === 'terminal:exit') {
+  if (channel === 'terminal:data' || channel === 'terminal:exit' || channel === 'terminal:finished') {
     const dw = detachedWindows.get(payload.id);
     if (dw && !dw.isDestroyed()) {
       dw.webContents.send(channel, payload);
@@ -1146,6 +1148,7 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       outTimer = setTimeout(flushOut, 5);
     };
     t.onData((data) => {
+      const io = ptyIO.get(id) || {}; io.out = Date.now(); ptyIO.set(id, io);
       if (outTimer) { outBuf += data; return; }
       sendToRenderer('terminal:data', { id, data });
       outTimer = setTimeout(flushOut, 5);
@@ -1154,7 +1157,7 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       if (startup.tmpDir) {
         try { fs.rmSync(startup.tmpDir, { recursive: true, force: true }); } catch {}
       }
-      notifyBusy.delete(id);
+      notifyBusy.delete(id); ptyIO.delete(id);
       clearTimeout(outTimer);
       if (outBuf && ptys.get(id) === t) sendToRenderer('terminal:data', { id, data: outBuf });
       outBuf = '';
@@ -1194,6 +1197,7 @@ ipcMain.on('terminal:resize', (_e, { id, cols, rows }) => {
 ipcMain.on('terminal:write', (_e, { id, data }) => {
   const t = ptys.get(id);
   if (!t) return;
+  const io = ptyIO.get(id) || {}; io.in = Date.now(); ptyIO.set(id, io);
   try { t.write(Buffer.isBuffer(data) ? data : Buffer.from(data || [])); } catch {}
 });
 // The detached window's renderer is up and has replayed the captured buffer;
@@ -1210,7 +1214,7 @@ ipcMain.on('terminal:attached', (_e, id) => {
 });
 
 ipcMain.on('terminal:close', (_e, id) => {
-  notifyBusy.delete(id);
+  notifyBusy.delete(id); ptyIO.delete(id);
   const t = ptys.get(id);
   if (t) { try { t.kill(); } catch {} ptys.delete(id); }
 });
@@ -1219,7 +1223,7 @@ ipcMain.handle('terminal:hasRunningProcess', (_e, id) => {
   return t ? runningProcessInfo(t.pid) : { running: false, name: null };
 });
 ipcMain.on('terminal:kill-all', () => {
-  notifyBusy.clear();
+  notifyBusy.clear(); ptyIO.clear();
   for (const t of ptys.values()) { try { t.kill(); } catch {} }
   ptys.clear();
   for (const [id, dw] of detachedWindows) { try { if (!dw.isDestroyed()) dw.close(); } catch {} }
@@ -1227,20 +1231,17 @@ ipcMain.on('terminal:kill-all', () => {
   detachedPending.clear();
 });
 
-// ── Notify when a terminal command finishes ──
+// ── Notify when a command or an agent response finishes ──
 // Reuses runningProcessInfo() (proc.js): a terminal is "busy" while a real
 // process owns the foreground group, "idle" when back at the shell prompt.
-// Fires a desktop notification on the busy→idle transition, only when no app
-// window is focused (you're looking elsewhere). Opt-in via the Settings →
-// Advanced "Notify when a command finishes" toggle (state.json).
-const notifyBusy = new Map(); // termId -> { wasBusy:boolean, name:string|null }
-function anyAppFocused() {
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()) return true;
-  for (const [, dw] of detachedWindows) {
-    if (!dw.isDestroyed() && dw.isFocused()) return true;
-  }
-  return false;
-}
+// Agent turns: Codex by output going quiet (finish-notify.js), Claude Code by
+// its terminal title in the renderer (setupTerminalTitles).
+// Main only detects; the renderer decides if you're looking at that tab and
+// plays the sound / shows the notification. Opt-in via Settings → Advanced
+// "Notify when a command or agent finishes" (state.json).
+const notifyBusy = new Map(); // termId -> { wasBusy, name, agentSince }
+const ptyIO = new Map();      // termId -> { out, in } last output/input timestamps
+const { finishStep } = require('./finish-notify');
 // Re-parse state.json only when its mtime changes (this runs every second).
 let _notifyCache = { path: null, mtime: 0, enabled: false };
 function notifyEnabled() {
@@ -1257,25 +1258,22 @@ function notifyEnabled() {
 setInterval(() => {
   if (ptys.size === 0) return;
   if (!notifyEnabled()) return;
+  const now = Date.now();
   for (const [id, t] of ptys) {
-    const info = runningProcessInfo(t.pid);
-    const cur = notifyBusy.get(id) || { wasBusy: false, name: null };
-    if (info.running) {
-      cur.wasBusy = true;
-      if (info.name) cur.name = info.name;
-      notifyBusy.set(id, cur);
-    } else if (cur.wasBusy) {
-      notifyBusy.set(id, { wasBusy: false, name: null });
-      if (anyAppFocused()) continue;
-      try {
-        new Notification({
-          title: 'TerminalVibe',
-          body: cur.name ? `Command finished: ${cur.name}` : 'A command finished',
-        }).show();
-      } catch {}
-    }
+    const cur = notifyBusy.get(id) || { wasBusy: false, name: null, agentSince: 0 };
+    notifyBusy.set(id, cur);
+    const event = finishStep(cur, runningProcessInfo(t.pid), ptyIO.get(id) || {}, now);
+    if (event) sendToRenderer('terminal:finished', { id, ...event });
   }
 }, 1000);
+
+// Bring the sender's window to front (notification click).
+ipcMain.on('window:focus', (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show(); win.focus();
+});
 
 // ── IPC: detach terminal into a new window ──
 ipcMain.handle('terminal:detach', (_e, { id, cols, rows, cwd }) => {

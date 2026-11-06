@@ -35,6 +35,10 @@ async function main() {
     await assert.rejects(killServer(process.pid, server.address().port), /TerminalVibe itself/);
     const child = spawn(process.execPath, ['-e', "require('net').createServer().listen(0,'127.0.0.1',function(){console.log(this.address().port)})"]);
     const childPort = Number((await once(child.stdout, 'data'))[0]);
+    const owned = await listRunningServers(process.pid);
+    assert(owned.some(row => row.port === childPort), 'Child process server is listed as ours');
+    assert(!owned.some(row => row.pid === process.pid), 'Root process own server is excluded');
+    assert(!(await listRunningServers(child.pid)).length, 'Servers outside the root are excluded');
     await assert.rejects(killServer(child.pid, childPort + 1), /no longer listening/, 'PID and port must match a live listener');
     await killServer(child.pid, childPort);
     // Windows has no signals: process.kill() is TerminateProcess, reported as

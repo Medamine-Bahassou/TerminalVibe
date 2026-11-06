@@ -86,6 +86,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('terminal:data', l);
     return () => ipcRenderer.removeListener('terminal:data', l);
   },
+  // A command or an agent (Claude Code / Codex) response finished in a terminal.
+  onTerminalFinished: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('terminal:finished', l);
+    return () => ipcRenderer.removeListener('terminal:finished', l);
+  },
+  focusWindow: () => ipcRenderer.send('window:focus'),
   onTerminalExit: (cb) => {
     const l = (_e, d) => cb(d);
     ipcRenderer.on('terminal:exit', l);

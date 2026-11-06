@@ -733,7 +733,8 @@ body .term-group.maximized::after {
   box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 15%,transparent), inset 0 0 24px color-mix(in srgb,var(--accent) 8%,transparent);
 }
 .maximized-tag { display:none; }
-body .term-group.maximized > .maximized-tag {
+body .term-group.maximized > .maximized-tag,
+body .browser-slot.maximized::before {
   display:block; position:absolute; right:2px; bottom:2px; z-index:62;
   padding:2px 7px; border-radius:4px 0 0 0;
   background:var(--ui-surface); color:var(--accent);
@@ -749,14 +750,18 @@ body .term-group.maximized .term-group-header { border-bottom-color:var(--ui-lin
 body .term-group.maximized .tg-tab.active,
 body .term-group.maximized .tg-tab.active[data-color] { border-bottom-color:var(--accent) !important; }
 body .term-group.maximized .tg-tab.active[data-color] { border-bottom-color:var(--tab-color) !important; }
-body .term-group.maximized .tg-tab.active .tg-tab-dot { background:var(--accent) !important; }
-body .term-group.maximized .tg-tab.active .tg-tab-icon { color:inherit !important; }
+body .term-group.maximized .tg-tab.active .tg-tab-dot:not(.tg-tab-icon) { background:var(--accent) !important; }
+/* The browser globe icon shares .tg-tab-dot: keep it a plain icon, never a filled square. */
+body .term-group.maximized .tg-tab.active .tg-tab-icon { color:inherit !important; background:none !important; }
 /* Browser tabs paint in an overlay above the slot, hiding the group frame:
    continue the frame (sides + bottom) on the overlay itself. */
 body .browser-slot.maximized::after {
   content:''; position:absolute; inset:0; z-index:11; pointer-events:none;
   border:2px solid color-mix(in srgb,var(--accent) 70%,transparent); border-top:0;
 }
+/* The browser overlay sits above the group and hides its "Maximized" tag:
+   draw the same tag on the overlay, over the page (webview is DOM). */
+body .browser-slot.maximized::before { content:'Maximized'; pointer-events:none; }
 
 /* Profile picker: rounded cards on the sidebar surface, round avatars. */
 .pp-inner { gap:24px; }
@@ -1320,3 +1325,21 @@ body #servers-dropdown .server-kill:hover { background:color-mix(in srgb,var(--u
 #plugins-list .plugin-controls label { margin-left:8px; }
 #plugins-list .plugin-empty { padding:16px; font:400 12px/18px var(--ui-font); color:var(--muted-text); }
 @media (max-width:600px) { #plugins-list .plugin-row { flex-wrap:wrap; } }
+
+/* ── Settings → Appearance: global background image picker. Same control
+   shape as the dropdown beside it; with an image it shows a thumbnail and an
+   inline remove button instead of a floating badge. ── */
+body #settings-modal .bg-upload-area.compact { height:36px; min-height:36px; padding:0 12px; gap:8px; border:1px solid var(--border); border-radius:6px !important; background:var(--bg); color:var(--muted-text); transition:border-color 150ms, background-color 150ms, color 150ms; }
+#settings-modal .bg-upload-area.compact:hover { border-color:var(--muted-text); background:var(--bg); color:var(--fg); }
+#settings-modal .bg-upload-area.compact .bg-upload-icon { opacity:1; width:16px; height:16px; }
+#settings-modal .bg-upload-area.compact .bg-upload-text { font:400 13px/20px var(--ui-font); color:inherit; }
+#settings-modal .bg-upload-area.compact.has-image { padding:0 3px; gap:2px; }
+body #settings-modal .bg-upload-area.compact .bg-upload-preview { width:48px; height:28px; border-radius:4px !important; }
+body #settings-modal .bg-upload-area.compact .bg-clear-btn { position:static; width:28px; height:28px; border:0; border-radius:6px !important; background:transparent; color:var(--muted-text); font-size:14px; transition:background-color 150ms, color 150ms; }
+#settings-modal .bg-upload-area.compact .bg-clear-btn:hover { background:var(--ui-hover); color:var(--ui-error); }
+#settings-modal .bg-upload-area.compact .bg-clear-btn:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { body #settings-modal .bg-upload-area.compact, body #settings-modal .bg-upload-area.compact .bg-clear-btn { transition:none; } }
+
+/* ── Pane-header / titlebar icon buttons: the global focus ring sits 2px
+   outside, which the 32px header clips top/bottom — draw it inside instead. ── */
+body .tg-btn:focus-visible, body .titlebar-btn:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }

@@ -121,7 +121,7 @@ const appServer = http.createServer((req, res) => {
     if (req.method !== 'GET') { res.writeHead(405); res.end(JSON.stringify({ error: 'Use GET' })); return; }
     const origin = req.headers.origin;
     if (origin && origin !== `http://${req.headers.host}`) { res.writeHead(403); res.end(JSON.stringify({ error: 'Invalid origin' })); return; }
-    listRunningServers().then(servers => res.end(JSON.stringify({ servers })), error => {
+    listRunningServers(process.pid).then(servers => res.end(JSON.stringify({ servers })), error => {
       console.error('[servers]', error.message);
       res.writeHead(500); res.end(JSON.stringify({ error: 'Could not list servers. Check that the system network tools are available.' }));
     });

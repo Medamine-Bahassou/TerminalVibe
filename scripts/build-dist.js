@@ -48,6 +48,7 @@ for (const a of assets) {
 }
 
 fs.cpSync(path.join(root, 'fonts'), path.join(dist, 'fonts'), { recursive: true });
+fs.cpSync(path.join(root, 'sounds'), path.join(dist, 'sounds'), { recursive: true });
 
 const vendorXterm = path.join(root, 'vendor', 'xterm');
 fs.cpSync(vendorXterm, path.join(dist, 'vendor', 'xterm'), { recursive: true });

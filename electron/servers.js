@@ -40,7 +40,7 @@ function normalize(listeners) {
 }
 
 let pending;
-async function listRunningServers() {
+async function allServers() {
   if (pending) return pending;
   pending = (async () => {
     const options = { timeout: 8000, maxBuffer: 2 * 1024 * 1024, windowsHide: true };
@@ -65,13 +65,41 @@ async function listRunningServers() {
   try { return await pending; } finally { pending = null; }
 }
 
+// pid -> parent pid for every process on the machine.
+async function processParents() {
+  const options = { timeout: 8000, maxBuffer: 8 * 1024 * 1024, windowsHide: true };
+  const { stdout } = process.platform === 'win32'
+    ? await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }'], options)
+    : await execute('ps', ['-A', '-o', 'pid=,ppid='], options);
+  const parents = new Map();
+  for (const line of stdout.split(/\r?\n/)) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+    if (pid) parents.set(pid, ppid);
+  }
+  return parents;
+}
+
+// Listening servers. With `root`, only servers started from inside it (its
+// descendants, e.g. commands run in TerminalVibe terminals) — not root itself.
+async function listRunningServers(root) {
+  const servers = await allServers();
+  if (!root) return servers;
+  const parents = await processParents();
+  return servers.filter(server => {
+    let pid = parents.get(server.pid);
+    for (let hops = 0; pid && hops < 64; hops++, pid = parents.get(pid)) if (pid === root) return true;
+    return false;
+  });
+}
+
 // Stop a listening server from the list. Re-check the listener first so a
 // recycled PID is never signalled, and never stop TerminalVibe itself.
 async function killServer(pid, port, self = process.pid) {
   pid = Number(pid); port = Number(port);
   if (!Number.isInteger(pid) || pid < 2 || !Number.isInteger(port)) throw new Error('Invalid server.');
   if (pid === self) throw new Error('This server is TerminalVibe itself.');
-  if (!(await listRunningServers()).some(server => server.pid === pid && server.port === port)) {
+  if (!(await allServers()).some(server => server.pid === pid && server.port === port)) {
     throw new Error('That server is no longer listening.');
   }
   process.kill(pid, 'SIGTERM');
