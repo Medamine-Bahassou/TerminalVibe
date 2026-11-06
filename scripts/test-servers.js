@@ -37,7 +37,10 @@ async function main() {
     const childPort = Number((await once(child.stdout, 'data'))[0]);
     await assert.rejects(killServer(child.pid, childPort + 1), /no longer listening/, 'PID and port must match a live listener');
     await killServer(child.pid, childPort);
-    assert.equal((await once(child, 'exit'))[1], 'SIGTERM');
+    // Windows has no signals: process.kill() is TerminateProcess, reported as
+    // a plain exit (signal null). Exiting at all is the stop guarantee there.
+    const [, signal] = await once(child, 'exit');
+    if (process.platform !== 'win32') assert.equal(signal, 'SIGTERM');
     console.log('Servers: IPv4/IPv6, process metadata, deduplication, real listening port and safe stop passed');
   } finally { server.close(); }
 }
