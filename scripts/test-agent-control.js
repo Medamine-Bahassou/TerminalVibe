@@ -22,6 +22,7 @@ async function main() {
   let browserServer, browserClient, extraClient;
   try {
     assert.equal(canReplaceSession({running:false}), true);
+    assert.equal(canReplaceSession({running:false,unknown:true}), false, 'Uninspectable sessions are never replaced');
     assert.equal(canReplaceSession({running:true,name:'claude'}, true), true);
     assert.equal(canReplaceSession({running:true,name:'claude'}), false);
     assert.equal(canReplaceSession({running:true,name:'unknown'}, true), false);
@@ -502,7 +503,11 @@ async function main() {
     await browserCall('send', { paneId:liveId, text:'still alive after refused resume', enter:true });
     await waitOutput('RECEIVED:still alive after refused resume');
     const claudeGuardId = '01234567-1234-1234-1234-123456789abc';
-    assert.equal(await sandbox.createAgentTerminal({ id:claudeGuardId,cwd:temp,executable:process.execPath,
+    // Windows reports the image name, which process.title cannot change: run
+    // node under the name a real install has (claude.exe).
+    const claudeExe = process.platform === 'win32' ? path.join(temp, 'claude.exe') : process.execPath;
+    if (claudeExe !== process.execPath) fs.copyFileSync(process.execPath, claudeExe);
+    assert.equal(await sandbox.createAgentTerminal({ id:claudeGuardId,cwd:temp,executable:claudeExe,
       argv:['-e',"process.title='claude'; process.stdin.setRawMode(true); process.stdin.resume(); let draft='';process.stdin.on('data',b=>{draft+=b.toString();if(draft.includes('\\x1b[201~')) console.log(draft.startsWith('\\x1b[200~') && draft.endsWith('\\x1b[201~') && draft.includes('Fixture context') ? 'TV-CONTEXT-DRAFT-OK' : 'TV-CONTEXT-DRAFT-BAD');});console.log('TV-CLAUDE-GUARD-READY'); setInterval(()=>{},1000)"] }), true);
     await waitOutput('TV-CLAUDE-GUARD-READY');
     const contextDir=path.join(browserHome,'.claude','projects','fixture');fs.mkdirSync(contextDir,{recursive:true});
@@ -513,7 +518,14 @@ async function main() {
       const listener=(data,binary)=>{if(binary)return;const msg=JSON.parse(data.toString());if(msg.type==='session-context:result'&&msg.requestId===requestId){clearTimeout(timer);browserClient.off('message',listener);resolve(msg);}};
       browserClient.on('message',listener);browserClient.send(JSON.stringify({type:'session-context',id,sessionId,requestId}));
     });
-    const attached=await sendContext(claudeGuardId,claudeGuardId);
+    // Windows process snapshots refresh every few seconds; a just-started chat
+    // is refused (unknown) until it appears.
+    let attached;
+    for (const deadline=Date.now()+10000;;) {
+      attached=await sendContext(claudeGuardId,claudeGuardId);
+      if (!attached.error || process.platform!=='win32' || Date.now()>deadline) break;
+      await new Promise(r=>setTimeout(r,500));
+    }
     assert(attached.result.chars>0);await waitOutput('TV-CONTEXT-DRAFT-OK');
     assert.match((await sendContext(liveId,claudeGuardId)).error,/running Claude/);
     assert.match((await sendContext('unknown-pane',claudeGuardId)).error,/Unknown chat target/);

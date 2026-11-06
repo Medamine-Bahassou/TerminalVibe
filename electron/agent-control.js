@@ -108,7 +108,7 @@ async function dispatchWithCapabilities(request, dispatch) {
 }
 
 function canReplaceSession(info, allowClaude = false) {
-  return info?.running === false || (allowClaude && info?.running === true && /^(claude|claude-code)(\.exe)?$/i.test(info.name || ''));
+  return (info?.running === false && !info.unknown) || (allowClaude && info?.running === true && /^(claude|claude-code)(\.exe)?$/i.test(info.name || ''));
 }
 
 module.exports = { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession };
