@@ -124,6 +124,7 @@ function refreshWindowsProcessTable() {
     _winUpdating = false;
     if (!out) return;
     const byParent = new Map();
+    const byPid = new Map();
     for (const line of out.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed) continue;
@@ -134,6 +135,7 @@ function refreshWindowsProcessTable() {
         const ppid = parseInt(m[2], 10);
         const name = m[3].trim();
         if (!name || isNaN(pid) || isNaN(ppid)) continue;
+        byPid.set(pid, name);
         if (!byParent.has(ppid)) byParent.set(ppid, []);
         byParent.get(ppid).push({ pid, name });
       } else if (trimmed.includes(',')) {
@@ -143,12 +145,13 @@ function refreshWindowsProcessTable() {
           const ppid = parseInt(parts[parts.length - 2], 10);
           const name = parts.slice(1, parts.length - 2).join(',').trim();
           if (!name || isNaN(pid) || isNaN(ppid)) continue;
+          byPid.set(pid, name);
           if (!byParent.has(ppid)) byParent.set(ppid, []);
           byParent.get(ppid).push({ pid, name });
         }
       }
     }
-    _winTable = { ts: Date.now(), byParent };
+    _winTable = { ts: Date.now(), byParent, byPid };
   };
 
   const tryPowershell = () => {
@@ -197,7 +200,7 @@ function windowsProcessTable() {
   if (!_winTable || (now - _winTable.ts >= WIN_CACHE_TTL)) {
     refreshWindowsProcessTable();
   }
-  return _winTable ? _winTable.byParent : null;
+  return _winTable;
 }
 
 if (process.platform === 'win32') {
@@ -206,15 +209,25 @@ if (process.platform === 'win32') {
 
 function windowsProcessInfo(pid) {
   if (!pid || pid <= 1) return { running: false, name: null };
-  let byParent = null;
+  let table = null;
   try {
-    byParent = windowsProcessTable();
+    table = windowsProcessTable();
   } catch {
-    byParent = null;
+    table = null;
   }
-  // Cannot inspect — assume an idle shell rather than reporting "unknown",
-  // so idle powershell/cmd/wsl tabs stay clean in the sidebar.
-  if (!byParent) return { running: false, name: null };
+  // Cannot inspect (no snapshot yet, or the process is newer than it): show
+  // idle so tabs stay clean in the sidebar, but flag `unknown` so guards that
+  // replace or write into a session refuse instead of trusting it.
+  // ponytail: snapshot refreshes every WIN_CACHE_TTL; a job started in an idle
+  // shell since the last refresh still reads idle. Await a fresh table in the
+  // guards if that matters.
+  const own = table && table.byPid.get(pid);
+  if (!own) return { running: false, name: null, unknown: true };
+  // The PTY child itself can be the workload (an agent launched directly,
+  // not through a shell), matching the Linux non-shell direct-child rule.
+  const ownBase = own.replace(/\.exe$/i, '');
+  if (!WIN_IDLE_RE.test(ownBase.toLowerCase())) return { running: true, name: ownBase };
+  const byParent = table.byParent;
   // BFS through nested shells / console helpers (depth-capped) looking for
   // the first real workload process.
   const seen = new Set([pid]);
