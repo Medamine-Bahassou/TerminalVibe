@@ -538,6 +538,34 @@ ipcMain.handle('clipboard:paste-image', () => {
   } catch (err) { console.error('[clipboard] paste-image failed:', err); return null; }
 });
 
+// ── IPC: read-only file access for plugins (api.fs.list / api.fs.read) ──
+// Plugins are trusted user code (they can already type into any PTY); this
+// only saves them from shelling out to read files. `~` expands to home.
+const expandHome = (p) => String(p || '').replace(/^~(?=$|[\\/])/, require('os').homedir());
+ipcMain.handle('plugin-fs:list', async (_e, dir) => {
+  try {
+    const d = expandHome(dir);
+    const ents = await fs.promises.readdir(d, { withFileTypes: true });
+    return await Promise.all(ents.map(async (ent) => {
+      let st = null;
+      try { st = await fs.promises.stat(path.join(d, ent.name)); } catch {}
+      return { name: ent.name, dir: ent.isDirectory(), size: st ? st.size : 0, mtime: st ? st.mtimeMs : 0 };
+    }));
+  } catch { return null; }
+});
+// Up to `maxBytes` (default 1 MiB) from the start, or from the end with `fromEnd`.
+ipcMain.handle('plugin-fs:read', async (_e, file, opts = {}) => {
+  let fh = null;
+  try {
+    fh = await fs.promises.open(expandHome(file), 'r');
+    const { size } = await fh.stat();
+    const len = Math.min(size, Math.max(0, Number(opts.maxBytes) || 1 << 20));
+    const buf = Buffer.alloc(len);
+    await fh.read(buf, 0, len, opts.fromEnd ? size - len : 0);
+    return buf.toString('utf8');
+  } catch { return null; } finally { if (fh) fh.close().catch(() => {}); }
+});
+
 // ── IPC: local files ──
 ipcMain.handle('file:save-temp', (_e, name, bytes) => require('./dropped-files').saveDroppedFile(name, bytes));
 ipcMain.handle('file:resolve', (_e, p) => {

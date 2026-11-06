@@ -1,0 +1,24 @@
+{
+  "id": "claude-chats",
+  "name": "Claude Chats",
+  "version": "1.0.0",
+  "minAppVersion": "0.9.0",
+  "description": "Lists your Claude Code chat sessions in the right panel. Click one to resume it in a new terminal, in the chat's project folder.",
+  "author": "TerminalVibe",
+  "settings": [
+    {
+      "key": "limit",
+      "label": "Chats shown",
+      "type": "number",
+      "default": 60,
+      "description": "How many of the most recent chats to list."
+    },
+    {
+      "key": "command",
+      "label": "Resume command",
+      "type": "text",
+      "default": "claude --resume",
+      "description": "Typed into the new terminal, followed by the session id."
+    }
+  ]
+}

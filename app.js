@@ -911,6 +911,21 @@
             return false;
           }
         },
+        // Open a new terminal tab in the active pane: { cwd, cmd, label }.
+        // `cmd` is typed into the fresh shell. Returns the new terminal id.
+        open: (opts = {}) => {
+          const entry = addTerminal(null, null, {
+            cwd: typeof opts.cwd === 'string' ? opts.cwd : null,
+            cmd: typeof opts.cmd === 'string' ? opts.cmd : null,
+            label: typeof opts.label === 'string' ? opts.label : null,
+          });
+          return entry ? entry.id : null;
+        },
+      },
+      // Read-only file access (Electron only; resolves null elsewhere or on error).
+      fs: {
+        list: (dir) => window.electronAPI?.pluginFsList ? window.electronAPI.pluginFsList(dir) : Promise.resolve(null),
+        read: (file, opts) => window.electronAPI?.pluginFsRead ? window.electronAPI.pluginFsRead(file, opts || {}) : Promise.resolve(null),
       },
       ui: {
         addWidget: (w) => {
@@ -920,7 +935,42 @@
         },
         removeWidget: (id) => {
           const i = _pluginWidgets.findIndex(x => x.pluginId === manifest.id && x.id === id);
-          if (i !== -1) { const [w] = _pluginWidgets.splice(i, 1); w.el.remove(); renderPluginWidgets(); }
+          if (i !== -1) { const [w] = _pluginWidgets.splice(i, 1); _removeWidgetDom(w); renderPluginWidgets(); }
+        },
+        // A page in the right panel, opened by a button on its main page:
+        // { id, label, icon: 'ph-…' (phosphor), el, onShow() }.
+        addPanel: (p) => {
+          const side = document.getElementById('sidebar-right');
+          const home = document.getElementById('sbr-main');
+          const bar = home && home.querySelector('.sbr-body');
+          if (!p || !p.el || !side || !bar) return;
+          const label = p.label || p.id || 'Panel';
+          const page = document.createElement('div');
+          page.className = 'sbr-page';
+          page.style.display = 'none';
+          page.innerHTML = '<div class="sbr-header"><button class="sbr-btn" title="Back"><i class="ph ph-arrow-left"></i></button><span class="sbr-title"></span></div>';
+          page.querySelector('.sbr-title').textContent = label;
+          page.appendChild(p.el);
+          const btn = document.createElement('button');
+          btn.className = 'sbr-big-btn';
+          btn.title = label;
+          const icon = document.createElement('i');
+          icon.className = 'ph ' + (p.icon || 'ph-puzzle-piece');
+          const text = document.createElement('span');
+          text.textContent = label;
+          btn.append(icon, text);
+          btn.addEventListener('click', () => {
+            side.querySelectorAll('.sbr-page').forEach(el => { el.style.display = 'none'; });
+            page.style.display = 'flex';
+            if (typeof p.onShow === 'function') { try { p.onShow(); } catch (e) { console.error('[plugin] panel onShow failed:', e); } }
+          });
+          page.querySelector('.sbr-btn').addEventListener('click', () => {
+            page.style.display = 'none';
+            home.style.display = 'flex';
+          });
+          side.appendChild(page);
+          bar.appendChild(btn);
+          _pluginWidgets.push({ pluginId: manifest.id, id: p.id || ('p' + Math.random().toString(36).slice(2)), position: 'panel', el: page, btn });
         },
       },
 
@@ -993,6 +1043,17 @@
     _pluginConfigLast.delete(id);
     saveState();
     deliverPluginConfig(id, [key]);
+  }
+
+  // Panel widgets also own a button on the right panel's main page; if the
+  // panel was open, fall back to the main page.
+  function _removeWidgetDom(w) {
+    if (w.btn) {
+      w.btn.remove();
+      const home = document.getElementById('sbr-main');
+      if (home && w.el.style.display !== 'none') home.style.display = 'flex';
+    }
+    w.el.remove();
   }
 
   function renderPluginWidgets() {
@@ -1424,7 +1485,7 @@
       }
     }
     const removedWidgets = _pluginWidgets.filter(w => w.pluginId === id);
-    for (const w of removedWidgets) { try { w.el.remove(); } catch { } }
+    for (const w of removedWidgets) { try { _removeWidgetDom(w); } catch { } }
     _pluginWidgets.splice(0, _pluginWidgets.length, ..._pluginWidgets.filter(w => w.pluginId !== id));
     renderPluginWidgets();
     for (const [ev, set] of _pluginBus) {
@@ -4091,7 +4152,9 @@
     return entry;
   }
 
-  function addTerminal(wsId, targetGroupId) {
+  // opts (plugins: api.terminal.open): { cwd, cmd, label } — start directory,
+  // a command typed into the fresh shell, and a pinned tab label.
+  function addTerminal(wsId, targetGroupId, opts = {}) {
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
 
@@ -4105,12 +4168,14 @@
       || [...(targetGroup?._history || [])].reverse().map(id => groupTerms.find(t => t.id === id && t.type !== 'browser')).find(Boolean)
       || groupTerms.find(t => t.type !== 'browser')
       || getWorkspaceTerminals(wsp).find(t => t.type !== 'browser' && t.cwd);
-    const cwd = previous?.cwd || ((defaultTerminalPath && defaultTerminalPath.trim())
+    const cwd = opts.cwd || previous?.cwd || ((defaultTerminalPath && defaultTerminalPath.trim())
       ? defaultTerminalPath.trim().replace(/^["']|["']$/g, '') : null);
     const id = uuid();
-    const label = (cwd || '').split(/[\\/]/).filter(Boolean).pop() || 'Terminal';
+    const label = opts.label || (cwd || '').split(/[\\/]/).filter(Boolean).pop() || 'Terminal';
     const entry = _createTermEntry(wsp, id, label);
     entry.cwd = cwd;
+    if (opts.cmd) entry.runCmd = opts.cmd;
+    if (opts.label) entry.pinLabel = true;
 
     if (!wsp.layout) {
       wsp.layout = {
