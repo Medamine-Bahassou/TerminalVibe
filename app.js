@@ -155,8 +155,8 @@
   const THEMES = {
     'graphite': {
       label: 'Graphite',
-      bg: '#15191d', fg: '#dce3e6', cursor: '#8ddbb8', selection: '#344c46',
-      swatches: ['#15191d', '#dce3e6', '#8ddbb8'],
+      bg: '#0d1017', fg: '#e8ecf4', cursor: '#a5b2ff', selection: '#273249',
+      swatches: ['#0d1017', '#e8ecf4', '#8b9dff'],
       palette: [
         '#20262c', '#ed8993', '#8ddbb8', '#e6c788',
         '#8bb9e8', '#c1a6d9', '#89cdd3', '#dce3e6',
@@ -164,9 +164,9 @@
         '#accff0', '#d5bfe7', '#a8dfe3', '#f2f5f6',
       ],
       ui: {
-        accent: '#8ddbb8', border: '#2c343b',
-        tabActiveBg: '#252d33', tabHoverBg: '#20272d',
-        dimText: '#87959e', mutedText: '#a3afb7',
+        accent: '#8b9dff', border: '#2a3240',
+        tabActiveBg: '#191e29', tabHoverBg: '#222937',
+        dimText: '#707b90', mutedText: '#a0a9bb',
       },
     },
     'catppuccin-mocha': {
@@ -1328,10 +1328,10 @@
   let currentThemeName = 'graphite';
   let currentTheme = THEMES[currentThemeName];
   let currentFontSize = 14;
-  let cornerStyle = 'sharp'; // 'rounded' | 'sharp'
-  let currentFontFamily = "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace";
+  let currentFontFamily = "'Geist Mono', 'Cascadia Code', 'Consolas', monospace";
   let customFonts = {}; // name -> { name, dataUrl, format }
   const PRESET_FONTS = [
+    { name: 'Geist Mono', family: "'Geist Mono', 'Cascadia Code', 'Consolas', monospace" },
     { name: 'JetBrains Mono', family: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace" },
     { name: 'Fira Code', family: "'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace" },
     { name: 'Cascadia Code', family: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace" },
@@ -1343,7 +1343,7 @@
     { name: 'Consolas', family: "'Consolas', 'Courier New', monospace" },
     { name: 'Courier New', family: "'Courier New', monospace" },
   ];
-  let currentLineHeight = 1.0;
+  let currentLineHeight = 1.2;
   let currentCursorStyle = 'block';
   let currentCursorBlink = true;
   let currentScrollback = 10000;
@@ -1441,20 +1441,33 @@
   const sessionContextRequests = new Map();
   let sessionContextReady = false;
 
-  let _browserSyncRaf = null;
   const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
   if (isDesktop() && window.electronAPI) {
     window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
     window.electronAPI.onBrowserKey?.(d => document.dispatchEvent(new KeyboardEvent('keydown', { ...d, bubbles: true, cancelable: true })));
     syncBrowserShortcuts();
   }
-  const browserSlotRo = new ResizeObserver(() => {
-    if (_browserSyncRaf) return;
-    _browserSyncRaf = requestAnimationFrame(() => {
-      _browserSyncRaf = null;
-      syncBrowserSlots();
-    });
-  });
+  // ResizeObserver fires after layout, before paint: syncing here moves the
+  // overlay in the same frame as its slot (a RAF would lag one frame behind).
+  const browserSlotRo = new ResizeObserver(() => { syncBrowserSlots(); settleBrowserSurfaces(); });
+
+  // A fast resize can leave the webview guest composited at a stale width
+  // (blank strip on one edge). Once resizing goes quiet, nudge each visible
+  // webview by 1px for a frame so the guest re-lays out at the real size.
+  let _browserSettleTimer = null;
+  function settleBrowserSurfaces() {
+    clearTimeout(_browserSettleTimer);
+    _browserSettleTimer = setTimeout(() => {
+      const ws = activeWs();
+      if (!ws) return;
+      for (const t of getWorkspaceTerminals(ws)) {
+        const w = t.type === 'browser' && t.browserContainer?.querySelector('webview.browser-surface');
+        if (!w || !w.offsetWidth) continue;
+        w.style.width = 'calc(100% - 1px)';
+        requestAnimationFrame(() => { w.style.width = '100%'; });
+      }
+    }, 120);
+  }
 
   function syncBrowserSlots() {
     const paneArea = document.getElementById('pane-area');
@@ -1497,6 +1510,8 @@
             if (t._viewCreated) viewUpdates.push({ id: t.id, show: false });
           } else {
             const slotRect = t.el.getBoundingClientRect();
+            // The overlay hides the group's maximized frame; let it draw its own.
+            t.browserContainer.classList.toggle('maximized', !!t.el.closest('.term-group.maximized'));
             updates.push({
               container: t.browserContainer,
               x: slotRect.left - paneRect.left,
@@ -2029,7 +2044,7 @@
    T H*EME APPLICATION
    ═══════════════════════════════════════════════════════════════ */
   function applyCornerStyle() {
-    document.body.classList.toggle('roundless', cornerStyle === 'sharp');
+    document.body.classList.add('roundless'); // sharp base; the design rounds selected components
   }
 
   function applySidebarMode() {
@@ -2540,7 +2555,6 @@
         fontFamily: currentFontFamily,
         customFonts,
         lineHeight: currentLineHeight,
-        cornerStyle,
         cursorStyle: currentCursorStyle,
         cursorBlink: currentCursorBlink,
         scrollback: currentScrollback,
@@ -2579,7 +2593,6 @@
       fontFamily: currentFontFamily,
       customFonts,
       lineHeight: currentLineHeight,
-      cornerStyle,
       cursorStyle: currentCursorStyle,
       cursorBlink: currentCursorBlink,
       scrollback: currentScrollback,
@@ -2652,7 +2665,6 @@
         injectCustomFonts();
       }
       if (state.lineHeight) currentLineHeight = state.lineHeight;
-      if (state.cornerStyle) cornerStyle = state.cornerStyle;
       if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
       if (state.scrollback) currentScrollback = state.scrollback;
@@ -2875,13 +2887,6 @@
       const box = document.createElement('div');
       box.className = 'pp-box' + (current && p.id === current.id ? ' current' : '');
       box.tabIndex = -1; // keyboard-focusable so arrows land on a box when the picker opens
-      if (p.id === meta.default) {
-        const badge = document.createElement('div');
-        badge.className = 'pp-badge';
-        badge.title = 'Default profile';
-        badge.textContent = 'DEFAULT';
-        box.appendChild(badge);
-      }
       if (p.avatar) {
         const img = document.createElement('img');
         img.src = p.avatar; img.alt = ''; img.draggable = false;
@@ -2896,6 +2901,13 @@
       name.className = 'pp-name';
       name.textContent = p.name;
       box.appendChild(name);
+      if (p.id === meta.default) {
+        const badge = document.createElement('div');
+        badge.className = 'pp-badge';
+        badge.title = 'Default profile';
+        badge.textContent = 'Default';
+        box.appendChild(badge);
+      }
       const menu = document.createElement('div');
       menu.className = 'pp-edit';
       menu.title = 'Profile options';
@@ -2965,6 +2977,7 @@
   // Boot gate: >1 profile → always show the picker and wait for a choice.
   // Single profile (or legacy state.json) auto-activates with no UI.
   async function profileGate() {
+    await document.fonts.load('14px "Geist Mono"');
     const res = await initActiveProfile();
     if (!res) return; // profile storage unavailable
     const { meta, current } = res;
@@ -3628,7 +3641,10 @@
     // own context at creation exhausted the pool when many tabs were added
     // quickly, leaving the newest canvases blank (white page + dead icon).
 
-    term.onData(data => { if (wsReady) sendStdin(id, new TextEncoder().encode(data)); });
+    term.onData(data => {
+      if (wsReady) sendStdin(id, new TextEncoder().encode(data));
+      if (/[\r\x03\x04]/.test(data)) refreshWorkspaceProcsSoon();
+    });
     term.onBinary(data => {
       if (wsReady) {
         const bytes = new Uint8Array(data.length);
@@ -6252,7 +6268,12 @@
       _suppressResize = true;
       startResizing();
 
+      let moveRaf = null, lastEv = null;
       const onMove = (ev) => {
+        lastEv = ev;
+        if (!moveRaf) moveRaf = requestAnimationFrame(() => { moveRaf = null; applyMove(lastEv); });
+      };
+      const applyMove = (ev) => {
         const pos = isRow ? ev.clientX : ev.clientY;
         const delta = pos - startPos;
         const prevIdx = childIdx - 1;
@@ -6278,6 +6299,7 @@
       };
 
       const onUp = () => {
+        if (moveRaf) { cancelAnimationFrame(moveRaf); moveRaf = null; applyMove(lastEv); }
         sash.classList.remove('dragging');
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
@@ -6862,18 +6884,16 @@
         return `<span class="ws-label">${wsNum}</span>`;
       };
       const labelHtml = wsIconHtml();
-      btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<div class="ws-info"><span class="ws-name">${escHtml(wsp.label)}</span><div class="ws-procs"></div></div><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
+      btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<div class="ws-info"><span class="ws-name">${escHtml(wsp.label)}</span><div class="ws-procs"></div></div>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
       if (wsp.pinned) btn.classList.add('pinned');
       btn.title = wsp.label;
       makeKeyboardButton(btn, wsp.label);
       btn.setAttribute('aria-current', isActive ? 'true' : 'false');
-      btn.querySelectorAll('.ws-action').forEach(action => makeKeyboardButton(action, action.title + ' ' + wsp.label));
       if (wsp.color) {
         btn.dataset.color = wsp.color;
         btn.style.setProperty('--ws-color', wsp.color);
       }
       btn.addEventListener('click', (e) => {
-        if (e.target.closest('.ws-action')) return;
         if (window._wsDragged) { window._wsDragged = false; return; }
         activateWorkspace(wsp.id);
       });
@@ -6997,20 +7017,6 @@
         }
       });
 
-      if (!isInFolder) {
-        btn.querySelector('.ws-pin').addEventListener('click', (e) => {
-          e.stopPropagation();
-          togglePinWorkspace(wsp.id);
-        });
-      }
-      btn.querySelector('.ws-rename').addEventListener('click', (e) => {
-        e.stopPropagation();
-        renameWorkspace(wsp.id);
-      });
-      btn.querySelector('.ws-remove').addEventListener('click', (e) => {
-        e.stopPropagation();
-        removeWorkspace(wsp.id);
-      });
       if (showWsProcs) updateWorkspaceProcs(wsp, btn);
       return btn;
     };
@@ -7214,7 +7220,7 @@
      Each workspace button shows the running processes (excluding idle shells)
      as up to 3 lines. When more than 3 exist, the 3rd line becomes "+N". */
   const _wsProcsCache = new Map(); // wsId -> { names: string[], termIds: string, ts: number }
-  const _WS_PROCS_TTL = 4000;
+  const _WS_PROCS_TTL = 900;
   // Idle shells and unidentified sessions are never shown in the workspace
   // button: an idle powershell.exe / cmd.exe / wsl.exe is not a "running
   // process", and 'unknown' (backend couldn't tell) must not render as text.
@@ -7225,13 +7231,27 @@
     return !base || _WS_PROCS_HIDE_RE.test(base);
   };
 
+  // Brand logo for a known process (proc-icons.js), else a generic terminal glyph.
+  function procIconHtml(name, fallback = 'ph-terminal-window') {
+    const key = String(name).toLowerCase().replace(/[\d.]+$/, '');
+    if (key === 'codex') return '<i class="ws-proc-icon ph ph-open-ai-logo"></i>';
+    const slug = window.PROC_ICON_ALIAS?.[key];
+    const d = slug && window.PROC_ICON_PATHS?.[slug];
+    return d ? `<svg class="ws-proc-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`
+             : `<i class="ws-proc-icon ph ${fallback}"></i>`;
+  }
+
   function renderWsProcs(procsEl, names) {
     if (!procsEl) return;
+    // Polled every second: skip DOM work when the list hasn't changed.
+    const sig = (names || []).join('\n');
+    if (procsEl.dataset.sig === sig) return;
+    procsEl.dataset.sig = sig;
     if (!names || !names.length) { procsEl.textContent = ''; return; }
     const total = names.length;
     const shown = total > 3 ? names.slice(0, 2) : names.slice(0, 3);
     const extra = total - shown.length;
-    let html = shown.map(n => `<div class="ws-proc">- ${escHtml(n)}</div>`).join('');
+    let html = shown.map(n => `<div class="ws-proc">${procIconHtml(n)}<span>${escHtml(n)}</span></div>`).join('');
     if (extra > 0) html += `<div class="ws-proc ws-proc-more">+${extra}</div>`;
     procsEl.innerHTML = html;
   }
@@ -7257,6 +7277,18 @@
       _wsProcsCache.set(wsp.id, { names: unique, termIds, ts: Date.now() });
       renderWsProcs(procsEl, unique);
     });
+  }
+
+  // Enter / Ctrl+C / Ctrl+D usually start or stop a process: re-check right
+  // away (twice, since a command can take a moment to spawn or exit).
+  let _wsProcsSoonTimers = [];
+  function refreshWorkspaceProcsSoon() {
+    if (!showWsProcs) return;
+    _wsProcsSoonTimers.forEach(clearTimeout);
+    _wsProcsSoonTimers = [150, 600].map(ms => setTimeout(() => {
+      _wsProcsCache.clear();
+      refreshAllWorkspaceProcs();
+    }, ms));
   }
 
   function refreshAllWorkspaceProcs() {
@@ -7453,6 +7485,24 @@
         if (!addedSep) { sep(); addedSep = true; }
         item(it.icon, escHtml(it.label), '', () => it.handler(data));
       }
+    }
+
+    // Desktop: show the same items as a native OS menu. The DOM items built
+    // above are the source of truth; the picked one is clicked to run its handler.
+    if (window.electronAPI?.popupContextMenu) {
+      const actions = [];
+      const toTemplate = root => [...root.children].map(el => {
+        if (el.classList.contains('ctx-sep')) return { type: 'separator' };
+        const label = el.children[1]?.textContent.trim() || '';
+        const sub = el.querySelector(':scope > .ctx-sub');
+        if (sub) return { label, submenu: toTemplate(sub) };
+        const key = el.querySelector(':scope > .ci-key')?.textContent.trim();
+        actions.push(el);
+        return { id: actions.length - 1, label, checked: el.classList.contains('checked'), accelerator: key || undefined };
+      });
+      const template = toTemplate(ctxEl);
+      window.electronAPI.popupContextMenu(template).then(id => { if (id != null) actions[id]?.click(); });
+      return;
     }
 
     ctxEl.classList.add('open');
@@ -8742,17 +8792,6 @@
     const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
     if (themeDD) initCustomDropdown(themeDD);
 
-    // Corner style
-    const cornerSelect = document.getElementById('set-corner-style');
-    cornerSelect.value = cornerStyle;
-    cornerSelect.onchange = e => {
-      cornerStyle = e.target.value;
-      applyCornerStyle();
-      saveState();
-    };
-    const cornerDD = document.querySelector('.custom-dropdown[data-for="set-corner-style"]');
-    if (cornerDD) initCustomDropdown(cornerDD);
-
     // Sidebar style
     const sbModeSelect = document.getElementById('set-sidebar-mode');
     sbModeSelect.value = sidebarMode;
@@ -8836,6 +8875,8 @@
     renderShortcutsList();
 
     // Always open on the first category (Appearance) unless deep-linked
+    document.getElementById('settings-nav-search').value = '';
+    document.querySelectorAll('.settings-cat-btn').forEach(btn => { btn.hidden = false; });
     switchSettingsCat(typeof cat === 'string' ? cat : 'appearance');
     settingsOverlay.classList.add('open');
     document.activeElement?.blur();
@@ -9034,7 +9075,7 @@
 
   function switchSettingsCat(cat) {
     const prevCat = document.querySelector('.settings-cat-btn.active')?.dataset.cat;
-    document.querySelectorAll('.settings-cat-btn').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
+    document.querySelectorAll('.settings-cat-btn').forEach(b => { b.classList.toggle('active', b.dataset.cat === cat); b.setAttribute('aria-pressed', String(b.dataset.cat === cat)); });
     document.querySelectorAll('.settings-section[data-cat]').forEach(s => s.classList.toggle('active', s.dataset.cat === cat));
     // Leaving theme editor → revert live preview to applied theme
     if (prevCat === 'theme-editor' && cat !== 'theme-editor') {
@@ -9042,6 +9083,8 @@
     }
     // Reset scroll to top of the new section
     document.querySelector('.settings-section')?.parentElement?.scrollTo({ top: 0 });
+    const categoryTitle = document.getElementById('settings-category-title');
+    if (categoryTitle) categoryTitle.textContent = document.querySelector('.settings-cat-btn.active span')?.textContent || 'Settings';
     settingsCategory = cat;
     saveState();
     if (cat === 'plugins') renderPluginsSettings();
@@ -9139,7 +9182,6 @@
         injectCustomFonts();
       }
       if (state.lineHeight) currentLineHeight = state.lineHeight;
-      if (state.cornerStyle) cornerStyle = state.cornerStyle;
       if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
       if (state.scrollback) currentScrollback = state.scrollback;
@@ -9332,6 +9374,7 @@
   }
 
   async function detachedOnlyBoot() {
+    await document.fonts.load('14px "Geist Mono"');
     await loadCustomThemes();
     // Restore only theme/font settings (not workspaces) for the detached window
     try {
@@ -9355,7 +9398,6 @@
           injectCustomFonts();
         }
         if (state.lineHeight) currentLineHeight = state.lineHeight;
-        if (state.cornerStyle) cornerStyle = state.cornerStyle;
         if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
         if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
         if (state.scrollback !== undefined) currentScrollback = state.scrollback;
@@ -9591,7 +9633,7 @@
           const row = document.createElement('a');
           row.className = 'server-row'; row.href = url.href;
           row.title = `Open ${url.origin}${server.pid ? ' · PID ' + server.pid : ''}`;
-          const icon = document.createElement('i'); icon.className = 'ph ph-globe'; icon.setAttribute('aria-hidden', 'true');
+          const icon = document.createElement('span'); icon.className = 'server-icon'; icon.innerHTML = procIconHtml(server.process || '', 'ph-globe'); icon.setAttribute('aria-hidden', 'true');
           const details = document.createElement('span'); details.className = 'server-details';
           const name = document.createElement('span'); name.className = 'server-name'; name.textContent = server.process || 'Listening server';
           const address = document.createElement('span'); address.className = 'server-address'; address.textContent = url.origin;
@@ -9716,7 +9758,8 @@
   async function attachContextToChat(entry, sessionId) {
     const notice=document.createElement('div');notice.className='session-drop-feedback';notice.setAttribute('role','status');
     const host=entry?.el; if(!host) return;
-    notice.textContent='Adding saved session context…';host.append(notice);
+    const say=(icon,text,cls='')=>{notice.className='session-drop-feedback '+cls;notice.innerHTML=`<i class="ph ${icon}" aria-hidden="true"></i>`;const t=document.createElement('span');t.textContent=text;notice.append(t);};
+    say('ph-circle-notch','Adding saved session context…','is-pending');host.append(notice);
     try {
       if(entry.type==='browser' || entry.locked || entry.dead) throw new Error('Choose an unlocked, running Claude terminal');
       let result;
@@ -9731,11 +9774,11 @@
           ws.send(JSON.stringify({type:'session-context',id:entry.id,sessionId,requestId}));
         });
       }
-      notice.textContent='Session context added successfully';
+      say('ph-check-circle','Session context added','is-success');
       document.dispatchEvent(new CustomEvent('session-context:attached',{detail:result}));
       entry.term?.focus();
     } catch(error) {
-      notice.textContent=error.message;
+      say('ph-warning-circle',error.message,'is-error');
       document.dispatchEvent(new CustomEvent('session-context:attached',{detail:{error:error.message}}));
     }
     setTimeout(()=>notice.remove(),2000);
@@ -10197,7 +10240,26 @@
       renderAutoRuns();
     });
   }
+  document.getElementById('settings-nav-search').addEventListener('input', e => {
+    const query = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('.settings-cat-btn').forEach(btn => { btn.hidden = !btn.textContent.toLowerCase().includes(query); });
+  });
+  document.querySelectorAll('.settings-cat-btn').forEach(btn => {
+    btn.setAttribute('role', 'button'); btn.tabIndex = 0;
+    btn.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); btn.click(); }
+    });
+  });
   document.getElementById('settings-close').addEventListener('click', closeSettings);
+  settingsOverlay.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const controls = [...settingsOverlay.querySelectorAll('button,input,select,textarea,[tabindex="0"],a[href]')]
+      .filter(el => !el.disabled && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+    const first = controls[0], last = controls[controls.length - 1];
+    if (!first) return;
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === settingsOverlay)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || document.activeElement === settingsOverlay)) { e.preventDefault(); first.focus(); }
+  });
   settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) { closeSettings(); e.stopPropagation(); }
@@ -10908,6 +10970,7 @@
       document.body.classList.remove('tab-dragging');
     }
     syncBrowserSlots();
+    settleBrowserSurfaces();
   }
 
   let resizeRaf = null;
@@ -11103,11 +11166,70 @@
       }
     });
 
+    // Styled tooltips for every [title] element (replaces the OS tooltip).
+    // UX: 700ms hover-intent delay (restarts while the pointer moves), 100ms
+    // skip-delay for 300ms after one closes, hidden after a click until the
+    // pointer leaves, shown on keyboard focus, Esc dismisses.
+    // The title is parked in data-tip while targeted so the native one never shows.
+    {
+      const DELAY = 700, SKIP_DELAY = 100, SKIP_WINDOW = 300;
+      const tip = document.createElement('div');
+      tip.className = 'ui-tooltip'; tip.setAttribute('role', 'tooltip');
+      document.body.append(tip);
+      let target = null, timer = null, warmUntil = 0, dismissed = false;
+      const close = () => {
+        clearTimeout(timer);
+        if (tip.classList.contains('show')) warmUntil = Date.now() + SKIP_WINDOW;
+        tip.classList.remove('show');
+      };
+      const release = () => {
+        close();
+        if (target && !target.hasAttribute('title') && target.dataset.tip != null) target.title = target.dataset.tip;
+        if (target) delete target.dataset.tip;
+        target = null; dismissed = false;
+      };
+      const show = () => {
+        if (!target?.isConnected || dismissed) return;
+        tip.textContent = target.dataset.tip;
+        const r = target.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+        let top = r.bottom + 6;
+        if (top + h > innerHeight - 4) top = r.top - h - 6;
+        const left = Math.min(Math.max(4, r.left + r.width / 2 - w / 2), innerWidth - w - 4);
+        tip.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+        tip.classList.add('show');
+      };
+      const schedule = () => {
+        clearTimeout(timer);
+        timer = setTimeout(show, Date.now() < warmUntil ? SKIP_DELAY : DELAY);
+      };
+      const take = el => {
+        if (el === target) return false;
+        release();
+        if (!el || !el.title) return false;
+        target = el;
+        el.dataset.tip = el.title;
+        if (!el.hasAttribute('aria-label') && !el.textContent.trim()) el.setAttribute('aria-label', el.title);
+        el.removeAttribute('title');
+        return true;
+      };
+      const SEL = '[title]:not(iframe):not(webview), [data-tip]';
+      document.addEventListener('mouseover', e => { if (take(e.target.closest?.(SEL))) schedule(); });
+      // Hover intent: keep postponing while the pointer is still travelling.
+      document.addEventListener('mousemove', () => { if (target && !dismissed && !tip.classList.contains('show')) schedule(); }, { passive: true });
+      document.addEventListener('mousedown', () => { if (target) { close(); dismissed = true; } }, true);
+      document.addEventListener('focusin', e => { if (e.target.matches?.(':focus-visible') && take(e.target.closest?.(SEL))) schedule(); });
+      document.addEventListener('focusout', e => { if (e.target === target) release(); });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && tip.classList.contains('show')) { close(); dismissed = true; } }, true);
+      document.addEventListener('wheel', () => { if (target) { close(); dismissed = true; } }, { capture: true, passive: true });
+      document.documentElement.addEventListener('mouseleave', release);
+      window.addEventListener('blur', release);
+    }
+
     // Auto-save every 30 seconds
     setInterval(saveState, 30000);
 
     // Keep the workspace buttons' running-process lists up to date
-    setInterval(() => { if (!document.hidden) refreshAllWorkspaceProcs(); }, 5000);
+    setInterval(() => { if (!document.hidden) refreshAllWorkspaceProcs(); }, 1000);
 
     // Save on close (browser)
     window.addEventListener('beforeunload', (e) => {

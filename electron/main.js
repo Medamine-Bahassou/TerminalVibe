@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, Notification, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, Notification, dialog, Menu } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
@@ -497,6 +497,21 @@ ipcMain.handle('shell:open-external', (_e, url) => {
 
 // ── IPC: clipboard (terminal text; navigator.clipboard also works) ──
 ipcMain.handle('servers:list', () => listRunningServers());
+// ── IPC: native context menu. Renderer sends a plain template; resolves with the clicked item id (or null). ──
+ipcMain.handle('context-menu:popup', (e, template) => new Promise(resolve => {
+  const build = items => (Array.isArray(items) ? items : []).map(it => it && it.type === 'separator' ? { type: 'separator' } : {
+    label: String(it?.label ?? ''),
+    type: it?.checked ? 'checkbox' : 'normal',
+    checked: !!it?.checked,
+    accelerator: typeof it?.accelerator === 'string' && /^[A-Za-z0-9+]+$/.test(it.accelerator) ? it.accelerator : undefined,
+    registerAccelerator: false,
+    submenu: it?.submenu ? build(it.submenu) : undefined,
+    click: it?.submenu ? undefined : () => resolve(it?.id ?? null),
+  });
+  const win = BrowserWindow.fromWebContents(e.sender);
+  // Close fires before click on some platforms; give the click a moment to win.
+  Menu.buildFromTemplate(build(template)).popup({ window: win, callback: () => setTimeout(() => resolve(null), 100) });
+}));
 ipcMain.handle('clipboard:write-text', (_e, text) => clipboard.writeText(String(text ?? '')));
 ipcMain.handle('clipboard:read-text', () => clipboard.readText());
 

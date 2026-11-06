@@ -449,30 +449,8 @@ body.no-ws-procs #sidebar.expanded .ws-btn .ws-info .ws-name { flex: 1; }
 }
 #sidebar.expanded .ws-btn .ws-count { display: flex; opacity: 1; }
 .ws-btn.active .ws-count { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
-#sidebar.expanded .ws-btn:hover .ws-count { opacity: 0; pointer-events: none; }
 
-.ws-btn .ws-actions {
-  display: none;
-  gap: 2px;
-  position: absolute;
-  right: 8px;
-}
-#sidebar.expanded .ws-btn .ws-actions { display: flex; opacity: 0; transition: opacity 0.1s; pointer-events: none; }
-#sidebar.expanded .ws-btn:hover .ws-actions { opacity: 1; pointer-events: auto; }
-
-.ws-btn .ws-action {
-  width: 18px; height: 18px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: 4px;
-  color: var(--dim-text);
-  font-size: 11px;
-  cursor: pointer;
-  transition: color 0.1s, background 0.1s;
-}
-.ws-btn .ws-action .ph { font-size: 13px; pointer-events: none; }
-.ws-btn .ws-action:hover { color: var(--fg); background: rgba(255,255,255,0.1); }
-.ws-btn .ws-action.ws-remove:hover { color: #f38ba8; }
-.ws-btn .ws-action.ws-pin:hover { color: var(--accent); }
+#sidebar.expanded 
 .ws-btn.pinned .ws-strip { background: var(--accent) !important; }
 .ws-btn .ws-pin-icon {
   position: absolute;
@@ -485,7 +463,6 @@ body.no-ws-procs #sidebar.expanded .ws-btn .ws-info .ws-name { flex: 1; }
 }
 .ws-btn .ws-pin-icon .ph { font-size: 10px; }
 #sidebar.expanded .ws-btn .ws-pin-icon { display: flex; }
-#sidebar.expanded .ws-btn:hover .ws-pin-icon { opacity: 0; }
 
 .ws-pin-label {
   font-size: 9px;

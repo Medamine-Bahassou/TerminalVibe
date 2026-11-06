@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 
   // Clipboard
+  popupContextMenu: (template) => ipcRenderer.invoke('context-menu:popup', template),
   clipboardWrite: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   clipboardRead: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardPasteImage: () => ipcRenderer.invoke('clipboard:paste-image'),

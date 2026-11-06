@@ -13,13 +13,16 @@
     const head=el('header','session-head');
     const titles=el('div','session-titles'); titles.append(el('h2','',title));
     if(cwd) {const sub=el('div','session-sub',cwd); sub.title=cwd; titles.append(sub);}
-    const close=button('×',()=>dismiss(),'session-close'); close.setAttribute('aria-label','Close session history'); head.append(titles,close);
+    const close=button('',()=>dismiss(),'session-close'); close.innerHTML='<i class="ph ph-x"></i>'; close.setAttribute('aria-label','Close session history'); head.append(titles,close);
     const tools=el('div','session-tools');
     const search=el('input','session-search'); search.placeholder='Search conversations…'; search.setAttribute('aria-label','Search conversations');
     search.disabled=true;
-    const fresh=button('+ New',()=>run(null,'here'),'session-primary'); fresh.setAttribute('aria-label','New conversation');
+    const fresh=button('',()=>run(null,'here'),'session-primary'); fresh.innerHTML='<i class="ph ph-plus"></i><span>New session</span>'; fresh.setAttribute('aria-label','New conversation');
     fresh.disabled=true;
-    tools.append(search,fresh);
+    const searchWrap=el('div','session-search-wrap');
+    const icon=el('i','session-search-icon ph ph-magnifying-glass'); icon.setAttribute('aria-hidden','true');
+    const hint=el('kbd','session-search-hint','Ctrl F');
+    searchWrap.append(icon,search,hint); tools.append(searchWrap,fresh);
     const status=el('div','session-status','Loading local conversations…'); status.setAttribute('role','status');
     const list=el('div','session-list'); list.setAttribute('aria-label','Conversations');
     drawer.append(head,tools,status,list); overlay.append(drawer); host.append(overlay);
@@ -47,6 +50,7 @@
     overlay.onclick=e=>{if(e.target===overlay) dismiss();};
     function keys(e) {
       e.stopPropagation();
+      if((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==='f') {e.preventDefault();search.focus();search.select();}
       if(e.key==='Escape') {e.preventDefault();e.stopPropagation();dismiss();}
     }
     overlay.addEventListener('keydown',keys); close.focus();

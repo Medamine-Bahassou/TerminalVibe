@@ -9,6 +9,8 @@
   <link rel="stylesheet" href="vendor/xterm/xterm.css">
   <link rel="stylesheet" href="vendor/coloris.min.css">
   <link rel="stylesheet" href="style.css">
+  <link rel="preload" href="fonts/GeistSans.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/GeistMono.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="workspace.css">
   <script src="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -232,20 +234,20 @@
   <!-- Settings -->
   <div id="settings-overlay" tabindex="-1"
     class="fixed inset-0 z-[10000] hidden flex flex-col opacity-0 transition-opacity duration-150">
-    <div id="settings-modal" class="w-full h-full flex flex-col select-none bg-[var(--bg)]">
+    <div id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings" class="w-full h-full flex flex-col select-none bg-[var(--bg)]">
       <div class="settings-header flex items-center gap-1.5 pl-3 pr-2 h-8 shrink-0 border-b border-[var(--border)]">
         <button type="button" id="settings-close" class="settings-back-btn no-drag" title="Close settings" aria-label="Close settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
             stroke-linejoin="round" class="w-[16px] h-[16px]">
-            <line x1="19" y1="12" x2="5" y2="12" />
-            <polyline points="12 19 5 12 12 5" />
+            <path d="M6 6l12 12M6 18L18 6" />
           </svg>
         </button>
-        <h2 class="text-[12.5px] font-semibold text-[var(--fg)] m-0">Settings</h2>
+        <h2 class="settings-breadcrumb text-[12.5px] font-semibold text-[var(--fg)] m-0">Settings <span aria-hidden="true">/</span> <span id="settings-category-title">Appearance</span></h2>
       </div>
-      <div class="flex flex-1 min-h-0 overflow-hidden">
+      <div class="settings-layout flex flex-1 min-h-0 overflow-hidden">
         <div
-          class="w-[200px] shrink-0 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col overflow-y-auto">
+          class="settings-nav w-[200px] shrink-0 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col overflow-y-auto">
+          <label class="settings-nav-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input id="settings-nav-search" type="search" placeholder="Search settings" aria-label="Search settings categories"></label>
           <div
             class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
             data-cat="appearance">
@@ -283,7 +285,7 @@
             <span>Advanced</span>
           </div>
         </div>
-        <div class="flex-1 p-4 px-6 overflow-y-auto relative">
+        <div class="settings-content flex-1 p-4 px-6 overflow-y-auto relative">
           <!-- Appearance -->
           <div class="settings-section active select-none" data-cat="appearance">
             <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Color
@@ -299,21 +301,6 @@
                 <div class="flex-1 flex items-center justify-end gap-3">
                   <select id="set-theme" class="native-select-hidden"></select>
                   <div class="custom-dropdown" data-for="set-theme"></div>
-                </div>
-              </div>
-              <div
-                class="flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] hover:bg-white/[0.01]">
-                <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Corner style</span>
-                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Component border
-                    radius</span>
-                </div>
-                <div class="flex-1 flex items-center justify-end gap-3">
-                  <select id="set-corner-style" class="native-select-hidden">
-                    <option value="rounded">Rounded</option>
-                    <option value="sharp">Sharp</option>
-                  </select>
-                  <div class="custom-dropdown" data-for="set-corner-style"></div>
                 </div>
               </div>
               <div
@@ -736,6 +723,7 @@ Examples:
 
   <script src="vendor/split.min.js"></script>
   <script src="browser-snapshot.js"></script>
+  <script src="proc-icons.js"></script>
   <script src="session-drawer.js"></script>
   <script src="app.js"></script>
   <script>

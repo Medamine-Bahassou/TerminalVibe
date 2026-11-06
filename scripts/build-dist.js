@@ -37,7 +37,7 @@ ensureVendorFile('split.min.js', path.join('node_modules', 'split.js', 'dist', '
 ensureVendorFile('coloris.min.js', path.join('node_modules', '@melloware', 'coloris', 'dist', 'umd', 'coloris.min.js'));
 ensureVendorFile('coloris.min.css', path.join('node_modules', '@melloware', 'coloris', 'dist', 'coloris.min.css'));
 
-const assets = ['index.html', 'app.js', 'browser-snapshot.js', 'session-drawer.js', 'style.css', 'workspace.css', 'logo.png', 'logo-app.svg'];
+const assets = ['index.html', 'app.js', 'browser-snapshot.js', 'session-drawer.js', 'proc-icons.js', 'style.css', 'workspace.css', 'logo.png', 'logo-app.svg'];
 
 fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist, { recursive: true });
@@ -46,6 +46,8 @@ fs.mkdirSync(path.join(dist, 'vendor', 'xterm'), { recursive: true });
 for (const a of assets) {
   fs.copyFileSync(path.join(root, a), path.join(dist, a));
 }
+
+fs.cpSync(path.join(root, 'fonts'), path.join(dist, 'fonts'), { recursive: true });
 
 const vendorXterm = path.join(root, 'vendor', 'xterm');
 fs.cpSync(vendorXterm, path.join(dist, 'vendor', 'xterm'), { recursive: true });
