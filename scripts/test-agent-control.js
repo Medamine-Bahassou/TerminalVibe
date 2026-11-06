@@ -10,6 +10,12 @@ const { once } = require('events');
 const WebSocket = require('ws');
 const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession } = require('../electron/agent-control');
 
+// Windows: kill() terminates server.js only; its ConPTY children keep running
+// with the temp dir as cwd, which locks it. Kill the whole tree instead.
+const killTree = child => process.platform === 'win32'
+  ? cp.spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'])
+  : child.kill('SIGTERM');
+
 async function main() {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-control-'));
   let bridge;
@@ -546,7 +552,7 @@ async function main() {
     assert.match((await browserCall('list')).error, /Multiple browser tabs/);
     extraClient.close(); await once(extraClient, 'close'); extraClient = null;
     browserClient.close(); await once(browserClient, 'close'); browserClient = null;
-    browserServer.kill('SIGTERM'); await once(browserServer, 'exit'); browserServer = null;
+    killTree(browserServer); await once(browserServer, 'exit'); browserServer = null;
     console.log('Browser control: real server, WebSocket, PTY spawn, inherited instance, stdin and multi-tab protection passed');
     bridge.close();
     assert(!fs.existsSync(bridge.file));
@@ -554,7 +560,7 @@ async function main() {
   } finally {
     if (extraClient) extraClient.terminate();
     if (browserClient) browserClient.terminate();
-    if (browserServer) browserServer.kill('SIGTERM');
+    if (browserServer) killTree(browserServer);
     if (bridge) bridge.close();
     fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
