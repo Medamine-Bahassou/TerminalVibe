@@ -142,4 +142,4 @@ async function checkBackend(name, make) {
   await checkBackend('Electron', desktopBackend);
   await checkBackend('WebSocket', webBackend);
 })().catch(error => { console.error(error); process.exitCode = 1; })
-  .finally(() => fs.rmSync(temp, { recursive: true, force: true }));
+  .finally(() => fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));

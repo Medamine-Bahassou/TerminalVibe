@@ -111,7 +111,7 @@ app.whenReady().then(async () => {
     console.log('PASS: all workspace tabs and full scrollback/browser content, dedicated API and stale-preload detection, complete session logs, private file attachment and target checks');
   } finally {
     if(config===undefined) delete process.env.CLAUDE_CONFIG_DIR;else process.env.CLAUDE_CONFIG_DIR=config;
-    fs.rmSync(temp,{recursive:true,force:true});
+    fs.rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:200});
   }
   clearTimeout(timer); app.exit(0);
 }).catch(error => { console.error(error); clearTimeout(timer); app.exit(1); });

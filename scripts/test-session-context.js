@@ -26,5 +26,5 @@ const {readSessionContext,attachSessionContext}=require('../electron/session-con
     rows.push({type:'assistant',message:{content:'long message '.repeat(4000)}});fs.writeFileSync(file,rows.map(r=>JSON.stringify(r)).join('\n'));
     const shortened=await readSessionContext(id);assert(shortened.truncated);assert.match(shortened.text,/not the complete session/);assert(shortened.text.length<28000);
     console.log('PASS: session context extraction, bounded excerpts, control-character filtering, guarded Claude draft paste and target-change protection');
-  } finally {if(saved===undefined) delete process.env.CLAUDE_CONFIG_DIR;else process.env.CLAUDE_CONFIG_DIR=saved;fs.rmSync(temp,{recursive:true,force:true});}
+  } finally {if(saved===undefined) delete process.env.CLAUDE_CONFIG_DIR;else process.env.CLAUDE_CONFIG_DIR=saved;fs.rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 })().catch(e=>{console.error(e);process.exitCode=1;});
