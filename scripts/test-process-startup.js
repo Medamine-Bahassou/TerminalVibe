@@ -58,5 +58,5 @@ console.log('PASS: pre-exec Electron/Node filtering, idle shells, foreground Cla
     });
     assert.deepEqual(runningProcessInfo(terminal.pid),{running:true,name:'busy'});
     console.log('PASS: 20 real PTY shell startups remain idle; an executed workload is still detected');
-  } finally {await close();fs.rmSync(temp,{recursive:true,force:true});}
+  } finally {await close();fs.rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 })().catch(error=>{console.error(error);process.exitCode=1;});

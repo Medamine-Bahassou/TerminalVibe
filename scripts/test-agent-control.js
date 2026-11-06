@@ -556,7 +556,7 @@ async function main() {
     if (browserClient) browserClient.terminate();
     if (browserServer) browserServer.kill('SIGTERM');
     if (bridge) bridge.close();
-    fs.rmSync(temp, { recursive: true, force: true });
+    fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }
 main().catch(err => { console.error(err); process.exitCode = 1; });

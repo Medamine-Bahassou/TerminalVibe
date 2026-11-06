@@ -111,5 +111,5 @@ try {
     console.log('PASS: single startup load, no login profiles, stable zsh cache directory, custom ZDOTDIR, cwd hooks and Bash prompt arrays');
   }
 } finally {
-  for (const dir of [...generated, home]) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of [...generated, home]) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

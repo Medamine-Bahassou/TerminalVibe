@@ -33,7 +33,7 @@ if (process.argv.includes('--pty-host')) {
   const finish = code => {
     child?.stdin.end();
     child?.kill();
-    if (temp) fs.rmSync(temp, { recursive: true, force: true });
+    if (temp) fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     win?.destroy();
     app.exit(code);
   };

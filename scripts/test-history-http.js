@@ -21,5 +21,5 @@ const {once}=require('events');
     assert.equal((await fetch(url,{headers:{Origin:'https://untrusted.example'}})).status,403);
     assert.equal((await fetch(url,{method:'POST'})).status,405);
     console.log('PASS: frontend dev-server session API, all-project history, JSON responses and origin/method checks');
-  } finally {if(child && child.exitCode===null){child.kill();await once(child,'exit');}fs.rmSync(temp,{recursive:true,force:true});}
+  } finally {if(child && child.exitCode===null){child.kill();await once(child,'exit');}fs.rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

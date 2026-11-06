@@ -74,6 +74,6 @@ const { handleSkillRequest } = require('../electron/skill-http');
     console.log('PASS: skill installation, toggles, preservation, conflicts, custom paths, failed copy cleanup and HTTP origin/method/input validation');
   } finally {
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
-    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

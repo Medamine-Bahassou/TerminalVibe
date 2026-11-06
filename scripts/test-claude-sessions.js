@@ -34,5 +34,5 @@ const { listClaudeSessions } = require('../electron/claude-sessions');
     const emptyConfig=path.join(temp,'no-history');process.env.CLAUDE_CONFIG_DIR=emptyConfig;
     assert.deepEqual((await listClaudeSessions(cwd,temp)).sessions,[]);
     console.log('PASS: local Claude history, previews, malformed records, all-project discovery, original working directories and empty history');
-  } finally { if(saved===undefined) delete process.env.CLAUDE_CONFIG_DIR;else process.env.CLAUDE_CONFIG_DIR=saved;fs.rmSync(temp,{recursive:true,force:true}); }
+  } finally { if(saved===undefined) delete process.env.CLAUDE_CONFIG_DIR;else process.env.CLAUDE_CONFIG_DIR=saved;fs.rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:200}); }
 })().catch(e=>{console.error(e);process.exitCode=1;});

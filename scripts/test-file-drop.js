@@ -17,7 +17,7 @@ if(!process.versions.electron) {
       });
       const child=cp.spawnSync(require('electron'),[__filename,'--no-sandbox'],{stdio:'inherit',env:{...process.env,ELECTRON_RUN_AS_NODE:'',TV_DROP_WS:String(wsPort),TV_DROP_APP:String(appPort),TV_DROP_FILE:file,TV_DROP_ROOT:temp}});
       process.exitCode=child.status??1;
-    } finally { server.kill('SIGTERM');await new Promise(resolve=>server.exitCode!==null?resolve():server.once('exit',resolve));fs.rmSync(temp,{recursive:true,force:true}); }
+    } finally { server.kill('SIGTERM');await new Promise(resolve=>server.exitCode!==null?resolve():server.once('exit',resolve));fs.rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:200}); }
   })().catch(error=>{console.error(error);process.exitCode=1;});
 } else {
   const {app,BrowserWindow,ipcMain}=require('electron');
