@@ -189,6 +189,33 @@ user-select: none;
 .titlebar-btn:active { color: var(--dim-text); }
 .titlebar-btn svg { width: 15px; height: 15px; pointer-events: none; }
 
+#servers-dropdown {
+  position: fixed;
+  z-index: 10000;
+  width: min(340px, calc(100vw - 16px));
+  max-height: min(420px, calc(100vh - 60px));
+  overflow: auto;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px #0005;
+  font-size: 12px;
+  -webkit-app-region: no-drag;
+}
+#servers-dropdown[hidden] { display: none; }
+.servers-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: 600; }
+#servers-refresh { display: grid; place-items: center; width: 26px; height: 26px; border: 0; background: transparent; color: var(--dim-text); cursor: pointer; }
+#servers-refresh:hover, .server-row:hover { background: var(--tab-hover-bg); color: var(--fg); }
+#servers-refresh:disabled { opacity: .5; cursor: wait; }
+.server-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: inherit; text-decoration: none; border-bottom: 1px solid var(--border); }
+.server-row > i { font-size: 16px; color: var(--dim-text); }
+.server-details { flex: 1; min-width: 0; }
+.server-name, .server-address { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-address { color: var(--dim-text); font-size: 11px; margin-top: 3px; }
+.server-port { font-variant-numeric: tabular-nums; color: var(--dim-text); }
+.servers-message { padding: 16px 12px; color: var(--dim-text); line-height: 1.5; margin: 0; }
+#servers-dropdown :focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+
 /* ──────────────────────────────────────────
  *   APP LAYOUT
  * ────────────────────────────────────────── */
@@ -222,6 +249,13 @@ position: relative;
 z-index: 20;
 min-width: fit-content;
 --sb-rail-w: 37px;
+}
+/* Split.js retains its expanded minimum when setSizes([0, 100]) runs.
+   A collapsed rail must not inherit that inline flex-basis. */
+#sidebar:not(.expanded) {
+  flex: 0 0 var(--sb-rail-w) !important;
+  width: var(--sb-rail-w);
+  min-width: var(--sb-rail-w);
 }
 #sidebar-inner {
 --sidebar-expanded-w: 200px;
@@ -415,30 +449,8 @@ body.no-ws-procs #sidebar.expanded .ws-btn .ws-info .ws-name { flex: 1; }
 }
 #sidebar.expanded .ws-btn .ws-count { display: flex; opacity: 1; }
 .ws-btn.active .ws-count { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
-#sidebar.expanded .ws-btn:hover .ws-count { opacity: 0; pointer-events: none; }
 
-.ws-btn .ws-actions {
-  display: none;
-  gap: 2px;
-  position: absolute;
-  right: 8px;
-}
-#sidebar.expanded .ws-btn .ws-actions { display: flex; opacity: 0; transition: opacity 0.1s; pointer-events: none; }
-#sidebar.expanded .ws-btn:hover .ws-actions { opacity: 1; pointer-events: auto; }
-
-.ws-btn .ws-action {
-  width: 18px; height: 18px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: 4px;
-  color: var(--dim-text);
-  font-size: 11px;
-  cursor: pointer;
-  transition: color 0.1s, background 0.1s;
-}
-.ws-btn .ws-action .ph { font-size: 13px; pointer-events: none; }
-.ws-btn .ws-action:hover { color: var(--fg); background: rgba(255,255,255,0.1); }
-.ws-btn .ws-action.ws-remove:hover { color: #f38ba8; }
-.ws-btn .ws-action.ws-pin:hover { color: var(--accent); }
+#sidebar.expanded 
 .ws-btn.pinned .ws-strip { background: var(--accent) !important; }
 .ws-btn .ws-pin-icon {
   position: absolute;
@@ -451,7 +463,6 @@ body.no-ws-procs #sidebar.expanded .ws-btn .ws-info .ws-name { flex: 1; }
 }
 .ws-btn .ws-pin-icon .ph { font-size: 10px; }
 #sidebar.expanded .ws-btn .ws-pin-icon { display: flex; }
-#sidebar.expanded .ws-btn:hover .ws-pin-icon { opacity: 0; }
 
 .ws-pin-label {
   font-size: 9px;
@@ -1127,7 +1138,8 @@ isolation: isolate;
 }
 .tg-tab.active .tg-tab-dot { opacity: 1; }
 .tg-tab.active .tg-tab-icon { opacity: 0.9; }
-.tg-tab.dead { opacity: 0.45; pointer-events: none; }
+/* Exited terminals retain output; their tabs must still be selectable/closable. */
+.tg-tab.dead { opacity: 0.45; }
 .tg-tab-name {
   flex: 1;
   overflow: hidden;
@@ -2296,7 +2308,7 @@ body.resizing .drag-shield {
   flex-direction: column;
   overflow: hidden;
   display: flex;
-  background: #fff;
+  background: var(--bg);
 }
 
 /* Focus highlight for browser tabs. The webview/iframe paints inside
@@ -2393,8 +2405,14 @@ body.resizing .drag-shield {
   min-width: 0;
   min-height: 0;
   border: none;
-  background: #fff;
+  background: var(--bg);
   z-index: 1;
+}
+
+/* Electron's guest iframe flexes inside the webview. Overriding its host
+   with display:block interrupts guest resizing and exposes stale white edges. */
+webview.browser-surface {
+  display: flex;
 }
 
 /* Page viewers (start / error) paint above the surface slot */
@@ -2409,7 +2427,7 @@ body.resizing .drag-shield {
   overflow: hidden;
   position: relative;
   z-index: 2;
-  background: #fff;
+  background: var(--bg);
   /* When native Electron webview is active, JS sets this to transparent */
   transition: background 0.1s;
 }

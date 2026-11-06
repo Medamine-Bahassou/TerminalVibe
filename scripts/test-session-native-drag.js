@@ -1,0 +1,104 @@
+// Trusted Chromium mouse drag, not synthetic DOM drag events. No user terminals.
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict');
+if(!process.versions.electron) {
+  const r=require('child_process').spawnSync(require('electron'),[__filename,'--no-sandbox'],{stdio:'inherit',env:{...process.env,ELECTRON_RUN_AS_NODE:''}});process.exit(r.status??1);
+}
+const {app,BrowserWindow}=require('electron');
+let win;const timeout=setTimeout(()=>{console.error('Native session drag timed out');app.exit(1);},20000);
+app.whenReady().then(async()=>{
+  win=new BrowserWindow({show:false,width:1000,height:740,webPreferences:{backgroundThrottling:false,offscreen:true}});
+  await win.loadURL('about:blank');
+  for(const file of ['style.css','workspace.css']) await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname,'..',file),'utf8'));
+  await win.webContents.executeJavaScript(fs.readFileSync(path.join(__dirname,'../session-drawer.js'),'utf8'));
+  const src=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const handler=src.slice(src.indexOf('  function setupGroupDragAndDrop('),src.indexOf('  function handleTerminalDrop('));
+  const tabHelpers=src.slice(src.indexOf('  async function openSavedSessionTab('),src.indexOf('  function addTabSessionHistory('));
+  const coords=await win.webContents.executeJavaScript(`(async()=>{
+    const groupEl=document.createElement('div');groupEl.className='term-group';groupEl.dataset.groupId='test-group';groupEl.style.cssText='position:absolute;left:0;top:0;width:900px;height:640px';document.body.append(groupEl);
+    const header=document.createElement('div');header.className='term-group-header';header.style.cssText='height:34px;width:900px';header.innerHTML='<div class="term-group-tabs"><div class="tg-tab" data-termid="chat">Chat</div></div>';groupEl.append(header);
+    const body=document.createElement('div');body.style.cssText='position:absolute;left:0;top:34px;width:900px;height:600px';groupEl.append(body);
+    const host=document.createElement('div');host.style.cssText='position:absolute;inset:0';body.append(host);
+    const input=document.createElement('textarea');input.id='draft';input.style.cssText='position:absolute;left:300px;top:400px;width:400px;height:100px';host.append(input);
+    window.dropResults=[];window.nativeEvents=[];window.resumed=false;window.inputConsumedDrop=false;
+    body.addEventListener('dragstart',e=>nativeEvents.push({type:e.type,trusted:e.isTrusted}),true);
+    input.addEventListener('drop',e=>{e.stopPropagation();window.inputConsumedDrop=true;});
+    const attachContextToChat=(target,id)=>{dropResults.push({target:target.id,id});input.value='Saved context for '+id;};
+    const isFileDrag=e=>e.dataTransfer?.types.includes('Files');
+    window.fileDrops=[];
+    const dropFilesIntoTerminal=async(target,files)=>fileDrops.push({target:target.id,names:files.map(f=>f.name)});
+    const checkTerminalRunning=async()=> 'claude';
+    ${handler}
+    window.testChat={id:'chat',el:host};
+    const group={id:'test-group',activeTermId:'chat',terminals:[testChat]};
+    const workspaces=[{id:'workspace',layout:group}];
+    const getWorkspaceTerminals=ws=>ws.layout.terminals;
+    const findTermById=id=>{const term=group.terminals.find(t=>t.id===id);return term?{ws:workspaces[0],term}:null;};
+    const findGroupById=(layout,id)=>layout.id===id?layout:null;
+    const findGroupContainingTerm=(layout,id)=>layout.terminals.some(t=>t.id===id)?layout:null;
+    const loadClaudeHistory=async()=>({executable:'/fixture/claude',sessions:[{id:'saved-session',cwd:'/saved/project',title:'Saved conversation'}]});
+    window.tabLaunches=[];window.tabFocus=[];
+    const activateWorkspace=()=>{};
+    const activateTerminal=(ws,id)=>{tabFocus.push(id);group.activeTermId=id;};
+    const syncClaudeHistoryButton=()=>{},saveState=()=>{};
+    const handleAgentRequest=async request=>{tabLaunches.push(request);group.terminals.push({id:'resumed-tab'});return {launches:[{id:'resumed-tab',started:true}]};};
+    ${tabHelpers}
+    setupSessionTabDrops();
+    setupGroupDragAndDrop(body,group,workspaces[0],document.createElement('div'));
+    await openSessionDrawer({host,cwd:'Test',load:async()=>({sessions:[{id:'saved-session',cwd:'/project',title:'Saved conversation',updatedAt:new Date().toISOString()}]}),canReplace:async()=>true,start:async()=>{window.resumed=true;}});
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    const source=document.querySelector('.session-row').getBoundingClientRect(),target=input.getBoundingClientRect();
+    return {source:{x:source.x+source.width/2,y:source.y+source.height/2},target:{x:target.x+target.width/2,y:target.y+target.height/2}};
+  })()`);
+  win.webContents.debugger.attach('1.3');
+  const send=(name,args)=>win.webContents.debugger.sendCommand(name,args);
+  const intercepted=new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('Chromium did not start the session drag')),4000);
+    win.webContents.debugger.on('message',(_e,method,params)=>{if(method==='Input.dragIntercepted'){clearTimeout(timer);resolve(params.data);}});
+  });
+  await send('Input.setInterceptDrags',{enabled:true});
+  await send('Input.dispatchMouseEvent',{type:'mouseMoved',...coords.source});
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',...coords.source,button:'left',clickCount:1});
+  await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:coords.source.x+20,y:coords.source.y+10,button:'left',buttons:1});
+  const data=await intercepted;
+  assert(data.items.some(item=>item.mimeType==='application/x-terminalvibe-session'&&item.data==='saved-session'));
+  for(const type of ['dragEnter','dragOver','drop']) await send('Input.dispatchDragEvent',{type,...coords.target,data});
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',...coords.target,button:'left',clickCount:1});
+  const result=await win.webContents.executeJavaScript('({drops:dropResults,events:nativeEvents,resumed,inputConsumedDrop,draft:document.querySelector("#draft").value})');
+  assert.deepEqual(result.drops,[{target:'chat',id:'saved-session'}]);assert(result.events.some(e=>e.trusted));assert.equal(result.resumed,false);assert.equal(result.inputConsumedDrop,false);assert.match(result.draft,/Saved context/);
+  console.log('PASS: real Chromium session drag reaches chat draft before terminal input handlers and never resumes the source session');
+  const fileData={items:[],files:[__filename],dragOperationsMask:1};
+  for(const type of ['dragEnter','dragOver']) await send('Input.dispatchDragEvent',{type,...coords.target,data:fileData});
+  const cue=await win.webContents.executeJavaScript(`(()=>{
+    document.body.classList.add('roundless');
+    const effect=document.querySelector('.session-context-drop-effect'),pill=effect?.firstElementChild;
+    if(!effect) return null;
+    const icon=pill.querySelector('svg'),style=getComputedStyle(effect),pillStyle=getComputedStyle(pill);
+    return {text:pill.textContent,border:style.borderTopStyle,radius:pillStyle.borderRadius,layout:pillStyle.flexDirection,blur:style.backdropFilter,icon:getComputedStyle(icon).width};
+  })()`);
+  assert(cue,'File drag did not show the attachment cue');assert.equal(cue.text,'Drop files to attach');
+  assert.equal(cue.border,'dashed');assert.equal(cue.radius,'9999px');assert.equal(cue.layout,'row');assert.equal(cue.blur,'none');assert.equal(cue.icon,'16px');
+  await send('Input.dispatchDragEvent',{type:'drop',...coords.target,data:fileData});
+  let files=await win.webContents.executeJavaScript('({drops:fileDrops,inputConsumedDrop,cue:!!document.querySelector(".session-context-drop-effect")})');
+  assert.deepEqual(files.drops,[{target:'chat',names:[path.basename(__filename)]}]);assert.equal(files.inputConsumedDrop,false);assert.equal(files.cue,false);
+  await win.webContents.executeJavaScript('testChat.locked=true');
+  for(const type of ['dragEnter','dragOver','drop']) await send('Input.dispatchDragEvent',{type,...coords.target,data:fileData});
+  assert.equal(await win.webContents.executeJavaScript('fileDrops.length'),1,'Locked terminal accepted a file drop');
+  console.log('PASS: native file drag uses a compact paperclip pill and dashed outline, reaches the active terminal once, clears on drop and rejects locked targets');
+  await win.webContents.executeJavaScript('testChat.locked=false');
+  const tabTarget={x:450,y:17};
+  for(const type of ['dragEnter','dragOver']) await send('Input.dispatchDragEvent',{type,...tabTarget,data});
+  assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".session-tab-drop-target")'),true,'Tab bar must advertise a session drop');
+  await send('Input.dispatchDragEvent',{type:'drop',...tabTarget,data});
+  const tabResult=await win.webContents.executeJavaScript(`(async()=>{for(let i=0;i<100&&!tabFocus.length;i++)await new Promise(r=>setTimeout(r,10));return {launches:tabLaunches,focus:tabFocus,attachments:dropResults.length,resumed,cue:!!document.querySelector('.session-tab-drop-target')};})()`);
+  assert.equal(tabResult.launches.length,1);assert.equal(tabResult.focus[0],'resumed-tab');
+  assert.equal(tabResult.attachments,1,'Tab drop must not attach context to the current draft');assert.equal(tabResult.resumed,false);
+  assert.equal(tabResult.cue,false);
+  const plan=tabResult.launches[0].params;
+  assert.equal(plan.workspaceId,'workspace');assert.equal(plan.anchorPaneId,'chat');assert.equal(plan.placement.mode,'tab');
+  assert.deepEqual(plan.layout.argv,['/fixture/claude','--resume','saved-session']);
+  assert.equal(plan.layout.cwd,'/saved/project');assert.equal(plan.layout.returnToShell,true);
+  for(const type of ['dragEnter','dragOver','drop']) await send('Input.dispatchDragEvent',{type,...tabTarget,data});
+  assert.equal(await win.webContents.executeJavaScript('tabLaunches.length'),1,'Repeated drops must select the already-open conversation');
+  console.log('PASS: trusted session drop on the tab bar resumes in a new tab, focuses it, preserves drafts, uses the original cwd and avoids duplicate launches');
+  clearTimeout(timeout);win.destroy();app.quit();
+}).catch(e=>{console.error(e);win?.destroy();app.exit(1);});

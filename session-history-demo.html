@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TerminalVibe · Session drawer preview</title>
+<link rel="stylesheet" href="style.css"><link rel="stylesheet" href="workspace.css">
+<style>
+body{font:14px/1.6 system-ui,sans-serif;padding:32px;background:#202128;color:#d7d9e0;overflow:auto}.demo-shell{margin:36px auto;max-width:1040px;border:1px solid #ffffff18;border-radius:8px;overflow:hidden}.demo-tabs{display:flex;align-items:center;gap:24px;padding:10px 16px;border-bottom:1px solid #ffffff18;background:#292b34}.demo-tabs button{margin-left:auto;color:inherit;background:transparent;border:1px solid #ffffff26;border-radius:4px;padding:5px 12px;cursor:pointer}.demo-body{display:grid;grid-template-columns:1.5fr 1fr;min-height:400px}.demo-terminal{position:relative;padding:24px;font:13px/1.9 monospace;white-space:pre-wrap}.demo-terminal+div{border-left:1px solid #ffffff18;color:#a3a6b3}.demo-note{max-width:1040px;margin:auto;color:#a3a6b3;font-size:13px}.demo-note h1{color:#d7d9e0;font-size:24px;font-weight:500;margin-bottom:8px}#demo-result{margin-top:20px;color:#a6c7ff}.demo-tag{font-size:10px;letter-spacing:.12em;color:#90b6f9}
+</style></head><body>
+<div class="demo-note"><span class="demo-tag">INTERACTIVE PREVIEW · SAMPLE CONVERSATIONS</span><h1>History belongs to the terminal.</h1><p>Open the clock button, then choose a conversation to resume it directly in the same terminal. This preview starts no processes and uses no private history.</p></div>
+<main class="demo-shell"><div class="demo-tabs"><span>~/Projects/website · Claude</span><span style="color:#848898">server logs</span><button id="history" aria-label="Open Claude session history">◷ &nbsp; Sessions</button></div><div class="demo-body"><div class="demo-terminal"><span style="color:#90b6f9">~/Projects/website</span>
+$ claude
+
+Ready when you are.
+
+Your terminal stays here while you browse
+previous conversations.</div><div class="demo-terminal">$ npm run dev
+
+Local: http://localhost:3000
+
+✓ Ready
+
+Server process stays running.</div></div></main>
+<div class="demo-note" id="demo-result" role="status"></div>
+<script src="session-drawer.js"></script><script>
+const samples=[{id:'one',title:'Investigate slow startup',updatedAt:'2026-11-05T18:35:00Z',preview:[{role:'user',text:'Find why this application takes so long to start.'},{role:'assistant',text:'I traced startup and found that the configuration loader reads the same files twice. We can cache the result during initialization.'}]},{id:'two',title:'Explain the deployment script',updatedAt:'2026-11-04T15:10:00Z',preview:[{role:'user',text:'Walk me through the deployment script before I run it.'},{role:'assistant',text:'It builds the assets, checks the target directory, then uploads the release. The final restart requires your confirmation.'}]},{id:'three',title:'Review terminal keyboard shortcuts',updatedAt:'2026-11-03T10:20:00Z',preview:[{role:'user',text:'Help me understand the keyboard shortcuts.'},{role:'assistant',text:'We reviewed navigation, pane splitting, and how to move between tabs without leaving the keyboard.'}]}];
+document.querySelector('#history').onclick=()=>openSessionDrawer({host:document.querySelector('.demo-terminal'),cwd:'Claude Code · All projects',load:async()=>({sessions:samples}),canReplace:async()=>true,start:async(session,mode)=>{document.querySelector('#demo-result').textContent='Preview: '+(session?'Resume “'+session.title+'”':'Start a new conversation')+(mode==='split'?' in a new split.':' in this idle terminal.')+' No process was started.';}});
+</script></body></html>

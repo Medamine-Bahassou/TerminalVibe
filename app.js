@@ -7,6 +7,117 @@
   // instead of leaving the app stuck forever.
   window.__tvAppJsRan = true;
 
+  setupAppTooltips();
+
+  // Permanently remove native tooltip sources before any settings/detached boot.
+  function setupAppTooltips() {
+    const DELAY = 700, SKIP_DELAY = 100, SKIP_WINDOW = 300;
+    const tip = document.createElement('div');
+    tip.className = 'ui-tooltip'; tip.id = 'app-ui-tooltip'; tip.setAttribute('role', 'tooltip');
+    document.body.append(tip);
+    let target = null, timer = null, warmUntil = 0, dismissed = false;
+    const close = () => {
+      clearTimeout(timer);
+      if (tip.classList.contains('show')) warmUntil = Date.now() + SKIP_WINDOW;
+      tip.classList.remove('show');
+      target?.removeAttribute('aria-describedby');
+    };
+    const release = () => { close(); target = null; dismissed = false; };
+    const show = () => {
+      if (!target?.isConnected || dismissed || !target.dataset.tip) return;
+      const processes = target.dataset.tipProcesses ? JSON.parse(target.dataset.tipProcesses) : null;
+      tip.classList.toggle('ws-process-tooltip', !!processes);
+      const sessionRow = target.closest('.session-row');
+      tip.classList.toggle('session-tooltip', !!sessionRow);
+      tip.textContent = target.dataset.tip;
+      if (processes) {
+        const heading = document.createElement('div');
+        heading.className = 'ws-process-tooltip-heading'; heading.textContent = target.dataset.tip;
+        tip.replaceChildren(heading);
+        for (const process of processes) {
+          const row = document.createElement('div'); row.className = 'ws-process-tooltip-row';
+          row.innerHTML = procIconHtml(process.name);
+          const name = document.createElement('span'); name.textContent = process.name; row.append(name);
+          tip.append(row);
+        }
+      }
+      const workspaceButton = target.closest('.ws-btn');
+      const sideTarget = workspaceButton || sessionRow;
+      const r = (sideTarget || target).getBoundingClientRect();
+      const w = tip.offsetWidth, h = tip.offsetHeight;
+      let top = sideTarget ? r.top : r.bottom + 6;
+      if (top + h > innerHeight - 4) top = sideTarget ? innerHeight - h - 4 : r.top - h - 6;
+      const preferredLeft = sideTarget ? r.right + 6 : r.left + r.width / 2 - w / 2;
+      const left = Math.max(4, Math.min(preferredLeft, innerWidth - w - 4));
+      tip.style.transform = `translate(${Math.round(left)}px, ${Math.round(Math.max(4, top))}px)`;
+      tip.classList.add('show');
+      target.setAttribute('aria-describedby', tip.id);
+    };
+    const convertTitle = el => {
+      if (!el.hasAttribute('title')) return;
+      const text = el.getAttribute('title');
+      el.dataset.tip = text;
+      if (text && !el.hasAttribute('aria-label') && !el.textContent.trim()) el.setAttribute('aria-label', text);
+      el.removeAttribute('title');
+      if (el === target) { if (!text) release(); else if (tip.classList.contains('show')) show(); }
+    };
+    const normalize = root => {
+      if (!(root instanceof Element)) return;
+      convertTitle(root);
+      root.querySelectorAll('[title]').forEach(convertTitle);
+      // SVG <title> is another native-tooltip source; preserve its accessible name.
+      const svgTitles = [...root.querySelectorAll('svg title')];
+      if (root.matches('svg title')) svgTitles.push(root);
+      for (const node of svgTitles) {
+        const owner = node.parentElement;
+        if (!owner.hasAttribute('data-tip')) owner.dataset.tip = node.textContent;
+        if (!owner.hasAttribute('aria-label')) owner.setAttribute('aria-label', node.textContent);
+        node.remove();
+      }
+    };
+    normalize(document.documentElement);
+    new MutationObserver(records => {
+      for (const record of records) {
+        if (record.type === 'attributes') {
+          if (record.attributeName === 'title') convertTitle(record.target);
+          else if (record.target === target) {
+            if (!target.dataset.tip) release();
+            else if (tip.classList.contains('show')) show();
+          }
+        }
+        else for (const node of record.addedNodes) normalize(node);
+      }
+      if (target && !target.isConnected) release();
+    }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'data-tip', 'data-tip-processes'] });
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(show, Date.now() < warmUntil ? SKIP_DELAY : DELAY); };
+    const take = el => {
+      if (el === target) return false;
+      release();
+      if (!el?.dataset.tip) return false;
+      target = el; return true;
+    };
+    const closestTip = el => {
+      // Also sanitize synchronously on entry if another event handler just set a title.
+      for (let node = el instanceof Element ? el : null; node; node = node.parentElement) convertTitle(node);
+      return el.closest?.('[data-tip]');
+    };
+    document.addEventListener('mouseover', e => { if (take(closestTip(e.target))) schedule(); });
+    document.addEventListener('mouseout', e => {
+      if (target && (!e.relatedTarget || !target.contains(e.relatedTarget))) release();
+    });
+    document.addEventListener('mousemove', () => { if (target && !dismissed && !tip.classList.contains('show')) schedule(); }, { passive: true });
+    document.addEventListener('mousedown', () => { if (target) { close(); dismissed = true; } }, true);
+    document.addEventListener('focusin', e => { if (e.target.matches?.(':focus-visible') && take(closestTip(e.target))) schedule(); });
+    document.addEventListener('focusout', e => {
+      if (target?.contains(e.target) && !target.contains(e.relatedTarget)) release();
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && tip.classList.contains('show')) { close(); dismissed = true; } }, true);
+    document.addEventListener('wheel', () => { if (target) { close(); dismissed = true; } }, { capture: true, passive: true });
+    document.documentElement.addEventListener('mouseleave', release);
+    window.addEventListener('blur', release);
+  }
+
+
   window.addEventListener('error', e => console.error('[UNCAUGHT]', e.error || e.message, e.filename, e.lineno));
   window.addEventListener('unhandledrejection', e => console.error('[UNHANDLED-REJECTION]', e.reason));
 
@@ -153,6 +264,40 @@
    T H*EMES — mirror Python THEMES dict exactly
    ═══════════════════════════════════════════════════════════════ */
   const THEMES = {
+    'carbon': {
+      label: 'Carbon',
+      bg: '#050505', fg: '#eeeeee', cursor: '#eeeeee', selection: '#303030',
+      swatches: ['#050505', '#eeeeee', '#70a9ed'],
+      palette: [
+        '#161616', '#e76975', '#72bc98', '#d5b477',
+        '#70a9ed', '#b59adb', '#79b9c1', '#c9c9c9',
+        '#707070', '#f08c95', '#92d1ad', '#e4ca96',
+        '#96c1f5', '#ccb5eb', '#9dd0d5', '#f5f5f5',
+      ],
+      ui: {
+        accent: '#70a9ed', border: '#2b2b2b',
+        tabActiveBg: '#161616', tabHoverBg: '#222222',
+        dimText: '#909090', mutedText: '#b0b0b0',
+        sidebarBg: '#0c0c0c', surfaceBg: '#161616',
+        hoverBg: '#222222', activeBg: '#262626',
+      },
+    },
+    'graphite': {
+      label: 'Graphite',
+      bg: '#0d1017', fg: '#e8ecf4', cursor: '#a5b2ff', selection: '#273249',
+      swatches: ['#0d1017', '#e8ecf4', '#8b9dff'],
+      palette: [
+        '#20262c', '#ed8993', '#8ddbb8', '#e6c788',
+        '#8bb9e8', '#c1a6d9', '#89cdd3', '#dce3e6',
+        '#65727c', '#f3a2aa', '#abe8cc', '#f0d7a4',
+        '#accff0', '#d5bfe7', '#a8dfe3', '#f2f5f6',
+      ],
+      ui: {
+        accent: '#8b9dff', border: '#2a3240',
+        tabActiveBg: '#191e29', tabHoverBg: '#222937',
+        dimText: '#707b90', mutedText: '#a0a9bb',
+      },
+    },
     'catppuccin-mocha': {
       label: 'Catppuccin Mocha',
       bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#585b70',
@@ -163,25 +308,6 @@
         '#585b70', '#eba0ac', '#a6e3a1', '#f9e2af',
         '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de',
       ],
-    },
-    'catppuccin-latte': {
-      label: 'Catppuccin Latte',
-      bg: '#2a2a2a', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#45475a',
-      swatches: ['#2a2a2a', '#cdd6f4', '#f5e0dc'],
-      palette: [
-        '#2a2a2a', '#f38ba8', '#a6e3a1', '#f9e2af',
-        '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de',
-        '#585b70', '#f38ba8', '#a6e3a1', '#f9e2af',
-        '#89b4fa', '#f5c2e7', '#94e2d5', '#a6adc8',
-      ],
-      ui: {
-        accent: '#89b4fa',
-        border: 'rgba(255,255,255,0.08)',
-        tabActiveBg: 'rgba(255,255,255,0.07)',
-        tabHoverBg: 'rgba(255,255,255,0.04)',
-        dimText: 'rgba(255,255,255,0.3)',
-        mutedText: 'rgba(255,255,255,0.5)',
-      },
     },
     'dracula': {
       label: 'Dracula',
@@ -319,6 +445,18 @@
 
   let WS_PORT = 7681;
 
+  // Terminal links follow Settings → General: a browser tab beside the
+  // terminal they were clicked in, or the system browser. Shift+click picks
+  // the other one. Non-web URLs and detached panes always go external.
+  function openTerminalLink(termId, uri, event) {
+    let url = null;
+    try { url = new URL(uri); } catch { }
+    const found = findTermById(termId);
+    const inTab = (terminalLinkTarget !== 'external') !== !!event?.shiftKey;
+    if (!url || !['http:', 'https:'].includes(url.protocol) || !inTab || !found?.ws) { openExternalUrl(uri); return; }
+    addBrowserTab(found.ws.id, findGroupContainingTerm(found.ws.layout, termId)?.id, url.href);
+  }
+
   function openExternalUrl(url) {
     if (isDesktop() && window.electronAPI) {
       window.electronAPI.openExternal(url);
@@ -330,7 +468,7 @@
   // Quote a path for pasting into a shell (POSIX '…'\''…', PowerShell '…''…').
   function shellQuote(p) {
     if (/^[\w@%+=:,./~-]+$/.test(p)) return p;
-    return window.electronAPI?.platform === 'win32'
+    return (window.electronAPI?.platform || terminalBackendPlatform) === 'win32'
       ? `'${p.replace(/'/g, "''")}'`
       : `'${p.replace(/'/g, "'\\''")}'`;
   }
@@ -339,38 +477,124 @@
   // paste their quoted paths into the terminal, like other terminals do.
   // Files without a disk path (dragged out of a browser) are saved to temp.
   const isFileDrag = e => !!e.dataTransfer?.types?.includes('Files');
+  async function saveBrowserDroppedFile(entry, file) {
+    if (!wsReady || !ws || ws.readyState !== WebSocket.OPEN) throw new Error('Terminal backend is disconnected');
+    if (!fileDropReady) throw new Error('Restart the TerminalVibe backend and reload to enable file drops');
+    if (file.size > 64 * 1024 * 1024) throw new Error('Dropped files must be at most 64 MiB each');
+    const data = await new Promise((resolve,reject) => {
+      const reader=new FileReader();
+      reader.onload=()=>resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror=()=>reject(new Error('Could not read '+file.name));
+      reader.onabort=()=>reject(new Error('File transfer was cancelled'));
+      reader.readAsDataURL(file);
+    });
+    if (!wsReady || ws.readyState !== WebSocket.OPEN) throw new Error('Terminal backend disconnected while reading the file');
+    return new Promise((resolve,reject) => {
+      const requestId=uuid();
+      const timer=setTimeout(()=>{fileDropRequests.delete(requestId);reject(new Error('File transfer timed out'));},30000);
+      fileDropRequests.set(requestId,{resolve,reject,timer});
+      try { ws.send(JSON.stringify({type:'file:save-temp',requestId,id:entry.id,name:file.name,data})); }
+      catch(error) { clearTimeout(timer);fileDropRequests.delete(requestId);reject(error); }
+    });
+  }
+
   async function dropFilesIntoTerminal(entry, files) {
-    const api = window.electronAPI;
-    if (!entry || !entry.term || entry.type === 'browser' || !api?.getPathForFile) return;
-    const paths = [];
-    for (const f of files) {
-      let p = api.getPathForFile(f);
-      if (!p) p = await api.saveTempFile(f.name, new Uint8Array(await f.arrayBuffer()));
-      if (p) paths.push(shellQuote(p));
+    if (!entry?.term || entry.type === 'browser' || entry.locked || entry.dead || !files.length) return;
+    const target=entry.term;
+    const available=()=>!entry.locked && !entry.dead && entry.term===target && findTermById(entry.id)?.term===entry;
+    const notice=document.createElement('div');notice.className='session-drop-feedback is-pending';
+    notice.setAttribute('role','status');notice.textContent='Adding files…';entry.el?.append(notice);
+    try {
+      const api=window.electronAPI, paths=[];
+      for (const file of files) {
+        if (!available()) throw new Error('The target terminal changed while adding files');
+        let path;
+        if (api?.getPathForFile) {
+          path=api.getPathForFile(file);
+          if (!path) path=await api.saveTempFile(file.name,new Uint8Array(await file.arrayBuffer()));
+        } else path=await saveBrowserDroppedFile(entry,file);
+        if (!path) throw new Error('Could not transfer '+file.name);
+        paths.push(shellQuote(path));
+      }
+      if (!available()) throw new Error('The target terminal changed while adding files');
+      // xterm emits one bracketed paste into this pane's editable draft. No Enter.
+      target.paste(paths.join(' ')+' ');
+      target.focus();
+      notice.className='session-drop-feedback is-success';
+      notice.textContent=files.length===1?'File added to draft':files.length+' files added to draft';
+    } catch(error) {
+      notice.className='session-drop-feedback is-error';notice.textContent=error.message;
+      console.error('[drop] failed:',error);
     }
-    if (!paths.length) return;
-    entry.term.paste(paths.join(' ') + ' ');
-    entry.term.focus();
+    setTimeout(()=>notice.remove(),4000);
   }
 
   // Never let a file dropped outside a pane navigate the window to it.
   document.addEventListener('dragover', e => { if (isFileDrag(e)) e.preventDefault(); });
   document.addEventListener('drop', e => { if (isFileDrag(e)) e.preventDefault(); });
 
-  // Single paste chokepoint: text first; if the clipboard holds an image,
-  // save it to the OS temp dir and paste the file path.
-  function doPaste(entry) {
-    if (!entry || !entry.term || entry.type === 'browser') return;
-    const pasteText = text => { if (text) entry.term.paste(text); };
-    if (isDesktop() && window.electronAPI?.clipboardPasteImage) {
-      window.electronAPI.clipboardRead().then(text => {
-        if (text) return pasteText(text);
-        return window.electronAPI.clipboardPasteImage().then(path => {
-          if (path) pasteText(shellQuote(path));
-        });
-      }).catch(() => { });
-    } else {
-      navigator.clipboard.readText().then(pasteText).catch(() => { });
+  function setupWorkspaceDragIsolation() {
+    for (const type of ['dragenter', 'dragover', 'drop']) {
+      document.addEventListener(type, e => {
+        const types = e.dataTransfer?.types || [];
+        const sidebarDrag = window.draggedWsId || window.draggedFolderId ||
+          types.includes('application/x-terminalvibe-workspace') || types.includes('application/x-terminalvibe-folder');
+        if (!sidebarDrag || e.target.closest?.('#sidebar')) return;
+        // Workspace context drops are handled by the pane's capture listener.
+        if (!window.draggedFolderId && !types.includes('application/x-terminalvibe-folder') &&
+            types.includes('application/x-terminalvibe-workspace') && e.target.closest?.('.term-group-body')) return;
+        // Workspace/folder reordering belongs to the sidebar. Never let these
+        // payloads reach terminal split, reattach, browser or native paste paths.
+        e.stopPropagation();
+        if (type === 'drop') e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+        document.querySelectorAll('.drag-indicator-overlay.active').forEach(overlay => overlay.classList.remove('active'));
+      }, true);
+    }
+  }
+  setupWorkspaceDragIsolation();
+
+  // Clipboard images take priority over accompanying alt text/URLs. Claude
+  // handles its own image shortcut so attachments become native image chips.
+  async function doPaste(entry, clipboardData = null) {
+    if (!entry?.term || entry.type === 'browser' || entry.locked || entry.dead) return;
+    const target = entry.term;
+    const available = () => !entry.locked && !entry.dead && entry.term === target && findTermById(entry.id)?.term === entry;
+    const pasteText = text => { if (text && available()) target.paste(text); };
+    const pasteImage = async path => {
+      if (!available()) return;
+      let process = null;
+      try { process = await checkTerminalRunning(entry.id); } catch { }
+      if (!available()) return;
+      if (/^claude(?:[-.\s]|$)/i.test(process || '')) {
+        // Send the key, not a bracketed-paste string. Claude reads the local
+        // clipboard itself; do not also insert a filename or submit the draft.
+        const shortcut = window.electronAPI?.platform === 'win32' ? '\x1bv' : '\x16';
+        sendStdin(entry.id, new TextEncoder().encode(shortcut));
+      } else {
+        pasteText(shellQuote(path));
+      }
+    };
+    try {
+      const api = window.electronAPI;
+      if (isDesktop() && api?.clipboardPasteImage) {
+        // Do not let an image-read failure swallow a normal text paste.
+        let path = null;
+        try { path = await api.clipboardPasteImage(); } catch { }
+        if (path) { await pasteImage(path); return; }
+        pasteText(clipboardData?.getData('text/plain') || await api.clipboardRead());
+        return;
+      }
+      // Native paste events can supply image bytes even when clipboard.readText
+      // is denied. Persist them using the existing file bridge when available.
+      const image = [...(clipboardData?.files || [])].find(file => file.type.startsWith('image/'));
+      if (image && api?.saveTempFile) {
+        const path = await api.saveTempFile(image.name || 'clipboard.png', new Uint8Array(await image.arrayBuffer()));
+        if (path) { await pasteImage(path); return; }
+      }
+      pasteText(clipboardData?.getData('text/plain') || await navigator.clipboard.readText());
+    } catch (error) {
+      console.warn('[clipboard] Paste failed:', error);
     }
   }
 
@@ -389,7 +613,8 @@
     const t = activeTerminal();
     if (!t || t.type === 'browser') return;
     e.preventDefault();
-    doPaste(t);
+    e.stopPropagation();
+    void doPaste(t, e.clipboardData);
   }, true);
 
   /* ═══════════════════════════════════════════════════════════════
@@ -874,7 +1099,7 @@
     updatePluginsSectionTitle(manifests);
     if (!Array.isArray(manifests) || !manifests.length) {
       const empty = document.createElement('div');
-      empty.className = 'px-3 py-2.5 text-[11px] text-[var(--muted-text)]';
+      empty.className = 'plugin-empty';
       empty.textContent = 'No plugins installed. Drop a folder into ~/.terminalvibe/plugins/, then reopen this page.';
       list.appendChild(empty);
       return;
@@ -889,50 +1114,41 @@
     for (const manifest of manifests) {
       const enabled = _pluginStates.get(manifest.id) !== false;
       const row = document.createElement('div');
-      row.className = 'flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] first:border-t-0 hover:bg-white/[0.01]';
+      row.className = 'plugin-row';
       const meta = document.createElement('div');
-      meta.className = 'flex flex-col gap-1 min-w-0';
-      const head = document.createElement('div');
-      head.className = 'flex items-center gap-2 flex-wrap';
-      const nameEl = document.createElement('span');
-      nameEl.className = 'text-[12.5px] font-medium text-[var(--fg)]';
+      meta.className = 'plugin-info';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'plugin-name';
       nameEl.textContent = manifest.name || manifest.id;
-      head.appendChild(nameEl);
-      if (manifest.version) {
-        const v = document.createElement('span');
-        v.className = 'text-[10px] px-1.5 py-0.5 rounded bg-black/20 text-[var(--dim-text)]';
-        v.textContent = 'v' + manifest.version;
-        head.appendChild(v);
-      }
+      const pluginErr = _pluginErrors.get(manifest.id);
+      // Quiet text state, like Skills; only a real failure gets an icon + color.
       const status = document.createElement('span');
-      const pluginErrMsg = _pluginErrors.get(manifest.id);
-      status.className = 'text-[10px] px-1.5 py-0.5 rounded ' + (!enabled ? 'bg-black/20 text-[var(--dim-text)]'
-        : pluginErrMsg ? 'bg-red-500/20 text-red-400'
-        : 'bg-[color-mix(in_srgb,var(--accent)_25%,transparent)] text-[var(--accent)]');
-      status.textContent = !enabled ? 'Disabled' : (pluginErrMsg ? 'Error' : 'Active');
-      head.appendChild(status);
-      meta.appendChild(head);
+      status.className = 'plugin-state' + (enabled && pluginErr ? ' error' : '');
+      if (enabled && pluginErr) status.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>';
+      status.append(!enabled ? 'Inactive' : pluginErr ? 'Error' : 'Active');
+      nameEl.append(' ', status);
+      meta.appendChild(nameEl);
       if (manifest.description) {
         const desc = document.createElement('div');
-        desc.className = 'text-[11px] text-[var(--muted-text)] leading-tight truncate max-w-[420px]';
+        desc.className = 'plugin-desc';
         desc.textContent = manifest.description;
+        desc.title = manifest.description;
         meta.appendChild(desc);
       }
       const idEl = document.createElement('div');
-      idEl.className = 'text-[11px] text-[var(--muted-text)]';
-      idEl.textContent = manifest.id + (manifest.author ? '  ·  ' + manifest.author : '');
+      idEl.className = 'plugin-meta';
+      idEl.textContent = [manifest.id, manifest.version && 'v' + manifest.version, manifest.author].filter(Boolean).join(' · ');
       meta.appendChild(idEl);
-      const pluginErr = _pluginErrors.get(manifest.id);
       if (pluginErr) {
         const errEl = document.createElement('div');
-        errEl.className = 'text-[11px] text-red-400 leading-tight max-w-[420px]';
-        errEl.textContent = 'Error: ' + pluginErr;
+        errEl.className = 'plugin-error';
+        errEl.textContent = pluginErr;
         meta.appendChild(errEl);
       }
       row.appendChild(meta);
 
       const controls = document.createElement('div');
-      controls.className = 'flex-1 flex items-center justify-end gap-3';
+      controls.className = 'plugin-controls';
       const schema = Array.isArray(manifest.settings) ? manifest.settings : [];
       if (schema.length) {
         const cfgBtn = document.createElement('button');
@@ -1004,7 +1220,7 @@
       titleEl.appendChild(name);
     } else {
       if (openDirRow) openDirRow.style.display = '';
-      titleEl.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1';
+      titleEl.className = 'settings-section-label mt-0 mb-1.5 ml-1';
       titleEl.textContent = 'Plugins';
     }
   }
@@ -1015,7 +1231,7 @@
 
     if (!schema.length) {
       const none = document.createElement('div');
-      none.className = 'px-3 py-2.5 text-[11px] text-[var(--muted-text)]';
+      none.className = 'plugin-empty';
       none.textContent = 'This plugin has no configurable options.';
       list.appendChild(none);
       return;
@@ -1034,7 +1250,7 @@
   // settings-row pattern: label/description on the left, control on the right.
   function renderPluginConfigField(manifest, s) {
     const wrap = document.createElement('div');
-    wrap.className = 'flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] first:border-t-0 hover:bg-white/[0.01]';
+    wrap.className = 'plugin-row';
     const labelEl = document.createElement('div');
     labelEl.className = 'flex flex-col gap-1';
     const lab = document.createElement('div');
@@ -1263,7 +1479,7 @@
         _pluginThemes.delete(name);
         if (currentThemeName === name) {
           currentThemeName = 'catppuccin-mocha';
-          currentTheme = THEMES[currentThemeName];
+          currentTheme = resolveAppearanceTheme(THEMES[currentThemeName], resolvedDarkScheme());
           applyTheme(currentThemeName);
         }
       }
@@ -1370,13 +1586,50 @@
   /* ═══════════════════════════════════════════════════════════════
    S T*ATE
    ═══════════════════════════════════════════════════════════════ */
-  let currentThemeName = 'catppuccin-mocha';
-  let currentTheme = THEMES[currentThemeName];
-  let currentFontSize = 13;
-  let cornerStyle = 'sharp'; // 'rounded' | 'sharp'
-  let currentFontFamily = "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace";
+  let currentColorScheme = 'dark'; // Preserve the appearance of existing installations.
+  const systemColorScheme = window.matchMedia('(prefers-color-scheme: dark)');
+
+  // Appearance resolution is pure so previews and terminal colors stay in sync.
+  function resolveAppearanceTheme(theme, dark) {
+    const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    const luminance = hex => rgb(hex).map(v => {
+      v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4;
+    }).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+    const nativeDark = luminance(theme.bg) < .4;
+    if (nativeDark === dark) return theme;
+    const bg = dark ? '#10131a' : '#f7f8fb';
+    const fg = dark ? '#e8ecf4' : '#202432';
+    const contrast = color => {
+      const a = luminance(color), b = luminance(bg);
+      return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
+    };
+    const readable = (color, ratio = 4.5) => {
+      if (!/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(color)) return fg;
+      const start = rgb(color), end = rgb(fg);
+      for (let step = 0; step <= 20; step++) {
+        const hex = '#' + start.map((v, i) => Math.round(v + (end[i] - v) * step / 20).toString(16).padStart(2, '0')).join('');
+        if (contrast(hex) >= ratio) return hex;
+      }
+      return fg;
+    };
+    const accent = readable(theme.ui?.accent || theme.palette[4]);
+    return { ...theme, bg, fg, cursor: accent, selection: dark ? '#303b55' : '#d8dff5',
+      palette: theme.palette.map(color => readable(color, 3)),
+      ui: { accent, border: dark ? '#2a3240' : '#d9dde6',
+        tabActiveBg: dark ? '#191e29' : '#ffffff', tabHoverBg: dark ? '#222937' : '#e9ecf3',
+        dimText: dark ? '#8994a8' : '#667085', mutedText: dark ? '#a0a9bb' : '#505b70' } };
+  }
+  function resolvedDarkScheme() {
+    return currentColorScheme === 'system' ? systemColorScheme.matches : currentColorScheme === 'dark';
+  }
+
+  let currentThemeName = 'graphite';
+  let currentTheme = resolveAppearanceTheme(THEMES[currentThemeName], resolvedDarkScheme());
+  let currentFontSize = 14;
+  let currentFontFamily = "'Geist Mono', 'Cascadia Code', 'Consolas', monospace";
   let customFonts = {}; // name -> { name, dataUrl, format }
   const PRESET_FONTS = [
+    { name: 'Geist Mono', family: "'Geist Mono', 'Cascadia Code', 'Consolas', monospace" },
     { name: 'JetBrains Mono', family: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace" },
     { name: 'Fira Code', family: "'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace" },
     { name: 'Cascadia Code', family: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace" },
@@ -1388,7 +1641,7 @@
     { name: 'Consolas', family: "'Consolas', 'Courier New', monospace" },
     { name: 'Courier New', family: "'Courier New', monospace" },
   ];
-  let currentLineHeight = 1.4;
+  let currentLineHeight = 1.2;
   let currentCursorStyle = 'block';
   let currentCursorBlink = true;
   let currentScrollback = 10000;
@@ -1396,7 +1649,8 @@
   let backgroundMode = 'none';       // 'none' | 'per-tab' | 'per-workspace' | 'global'
   let globalBackgroundImage = '';    // data URL for global bg
   let backgroundOpacity = 0.85;       // 0..1
-  let settingsCategory = 'appearance'; // last-opened settings category (deep-link via openSettings(cat))
+  let animationsEnabled = true;
+  let settingsCategory = 'general'; // last-opened settings category (deep-link via openSettings(cat))
   let searchEngine = 'google';        // 'google' | 'duckduckgo' | 'brave' | 'bing' | 'yahoo' | 'startpage' | 'custom'
   let customSearchUrl = '';           // custom search URL with %s placeholder
   const SEARCH_ENGINES = {
@@ -1419,6 +1673,7 @@
   let sidebarMode = 'normal'; // 'normal' | 'hover' | 'hidden'
   let showWsProcs = true;     // show running processes in workspace buttons
   let notifyOnCommandFinish = true; // desktop notify when a command finishes
+  let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
@@ -1481,21 +1736,42 @@
   let ws = null;             // WebSocket
   let wsReady = false;
   let nativePtyReady = false; // native PTY backend ready (Electron main process)
+  let agentBrowserReady = false;
+  const agentCreates = new Map();
+  const sessionContextRequests = new Map();
+  const fileDropRequests = new Map();
+  let fileDropReady = false;
+  let terminalBackendPlatform = null;
+  let sessionContextReady = false;
+  let workspaceContextReady = false;
 
-  let _browserSyncRaf = null;
   const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
   if (isDesktop() && window.electronAPI) {
     window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
     window.electronAPI.onBrowserKey?.(d => document.dispatchEvent(new KeyboardEvent('keydown', { ...d, bubbles: true, cancelable: true })));
     syncBrowserShortcuts();
   }
-  const browserSlotRo = new ResizeObserver(() => {
-    if (_browserSyncRaf) return;
-    _browserSyncRaf = requestAnimationFrame(() => {
-      _browserSyncRaf = null;
-      syncBrowserSlots();
-    });
-  });
+  // ResizeObserver fires after layout, before paint: syncing here moves the
+  // overlay in the same frame as its slot (a RAF would lag one frame behind).
+  const browserSlotRo = new ResizeObserver(() => { syncBrowserSlots(); settleBrowserSurfaces(); });
+
+  // A fast resize can leave the webview guest composited at a stale width
+  // (blank strip on one edge). Once resizing goes quiet, nudge each visible
+  // webview by 1px for a frame so the guest re-lays out at the real size.
+  let _browserSettleTimer = null;
+  function settleBrowserSurfaces() {
+    clearTimeout(_browserSettleTimer);
+    _browserSettleTimer = setTimeout(() => {
+      const ws = activeWs();
+      if (!ws) return;
+      for (const t of getWorkspaceTerminals(ws)) {
+        const w = t.type === 'browser' && t.browserContainer?.querySelector('webview.browser-surface');
+        if (!w || !w.offsetWidth) continue;
+        w.style.width = 'calc(100% - 1px)';
+        requestAnimationFrame(() => { w.style.width = '100%'; });
+      }
+    }, 120);
+  }
 
   function syncBrowserSlots() {
     const paneArea = document.getElementById('pane-area');
@@ -1505,7 +1781,11 @@
     // the in-window overlay fallback). Native views paint above the window's DOM,
     // so detach them all (alive, not destroyed) on every sync — they must never
     // re-raise above the settings layer.
+    const profilePicker = document.getElementById('profile-picker');
     const overlayOpen = settingsWindowOpen ||
+      (profilePicker && profilePicker.style.display !== 'none') ||
+      (document.getElementById('servers-dropdown')?.hidden === false || document.getElementById('servers-dropdown')?.classList.contains('closing')) ||
+      (document.getElementById('tab-search')?.style.display === 'flex') ||
       (document.getElementById('settings-overlay')?.classList.contains('open') === true);
     if (overlayOpen || document.body.classList.contains('tab-dragging')) {
       if (window.electronAPI) {
@@ -1534,6 +1814,8 @@
             if (t._viewCreated) viewUpdates.push({ id: t.id, show: false });
           } else {
             const slotRect = t.el.getBoundingClientRect();
+            // The overlay hides the group's maximized frame; let it draw its own.
+            t.browserContainer.classList.toggle('maximized', !!t.el.closest('.term-group.maximized'));
             updates.push({
               container: t.browserContainer,
               x: slotRect.left - paneRect.left,
@@ -1546,8 +1828,7 @@
             if (t._viewCreated) {
               const cw = t.browserContainer.querySelector('.browser-content');
               if (cw) {
-                const r = cw.getBoundingClientRect();
-                viewUpdates.push({ id: t.id, rect: { x: r.left, y: r.top, width: r.width, height: r.height }, show: true });
+                viewUpdates.push({ id: t.id, content: cw, show: true });
               }
             }
           }
@@ -1579,7 +1860,11 @@
     if (window.electronAPI) {
       for (const v of viewUpdates) {
         if (v.show) {
-          window.electronAPI.browserResize(v.id, v.rect);
+          const r = v.content.getBoundingClientRect();
+          window.electronAPI.browserResize(v.id, {
+            x: Math.round(r.left), y: Math.round(r.top),
+            width: Math.round(r.width), height: Math.round(r.height)
+          });
           window.electronAPI.browserShow(v.id);
         } else {
           window.electronAPI.browserHide(v.id);
@@ -1630,6 +1915,7 @@
 
     ws.onopen = () => {
       wsReady = true;
+      if (agentBrowserReady) ws.send(JSON.stringify({ type: 'agent:ready' }));
 
       if (workspaces.length) {
         for (const ws of workspaces) {
@@ -1662,8 +1948,27 @@
       } else {
         try {
           const msg = JSON.parse(e.data);
-          if (msg.type === 'ready') {
+          if (msg.type === 'agent:request') {
+            const connection = ws;
+            handleAgentRequest(msg).then(
+              result => { if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ type: 'agent:result', id: msg.id, result })); },
+              error => { if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ type: 'agent:result', id: msg.id, error: error.message })); }
+            );
+          } else if (msg.type === 'session-context:result' || msg.type === 'workspace-context:result') {
+            const pending=sessionContextRequests.get(msg.requestId);
+            if(pending) {clearTimeout(pending.timer);sessionContextRequests.delete(msg.requestId);if(msg.error) pending.reject(new Error(msg.error));else pending.resolve(msg.result);}
+          } else if (msg.type === 'file:result') {
+            const pending=fileDropRequests.get(msg.requestId);
+            if(pending) {clearTimeout(pending.timer);fileDropRequests.delete(msg.requestId);if(msg.error) pending.reject(new Error(msg.error));else pending.resolve(msg.path);}
+          } else if (msg.type === 'agent:created') {
+            const pending = agentCreates.get(msg.requestId);
+            if (pending) { clearTimeout(pending.timer); agentCreates.delete(msg.requestId); pending.resolve(msg.started); }
+          } else if (msg.type === 'ready') {
             if (msg.port) { WS_PORT = msg.port; }
+            sessionContextReady = msg.sessionContextDrop === true;
+            workspaceContextReady = msg.workspaceContextDrop === true;
+            fileDropReady = msg.fileDrop === true;
+            terminalBackendPlatform = msg.platform || null;
           } else if (msg.type === 'exit') handleExit(msg.id, msg.code);
           else if (msg.type === 'error') handleError(msg.id, msg.msg);
           else if (msg.type === 'pong') { }
@@ -1673,6 +1978,15 @@
 
     ws.onclose = () => {
       wsReady = false;
+      for (const pending of agentCreates.values()) { clearTimeout(pending.timer); pending.reject(new Error('Terminal backend disconnected')); }
+      agentCreates.clear();
+      sessionContextReady = false;
+      workspaceContextReady = false;
+      fileDropReady = false;
+      for(const pending of fileDropRequests.values()) {clearTimeout(pending.timer);pending.reject(new Error('Terminal backend disconnected'));}
+      fileDropRequests.clear();
+      for(const pending of sessionContextRequests.values()) {clearTimeout(pending.timer);pending.reject(new Error('Terminal backend disconnected'));}
+      sessionContextRequests.clear();
       setTimeout(connectWS, 2000);
     };
 
@@ -1737,10 +2051,13 @@
     const entry = obj.type === 'create' ? findTermById(obj.id)?.term : null;
     const runCmd = entry && entry.runCmd;
     if (runCmd) delete entry.runCmd;
-    const typeCmd = () => { if (runCmd) _sendStdinRaw(obj.id, new TextEncoder().encode(runCmd + '\r')); };
+    const typeCmd = () => {
+      if (entry) fitTerm(entry, true);
+      if (runCmd) _sendStdinRaw(obj.id, new TextEncoder().encode(runCmd + '\r'));
+    };
     if (isDesktop() && window.electronAPI && nativePtyReady) {
       const api = window.electronAPI;
-      if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null }).then(typeCmd);
+      if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null, inheritFromId: obj.inheritFromId }).then(typeCmd);
       else if (obj.type === 'resize') api.terminalResize({ id: obj.id, cols: obj.cols, rows: obj.rows });
       else if (obj.type === 'close') api.terminalClose(obj.id);
       return;
@@ -1770,12 +2087,19 @@
   function sendStdin(sid, data) {
     const src = findTermById(sid);
     if (src && src.term.locked) return; // locked terminal: swallow all input
+    // PTY dimensions must be current before Enter launches a full-screen app.
+    if (src && (src.term._resizeTimeout || data.includes(13) || data.includes(10))) fitTerm(src.term, true);
     _sendStdinRaw(sid, data);
-    if (_multiSelected.size > 1) {
+    // Mouse reports (SGR ESC[<…, X10 ESC[M…) and focus reports (ESC[I / ESC[O)
+    // describe this pane only; mirrored into a shell they print as garbage.
+    const paneLocal = data[0] === 27 && data[1] === 91 &&
+      (data[2] === 60 || data[2] === 77 || (data.length === 3 && (data[2] === 73 || data[2] === 79)));
+    if (_multiSelected.size > 1 && !paneLocal) {
       for (const otherId of _multiSelected) {
         if (otherId !== sid) {
           const other = findTermById(otherId);
           if (other && other.term.locked) continue; // never write into a locked pane
+          if (other && (other.term._resizeTimeout || data.includes(13) || data.includes(10))) fitTerm(other.term, true);
           _sendStdinRaw(otherId, data);
         }
       }
@@ -2023,7 +2347,10 @@
       }
 
       if (node.children.length === 0) return null;
-      if (node.children.length === 1) return node.children[0];
+      if (node.children.length === 1) {
+        if (node.size) node.children[0].size = { ...node.size, ...node.children[0].size };
+        return node.children[0];
+      }
     }
     return node;
   }
@@ -2041,7 +2368,7 @@
    T H*EME APPLICATION
    ═══════════════════════════════════════════════════════════════ */
   function applyCornerStyle() {
-    document.body.classList.toggle('roundless', cornerStyle === 'sharp');
+    document.body.classList.add('roundless'); // sharp base; the design rounds selected components
   }
 
   function applySidebarMode() {
@@ -2054,9 +2381,24 @@
     if (showWsProcs) refreshAllWorkspaceProcs();
   }
 
+  function applyAnimationsSetting() {
+    document.body.classList.toggle('ui-animations', animationsEnabled);
+    const toggle = document.getElementById('set-animations');
+    if (toggle) toggle.checked = animationsEnabled;
+    const rightSidebar = document.getElementById('sidebar-right');
+    if (rightSidebar) rightSidebar.inert = document.body.classList.contains('sb-right-hidden');
+    if (!animationsEnabled) document.querySelectorAll('.session-overlay.closing').forEach(el => el.remove());
+  }
+
   function applyTheme(name) {
-    const theme = THEMES[name];
-    if (!theme) return;
+    applyAnimationsSetting();
+    const sourceTheme = THEMES[name];
+    if (!sourceTheme) return;
+    const dark = resolvedDarkScheme();
+    const theme = resolveAppearanceTheme(sourceTheme, dark);
+    document.documentElement.dataset.colorScheme = dark ? 'dark' : 'light';
+    document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+    document.querySelectorAll('.scheme-choice').forEach(card => card.setAttribute('aria-pressed', String(card.dataset.scheme === currentColorScheme)));
     currentThemeName = name;
     currentTheme = theme;
 
@@ -2065,6 +2407,9 @@
     document.documentElement.style.setProperty('--app-font', currentFontFamily);
 
     const r = document.documentElement.style;
+    document.querySelectorAll('.theme-choice').forEach(card => {
+      card.setAttribute('aria-pressed', String(card.dataset.theme === name));
+    });
     r.setProperty('--bg', theme.bg);
     r.setProperty('--fg', theme.fg);
     r.setProperty('--cursor', theme.cursor);
@@ -2077,8 +2422,8 @@
     r.setProperty('--multi-select', multiColor);
 
     // UI overrides from custom theme
-    const uiProps = ['border', 'tabActiveBg', 'tabHoverBg', 'dimText', 'mutedText'];
-    const uiCss = { border: '--border', tabActiveBg: '--tab-active-bg', tabHoverBg: '--tab-hover-bg', dimText: '--dim-text', mutedText: '--muted-text' };
+    const uiProps = ['border', 'tabActiveBg', 'tabHoverBg', 'dimText', 'mutedText', 'sidebarBg', 'surfaceBg', 'hoverBg', 'activeBg'];
+    const uiCss = { border: '--border', tabActiveBg: '--tab-active-bg', tabHoverBg: '--tab-hover-bg', dimText: '--dim-text', mutedText: '--muted-text', sidebarBg: '--ui-sidebar', surfaceBg: '--ui-surface', hoverBg: '--ui-hover', activeBg: '--ui-active' };
     if (theme.ui) {
       for (const prop of uiProps) {
         if (theme.ui[prop]) r.setProperty(uiCss[prop], theme.ui[prop]);
@@ -2098,6 +2443,7 @@
       }
     }
 
+    renderThemeCards();
     renderSidebar();
     renderPaneArea();
     applyBackground();
@@ -2334,6 +2680,7 @@
         id: node.id,
         direction: node.direction,
         sizes: node.sizes,
+        ...(node.size ? { size: node.size } : {}),
         children: node.children.map(serializeLayout)
       };
     }
@@ -2342,6 +2689,7 @@
         type: 'group',
         id: node.id,
         activeTermId: node.activeTermId,
+        ...(node.size ? { size: node.size } : {}),
         history: node._history || [],
         terminals: node.terminals.map(t => {
           const o = { id: t.id, label: t.label };
@@ -2350,8 +2698,11 @@
           else if (t.cwd) o.cwd = t.cwd;
           if (t.bgImage) o.bgImage = t.bgImage;
           if (t.dead) o.dead = true;
+          if (t.agentManaged) o.agentManaged = true;
           if (t.locked) o.locked = true;
           if (t.pinLabel) o.pinLabel = true;
+          if (t.toolProvider) o.toolProvider = t.toolProvider;
+          if (t.claudeSessionId) o.claudeSessionId = t.claudeSessionId;
           return o;
         })
       };
@@ -2366,6 +2717,7 @@
         id: data.id,
         direction: data.direction,
         sizes: data.sizes,
+        ...(data.size ? { size: data.size } : {}),
         children: data.children.map(c => deserializeLayout(c, ws))
       };
     }
@@ -2374,6 +2726,7 @@
         type: 'group',
         id: data.id,
         activeTermId: data.activeTermId,
+        ...(data.size ? { size: data.size } : {}),
         _history: data.history || [],
         terminals: []
       };
@@ -2382,7 +2735,11 @@
         if (tData.type === 'browser') {
           entry = { id: tData.id, label: tData.label, type: 'browser', url: tData.url || 'about:blank', iframe: null, el: null, opened: false };
         } else {
-          entry = _createTermEntry(ws, tData.id, tData.label);
+          // A restored tab starts a fresh shell, not the previous foreground app.
+          // Keep explicit names; automatic titles are rebuilt from the saved cwd
+          // before rendering, without waiting for shell startup or PTY output.
+          const label = tData.pinLabel || tData.argv ? tData.label : shortTitle(tData.cwd || 'Terminal');
+          entry = _createTermEntry(ws, tData.id, label);
           entry.pending = true;
         }
         if (tData.color) entry.color = tData.color;
@@ -2391,8 +2748,11 @@
         if (tData.cmd) entry.runCmd = tData.cmd; // auto-run launch only; never serialized
         if (tData.bgImage) entry.bgImage = tData.bgImage;
         if (tData.dead) entry.dead = true;
+        if (tData.agentManaged) entry.agentManaged = true;
         if (tData.locked) entry.locked = true;
         if (tData.pinLabel) entry.pinLabel = true;
+        if (tData.toolProvider) entry.toolProvider = tData.toolProvider;
+        if (tData.claudeSessionId) entry.claudeSessionId = tData.claudeSessionId;
         group.terminals.push(entry);
       }
       return group;
@@ -2538,19 +2898,21 @@
     if (SETTINGS_ONLY) {
       const settings = {
         theme: currentThemeName,
+        colorScheme: currentColorScheme,
         fontSize: currentFontSize,
         fontFamily: currentFontFamily,
         customFonts,
         lineHeight: currentLineHeight,
-        cornerStyle,
         cursorStyle: currentCursorStyle,
         cursorBlink: currentCursorBlink,
         scrollback: currentScrollback,
+        animationsEnabled,
         settingsCategory,
         pinnedCollapsed,
         sidebarMode,
         showWsProcs,
         notifyOnCommandFinish,
+        terminalLinkTarget,
         backgroundMode,
         globalBackgroundImage,
         backgroundOpacity,
@@ -2567,9 +2929,11 @@
       try {
         merged = Object.assign(JSON.parse(localStorage.getItem(STATE_KEY) || '{}'), settings);
       } catch { }
-      persistStateToStorage(merged, STATE_KEY);
-      if (window.electronAPI && window.electronAPI.settingsChanged) window.electronAPI.settingsChanged();
-      return persistStateToStorage(merged, STATE_KEY);
+      return persistStateToStorage(merged, STATE_KEY).then(() => {
+        // The main window reads disk state on this event. Notify only after
+        // image/state writes finish, or it can restore the old setting.
+        window.electronAPI?.settingsChanged?.();
+      });
     }
 
 
@@ -2577,19 +2941,21 @@
     const key = DETACHED_ONLY ? DETACHED_STATE_KEY : STATE_KEY;
     const state = {
       theme: currentThemeName,
+      colorScheme: currentColorScheme,
       fontSize: currentFontSize,
       fontFamily: currentFontFamily,
       customFonts,
       lineHeight: currentLineHeight,
-      cornerStyle,
       cursorStyle: currentCursorStyle,
       cursorBlink: currentCursorBlink,
       scrollback: currentScrollback,
+      animationsEnabled,
       settingsCategory,
       pinnedCollapsed,
       sidebarMode,
       showWsProcs,
       notifyOnCommandFinish,
+      terminalLinkTarget,
       backgroundMode,
       globalBackgroundImage,
       backgroundOpacity,
@@ -2639,9 +3005,10 @@
       const state = JSON.parse(raw);
       await resolveStateImages(state);
 
+      if (['system', 'light', 'dark'].includes(state.colorScheme)) currentColorScheme = state.colorScheme;
       if (state.theme && THEMES[state.theme]) {
         currentThemeName = state.theme;
-        currentTheme = THEMES[currentThemeName];
+        currentTheme = resolveAppearanceTheme(THEMES[currentThemeName], resolvedDarkScheme());
       }
 
       if (state.fontSize) currentFontSize = state.fontSize;
@@ -2654,15 +3021,17 @@
         injectCustomFonts();
       }
       if (state.lineHeight) currentLineHeight = state.lineHeight;
-      if (state.cornerStyle) cornerStyle = state.cornerStyle;
       if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
       if (state.scrollback) currentScrollback = state.scrollback;
+      animationsEnabled = state.animationsEnabled !== false;
+      applyAnimationsSetting();
       if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
       if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
       if (state.sidebarMode) sidebarMode = state.sidebarMode;
       if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
+      if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -2689,7 +3058,7 @@
       }
 
       if (!state.workspaces?.length) return false;
-      if (state.sidebarExpanded) document.getElementById('sidebar').classList.add('expanded');
+      if (typeof state.sidebarExpanded === 'boolean') document.getElementById('sidebar').classList.toggle('expanded', state.sidebarExpanded);
       if (state.sidebarWidth) {
         savedSidebarWidth = Math.max(state.sidebarWidth, SB_EXPANDED_MIN);
         if (state.sidebarExpanded && sidebarSplit) {
@@ -2751,6 +3120,67 @@
   let _profileSwitching = false; // suppress beforeunload save during a profile switch
   let ppNavHandler = null; // single live keydown handler for the profile picker
 
+  // Browser profiles use the same picker and namespaced state as desktop,
+  // without exposing an Electron bridge to the rest of the app.
+  const BROWSER_PROFILES_KEY = 'terminalvibe.browserProfiles';
+  function readBrowserProfiles() {
+    const raw = localStorage.getItem(BROWSER_PROFILES_KEY);
+    if (raw) return JSON.parse(raw);
+    const meta = {
+      profiles: [{ id: 'default', name: 'Default', avatar: '' }],
+      active: 'default', default: 'default',
+    };
+    const legacy = localStorage.getItem('ghostterm-state-v2');
+    if (legacy && !localStorage.getItem('ghostterm-state-v2:default')) {
+      localStorage.setItem('ghostterm-state-v2:default', legacy);
+    }
+    return writeBrowserProfiles(meta);
+  }
+  function writeBrowserProfiles(meta) {
+    localStorage.setItem(BROWSER_PROFILES_KEY, JSON.stringify(meta));
+    return meta;
+  }
+  async function switchBrowserProfile(id) {
+    const meta = readBrowserProfiles();
+    if (!meta.profiles.some(p => p.id === id)) return false;
+    meta.active = id;
+    writeBrowserProfiles(meta);
+    return true;
+  }
+  const browserProfilesApi = {
+    profilesList: async () => readBrowserProfiles(),
+    profilesCreate: async ({ name, avatar }) => {
+      const meta = readBrowserProfiles();
+      meta.profiles.push({ id: uuid(), name: String(name || 'Profile').slice(0, 40), avatar: avatar || '' });
+      return writeBrowserProfiles(meta);
+    },
+    profilesUpdate: async ({ id, name, avatar }) => {
+      const meta = readBrowserProfiles();
+      const p = meta.profiles.find(p => p.id === id);
+      if (p && name !== undefined) p.name = String(name).slice(0, 40);
+      if (p && avatar !== undefined) p.avatar = avatar;
+      return writeBrowserProfiles(meta);
+    },
+    profilesDelete: async id => {
+      const meta = readBrowserProfiles();
+      if (meta.profiles.length <= 1) return meta;
+      meta.profiles = meta.profiles.filter(p => p.id !== id);
+      if (meta.active === id) meta.active = meta.profiles[0].id;
+      if (meta.default === id) meta.default = meta.profiles[0].id;
+      writeBrowserProfiles(meta);
+      localStorage.removeItem('ghostterm-state-v2:' + id);
+      return meta;
+    },
+    profilesSetDefault: async id => {
+      const meta = readBrowserProfiles();
+      if (meta.profiles.some(p => p.id === id)) meta.default = id;
+      return writeBrowserProfiles(meta);
+    },
+    profilesSwitch: switchBrowserProfile,
+    profilesSwitchInPlace: switchBrowserProfile,
+  };
+  function profilesApi() { return configApi() || browserProfilesApi; }
+
   // Namespaces every localStorage key used by state persistence so profiles
   // never collide in plain-browser mode either.
   function applyProfileKey(p) {
@@ -2759,8 +3189,8 @@
   }
 
   async function initActiveProfile() {
-    const api = configApi();
-    if (!api || !api.profilesList) return null; // plain browser: single implicit profile
+    const api = profilesApi();
+    if (!api || !api.profilesList) return null;
     try {
       const meta = await api.profilesList();
       const p = meta.profiles.find(x => x.id === meta.active) || null;
@@ -2772,7 +3202,7 @@
   function editProfile(p) {
     showPrompt('Edit profile', p.name, { icon: p.avatar || '' }, async (name, _color, avatar) => {
       if (!name) return;
-      const api = configApi();
+      const api = profilesApi();
       if (!api || !api.profilesUpdate) return;
       const meta = await api.profilesUpdate({ id: p.id, name, avatar });
       const updated = meta.profiles.find(x => x.id === p.id);
@@ -2787,19 +3217,19 @@
 
   function deleteProfile(p) {
     showConfirm(`Delete profile "${p.name}"?`, async () => {
-      const api = configApi();
+      const api = profilesApi();
       if (!api || !api.profilesDelete) return;
       const meta = await api.profilesDelete(p.id);
       // Deleting the active profile moved the active pointer server-side; a
       // reload picks up the new active profile and fresh state. Otherwise
       // just re-render the grid.
-      if (_activeProfile && _activeProfile.id === p.id) { location.reload(); return; }
+      if (_activeProfile && _activeProfile.id === p.id) { _profileSwitching = true; location.reload(); return; }
       renderProfilePicker(meta, _activeProfile, (np) => { confirmProfileSwitch(np); });
     });
   }
 
   function setDefaultProfile(p) {
-    const api = configApi();
+    const api = profilesApi();
     if (!api || !api.profilesSetDefault) return;
     api.profilesSetDefault(p.id).then(meta => {
       const wrap = document.getElementById('profile-picker');
@@ -2816,13 +3246,6 @@
       const box = document.createElement('div');
       box.className = 'pp-box' + (current && p.id === current.id ? ' current' : '');
       box.tabIndex = -1; // keyboard-focusable so arrows land on a box when the picker opens
-      if (p.id === meta.default) {
-        const badge = document.createElement('div');
-        badge.className = 'pp-badge';
-        badge.title = 'Default profile';
-        badge.textContent = 'DEFAULT';
-        box.appendChild(badge);
-      }
       if (p.avatar) {
         const img = document.createElement('img');
         img.src = p.avatar; img.alt = ''; img.draggable = false;
@@ -2837,6 +3260,13 @@
       name.className = 'pp-name';
       name.textContent = p.name;
       box.appendChild(name);
+      if (p.id === meta.default) {
+        const badge = document.createElement('div');
+        badge.className = 'pp-badge';
+        badge.title = 'Default profile';
+        badge.textContent = 'Default';
+        box.appendChild(badge);
+      }
       const menu = document.createElement('div');
       menu.className = 'pp-edit';
       menu.title = 'Profile options';
@@ -2851,7 +3281,7 @@
         ctxEl.style.left = Math.max(0, r.right - ctxEl.offsetWidth - 4) + 'px';
       });
       box.appendChild(menu);
-      box.addEventListener('click', () => { wrap.style.display = 'none'; onPick(p); });
+      box.addEventListener('click', () => { wrap.inert = true; wrap.style.display = 'none'; onPick(p); });
       box.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
         showCtxMenu(e, 'profile', { p, defaultId: meta.default });
@@ -2866,15 +3296,14 @@
     add.addEventListener('click', () => {
       showPrompt('Profile name', '', { icon: '' }, async (name, _color, avatar) => {
         if (!name) return;
-        const api = configApi();
-        const meta = await api.profilesCreate({ name, avatar });
+        const meta = await profilesApi().profilesCreate({ name, avatar });
         const created = meta.profiles[meta.profiles.length - 1];
-        wrap.style.display = 'none';
+        wrap.inert = true; wrap.style.display = 'none';
         confirmProfileSwitch(created);
       });
     });
     grid.appendChild(add);
-    wrap.style.display = '';
+    wrap.inert = false; wrap.style.display = '';
     // Keyboard navigation: arrows move a selection highlight, Enter/Space picks.
     const boxes = [...grid.querySelectorAll('.pp-box')];
     let sel = Math.max(0, boxes.findIndex(b => b.classList.contains('current')));
@@ -2907,8 +3336,9 @@
   // Boot gate: >1 profile → always show the picker and wait for a choice.
   // Single profile (or legacy state.json) auto-activates with no UI.
   async function profileGate() {
+    await document.fonts.load('14px "Geist Mono"');
     const res = await initActiveProfile();
-    if (!res) return; // no profile system (plain browser)
+    if (!res) return; // profile storage unavailable
     const { meta, current } = res;
     // Auto-open the active profile at boot — no picker. If none is active yet,
     // fall back to the first (default) profile. Switching only happens via the
@@ -2917,7 +3347,7 @@
       const target = meta.profiles.find(x => x.id === meta.default) || meta.profiles[0];
       if (!target) return;
       applyProfileKey(target);
-      await configApi().profilesSwitch(target.id);
+      await profilesApi().profilesSwitch(target.id);
     }
   }
 
@@ -2939,7 +3369,7 @@
     const splash = document.getElementById('splash');
     if (splash) { splash.style.transition = 'none'; splash.classList.remove('hide'); }
     teardownAllWorkspaces();
-    return configApi().profilesSwitchInPlace(p.id).then(async ok => {
+    return profilesApi().profilesSwitchInPlace(p.id).then(async ok => {
       try {
         if (ok) {
           // Custom themes + plugins are global (already loaded at boot) — do NOT
@@ -2965,7 +3395,7 @@
   }
 
   function openProfilePicker() {
-    const api = configApi();
+    const api = profilesApi();
     if (!api || !api.profilesList) return;
     api.profilesList().then(meta => {
       renderProfilePicker(meta, _activeProfile, (p) => {
@@ -2979,7 +3409,7 @@
     if (e.code !== 'Escape') return;
     const wrap = document.getElementById('profile-picker');
     if (wrap && wrap.style.display !== 'none') {
-      wrap.style.display = 'none';
+      wrap.inert = true; wrap.style.display = 'none';
       e.stopPropagation();
     }
   });
@@ -3224,6 +3654,7 @@
         // Update active class in-place to avoid flicker from full sidebar rebuild
         document.querySelectorAll('.ws-btn').forEach(btn => {
           btn.classList.toggle('active', btn.dataset.wsid === id);
+          btn.setAttribute('aria-current', btn.dataset.wsid === id ? 'true' : 'false');
         });
       }
       switchWorkspacePane();
@@ -3442,6 +3873,45 @@
   // Below Chromium's ~16 context cap; keeps WebGL available to the active and
   // recently-active terminals without ever exhausting the pool (blank canvas).
   const _WEBGL_MAX = 8;
+  // Keep an explicitly selected Courier font, but don't fall back to its thin,
+  // serif glyphs just because the preferred coding font isn't installed.
+  function terminalFontFamily(family) {
+    if (family.trim().startsWith("'Courier New'")) return family;
+    return family.replace("'Courier New', monospace",
+      "'Cascadia Mono', 'Menlo', 'DejaVu Sans Mono', 'Liberation Mono', monospace");
+  }
+
+  function _useCanvas(entry) {
+    const term = entry.term;
+    if (term._canvasAddon) return;
+    try {
+      const addon = new CanvasAddon.CanvasAddon();
+      term.loadAddon(addon);
+      term._canvasAddon = addon;
+    } catch (e) {
+      console.warn('[terminal] Canvas renderer unavailable', e);
+    }
+  }
+
+  function _releaseWebgl(entry) {
+    const term = entry.term;
+    try { term._webglAddon?.dispose(); } catch (e) { }
+    term._webglAddon = null;
+    // Disposing WebGL restores xterm's DOM renderer, not the previous addon.
+    // Canvas draws continuous block/box glyphs even with extra line spacing.
+    _useCanvas(entry);
+  }
+
+  function _disposeTermRenderers(term) {
+    // xterm 5 disposes its core before its addons. Release renderers first,
+    // while the core can still restore the default renderer during cleanup.
+    term._imageAddon?.dispose();
+    term._imageAddon = null;
+    term._webglAddon?.dispose();
+    term._webglAddon = null;
+    term._canvasAddon?.dispose();
+    term._canvasAddon = null;
+  }
   // Attach WebGL on first show and KEEP it while hidden (dispose+recreate on
   // every tab switch paid a full context/shaders rebuild each time and stalled
   // switching). Contexts are only released when the live count hits _WEBGL_MAX,
@@ -3450,7 +3920,10 @@
   function _syncWebgl(entry, visible) {
     if (!entry || entry.type === 'browser' || !entry.term) return;
     const term = entry.term;
-    if (!visible) return; // keep alive: switching back is instant
+    if (!visible || entry._webglUnavailable) {
+      if (!term._webglAddon) _useCanvas(entry);
+      return;
+    }
     if (term._webglAddon) { entry._webglLastUse = performance.now(); return; }
     let live = 0, oldest = null, oldestT = Infinity;
     for (const wsp of workspaces) {
@@ -3462,16 +3935,128 @@
       }
     }
     if (live >= _WEBGL_MAX && oldest && oldest.term._webglAddon) {
-      try { oldest.term._webglAddon.dispose(); } catch (e) { }
-      oldest.term._webglAddon = null;
+      _releaseWebgl(oldest);
     }
-    try { term._webglAddon = new WebglAddon.WebglAddon(); term.loadAddon(term._webglAddon); entry._webglLastUse = performance.now(); } catch (e) { term._webglAddon = null; }
+    try {
+      if (term._canvasAddon) {
+        term._canvasAddon.dispose();
+        term._canvasAddon = null;
+      }
+      const addon = new WebglAddon.WebglAddon();
+      term._webglAddon = addon;
+      addon.onContextLoss(() => {
+        entry._webglUnavailable = true;
+        _releaseWebgl(entry);
+      });
+      term.loadAddon(addon);
+      entry._webglLastUse = performance.now();
+    } catch (e) {
+      entry._webglUnavailable = true;
+      _releaseWebgl(entry);
+      console.warn('[terminal] WebGL unavailable; using Canvas', e);
+    }
+  }
+
+  function _loadTerminalImages(term) {
+    // Install before processing PTY output so capability probes advertise SIXEL
+    // and Yazi can select native previews. The addon also enables pixel reports.
+    const addon = new ImageAddon.ImageAddon({
+      sixelSupport: true,
+      iipSupport: true,
+      enableSizeReports: true,
+      storageLimit: 32,
+    });
+    term.loadAddon(addon);
+    term._imageAddon = addon;
+  }
+
+  function setAutomaticTerminalTitle(entry, title) {
+    if (entry.pinLabel || entry.argv) return;
+    const label = shortTitle(title);
+    if (!label) return;
+    const changed = entry.label !== label;
+    entry.label = label;
+    const tab = document.querySelector(`.tg-tab[data-termid="${entry.id}"]`);
+    const text = tab?.querySelector('.tg-tab-name');
+    if (text) text.textContent = label;
+    if (tab) tab.title = label;
+    if (changed) renderSidebar();
+  }
+
+  function setupTerminalTitles(entry) {
+    for (const code of [0, 2]) entry.term.parser.registerOscHandler(code, title => {
+      if (entry._atShellPrompt || (/claude/i.test(title) && entry._claudeRunning !== true)) {
+        entry._historyRevision = (entry._historyRevision || 0) + 1;
+      }
+      entry._atShellPrompt = false;
+      if (/claude/i.test(title)) entry._claudeRunning = true;
+      setAutomaticTerminalTitle(entry, title);
+      syncClaudeHistoryButton(entry);
+      scheduleClaudeHistoryRefresh(entry);
+      // Keep xterm's normal title processing, including repeated CLI titles.
+      return false;
+    });
+    // Parse complete OSC sequences so split PTY chunks cannot lose a cwd update.
+    entry.term.parser.registerOscHandler(7, data => {
+      const cwd = _extractOSC7CwdStr('\x1b]7;' + data + '\x07');
+      if (cwd) entry.cwd = cwd;
+      return true;
+    });
+    entry.term.parser.registerOscHandler(133, data => {
+      if (data.split(';')[0] === 'A') {
+        entry._atShellPrompt = true;
+        entry._claudeRunning = false;
+        entry._historyRevision = (entry._historyRevision || 0) + 1;
+        setAutomaticTerminalTitle(entry, entry.cwd || 'Terminal');
+        syncClaudeHistoryButton(entry);
+      }
+      return true;
+    });
+  }
+
+  function hasClaudeHistory(entry) {
+    return !entry.dead && entry._atShellPrompt !== true &&
+      (entry._claudeRunning ?? (entry.toolProvider === 'claude' || /claude/i.test(entry.label)));
+  }
+
+  function syncClaudeHistoryButton(entry) {
+    const button = document.querySelector(`[data-claude-history="${entry.id}"]`);
+    if (button) button.hidden = !hasClaudeHistory(entry);
+  }
+
+  async function refreshClaudeHistoryButton(entry) {
+    if (entry.type === 'browser' || entry.dead || entry._historyProbe) return;
+    const revision = entry._historyRevision;
+    entry._historyProbe = true;
+    try {
+      const name = await checkTerminalRunning(entry.id);
+      if (findTermById(entry.id)?.term !== entry || revision !== entry._historyRevision || name === 'unknown') return;
+      entry._claudeRunning = /^(claude|claude-code)(\.exe)?$/i.test(name || '');
+      if (entry._claudeRunning) entry._atShellPrompt = false;
+      syncClaudeHistoryButton(entry);
+    } finally { entry._historyProbe = false; }
+  }
+
+  function scheduleClaudeHistoryRefresh(entry) {
+    // Coalesce rapidly changing CLI titles without postponing detection forever.
+    if (entry._historyTimer) return;
+    entry._historyTimer = setTimeout(() => {
+      delete entry._historyTimer;
+      if (findTermById(entry.id)?.term === entry) void refreshClaudeHistoryButton(entry);
+    }, 100);
+  }
+
+  function refreshClaudeHistoryAfterInput(entry) {
+    entry._historyInputTimers?.forEach(clearTimeout);
+    entry._historyInputTimers = [150, 600].map(ms => setTimeout(() => {
+      if (findTermById(entry.id)?.term === entry) void refreshClaudeHistoryButton(entry);
+    }, ms));
   }
 
   function _createTermEntry(wsp, id, label) {
     const term = new Terminal({
       theme: makeXtermTheme(currentTheme),
-      fontFamily: currentFontFamily,
+      fontFamily: terminalFontFamily(currentFontFamily),
       fontSize: currentFontSize,
       lineHeight: currentLineHeight,
       cursorBlink: currentCursorBlink,
@@ -3482,22 +4067,31 @@
       macOptionIsMeta: true,
       drawBoldTextInBrightColors: true,
       minimumContrastRatio: 1,
-      drawWideChars: true,
+      customGlyphs: true,
+      // OSC 8 hyperlinks (Claude, ls --hyperlink, …): same routing as plain URLs.
+      linkHandler: { activate: (e, uri) => openTerminalLink(id, uri, e) },
     });
 
     const fitAddon = new FitAddon.FitAddon();
     const searchAddon = new SearchAddon.SearchAddon();
-    const webLinksAddon = new WebLinksAddon.WebLinksAddon((e, uri) => openExternalUrl(uri));
+    const webLinksAddon = new WebLinksAddon.WebLinksAddon((e, uri) => openTerminalLink(id, uri, e));
     try { const u11 = new Unicode11Addon.Unicode11Addon(); term.loadAddon(u11); term.unicode.activeVersion = '11'; } catch { }
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
     term.loadAddon(webLinksAddon);
+    _loadTerminalImages(term);
     // WebGL attached lazily via _syncWebgl only while the terminal is VISIBLE.
     // Chromium caps concurrent WebGL contexts (~16); giving every terminal its
     // own context at creation exhausted the pool when many tabs were added
     // quickly, leaving the newest canvases blank (white page + dead icon).
 
-    term.onData(data => { if (wsReady) sendStdin(id, new TextEncoder().encode(data)); });
+    term.onData(data => {
+      if (wsReady) sendStdin(id, new TextEncoder().encode(data));
+      if (/[\r\x03\x04]/.test(data)) {
+        refreshWorkspaceProcsSoon();
+        refreshClaudeHistoryAfterInput(entry);
+      }
+    });
     term.onBinary(data => {
       if (wsReady) {
         const bytes = new Uint8Array(data.length);
@@ -3505,23 +4099,17 @@
         sendStdin(id, bytes);
       }
     });
-    term.onTitleChange(title => {
-      const terms = getWorkspaceTerminals(wsp);
-      const t = terms.find(x => x.id === id);
-      if (t) {
-        // CLI-spawned terminals carry an explicit command + label from the
-        // tab spec — pin that label; don't let the shell title clobber it.
-        if (!t.argv && !t.pinLabel) t.label = shortTitle(title) || t.label;
-        // Lightweight update: just change the tab label in the DOM
-        const tabEl = document.querySelector(`.tg-tab[data-termid="${id}"] .tg-tab-name`);
-        if (tabEl) tabEl.textContent = t.label;
-        const tabWrap = document.querySelector(`.tg-tab[data-termid="${id}"]`);
-        if (tabWrap) tabWrap.title = t.label;
-        renderSidebar();
-      }
-    });
 
     const entry = { id, label, term, fit: fitAddon, search: searchAddon, el: null, opened: false, locked: false, _bgTransparent: false };
+    setupTerminalTitles(entry);
+    term.buffer.onBufferChange(buffer => {
+      if (buffer.type !== 'alternate') return;
+      // A TUI may enter the alternate screen before its tab's final layout fit.
+      // Resync after parsing finishes, even if the pane's pixel size is unchanged.
+      requestAnimationFrame(() => {
+        if (findTermById(entry.id)?.term === entry) fitTerm(entry, true);
+      });
+    });
 
     // The grid only fits whole character cells, so a sub-cell strip is left at the
     // right/bottom edge showing the panel background. Tint the panel with the
@@ -3570,12 +4158,20 @@
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
 
-    const cwd = opts.cwd || ((defaultTerminalPath && defaultTerminalPath.trim())
-      ? defaultTerminalPath.trim().replace(/^["']|["']$/g, '')
-      : _getFocusedCwd());
+    // Resolve the destination and its previous tab before selecting the new one.
+    // The + button may belong to a different split from the focused terminal.
+    let targetGroup = targetGroupId ? findGroupById(wsp.layout, targetGroupId) : null;
+    if (!targetGroup && wsp.activeTermId) targetGroup = findGroupContainingTerm(wsp.layout, wsp.activeTermId);
+    if (!targetGroup) targetGroup = findFirstGroup(wsp.layout);
+    const groupTerms = targetGroup?.terminals || [];
+    const previous = groupTerms.find(t => t.id === targetGroup.activeTermId && t.type !== 'browser')
+      || [...(targetGroup?._history || [])].reverse().map(id => groupTerms.find(t => t.id === id && t.type !== 'browser')).find(Boolean)
+      || groupTerms.find(t => t.type !== 'browser')
+      || getWorkspaceTerminals(wsp).find(t => t.type !== 'browser' && t.cwd);
+    const cwd = opts.cwd || previous?.cwd || ((defaultTerminalPath && defaultTerminalPath.trim())
+      ? defaultTerminalPath.trim().replace(/^["']|["']$/g, '') : null);
     const id = uuid();
-    const allTerms = getWorkspaceTerminals(wsp);
-    const label = opts.label || activeTerminal()?.label || `bash ${allTerms.length + 1}`;
+    const label = opts.label || (cwd || '').split(/[\\/]/).filter(Boolean).pop() || 'Terminal';
     const entry = _createTermEntry(wsp, id, label);
     entry.cwd = cwd;
     if (opts.cmd) entry.runCmd = opts.cmd;
@@ -3591,14 +4187,6 @@
       renderPaneArea();
       activateTerminal(wsp.id, id);
     } else {
-      let targetGroup = null;
-      if (targetGroupId) targetGroup = findGroupById(wsp.layout, targetGroupId);
-      if (!targetGroup) {
-        const active = activeTerminal();
-        if (active) targetGroup = findGroupContainingTerm(wsp.layout, active.id);
-      }
-      if (!targetGroup) targetGroup = findFirstGroup(wsp.layout);
-
       if (targetGroup) {
         targetGroup.terminals.push(entry);
         // Push old active to history before switching
@@ -3620,6 +4208,7 @@
             tab.dataset.termid = entry.id;
             tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
             tab.title = entry.label;
+            addTabSessionHistory(tab, wsp, entry);
             applyTabColor(tab, entry.color);
             tab.draggable = true;
             tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
@@ -3636,7 +4225,7 @@
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
             // Drag & drop
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
             tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
             tab.addEventListener('dragover', e => {
               e.preventDefault();
@@ -3665,7 +4254,7 @@
             tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
             tab.addEventListener('drop', e => {
               e.preventDefault();
-              const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+              const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
               if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) {
                 const api = window.electronAPI;
                 if (api && api.tabDragDrop) {
@@ -3737,12 +4326,11 @@
 
     renderSidebar();
 
-    setTimeout(() => {
-      const slot = getSlotDimensions(entry);
-      sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd, argv: entry.argv || [] });
-      // Fit again after PTY is connected
-      requestAnimationFrame(() => fitTerm(entry));
-    }, 80);
+    // The slot is already mounted: measuring it settles layout synchronously.
+    // Start the shell now so its init can run while the first frame is painted.
+    const slot = getSlotDimensions(entry);
+    sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd, inheritFromId: previous?.id, argv: entry.argv || [] });
+    requestAnimationFrame(() => fitTerm(entry));
 
     saveState();
     pluginEmit('terminal:add', { wsId: wsp.id, termId: id, type: 'terminal', label: entry.label });
@@ -3809,7 +4397,7 @@
               }
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
             tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
             tab.addEventListener('dragover', e => {
               e.preventDefault();
@@ -3838,7 +4426,7 @@
             tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
             tab.addEventListener('drop', e => {
               e.preventDefault();
-              const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+              const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
               if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) {
                 const api = window.electronAPI;
                 if (api && api.tabDragDrop) {
@@ -4392,7 +4980,12 @@
     if (entry.type !== 'browser') {
       if (!skipPtyClose) {
         sendControl({ type: 'close', id: termId });
-        try { if (entry.term) entry.term.dispose(); } catch { }
+        try {
+          if (entry.term) {
+            _disposeTermRenderers(entry.term);
+            entry.term.dispose();
+          }
+        } catch { }
       }
     } else {
       if (entry._msgCleanup) entry._msgCleanup();
@@ -4406,8 +4999,6 @@
       if (entry.term) {
         if (entry.term._fitObserverRaf) cancelAnimationFrame(entry.term._fitObserverRaf);
         delete entry.term._fitObserverRaf;
-        delete entry.term._lastFitW;
-        delete entry.term._lastFitH;
       }
       entry.el.remove();
     }
@@ -4578,6 +5169,7 @@
     if (!t) return;
 
     showPrompt('Edit tab', t.label, { color: t.color || '' }, (value, color) => {
+      if (value.trim() && value.trim() !== t.label) t.pinLabel = true;
       t.label = value.trim() || t.label;
       t.color = color || undefined;
       const tabEl = document.querySelector(`.tg-tab[data-termid="${termId}"] .tg-tab-name`);
@@ -4606,6 +5198,13 @@
     const { ws, term: t } = result;
     t.dead = true;
     pluginEmit('terminal:exit', { termId: id, code });
+    if (t.agentManaged) {
+      t.term.write(`\r\n[Agent process exited: ${code}]\r\n`);
+      t.term.options.disableStdin = true;
+      renderPaneArea();
+      saveState();
+      return;
+    }
     if (getWorkspaceTerminals(ws).length <= 1) {
       if (DETACHED_ONLY) {
         window.close();
@@ -4632,7 +5231,15 @@
     }
   }
 
-  function fitTerm(entry) {
+  function syncTerminalSize(entry) {
+    if (entry._resizeTimeout) clearTimeout(entry._resizeTimeout);
+    entry._resizeTimeout = null;
+    if (entry.dead || findTermById(entry.id)?.term !== entry) return;
+    const { cols, rows } = entry.term;
+    if (cols > 0 && rows > 0) sendControl({ type: 'resize', id: entry.id, cols, rows });
+  }
+
+  function fitTerm(entry, immediate = false) {
     if (!entry || !entry.el || entry.type === 'browser') return;
     if (entry.dead) return;
     // Never fit a hidden terminal. When the slot (or an ancestor group /
@@ -4649,15 +5256,10 @@
     try {
       // Frontend fits instantly for snappy visual feedback
       entry.fit.fit();
-      const dims = entry.term.rows && entry.term.cols
-        ? { cols: entry.term.cols, rows: entry.term.rows }
-        : { cols: 80, rows: 24 };
-
-      // Debounce the backend PTY resize to prevent freezing the socket/app during continuous resizes
+      // Keep drag updates coalesced, but never capture a stale grid in a timer.
       if (entry._resizeTimeout) clearTimeout(entry._resizeTimeout);
-      entry._resizeTimeout = setTimeout(() => {
-        sendControl({ type: 'resize', id: entry.id, cols: dims.cols, rows: dims.rows });
-      }, 80);
+      if (immediate) syncTerminalSize(entry);
+      else entry._resizeTimeout = setTimeout(() => syncTerminalSize(entry), 80);
 
     } catch { }
   }
@@ -4678,11 +5280,11 @@
       if (found.term.el && (found.term.el.style.display === 'none' || found.term.el.offsetParent === null)) continue;
       // Skip zero-size transients (flex not yet settled)
       if (en.contentRect.width < 20 || en.contentRect.height < 20) continue;
-      // Dedupe: only fit when pixel size actually changed
-      const w = Math.round(en.contentRect.width);
-      const h = Math.round(en.contentRect.height);
-      if (found.term._lastFitW === w && found.term._lastFitH === h) continue;
-      found.term._lastFitW = w; found.term._lastFitH = h;
+      // No size dedupe here: ResizeObserver only fires on real changes, and a
+      // cache updated only by this observer goes stale when a pane is fitted
+      // elsewhere (e.g. after a suppressed sash/window resize). Returning to
+      // the cached width then skipped the refit, leaving a narrow grid in a
+      // wide pane and TUIs cut off. FitAddon is a no-op when the grid matches.
       if (found.term._fitObserverRaf) cancelAnimationFrame(found.term._fitObserverRaf);
       found.term._fitObserverRaf = requestAnimationFrame(() => {
         found.term._fitObserverRaf = null;
@@ -4722,9 +5324,8 @@
     }
 
     // Create a new terminal for the new split pane
-    const allTerms = getWorkspaceTerminals(wsp);
     const id = uuid();
-    const label = activeTerminal()?.label || `bash ${allTerms.length + 1}`;
+    const label = (cwd || '').split(/[\\/]/).filter(Boolean).pop() || 'Terminal';
     const newEntry = _createTermEntry(wsp, id, label);
 
     const newGroup = {
@@ -4899,7 +5500,9 @@
 ═══════════════════════════════════════════════════════════════ */
   function getMinSizes(node) {
     if (!node) return { minW: 0, minH: 0 };
-    if (node.type === 'group') return { minW: SPLIT_MIN_PX, minH: SPLIT_MIN_PX };
+    const requestedW = typeof node.size?.width === 'number' ? node.size.width : 0;
+    const requestedH = typeof node.size?.height === 'number' ? node.size.height : 0;
+    if (node.type === 'group') return { minW: Math.max(SPLIT_MIN_PX, requestedW), minH: Math.max(SPLIT_MIN_PX, requestedH) };
     if (node.type === 'split') {
       let minW = 0, minH = 0;
       node.children.forEach((c, idx) => {
@@ -4914,9 +5517,25 @@
           minW = Math.max(minW, s.minW);
         }
       });
-      return { minW, minH };
+      return { minW: Math.max(minW, requestedW), minH: Math.max(minH, requestedH) };
     }
     return { minW: 0, minH: 0 };
+  }
+
+  function applyLayoutNodeSize(el, node, parentDirection) {
+    if (!node.size) return;
+    const legacyCompact = node.size.width === 'min' && node.size.height === 'min';
+    const mins = getMinSizes(node);
+    for (const [axis, minimum] of [['width', mins.minW], ['height', mins.minH]]) {
+      if (node.size[axis] === undefined) continue;
+      // Old compact layouts stored both minima. Keep the cross axis filling
+      // its split instead of leaving a blank strip beside the worker panes.
+      if (legacyCompact && (!parentDirection || axis !== (parentDirection === 'row' ? 'width' : 'height'))) continue;
+      const value = Math.max(minimum, node.size[axis] === 'min' ? 0 : node.size[axis]);
+      el.style[axis] = value + 'px';
+      el.style[axis === 'width' ? 'maxWidth' : 'maxHeight'] = value + 'px';
+    }
+    el.style.alignSelf = 'flex-end';
   }
 
   // ── Tab bar: reveal active tab & refresh chevron overflow state ──
@@ -4953,7 +5572,7 @@
     applyBackground();
   }
 
-  function buildNodeDom(node, wsp) {
+  function buildNodeDom(node, wsp, parentDirection) {
     if (!node) return null;
 
     if (node.type === 'split') {
@@ -4964,6 +5583,7 @@
       const mins = getMinSizes(node);
       container.style.minWidth = mins.minW + 'px';
       container.style.minHeight = mins.minH + 'px';
+      applyLayoutNodeSize(container, node, parentDirection);
 
       node.children.forEach((child, idx) => {
         if (idx > 0) {
@@ -4973,10 +5593,12 @@
           container.appendChild(sash);
         }
 
-        const childDom = buildNodeDom(child, wsp);
+        const childDom = buildNodeDom(child, wsp, node.direction);
         if (childDom) {
           const size = node.sizes[idx] !== undefined ? node.sizes[idx] : (100 / node.children.length);
           childDom.style.flex = `${size} 1 0%`;
+          const axis = node.direction === 'row' ? 'width' : 'height';
+          if (child.size?.[axis] !== undefined) childDom.style.flex = `0 0 ${childDom.style[axis]}`;
           container.appendChild(childDom);
         }
       });
@@ -4987,8 +5609,22 @@
     if (node.type === 'group') {
       const groupEl = document.createElement('div');
       groupEl.className = 'term-group';
+      const maximizedTag = document.createElement('span');
+      maximizedTag.className = 'maximized-tag';
+      maximizedTag.textContent = 'Maximized';
+      groupEl.addEventListener('pointermove', e => {
+        if (!groupEl.classList.contains('maximized')) return;
+        const bounds = groupEl.getBoundingClientRect();
+        const right = bounds.right - 2, bottom = bounds.bottom - 2;
+        const overTagCorner = e.clientX >= right - maximizedTag.offsetWidth && e.clientX <= right &&
+          e.clientY >= bottom - maximizedTag.offsetHeight && e.clientY <= bottom;
+        maximizedTag.classList.toggle('on-left', overTagCorner);
+      });
+      groupEl.addEventListener('pointerleave', () => maximizedTag.classList.remove('on-left'));
+      groupEl.append(maximizedTag);
       groupEl.id = 'group-' + node.id;
       groupEl.dataset.groupId = node.id;
+      applyLayoutNodeSize(groupEl, node, parentDirection);
 
       const header = document.createElement('div');
       header.className = 'term-group-header';
@@ -5016,7 +5652,7 @@
       };
 
       const handleTabBarDragOver = (e) => {
-        const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
+        const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
         if (!window.draggedTermId && !hasExternal) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
@@ -5046,7 +5682,7 @@
 
       const handleTabBarDrop = (e) => {
         tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
-        const extId = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+        const extId = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
 
         // Cross-window drag (tab from a detached window): attach into this group
         if (!window.draggedTermId) {
@@ -5166,6 +5802,7 @@
         <span class="tg-tab-close" title="Close">✕</span>
         `;
         tab.title = t.label;
+        addTabSessionHistory(tab, wsp, t);
         applyTabColor(tab, t.color);
 
         tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, t.id); } });
@@ -5189,6 +5826,7 @@
         });
 
         tab.addEventListener('dragstart', e => {
+          e.dataTransfer.setData('application/x-terminalvibe-tab', t.id);
           e.dataTransfer.setData('text/plain', t.id);
           e.dataTransfer.effectAllowed = 'move';
           window.draggedTermId = t.id;
@@ -5282,7 +5920,7 @@
         }
 
         tab.addEventListener('dragover', e => {
-          const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
+          const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
           if (!window.draggedTermId && !hasExternal) return;
           e.preventDefault();
           e.stopPropagation();
@@ -5329,7 +5967,7 @@
           // Cross-window drag (tab from a detached window): attach it into
           // this group, at the release position relative to this tab.
           if (!window.draggedTermId) {
-            const extId = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+            const extId = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
             if (extId && !findGroupContainingTerm(wsp.layout, extId)) {
               const api = window.electronAPI;
               if (api && api.tabDragDrop) {
@@ -5465,12 +6103,15 @@
         return item;
       }
       dropdown.appendChild(makeDropdownItem('Browser tab', addBrowserBtn.innerHTML, () => addBrowserTab(wsp.id, node.id)));
+      const claudeSessionsItem = makeDropdownItem('Claude sessions…', '<i class="ph ph-clock-counter-clockwise"></i>', () => openClaudeHistory(wsp, node.terminals.find(t => t.id === node.activeTermId)));
+      dropdown.appendChild(claudeSessionsItem);
       dropdown.appendChild(makeDropdownItem('Split horizontal', splitH.innerHTML, () => splitGroupDirectly(wsp.id, node.id, 'row')));
       dropdown.appendChild(makeDropdownItem('Split vertical', splitV.innerHTML, () => splitGroupDirectly(wsp.id, node.id, 'column')));
       dropdown.appendChild(makeDropdownItem(isMax ? 'Restore' : 'Maximize', maxBtn.innerHTML, () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); }));
 
       dropdownBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        claudeSessionsItem.hidden = node.terminals.find(t => t.id === node.activeTermId)?.type === 'browser';
         const wasOpen = dropdown.classList.contains('open');
         document.querySelectorAll('.tg-dropdown.open').forEach(d => d.classList.remove('open'));
         if (!wasOpen) dropdown.classList.add('open');
@@ -5729,15 +6370,16 @@
             surface.setAttribute('data-browser-surface-slot', entry.id);
             surface.style.cssText = 'width:100%;height:100% !important;border:0';
             contentWrap.appendChild(surface);
-            // Pin shadow iframe height as soon as the shadow DOM appears
+            // Electron's shadow iframe must stretch on both axes. Keep the
+            // webview a flex container; display:block can leave the guest's
+            // composited surface at its previous width during a split drag.
             const pinIframe = () => {
-              try {
-                const sr = surface.shadowRoot;
-                if (sr) { const f = sr.querySelector('iframe'); if (f) { f.style.height = '100%'; return true; } }
-              } catch { }
-              return false;
+              const frame = surface.shadowRoot?.querySelector('iframe');
+              if (!frame) return false;
+              frame.style.cssText = 'display:block;flex:1 1 auto;width:100%;height:100%;min-width:0;min-height:0;border:0';
+              return true;
             };
-            if (!pinIframe()) {
+            if (isElectron && !pinIframe()) {
               const mo = new MutationObserver(() => { if (pinIframe()) mo.disconnect(); });
               mo.observe(surface, { childList: true, subtree: true });
             }
@@ -5751,7 +6393,7 @@
               surface.addEventListener('focus', () => {
                 if (entry.type === 'browser') focusSlot(entry);
               });
-              surface.addEventListener('dom-ready', () => { surface._guestReady = true; }, { once: true });
+              surface.addEventListener('dom-ready', () => { surface._guestReady = true; pinIframe(); });
               surface.addEventListener('did-start-loading', () => showLoading(true));
               surface.addEventListener('did-stop-loading', () => {
                 entry._retryCount = 0;
@@ -5775,17 +6417,6 @@
                 showError(entry.url, 'Failed to load page.');
               });
               surface.addEventListener('new-window', e => { e.preventDefault(); openExternalUrl(e.url); });
-              // Force the inner iframe (shadow DOM) to fill the webview height
-              // immediately — no flash of small height before resize.
-              const pinShadowIframe = () => {
-                try {
-                  const sr = surface.shadowRoot;
-                  if (sr) { const f = sr.querySelector('iframe'); if (f) f.style.height = '100%'; }
-                } catch { }
-              };
-              // Watch for the shadow root to appear (fires instantly, no flash)
-              new MutationObserver(pinShadowIframe).observe(surface, { childList: true, subtree: true });
-              pinShadowIframe();
             } else {
               surface.addEventListener('load', () => {
                 clearTimeout(entry._loadTimer);
@@ -6020,19 +6651,21 @@
       });
     });
 
+    // Ctrl+Alt+LeftClick toggles multi-select (skip browser tabs). Capture
+    // phase: xterm must never see this click, or a TUI with mouse tracking
+    // gets press/drag reports for a gesture that belongs to the app.
     slot.addEventListener('mousedown', (e) => {
-      // Ctrl+Alt+LeftClick toggles multi-select (skip browser tabs)
       if (e.button === 0 && e.ctrlKey && e.altKey && entry.type !== 'browser') {
         e.preventDefault(); e.stopPropagation();
         toggleMultiSelect(entry.id);
-        return;
       }
+    }, true);
+    slot.addEventListener('mousedown', () => {
       focusSlot(entry);
-
       entry.term.focus();
     });
 
-    // Right-click on terminal body area — includes copy/paste
+    // Right-click on terminal body area
     slot.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -6053,14 +6686,56 @@
       const isRow = node.direction === 'row';
       startPos = isRow ? e.clientX : e.clientY;
 
+      // Capture the visible layout before releasing requested sizes. Otherwise
+      // switching back to old flex weights makes the divider jump on mouse-down.
       const panes = [...container.children].filter(c => !c.classList.contains('sash'));
       startSizes = panes.map(p => isRow ? p.offsetWidth : p.offsetHeight);
+      const wsp = activeWs();
+      if (wsp) syncSplitSizes(wsp.layout);
+
+      // Nested size requests also contribute to an ancestor's minimum size.
+      // Release the adjacent subtrees as well as the path to this divider so
+      // a worker's requested pixels cannot keep the whole row/column locked.
+      const release = (current, parent, index, subtree = false) => {
+        if (subtree && current.type === 'split') {
+          current.children.forEach((child, i) => release(child, current, i, true));
+        }
+        const sized = !!current.size;
+        delete current.size;
+        const el = document.getElementById((current.type === 'split' ? 'split-' : 'group-') + current.id);
+        if (!el) return;
+        if (sized) for (const key of ['width', 'height', 'maxWidth', 'maxHeight', 'alignSelf']) el.style[key] = '';
+        const mins = getMinSizes(current);
+        el.style.minWidth = mins.minW + 'px';
+        el.style.minHeight = mins.minH + 'px';
+        if (parent) el.style.flex = `${parent.sizes[index]} 1 0%`;
+      };
+      const releasePath = (current, parent, index) => {
+        if (current !== node && (current.type !== 'split' || !current.children.some((child, i) => releasePath(child, current, i)))) return false;
+        if (current === node) {
+          release(current.children[childIdx - 1], current, childIdx - 1, true);
+          release(current.children[childIdx], current, childIdx, true);
+        }
+        release(current, parent, index);
+        return true;
+      };
+      if (wsp) releasePath(wsp.layout, null, 0);
+
       const dim = isRow ? 'width' : 'height';
-      for (const p of panes) p.style.willChange = dim;
+      panes.forEach((p, i) => {
+        p.style.willChange = dim;
+        p.style.flex = 'none';
+        p.style[dim] = startSizes[i] + 'px';
+      });
       _suppressResize = true;
       startResizing();
 
+      let moveRaf = null, lastEv = null;
       const onMove = (ev) => {
+        lastEv = ev;
+        if (!moveRaf) moveRaf = requestAnimationFrame(() => { moveRaf = null; applyMove(lastEv); });
+      };
+      const applyMove = (ev) => {
         const pos = isRow ? ev.clientX : ev.clientY;
         const delta = pos - startPos;
         const prevIdx = childIdx - 1;
@@ -6080,9 +6755,13 @@
         nextPane.style.flex = 'none';
         prevPane.style[dim] = newPrev + 'px';
         nextPane.style[dim] = newNext + 'px';
+        // Move browser overlays in the same event as their split placeholders.
+        // Waiting for ResizeObserver + another RAF leaves an exposed edge.
+        syncBrowserSlots();
       };
 
       const onUp = () => {
+        if (moveRaf) { cancelAnimationFrame(moveRaf); moveRaf = null; applyMove(lastEv); }
         sash.classList.remove('dragging');
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
@@ -6142,9 +6821,91 @@
 
     // Files dropped on a split go to that split's active terminal (no split overlay).
     const dropTarget = () => groupNode.terminals.find(t => t.id === groupNode.activeTermId) || groupNode.terminals[0];
+    const isWorkspaceDrag = e => e.dataTransfer?.types.includes('application/x-terminalvibe-workspace');
+    const isSessionDrag = e => isWorkspaceDrag(e) || e.dataTransfer?.types.includes('application/x-terminalvibe-session');
+    const isAttachmentDrag = e => isSessionDrag(e) || isFileDrag(e);
+    let sessionDropProcess=null, sessionDropProbe=null, lastSessionHover=null;
+    const inSessionDropArea = e => {
+      const terminal=dropTarget();
+      if(!terminal?.el || terminal.type==='browser' || terminal.locked || terminal.dead) return false;
+      if(e.target.closest?.('.session-overlay')) return false;
+      const inside = rect => e.clientX>=rect.left && e.clientX<rect.right && e.clientY>=rect.top && e.clientY<rect.bottom;
+      if(!inside(terminal.el.getBoundingClientRect())) return false;
+      const sidebar=terminal.el.querySelector('.session-overlay');
+      return !sidebar || !inside(sidebar.getBoundingClientRect());
+    };
+    const acceptsSessionDrop = e => inSessionDropArea(e) &&
+      sessionDropProcess?.terminal===dropTarget() && Date.now()-sessionDropProcess.checkedAt<1000 &&
+      /^(claude|claude-code)(\.exe)?$/i.test(sessionDropProcess.name || '');
+    let sessionDropEffect = null;
+    const clearSessionDropEffect = () => {sessionDropEffect?.remove();sessionDropEffect=null;};
+    const showSessionDropEffect = () => {
+      const terminal=dropTarget();
+      if(!terminal?.el) return;
+      if(!sessionDropEffect?.isConnected) {
+        sessionDropEffect=document.createElement('div');sessionDropEffect.className='session-context-drop-effect';
+        sessionDropEffect.setAttribute('aria-hidden','true');
+        sessionDropEffect.innerHTML='<div class="session-context-drop-card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 11-9 9a6 6 0 0 1-8.5-8.5l10-10a4 4 0 0 1 5.7 5.7l-10 10a2 2 0 0 1-2.8-2.8l9-9"/></svg><span>Drop session to attach</span></div>';
+        terminal.el.append(sessionDropEffect);
+      }
+      sessionDropEffect.querySelector('span').textContent = isFileDrag(lastSessionHover || {}) ? 'Drop files to attach' : isWorkspaceDrag(lastSessionHover || {}) ? 'Drop workspace to attach' : 'Drop session to attach';
+      const rect=terminal.el.getBoundingClientRect();
+      const sidebar=terminal.el.querySelector('.session-overlay')?.getBoundingClientRect();
+      sessionDropEffect.style.left=Math.max(0,sidebar && sidebar.width ? sidebar.right-rect.left : 0)+'px';
+    };
+    const probeSessionDropTarget = e => {
+      lastSessionHover=inSessionDropArea(e) ? e : null;
+      if(!lastSessionHover) return;
+      const terminal=dropTarget();
+      if(sessionDropProbe || (sessionDropProcess?.terminal===terminal && Date.now()-sessionDropProcess.checkedAt<500)) return;
+      const probe=checkTerminalRunning(terminal.id);sessionDropProbe=probe;
+      probe.then(name=>{
+        if(sessionDropProbe!==probe) return;
+        sessionDropProbe=null;sessionDropProcess={terminal,name,checkedAt:Date.now()};
+        if(lastSessionHover && dropTarget()===terminal && (isFileDrag(lastSessionHover) || (isWorkspaceDrag(lastSessionHover) && window.draggedWsId) || document.querySelector('.session-overlay.session-dragging')) && acceptsSessionDrop(lastSessionHover)) showSessionDropEffect();
+        else clearSessionDropEffect();
+      }).catch(()=>{sessionDropProbe=null;sessionDropProcess=null;clearSessionDropEffect();});
+    };
+    // Capture context drags before the terminal's textarea/default drop handlers.
+    bodyEl.addEventListener('dragenter', e => {
+      if(!isAttachmentDrag(e)) return;
+      probeSessionDropTarget(e);
+      e.stopPropagation();
+      if(isFileDrag(e) && inSessionDropArea(e)) e.preventDefault();
+      if(acceptsSessionDrop(e)) {e.preventDefault();showSessionDropEffect();}else clearSessionDropEffect();
+    }, true);
+    bodyEl.addEventListener('dragover', e => {
+      if(!isAttachmentDrag(e)) return;
+      probeSessionDropTarget(e);
+      e.stopPropagation();
+      const accepted = isFileDrag(e) ? inSessionDropArea(e) : acceptsSessionDrop(e);
+      if(accepted) {e.preventDefault();e.dataTransfer.dropEffect='copy';}
+      else e.dataTransfer.dropEffect='none';
+      if(acceptsSessionDrop(e)) showSessionDropEffect(); else clearSessionDropEffect();
+    }, true);
+    bodyEl.addEventListener('dragleave', e => {
+      if(!isAttachmentDrag(e)) return;
+      e.stopPropagation();
+      if(!e.relatedTarget || !bodyEl.contains(e.relatedTarget) || e.relatedTarget.closest?.('.session-overlay')) {lastSessionHover=null;clearSessionDropEffect();}
+    }, true);
+    bodyEl.addEventListener('drop', e => {
+      if(!isAttachmentDrag(e)) return;
+      e.preventDefault();e.stopPropagation();
+      lastSessionHover=null;
+      clearSessionDropEffect();
+      if(isFileDrag(e)) {
+        if(inSessionDropArea(e)) dropFilesIntoTerminal(dropTarget(), [...e.dataTransfer.files]).catch(err => console.error('[drop] failed:', err));
+        return;
+      }
+      if(!acceptsSessionDrop(e)) return;
+      if(isWorkspaceDrag(e)) {
+        const source=findWs(e.dataTransfer.getData('application/x-terminalvibe-workspace'));
+        if(source) attachContextToChat(dropTarget(),null,() => buildWorkspaceContext(source));
+      } else attachContextToChat(dropTarget(),e.dataTransfer.getData('application/x-terminalvibe-session'));
+    }, true);
     bodyEl.addEventListener('dragenter', e => {
       if (isFileDrag(e)) { e.preventDefault(); return; }
-      const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
+      const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
       if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
       dragDepth++;
@@ -6157,7 +6918,7 @@
         if (t && t.type !== 'browser') { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
         return;
       }
-      const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('text/plain'));
+      const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
       if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
@@ -6211,7 +6972,7 @@
         window.electronAPI.tabDragHover({ id: null });
       }
 
-      const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+      const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
       if (!draggedId) return;
 
       const zone = getZoneFromPoint(e.clientX, e.clientY);
@@ -6409,6 +7170,19 @@
   /* ═══════════════════════════════════════════════════════════════
    S I*DEBAR RENDERING
    ═══════════════════════════════════════════════════════════════ */
+  function makeKeyboardButton(el, label) {
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    if (label) el.setAttribute('aria-label', label);
+    el.addEventListener('keydown', e => {
+      if (e.target === el && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        e.stopPropagation();
+        el.click();
+      }
+    });
+  }
+
   function renderSidebar() {
     const sb = document.getElementById('sidebar-inner') || document.getElementById('sidebar');
     if (!sideOrder.length && (workspaces.length || folders.length)) rebuildSideOrder();
@@ -6508,6 +7282,7 @@
 
     const addBtn = document.createElement('div');
     addBtn.className = 'ws-add';
+    makeKeyboardButton(addBtn, 'New workspace');
     addBtn.title = 'New workspace';
     addBtn.innerHTML = '<i class="ph ph-plus"></i>';
     addBtn.addEventListener('click', () => {
@@ -6540,6 +7315,7 @@
     const folderBtn = document.createElement('div');
     folderBtn.className = 'ws-folder-add-btn';
     folderBtn.title = 'New folder';
+    makeKeyboardButton(folderBtn, 'New folder');
     folderBtn.innerHTML = '<i class="ph ph-folder-plus"></i>';
     folderBtn.addEventListener('click', () => showPrompt('New folder', '', { color: '' }, (value, color) => createFolder(value, color)));
     headerActions.appendChild(folderBtn);
@@ -6584,15 +7360,16 @@
         return `<span class="ws-label">${wsNum}</span>`;
       };
       const labelHtml = wsIconHtml();
-      btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<div class="ws-info"><span class="ws-name">${escHtml(wsp.label)}</span><div class="ws-procs"></div></div><span class="ws-actions">${!isInFolder ? `<span class="ws-action ws-pin" title="${wsp.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${wsp.pinned ? '-slash' : ''}"></i></span>` : ''}<span class="ws-action ws-rename" title="Rename"><i class="ph ph-pencil-simple"></i></span><span class="ws-action ws-remove" title="Close"><i class="ph ph-x"></i></span></span>${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span>`;
+      btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<div class="ws-info"><span class="ws-name">${escHtml(wsp.label)}</span><div class="ws-procs"></div></div><span class="ws-meta">${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span></span>`;
       if (wsp.pinned) btn.classList.add('pinned');
       btn.title = wsp.label;
+      makeKeyboardButton(btn, wsp.label);
+      btn.setAttribute('aria-current', isActive ? 'true' : 'false');
       if (wsp.color) {
         btn.dataset.color = wsp.color;
         btn.style.setProperty('--ws-color', wsp.color);
       }
       btn.addEventListener('click', (e) => {
-        if (e.target.closest('.ws-action')) return;
         if (window._wsDragged) { window._wsDragged = false; return; }
         activateWorkspace(wsp.id);
       });
@@ -6601,8 +7378,9 @@
 
       // Drag & drop: move / reorder (folder-aware)
       btn.addEventListener('dragstart', e => {
+        e.dataTransfer.setData('application/x-terminalvibe-workspace', wsp.id);
         e.dataTransfer.setData('text/plain', wsp.id);
-        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.effectAllowed = 'copyMove';
         btn.classList.add('dragging');
         window.draggedWsId = wsp.id;
         startResizing();
@@ -6610,6 +7388,7 @@
       btn.addEventListener('dragend', () => {
         btn.classList.remove('dragging');
         window.draggedWsId = null;
+        document.querySelectorAll('.session-context-drop-effect').forEach(el => el.remove());
         clearDropMarks();
         stopResizing();
       });
@@ -6716,20 +7495,6 @@
         }
       });
 
-      if (!isInFolder) {
-        btn.querySelector('.ws-pin').addEventListener('click', (e) => {
-          e.stopPropagation();
-          togglePinWorkspace(wsp.id);
-        });
-      }
-      btn.querySelector('.ws-rename').addEventListener('click', (e) => {
-        e.stopPropagation();
-        renameWorkspace(wsp.id);
-      });
-      btn.querySelector('.ws-remove').addEventListener('click', (e) => {
-        e.stopPropagation();
-        removeWorkspace(wsp.id);
-      });
       if (showWsProcs) updateWorkspaceProcs(wsp, btn);
       return btn;
     };
@@ -6751,6 +7516,8 @@
       const headerEl = document.createElement('div');
       headerEl.className = 'ws-folder-header';
       headerEl.title = folder.label;
+      makeKeyboardButton(headerEl, folder.label);
+      headerEl.setAttribute('aria-expanded', String(!folder.collapsed));
       headerEl.innerHTML = `
         <span class="ws-folder-icon ws-folder-icon-closed"><i class="ph ph-folder"></i></span>
         <span class="ws-folder-icon ws-folder-icon-open"><i class="ph ph-folder-open"></i></span>
@@ -6758,11 +7525,14 @@
         ${folder.pinned ? '<span class="ws-folder-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}
         <span class="ws-folder-count">${wss.length}</span>
         <span class="ws-folder-actions">
-          <span class="ws-folder-action ws-folder-pin" title="${folder.pinned ? 'Unpin' : 'Pin to top'}"><i class="ph ph-push-pin${folder.pinned ? '-slash' : ''}"></i></span>
-          <span class="ws-folder-action ws-folder-add" title="New workspace here"><i class="ph ph-plus"></i></span>
-          <span class="ws-folder-action ws-folder-rename" title="Edit folder"><i class="ph ph-pencil-simple"></i></span>
-          <span class="ws-folder-action ws-folder-remove" title="Delete folder"><i class="ph ph-x"></i></span>
+          <button type="button" class="ws-folder-action ws-folder-add" title="New workspace here"><i class="ph ph-plus" aria-hidden="true"></i></button>
+          <button type="button" class="ws-folder-action ws-folder-more" title="Folder actions" aria-haspopup="menu"><i class="ph ph-dots-three" aria-hidden="true"></i></button>
         </span>`;
+      headerEl.querySelectorAll('.ws-folder-action').forEach(action => {
+        action.setAttribute('aria-label', action.title + ': ' + folder.label);
+        action.addEventListener('mousedown', e => e.stopPropagation());
+        action.addEventListener('dragstart', e => {e.preventDefault();e.stopPropagation();});
+      });
       if (folder.pinned) row.classList.add('pinned');
 
       headerEl.addEventListener('click', e => {
@@ -6772,10 +7542,12 @@
       });
       headerEl.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'folder', folder.id); });
 
-      headerEl.querySelector('.ws-folder-pin').addEventListener('click', e => { e.stopPropagation(); togglePinFolder(folder.id); });
       headerEl.querySelector('.ws-folder-add').addEventListener('click', e => { e.stopPropagation(); createWorkspace(undefined, folder.id); });
-      headerEl.querySelector('.ws-folder-rename').addEventListener('click', e => { e.stopPropagation(); renameFolder(folder.id); });
-      headerEl.querySelector('.ws-folder-remove').addEventListener('click', e => { e.stopPropagation(); removeFolder(folder.id); });
+      headerEl.querySelector('.ws-folder-more').addEventListener('click', e => {
+        e.stopPropagation();
+        const rect = e.currentTarget.getBoundingClientRect();
+        showCtxMenu({pageX:rect.left + window.scrollX, pageY:rect.bottom + window.scrollY + 6}, 'folder', folder.id);
+      });
 
       // Drop onto the folder button:
       //   folder → top half = insert above, bottom half = below
@@ -6849,6 +7621,7 @@
       row.addEventListener('dragstart', e => {
         if (e.target.closest('.ws-btn')) return;
         if (window.draggedWsId) { e.preventDefault(); return; }
+        e.dataTransfer.setData('application/x-terminalvibe-folder', folder.id);
         e.dataTransfer.setData('text/plain', folder.id);
         e.dataTransfer.effectAllowed = 'move';
         row.classList.add('dragging');
@@ -6927,10 +7700,10 @@
   }
 
   /* ── Workspace sidebar: live processes per workspace ──
-     Each workspace button shows the running processes (excluding idle shells)
-     as up to 3 lines. When more than 3 exist, the 3rd line becomes "+N". */
-  const _wsProcsCache = new Map(); // wsId -> { names: string[], termIds: string, ts: number }
-  const _WS_PROCS_TTL = 4000;
+     Show up to three processes and a count of any remaining processes.
+     The tooltip lists all running processes (excluding idle shells). */
+  const _wsProcsCache = new Map(); // wsId -> { processes: {id,name,label,cwd}[], termIds, ts }
+  const _WS_PROCS_TTL = 900;
   // Idle shells and unidentified sessions are never shown in the workspace
   // button: an idle powershell.exe / cmd.exe / wsl.exe is not a "running
   // process", and 'unknown' (backend couldn't tell) must not render as text.
@@ -6941,15 +7714,65 @@
     return !base || _WS_PROCS_HIDE_RE.test(base);
   };
 
-  function renderWsProcs(procsEl, names) {
+  // Brand logo for a known process (proc-icons.js), else a generic terminal glyph.
+  function procIconHtml(name, fallback = 'ph-terminal-window') {
+    const key = String(name).toLowerCase().replace(/[\d.]+$/, '');
+    if (key === 'codex') return '<i class="ws-proc-icon ph ph-open-ai-logo"></i>';
+    const slug = window.PROC_ICON_ALIAS?.[key];
+    const d = slug && window.PROC_ICON_PATHS?.[slug];
+    return d ? `<svg class="ws-proc-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`
+             : `<i class="ws-proc-icon ph ${fallback}"></i>`;
+  }
+
+  function renderWsProcs(procsEl, processes) {
     if (!procsEl) return;
-    if (!names || !names.length) { procsEl.textContent = ''; return; }
-    const total = names.length;
-    const shown = total > 3 ? names.slice(0, 2) : names.slice(0, 3);
-    const extra = total - shown.length;
-    let html = shown.map(n => `<div class="ws-proc">- ${escHtml(n)}</div>`).join('');
-    if (extra > 0) html += `<div class="ws-proc ws-proc-more">+${extra}</div>`;
-    procsEl.innerHTML = html;
+    // Preserve the hover/focus target while polling updates the count and list.
+    const sig = JSON.stringify(processes);
+    if (procsEl.dataset.sig === sig) return;
+    procsEl.dataset.sig = sig;
+    const workspaceButton = procsEl.closest('.ws-btn');
+    workspaceButton.dataset.tip = workspaceButton.querySelector('.ws-name')?.textContent || 'Workspace';
+    if (!processes?.length) {
+      procsEl.replaceChildren();
+      delete workspaceButton.dataset.tipProcesses;
+      return;
+    }
+    workspaceButton.dataset.tipProcesses = sig;
+    // Same process in several panes → one chip with a count, not duplicates.
+    const groups = [];
+    for (const process of processes) {
+      const group = groups.find(g => g.name === process.name);
+      if (group) group.count++; else groups.push({ name: process.name, count: 1 });
+    }
+    const shown = groups.slice(0, 3);
+    const previousRows = [...procsEl.querySelectorAll('.ws-proc:not(.ws-proc-more)')];
+    previousRows.slice(shown.length).forEach(row => row.remove());
+    shown.forEach((process, index) => {
+      let row = previousRows[index];
+      if (!row) {
+        row = document.createElement('span'); row.className = 'ws-proc';
+        row.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); } });
+        row.addEventListener('auxclick', e => { e.preventDefault(); e.stopPropagation(); });
+        row.addEventListener('dragstart', e => { e.preventDefault(); e.stopPropagation(); });
+        procsEl.insertBefore(row, procsEl.querySelector('.ws-proc-more'));
+      }
+      const html = `${procIconHtml(process.name)}${process.count > 1 ? `<span class="ws-proc-count">${process.count}</span>` : ''}<span>${escHtml(process.name)}</span>`;
+      if (row.innerHTML !== html) row.innerHTML = html;
+    });
+    let count = procsEl.querySelector('.ws-proc-more');
+    const remaining = groups.length - shown.length;
+    if (!remaining) { count?.remove(); return; }
+    if (!count) {
+      count = document.createElement('span');
+      count.className = 'ws-proc ws-proc-more'; count.draggable = false;
+      // Process details belong to the workspace card; left clicks bubble to it.
+      count.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); } });
+      count.addEventListener('auxclick', e => { e.preventDefault(); e.stopPropagation(); });
+      count.addEventListener('dragstart', e => { e.preventDefault(); e.stopPropagation(); });
+      procsEl.append(count);
+    }
+    count.textContent = '+' + remaining;
+    count.setAttribute('aria-label', `${remaining} more running ${remaining === 1 ? 'process' : 'processes'}`);
   }
 
   function updateWorkspaceProcs(wsp, btn) {
@@ -6959,20 +7782,33 @@
     const termIds = terms.map(t => t.id).sort().join(',');
     const cached = _wsProcsCache.get(wsp.id);
     if (cached && cached.termIds === termIds && Date.now() - cached.ts < _WS_PROCS_TTL) {
-      renderWsProcs(procsEl, cached.names);
+      renderWsProcs(procsEl, cached.processes, wsp.id);
       return;
     }
     if (!terms.length) {
-      _wsProcsCache.set(wsp.id, { names: [], termIds, ts: Date.now() });
-      renderWsProcs(procsEl, []);
+      _wsProcsCache.set(wsp.id, { processes: [], termIds, ts: Date.now() });
+      renderWsProcs(procsEl, [], wsp.id);
       return;
     }
     Promise.all(terms.map(t => checkTerminalRunning(t.id))).then(names => {
       if (!btn.isConnected) return;
-      const unique = [...new Set(names.filter(n => n && !_isHiddenWsProc(n)))];
-      _wsProcsCache.set(wsp.id, { names: unique, termIds, ts: Date.now() });
-      renderWsProcs(procsEl, unique);
+      const processes = names.map((name, i) => ({id:terms[i].id, name, label:terms[i].label, cwd:terms[i].cwd}))
+        .filter(process => !_isHiddenWsProc(process.name));
+      _wsProcsCache.set(wsp.id, { processes, termIds, ts: Date.now() });
+      renderWsProcs(procsEl, processes, wsp.id);
     });
+  }
+
+  // Enter / Ctrl+C / Ctrl+D usually start or stop a process: re-check right
+  // away (twice, since a command can take a moment to spawn or exit).
+  let _wsProcsSoonTimers = [];
+  function refreshWorkspaceProcsSoon() {
+    if (!showWsProcs) return;
+    _wsProcsSoonTimers.forEach(clearTimeout);
+    _wsProcsSoonTimers = [150, 600].map(ms => setTimeout(() => {
+      _wsProcsCache.clear();
+      refreshAllWorkspaceProcs();
+    }, ms));
   }
 
   function refreshAllWorkspaceProcs() {
@@ -6987,8 +7823,10 @@
    C O*NTEXT MENU
    ═══════════════════════════════════════════════════════════════ */
   const ctxEl = document.getElementById('ctx');
+  let ctxPreviousFocus;
 
   function showCtxMenu(e, type, data) {
+    if (!ctxEl.contains(document.activeElement)) ctxPreviousFocus = document.activeElement;
     ctxEl.innerHTML = '';
 
     const item = (icon, label, key, fn, danger) => {
@@ -7054,7 +7892,7 @@
       item('<i class="ph ph-pencil-simple"></i>', 'Edit profile', '', () => editProfile(p));
       if (p.id !== defaultId) item('<i class="ph ph-star"></i>', 'Set as default profile', '', () => setDefaultProfile(p));
       if (p.avatar) item('<i class="ph ph-image"></i>', 'Remove picture', '', async () => {
-        const api = configApi();
+        const api = profilesApi();
         if (!api || !api.profilesUpdate) return;
         const meta = await api.profilesUpdate({ id: p.id, avatar: '' });
         const updated = meta.profiles.find(x => x.id === p.id);
@@ -7065,7 +7903,7 @@
       if (p.id && (typeof p === 'object')) {
         sep();
         item('<i class="ph ph-trash"></i>', 'Delete profile', '', () => {
-          configApi().profilesList().then(m => {
+          profilesApi().profilesList().then(m => {
             if (m.profiles.length <= 1) return; // never delete the last profile
             deleteProfile(p);
           });
@@ -7135,7 +7973,7 @@
           });
         }
       }
-      // Copy & Paste — only when right-clicking on the terminal body
+      // Copy — only when right-clicking on the terminal body
       if (data._fromBody) {
         item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+Shift+C', () => {
           const t = findTermById(termId);
@@ -7147,10 +7985,6 @@
               navigator.clipboard.writeText(text);
             }
           }
-        });
-        item('<i class="ph ph-clipboard-text"></i>', 'Paste', 'Ctrl+Shift+V', () => {
-          const t = findTermById(termId);
-          if (t && t.term.type !== 'browser') doPaste(t.term);
         });
       }
       sep();
@@ -7171,6 +8005,14 @@
       }
     }
 
+    // Keep menus in the DOM so motion follows the appearance preference.
+    // Browser panes are DOM webviews, covered by this overlay's z-index.
+    ctxEl.inert = false;
+    ctxEl.setAttribute('role', 'menu');
+    ctxEl.querySelectorAll('.ctx-item').forEach(el => {
+      el.setAttribute('role', 'menuitem');
+      el.tabIndex = -1;
+    });
     ctxEl.classList.add('open');
     const menuW = ctxEl.offsetWidth;
     const menuH = ctxEl.offsetHeight;
@@ -7184,8 +8026,29 @@
     ctxEl.classList.toggle('sub-flip', x + menuW + 210 > window.innerWidth);
   }
 
-  function hideCtxMenu() { ctxEl.classList.remove('open'); }
+  function hideCtxMenu() {
+    const restoreFocus = ctxEl.contains(document.activeElement);
+    ctxEl.classList.remove('open');
+    ctxEl.inert = true;
+    if (restoreFocus && ctxPreviousFocus?.isConnected) ctxPreviousFocus.focus({ preventScroll: true });
+  }
+  document.addEventListener('contextmenu', e => { if (!ctxEl.contains(e.target)) hideCtxMenu(); }, true);
   document.addEventListener('click', e => { if (!e.target.closest('#ctx')) hideCtxMenu(); });
+  document.addEventListener('keydown', e => {
+    if (!ctxEl.classList.contains('open')) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideCtxMenu(); return; }
+    if (!['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Enter', ' '].includes(e.key)) return;
+    e.preventDefault(); e.stopPropagation();
+    const items = [...ctxEl.querySelectorAll('.ctx-item')].filter(el => el.getClientRects().length);
+    const index = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowRight') { document.activeElement?.querySelector('.ctx-sub > .ctx-item')?.focus(); return; }
+    if (e.key === 'ArrowLeft') { document.activeElement?.closest('.ctx-sub')?.parentElement.focus(); return; }
+    if ((e.key === 'Enter' || e.key === ' ') && document.activeElement?.classList.contains('has-sub')) {
+      document.activeElement.querySelector('.ctx-sub > .ctx-item')?.focus(); return;
+    }
+    if (e.key === 'Enter' || e.key === ' ') { if (index >= 0) items[index].click(); }
+    else items[index < 0 ? (e.key === 'ArrowDown' ? 0 : items.length - 1) : (index + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+  }, true);
 
   /* ═══════════════════════════════════════════════════════════════
    P R*OMPT MODAL
@@ -7290,11 +8153,13 @@
       promptIconBtn.style.display = 'none';
     }
 
+    promptOverlay.inert = false;
     promptOverlay.classList.add('open');
     promptInput.focus();
     promptInput.select();
 
     const close = () => {
+      promptOverlay.inert = true;
       promptOverlay.classList.remove('open');
       // Dismiss a still-open Coloris popup and drop its temp input
       if (colorisInput) {
@@ -7337,12 +8202,14 @@
     promptColors.style.display = 'none';
     promptIconBtn.style.display = 'none';
 
+    promptOverlay.inert = false;
     promptOverlay.classList.add('open');
     promptOk.focus();
 
     let onKey;
     let cancelled = false;
     const close = () => {
+      promptOverlay.inert = true;
       promptOverlay.classList.remove('open');
       promptInput.style.display = '';
       promptOk.onclick = null;
@@ -7405,12 +8272,14 @@
     if (closeConfirmDontAgain) closeConfirmDontAgain.checked = false;
     if (closeConfirmDontAgainRow) closeConfirmDontAgainRow.style.display = key ? 'flex' : 'none';
 
+    closeConfirmOverlay.inert = false;
     closeConfirmOverlay.classList.add('open');
     closeConfirmCancel.focus();
 
     let onKey;
     let cancelled = false;
     const close = () => {
+      closeConfirmOverlay.inert = true;
       closeConfirmOverlay.classList.remove('open');
       closeConfirmOk.onclick = null;
       closeConfirmCancel.onclick = null;
@@ -7569,18 +8438,20 @@
   })();
 
   document.getElementById('pane-area').addEventListener('wheel', (e) => {
-    if (!e.ctrlKey) return;
-    const active = activeTerminal();
+    if (!e.ctrlKey || !e.deltaY || e.target.closest?.('.session-overlay')) return;
+    const slot = e.target.closest?.('.term-slot');
+    const active = slot ? findTermById(slot.id.slice(5))?.term : activeTerminal();
 
-    // Terminal font size (not browser tabs — let iframe handle natively)
-    if (!active || active.type === 'browser') return;
+    // Zoom the hovered terminal, including TUIs that consume wheel events.
+    // Browser tabs and the session drawer retain their own scrolling behavior.
+    if (!active?.term || active.type === 'browser') return;
 
     // Stop the wheel scroll from bubbling and zooming the actual browser window
     e.preventDefault();
     e.stopPropagation();
 
     // Track zoom per terminal instance
-    if (!active._customFontSize) active._customFontSize = currentFontSize;
+    if (!active._customFontSize) active._customFontSize = active.term.options.fontSize || currentFontSize;
 
     // Normalize trackpad/wheel deltas for predictable scrolling
     const delta = e.deltaY > 0 ? -1 : 1;
@@ -7592,6 +8463,8 @@
     // Use requestAnimationFrame for visual update to avoid layout thrashing
     if (active._zoomRaf) cancelAnimationFrame(active._zoomRaf);
     active._zoomRaf = requestAnimationFrame(() => {
+      active._zoomRaf = null;
+      if (findTermById(active.id)?.term !== active) return;
       active.term.options.fontSize = active._customFontSize;
       zoomBadge(active._customFontSize + 'px');
     });
@@ -7600,10 +8473,11 @@
     // Prevents sending 60 resize payloads per second which freezes the app
     if (active._zoomFitTimeout) clearTimeout(active._zoomFitTimeout);
     active._zoomFitTimeout = setTimeout(() => {
-      fitTerm(active);
+      active._zoomFitTimeout = null;
+      if (findTermById(active.id)?.term === active) fitTerm(active, true);
     }, 150);
 
-  }, { passive: false });
+  }, { capture: true, passive: false });
 
   /* ═══════════════════════════════════════════════════════════════
    S E*ARCH
@@ -7676,6 +8550,7 @@
   // 'snips' (saved commands). Items: { label, meta, icon, run(e), del?, pin? }.
   let tsMode = 'tabs';
   let tsShown = [];
+  let tsReturnFocus = null;
 
   function collectTabItems() {
     const items = [];
@@ -7826,10 +8701,12 @@
       .sort((a, b) => a.score - b.score || (tsMode === 'history' ? a.i - b.i : a.it.label.localeCompare(b.it.label)))
       .map(x => x.it);
     tsResults.innerHTML = '';
+    tsInput.removeAttribute('aria-activedescendant');
+    document.getElementById('ts-status').textContent = tsShown.length + (tsShown.length === 1 ? ' result' : ' results');
     if (!tsShown.length) {
       const empty = document.createElement('div');
       empty.className = 'ts-empty';
-      empty.textContent = 'No matches';
+      empty.textContent = q ? 'No matches. Try a different search or category.' : tsMode === 'tabs' ? 'No open tabs. Open a terminal to get started.' : 'Nothing here yet.';
       tsResults.appendChild(empty);
       tsSelected = -1;
       return;
@@ -7837,6 +8714,9 @@
     tsShown.forEach((it, i) => {
       const row = document.createElement('div');
       row.className = 'ts-item';
+      row.id = 'ts-result-' + i;
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', 'false');
       row.innerHTML = `<i class="ph ${it.icon}"></i><span class="ts-label"></span><span class="ts-ws"></span>`;
       row.querySelector('.ts-label').textContent = it.label;
       row.querySelector('.ts-ws').textContent = it.meta;
@@ -7855,9 +8735,13 @@
   }
 
   function setTsSelected(i) {
-    if (i < 0 || i >= tsResults.children.length) return;
+    if (i < 0 || i >= tsShown.length) return;
     tsSelected = i;
-    tsResults.querySelectorAll('.ts-item').forEach((el, idx) => el.classList.toggle('selected', idx === i));
+    tsResults.querySelectorAll('.ts-item').forEach((el, idx) => {
+      el.classList.toggle('selected', idx === i);
+      el.setAttribute('aria-selected', String(idx === i));
+    });
+    tsInput.setAttribute('aria-activedescendant', tsResults.children[i].id);
     tsResults.children[i].scrollIntoView({ block: 'nearest' });
   }
 
@@ -7871,11 +8755,17 @@
   const TS_PLACEHOLDERS = { tabs: 'Search tabs…', cmds: 'Type a command…', snips: 'Search snippets… (Ctrl+Enter runs)', history: 'Search browser history…' };
   function openPalette(mode, query) {
     if (!tabSearchEl || tsResults.contains(document.activeElement)) return;
+    if (tabSearchEl.style.display === 'none') tsReturnFocus = document.activeElement;
     tsMode = mode;
+    document.querySelectorAll('[data-palette-mode]').forEach(btn => btn.setAttribute('aria-pressed', String(btn.dataset.paletteMode === mode)));
     tsItems = mode === 'cmds' ? collectCommandItems() : mode === 'snips' ? collectSnippetItems()
       : mode === 'history' ? collectHistoryItems() : collectTabItems();
     tsInput.placeholder = TS_PLACEHOLDERS[mode];
+    tsInput.setAttribute('aria-label', TS_PLACEHOLDERS[mode]);
+    tsInput.setAttribute('aria-expanded', 'true');
+    tabSearchEl.inert = false;
     tabSearchEl.style.display = 'flex';
+    syncBrowserSlots();
     tsInput.value = query || '';
     renderTabSearch();
     tsInput.focus();
@@ -7884,11 +8774,31 @@
 
   function closeTabSearch() {
     if (!tabSearchEl) return;
+    tabSearchEl.inert = true;
     tabSearchEl.style.display = 'none';
+    syncBrowserSlots();
+    tsInput.setAttribute('aria-expanded', 'false');
+    tsInput.removeAttribute('aria-activedescendant');
+    if (tsReturnFocus && tsReturnFocus.isConnected && tsReturnFocus.getClientRects().length) {
+      tsReturnFocus.focus();
+      return;
+    }
     const t = activeTerminal();
     if (t && t.type !== 'browser' && t.term) t.term.focus();
   }
 
+  document.querySelectorAll('[data-palette-mode]').forEach(btn => {
+    btn.addEventListener('click', () => openPalette(btn.dataset.paletteMode, tsInput.value));
+  });
+  document.getElementById('empty-commands').addEventListener('click', () => openPalette('cmds'));
+  tabSearchEl.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && e.target !== tsInput) { e.stopPropagation(); closeTabSearch(); }
+    if (e.key !== 'Tab') return;
+    const controls = [...tabSearchEl.querySelectorAll('button, input')];
+    const first = controls[0], last = controls[controls.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
   tsInput.addEventListener('input', renderTabSearch);
   tsInput.addEventListener('keydown', e => {
     if (e.key === 'Escape') { e.stopPropagation(); closeTabSearch(); }
@@ -8039,374 +8949,202 @@
     if (dd) initCustomDropdown(dd);
   }
 
+  let closeActiveDropdown = null;
+  let dropdownSequence = 0;
   function initCustomDropdown(dd) {
-    const selectId = dd.dataset.for;
-    const select = document.getElementById(selectId);
+    dd._disposeDropdown?.();
+    const select = document.getElementById(dd.dataset.for);
     if (!select) return;
-
-    dd.innerHTML = '';
-    const btn = document.createElement('div');
+    const lifetime = new AbortController();
+    let openedEvents = null;
+    dd.replaceChildren();
+    const btn = document.createElement('button');
+    btn.type = 'button';
     btn.className = 'custom-dropdown-btn';
-    btn.innerHTML = `<span class="custom-dropdown-label"></span><i class="ph ph-caret-down dropdown-arrow"></i>`;
+    btn.setAttribute('aria-haspopup', 'listbox');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.innerHTML = '<span class="custom-dropdown-label"></span><i class="ph ph-caret-down dropdown-arrow" aria-hidden="true"></i>';
     const menu = document.createElement('div');
     menu.className = 'custom-dropdown-menu';
-    dd.appendChild(btn);
-    dd.appendChild(menu);
-
-    function buildOptions() {
-      menu.innerHTML = '';
-      [...select.options].forEach(opt => {
-        const el = document.createElement('div');
-        el.className = 'custom-dropdown-option' + (opt.selected ? ' selected' : '');
-        el.dataset.value = opt.value;
-        let content = '';
-        if (opt.dataset.icon) {
-          content += `<svg class="dropdown-icon" viewBox="0 0 24 24" width="16" height="16"><path d="${opt.dataset.icon}"/></svg>`;
+    menu.id = `dropdown-options-${++dropdownSequence}`;
+    menu.popover = 'manual';
+    menu.setAttribute('role', 'listbox');
+    menu.setAttribute('aria-label', select.getAttribute('aria-label') || dd.dataset.for.replace(/^set-/, '').replaceAll('-', ' '));
+    btn.setAttribute('aria-controls', menu.id);
+    dd.append(btn, menu);
+    const label = btn.querySelector('.custom-dropdown-label');
+    const arrow = btn.querySelector('.dropdown-arrow');
+    function appendIcon(host, pathData) {
+      if (!pathData) return;
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.classList.add('dropdown-icon'); svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('width', '16'); svg.setAttribute('height', '16'); svg.setAttribute('aria-hidden', 'true');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', pathData); svg.append(path); host.append(svg);
+    }
+    function refresh() {
+      label.replaceChildren();
+      appendIcon(label, select.selectedOptions[0]?.dataset.icon);
+      label.append(document.createTextNode(select.selectedOptions[0]?.textContent || ''));
+      btn.disabled = select.disabled;
+      for (const option of menu.children) {
+        const selected = option.dataset.value === select.value;
+        option.classList.toggle('selected', selected);
+        option.setAttribute('aria-selected', String(selected));
+      }
+    }
+    function close(restoreFocus = false) {
+      openedEvents?.abort(); openedEvents = null;
+      if (menu.matches(':popover-open')) menu.hidePopover();
+      menu.classList.remove('open'); btn.classList.remove('open');
+      btn.setAttribute('aria-expanded', 'false');
+      arrow.classList.replace('ph-caret-up', 'ph-caret-down');
+      if (closeActiveDropdown === close) closeActiveDropdown = null;
+      if (restoreFocus && btn.isConnected) btn.focus({ preventScroll: true });
+    }
+    function open(keyboard = false) {
+      if (select.disabled) return;
+      closeActiveDropdown?.();
+      menu.replaceChildren();
+      for (const option of select.options) {
+        const item = document.createElement('div');
+        item.className = 'custom-dropdown-option';
+        item.dataset.value = option.value;
+        item.tabIndex = -1;
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-disabled', String(option.disabled));
+        if (option.dataset.swatches) {
+          const swatches = document.createElement('span'); swatches.className = 'theme-swatch';
+          for (const color of option.dataset.swatches.split(',')) {
+            const swatch = document.createElement('span'); swatch.style.background = color; swatches.append(swatch);
+          }
+          item.append(swatches);
         }
-        // Support theme swatches via data-swatches attribute
-        if (opt.dataset.swatches) {
-          const swatches = opt.dataset.swatches.split(',');
-          content += `<span class="theme-swatch">${swatches.map(c => `<span style="background:${c}"></span>`).join('')}</span>`;
-        }
-        content += `<span>${opt.textContent}</span>`;
-        el.innerHTML = content;
-        el.addEventListener('click', () => {
-          select.value = opt.value;
+        appendIcon(item, option.dataset.icon);
+        const text = document.createElement('span'); text.textContent = option.textContent; item.append(text);
+        item.addEventListener('click', () => {
+          if (option.disabled) return;
+          const value = option.value;
+          close(true);
+          select.value = value;
           select.dispatchEvent(new Event('change', { bubbles: true }));
           refresh();
-          close();
         });
-        menu.appendChild(el);
-      });
-    }
-
-    function refresh() {
-      const sel = select.options[select.selectedIndex];
-      const label = btn.querySelector('.custom-dropdown-label');
-      let html = '';
-      if (sel && sel.dataset.icon) {
-        html += `<svg class="dropdown-icon" viewBox="0 0 24 24" width="14" height="14"><path d="${sel.dataset.icon}"/></svg>`;
+        menu.append(item);
       }
-      html += sel ? sel.textContent : '';
-      label.innerHTML = html;
-      menu.querySelectorAll('.custom-dropdown-option').forEach(el => {
-        el.classList.toggle('selected', el.dataset.value === select.value);
-      });
+      refresh();
+      btn.classList.add('open'); menu.classList.add('open');
+      btn.setAttribute('aria-expanded', 'true');
+      arrow.classList.replace('ph-caret-down', 'ph-caret-up');
+      // Top-layer popovers escape overflow clipping and transformed ancestors,
+      // while staying in the settings DOM for focus containment and theme styles.
+      Object.assign(menu.style, { position: 'fixed', inset: 'auto', margin: '0', width: 'max-content', minWidth: '0', maxHeight: '256px', visibility: 'hidden' });
+      menu.showPopover();
+      const anchor = btn.getBoundingClientRect();
+      const modal = dd.closest('#settings-modal')?.getBoundingClientRect();
+      const bounds = { left: Math.max(8, modal?.left + 8 || 8), right: Math.min(innerWidth - 8, modal?.right - 8 || innerWidth - 8),
+        top: Math.max(8, modal?.top + 8 || 8), bottom: Math.min(innerHeight - 8, modal?.bottom - 8 || innerHeight - 8) };
+      const width = Math.min(Math.max(anchor.width, menu.scrollWidth + 2), bounds.right - bounds.left);
+      const below = Math.max(0, bounds.bottom - anchor.bottom - 6);
+      const above = Math.max(0, anchor.top - bounds.top - 6);
+      const desired = Math.min(256, menu.scrollHeight + 2);
+      const upward = below < desired && above > below;
+      menu.style.width = `${width}px`;
+      menu.style.maxHeight = `${Math.min(256, upward ? above : below)}px`;
+      menu.style.left = `${Math.max(bounds.left, Math.min(anchor.right - width, bounds.right - width))}px`;
+      const height = menu.getBoundingClientRect().height;
+      menu.style.top = `${upward ? anchor.top - 6 - height : anchor.bottom + 6}px`;
+      menu.style.visibility = '';
+      const selected = menu.querySelector('[aria-selected="true"]');
+      if (selected) menu.scrollTop = Math.max(0, selected.offsetTop - menu.clientHeight / 2);
+      if (keyboard) (selected || menu.firstElementChild)?.focus({ preventScroll: true });
+      closeActiveDropdown = close;
+      openedEvents = new AbortController();
+      const signal = openedEvents.signal;
+      document.addEventListener('pointerdown', e => { if (!dd.contains(e.target)) close(); }, { capture: true, signal });
+      document.addEventListener('scroll', e => { if (!menu.contains(e.target)) close(); }, { capture: true, signal });
+      window.addEventListener('resize', () => close(), { signal });
+      window.addEventListener('blur', () => close(), { signal });
     }
-
-    function close() {
-      btn.classList.remove('open');
-      menu.classList.remove('open');
-      const arrow = btn.querySelector('.dropdown-arrow');
-      if (arrow) { arrow.classList.remove('ph-caret-up'); arrow.classList.add('ph-caret-down'); }
-    }
-
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
-      const isOpen = menu.classList.contains('open');
-      // Close all other dropdowns
-      document.querySelectorAll('.custom-dropdown-menu.open').forEach(m => m.classList.remove('open'));
-      document.querySelectorAll('.custom-dropdown-btn.open').forEach(b => {
-        b.classList.remove('open');
-        const a = b.querySelector('.dropdown-arrow');
-        if (a) { a.classList.remove('ph-caret-up'); a.classList.add('ph-caret-down'); }
-      });
-      if (!isOpen) {
-        buildOptions();
-        btn.classList.add('open');
-        menu.classList.add('open');
-        const arrow = btn.querySelector('.dropdown-arrow');
-        if (arrow) { arrow.classList.remove('ph-caret-down'); arrow.classList.add('ph-caret-up'); }
-      }
-    });
-
-    // Close on outside click
-    document.addEventListener('click', e => {
-      if (!dd.contains(e.target)) close();
-    });
-
-    // Sync when select changes externally
-    select.addEventListener('change', refresh);
-
-    // Initial build
-    buildOptions();
+    btn.addEventListener('click', () => menu.matches(':popover-open') ? close() : open());
+    dd.addEventListener('keydown', e => {
+      const isOpen = menu.matches(':popover-open');
+      if (e.key === 'Escape' && isOpen) { e.preventDefault(); e.stopPropagation(); close(true); return; }
+      if (e.key === 'Tab' && isOpen) { close(true); return; }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(e.key)) return;
+      if (!isOpen && ['ArrowDown', 'ArrowUp'].includes(e.key)) { e.preventDefault(); open(true); return; }
+      if (!isOpen) return; // Native button Enter/Space triggers click.
+      e.preventDefault(); e.stopPropagation();
+      const options = [...menu.children].filter(item => item.getAttribute('aria-disabled') !== 'true');
+      const index = options.indexOf(document.activeElement);
+      if (e.key === 'Enter' || e.key === ' ') { options[index]?.click(); return; }
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? options.length - 1 : (index + (e.key === 'ArrowUp' ? -1 : 1) + options.length) % options.length;
+      options[next]?.focus({ preventScroll: true }); options[next]?.scrollIntoView({ block: 'nearest' });
+    }, { signal: lifetime.signal });
+    select.addEventListener('change', refresh, { signal: lifetime.signal });
+    dd._disposeDropdown = () => { close(); lifetime.abort(); };
     refresh();
   }
 
   // Init all custom dropdowns
   document.querySelectorAll('.custom-dropdown').forEach(initCustomDropdown);
 
-  /* ═══════════════════════════════════════════════════════════════
-   T H E M E   E D I T O R
-   ═══════════════════════════════════════════════════════════════ */
-  const THEME_COLOR_GROUPS = {
-    'Core': {
-      bg: 'Background', fg: 'Foreground', cursor: 'Cursor', selection: 'Selection',
-    },
-    'UI Colors': {
-      accent: 'Accent', border: 'Border', multiSelect: 'Multi-select',
-      tabActiveBg: 'Tab Active BG', tabHoverBg: 'Tab Hover BG',
-      dimText: 'Dim Text', mutedText: 'Muted Text',
-    },
-    'Terminal Palette': {
-      p0: 'Black', p1: 'Red', p2: 'Green', p3: 'Yellow',
-      p4: 'Blue', p5: 'Magenta', p6: 'Cyan', p7: 'White',
-      p8: 'Bright Black', p9: 'Bright Red', p10: 'Bright Green', p11: 'Bright Yellow',
-      p12: 'Bright Blue', p13: 'Bright Magenta', p14: 'Bright Cyan', p15: 'Bright White',
-    },
-  };
-
-  const DEFAULT_PALETTE = ['#1e1e2e', '#f38ba8', '#a6e3a1', '#f9e2af', '#89b4fa', '#f5c2e7', '#94e2d5', '#cdd6f4', '#585b70', '#eba0ac', '#a6e3a1', '#f9e2af', '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de'];
-
-  let editingTheme = null;
-
-  function initEditingTheme(name) {
-    const src = THEMES[name];
-    if (src) {
-      editingTheme = {
-        label: src.label || name,
-        bg: src.bg, fg: src.fg, cursor: src.cursor, selection: src.selection,
-        swatches: src.swatches ? [...src.swatches] : [src.bg, src.fg, src.palette ? src.palette[4] : src.fg],
-        palette: src.palette ? [...src.palette] : [],
-        ui: src.ui ? { ...src.ui } : {},
-      };
-    } else {
-      editingTheme = {
-        label: '', bg: '#1e1e2e', fg: '#cdd6f4', cursor: '#f5e0dc', selection: '#585b70',
-        swatches: ['#1e1e2e', '#cdd6f4', '#89b4fa'],
-        palette: [
-          '#1e1e2e', '#f38ba8', '#a6e3a1', '#f9e2af',
-          '#89b4fa', '#f5c2e7', '#94e2d5', '#cdd6f4',
-          '#585b70', '#eba0ac', '#a6e3a1', '#f9e2af',
-          '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de',
-        ],
-        ui: {},
-      };
-    }
-  }
-
-  const UI_DEFAULTS = {
-    border: '#ffffff14',
-    tabActiveBg: '#ffffff12',
-    tabHoverBg: '#ffffff0a',
-    dimText: '#ffffff4d',
-    mutedText: '#ffffff80',
-  };
-
-  function getThemeColor(key) {
-    if (!editingTheme) return '#000000';
-    if (key === 'bg') return editingTheme.bg;
-    if (key === 'fg') return editingTheme.fg;
-    if (key === 'cursor') return editingTheme.cursor;
-    if (key === 'selection') return editingTheme.selection;
-    if (key === 'accent') return editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa';
-    if (key === 'multiSelect') return editingTheme.ui.multiSelect || editingTheme.palette[3] || '#f9e2af';
-    if (UI_DEFAULTS[key]) return editingTheme.ui[key] || UI_DEFAULTS[key];
-    if (key.startsWith('p')) return editingTheme.palette[parseInt(key.slice(1))] || '#000000';
-    return '#000000';
-  }
-
-  function setThemeColor(key, val) {
-    if (!editingTheme) return;
-    if (key === 'bg') editingTheme.bg = val;
-    else if (key === 'fg') editingTheme.fg = val;
-    else if (key === 'cursor') editingTheme.cursor = val;
-    else if (key === 'selection') editingTheme.selection = val;
-    else if (key === 'accent') editingTheme.ui.accent = val;
-    else if (key === 'border') editingTheme.ui.border = val || undefined;
-    else if (key === 'tabActiveBg') editingTheme.ui.tabActiveBg = val || undefined;
-    else if (key === 'tabHoverBg') editingTheme.ui.tabHoverBg = val || undefined;
-    else if (key === 'dimText') editingTheme.ui.dimText = val || undefined;
-    else if (key === 'mutedText') editingTheme.ui.mutedText = val || undefined;
-    else if (key === 'multiSelect') editingTheme.ui.multiSelect = val || undefined;
-    else if (key.startsWith('p')) editingTheme.palette[parseInt(key.slice(1))] = val;
-    editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
-  }
-
-  function openColorisForSwatch(swatchEl, currentColor, themeKey) {
-    const tempInput = document.createElement('input');
-    tempInput.type = 'text';
-    tempInput.value = currentColor || '#000000';
-    tempInput.style.position = 'fixed';
-    tempInput.style.opacity = '0';
-    tempInput.style.pointerEvents = 'none';
-    // Anchor the popup next to the swatch (Coloris positions from the input's rect)
-    const r = swatchEl.getBoundingClientRect();
-    tempInput.style.left = Math.max(8, Math.min(window.innerWidth - 210, r.left - 85)) + 'px';
-    tempInput.style.top = r.bottom + 6 + 'px';
-    tempInput.style.width = '1px';
-    tempInput.style.height = '1px';
-    tempInput.setAttribute('data-coloris', '');
-    document.body.appendChild(tempInput);
-
-    // This Coloris build exposes no .open()/.on(): a click on a
-    // [data-coloris] input opens the picker via its own delegation, and
-    // picked values arrive as 'input' events on that input.
-    tempInput.addEventListener('input', () => {
-      setThemeColor(themeKey, tempInput.value);
-      swatchEl.style.background = tempInput.value;
-      previewTheme();
-    });
-    tempInput.addEventListener('close', () => tempInput.remove());
-    setTimeout(() => tempInput.click(), 0);
-  }
-
-  function previewTheme() {
-    if (!editingTheme) return;
-    const r = document.documentElement.style;
-    r.setProperty('--bg', editingTheme.bg);
-    r.setProperty('--fg', editingTheme.fg);
-    r.setProperty('--cursor', editingTheme.cursor);
-    r.setProperty('--selection', editingTheme.selection);
-    const accent = editingTheme.ui.accent || editingTheme.palette[4] || editingTheme.fg;
-    r.setProperty('--accent', accent);
-    r.setProperty('--ws-active-strip', accent);
-    r.setProperty('--accent-dim', hexToRgba(accent, 0.15));
-    const uiMap = { border: '--border', tabActiveBg: '--tab-active-bg', tabHoverBg: '--tab-hover-bg', dimText: '--dim-text', mutedText: '--muted-text' };
-    for (const [prop, cssVar] of Object.entries(uiMap)) {
-      r.setProperty(cssVar, editingTheme.ui[prop] || UI_DEFAULTS[prop]);
-    }
-  }
-
-  function renderThemeEditor() {
-    const container = document.getElementById('theme-editor-groups');
-    if (!container) return;
-    container.innerHTML = '';
-
-    function buildColorItem(key, label) {
-      const item = document.createElement('div');
-      item.className = 'theme-color-item';
-      const val = getThemeColor(key);
-
-      const lbl = document.createElement('span');
-      lbl.className = 'theme-color-label';
-      lbl.textContent = label;
-
-      const inp = document.createElement('input');
-      inp.type = 'text';
-      inp.className = 'theme-color-input';
-      inp.setAttribute('data-coloris', '');
-      inp.value = val;
-      inp.spellcheck = false;
-
-      const swatch = document.createElement('span');
-      swatch.className = 'theme-color-swatch';
-      swatch.style.background = val;
-      swatch.title = label;
-
-      inp.addEventListener('input', () => {
-        let v = inp.value.trim();
-        if (/^#?[0-9a-fA-F]{3,8}$/.test(v)) {
-          if (!v.startsWith('#')) v = '#' + v;
-          setThemeColor(key, v);
-          swatch.style.background = v;
-          previewTheme();
-        }
-      });
-
-      item.appendChild(lbl);
-      item.appendChild(inp);
-      item.appendChild(swatch);
-      return item;
-    }
-
-    // Colors title
-    const colorsTitle = document.createElement('div');
-    colorsTitle.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
-    colorsTitle.textContent = 'Colors';
-    container.appendChild(colorsTitle);
-
-    // Core + UI Colors in one card
-    const colorsCard = document.createElement('div');
-    colorsCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
-    for (const [groupName, fields] of Object.entries(THEME_COLOR_GROUPS)) {
-      if (groupName === 'Terminal Palette') continue;
-      if (groupName === 'UI Colors') {
-        const sep = document.createElement('div');
-        sep.className = 'border-t border-[var(--border)] my-3';
-        colorsCard.appendChild(sep);
-      }
-      const title = document.createElement('div');
-      title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mb-2.5 ml-1';
-      title.textContent = groupName;
-      colorsCard.appendChild(title);
-      const grid = document.createElement('div');
-      grid.className = 'theme-color-grid';
-      for (const [key, label] of Object.entries(fields)) {
-        grid.appendChild(buildColorItem(key, label));
-      }
-      colorsCard.appendChild(grid);
-    }
-    container.appendChild(colorsCard);
-
-    // Terminal Palette — its own card
-    const paletteCard = document.createElement('div');
-    paletteCard.className = 'bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] rounded-xl mb-6 flex flex-col p-4';
-
-    // Title row inside card (with toggle)
-    const title = document.createElement('div');
-    title.className = 'text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] flex justify-between items-center mb-2 ml-1';
-    const titleText = document.createElement('span');
-    titleText.textContent = 'Terminal Palette';
-    title.appendChild(titleText);
-
-    const toggleLabel = document.createElement('label');
-    toggleLabel.className = 'inline-flex items-center cursor-pointer shrink-0';
-    const toggleInput = document.createElement('input');
-    toggleInput.type = 'checkbox';
-    toggleInput.className = 'sr-only peer';
-    const toggleTrack = document.createElement('div');
-    toggleTrack.className = 'relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[""] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]';
-    toggleLabel.appendChild(toggleInput);
-    toggleLabel.appendChild(toggleTrack);
-    title.appendChild(toggleLabel);
-    paletteCard.appendChild(title);
-
-    const paletteGrid = document.createElement('div');
-    paletteGrid.className = 'theme-color-grid';
-    paletteGrid.style.display = 'none';
-
-    for (const [key, label] of Object.entries(THEME_COLOR_GROUPS['Terminal Palette'])) {
-      paletteGrid.appendChild(buildColorItem(key, label));
-    }
-
-    // Reset palette link
-    const resetBtn = document.createElement('div');
-    resetBtn.className = 'text-[11px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline text-right pt-2 border-t border-[var(--border)] mt-1';
-    resetBtn.textContent = 'Reset palette';
-    resetBtn.addEventListener('click', () => {
-      DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
-      editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
-      paletteGrid.querySelectorAll('.theme-color-item').forEach((item, i) => {
-        if (i < 16) {
-          const v = editingTheme.palette[i];
-          const s = item.querySelector('span:nth-child(2)');
-          if (s) s.style.background = v;
-        }
-      });
-      previewTheme();
-    });
-    paletteGrid.appendChild(resetBtn);
-    paletteCard.appendChild(paletteGrid);
-
-    // Toggle handler
-    toggleInput.addEventListener('change', () => {
-      const isOn = toggleInput.checked;
-      paletteGrid.style.display = isOn ? '' : 'none';
-      if (!isOn) {
-        DEFAULT_PALETTE.forEach((c, i) => { editingTheme.palette[i] = c; });
-        editingTheme.swatches = [editingTheme.bg, editingTheme.fg, editingTheme.ui.accent || editingTheme.palette[4] || '#89b4fa'];
-        previewTheme();
-      }
-    });
-
-    container.appendChild(paletteCard);
-  }
-
-  /* ═══════════════════════════════════════════════════════════════
-   S E*TTINGS MODAL
-   ═══════════════════════════════════════════════════════════════ */
   const settingsOverlay = document.getElementById('settings-overlay');
+
+  function renderThemeCards() {
+    const grid = document.getElementById('theme-card-grid');
+    if (!grid) return;
+    const focusedTheme = grid.contains(document.activeElement) ? document.activeElement.dataset.theme : null;
+    grid.replaceChildren();
+    for (const [key, sourceTheme] of Object.entries(THEMES)) {
+      const theme = resolveAppearanceTheme(sourceTheme, resolvedDarkScheme());
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'theme-choice';
+      card.dataset.theme = key;
+      card.setAttribute('aria-pressed', String(key === currentThemeName));
+      card.setAttribute('aria-label', theme.label || key);
+      const preview = document.createElement('span');
+      preview.className = 'theme-choice-preview';
+      preview.setAttribute('aria-hidden', 'true');
+      preview.style.setProperty('--preview-bg', theme.bg);
+      preview.style.setProperty('--preview-fg', theme.fg);
+      preview.style.setProperty('--preview-accent', theme.ui?.accent || theme.palette[4] || theme.fg);
+      // Real palette samples, rather than an unrelated light/dark variant.
+      const colors = document.createElement('span');
+      colors.className = 'theme-choice-colors';
+      for (const color of [theme.bg, theme.fg, theme.ui?.accent || theme.palette[4]]) {
+        const dot = document.createElement('span');
+        dot.style.setProperty('--sample-color', color || theme.fg);
+        colors.appendChild(dot);
+      }
+      const palette = document.createElement('span');
+      palette.className = 'theme-choice-palette';
+      for (const color of theme.palette.slice(1, 7)) {
+        const swatch = document.createElement('span');
+        swatch.style.setProperty('--sample-color', color);
+        palette.appendChild(swatch);
+      }
+      preview.append(colors, palette);
+      const footer = document.createElement('span');
+      footer.className = 'theme-choice-footer';
+      const label = document.createElement('span');
+      label.className = 'theme-choice-name';
+      label.textContent = theme.label || key;
+      const check = document.createElement('i');
+      check.className = 'ph ph-check-circle theme-choice-check';
+      check.setAttribute('aria-hidden', 'true');
+      footer.append(label, check);
+      card.append(preview, footer);
+      card.addEventListener('click', () => {
+        const select = document.getElementById('set-theme');
+        select.value = key;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      grid.appendChild(card);
+    }
+    if (focusedTheme) [...grid.children].find(card => card.dataset.theme === focusedTheme)?.focus({ preventScroll: true });
+  }
 
   function openSettings(cat) {
     // Populate theme select
@@ -8423,17 +9161,7 @@
     // Rebuild custom dropdown for theme
     const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
     if (themeDD) initCustomDropdown(themeDD);
-
-    // Corner style
-    const cornerSelect = document.getElementById('set-corner-style');
-    cornerSelect.value = cornerStyle;
-    cornerSelect.onchange = e => {
-      cornerStyle = e.target.value;
-      applyCornerStyle();
-      saveState();
-    };
-    const cornerDD = document.querySelector('.custom-dropdown[data-for="set-corner-style"]');
-    if (cornerDD) initCustomDropdown(cornerDD);
+    renderThemeCards();
 
     // Sidebar style
     const sbModeSelect = document.getElementById('set-sidebar-mode');
@@ -8455,6 +9183,14 @@
         saveState();
       };
     }
+
+    const animationsToggle = document.getElementById('set-animations');
+    animationsToggle.checked = animationsEnabled;
+    animationsToggle.onchange = e => {
+      animationsEnabled = e.target.checked;
+      applyAnimationsSetting();
+      saveState();
+    };
 
     // Workspace process details
     const wsProcsToggle = document.getElementById('set-wsprocs');
@@ -8499,6 +9235,12 @@
       defaultPathBrowse.style.display = (isDesktop() && window.electronAPI?.selectDirectory) ? 'inline-flex' : 'none';
     }
 
+    // Terminal links
+    const linkSelect = document.getElementById('set-link-target');
+    linkSelect.value = terminalLinkTarget;
+    const linkDD = document.querySelector('.custom-dropdown[data-for="set-link-target"]');
+    if (linkDD) initCustomDropdown(linkDD);
+
     // Search engine
     const searchSelect = document.getElementById('set-search-engine');
     searchSelect.value = searchEngine;
@@ -8517,33 +9259,32 @@
     // Shortcuts
     renderShortcutsList();
 
-    // Always open on the first category (Appearance) unless deep-linked
-    switchSettingsCat(typeof cat === 'string' ? cat : 'appearance');
+    // Always open on the first category (General) unless deep-linked
+    document.getElementById('settings-nav-search').value = '';
+    document.querySelectorAll('.settings-cat-btn').forEach(btn => { btn.hidden = false; });
+    switchSettingsCat(typeof cat === 'string' ? cat : 'general');
+    settingsOverlay.inert = false;
     settingsOverlay.classList.add('open');
     document.activeElement?.blur();
 
-    // Init theme editor in "New Theme" mode
-    document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === 'new'));
-    document.querySelector('.theme-name-row')?.classList.remove('hidden');
-    document.querySelector('.theme-name-row')?.classList.add('flex');
-    document.querySelector('.theme-edit-row')?.classList.add('hidden');
-    document.querySelector('.theme-edit-row')?.classList.remove('flex');
-    initEditingTheme(currentThemeName);
-    editingTheme.label = '';
-    document.getElementById('set-theme-name').value = '';
-    renderThemeEditor();
-    refreshThemeCustomSelect();
     settingsOverlay.focus({ preventScroll: true });
     syncBrowserSlots();
     if (cat === 'plugins') renderPluginsSettings();
   }
 
   function closeSettings() {
+    closeActiveDropdown?.();
     applyTheme(currentThemeName);
+    settingsOverlay.inert = true;
     settingsOverlay.classList.remove('open');
     syncBrowserSlots();
     // In the Electron settings window, closing the overlay closes the window
-    if (SETTINGS_ONLY && window.electronAPI && window.electronAPI.settingsClose) window.electronAPI.settingsClose();
+    if (SETTINGS_ONLY && window.electronAPI?.settingsClose) {
+      const exits = settingsOverlay.getAnimations({ subtree: true });
+      Promise.allSettled(exits.map(animation => animation.finished)).then(() => {
+        if (!settingsOverlay.classList.contains('open')) window.electronAPI.settingsClose();
+      });
+    }
   }
 
   function renderShortcutsList() {
@@ -8714,63 +9455,109 @@
     }
   });
 
-  function switchSettingsCat(cat) {
-    const prevCat = document.querySelector('.settings-cat-btn.active')?.dataset.cat;
-    document.querySelectorAll('.settings-cat-btn').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
-    document.querySelectorAll('.settings-section[data-cat]').forEach(s => s.classList.toggle('active', s.dataset.cat === cat));
-    // Leaving theme editor → revert live preview to applied theme
-    if (prevCat === 'theme-editor' && cat !== 'theme-editor') {
-      applyTheme(currentThemeName);
+  let skillsBusy = false;
+  async function skillRequest(id, enabled) {
+    if (window.electronAPI?.listSkills) {
+      return id === undefined ? window.electronAPI.listSkills() : window.electronAPI.setSkillEnabled(id, enabled);
     }
+    const response = await fetch('/api/skills', id === undefined ? {} : {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, enabled }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not update skills');
+    return data;
+  }
+
+  async function renderSkillsSettings() {
+    if (skillsBusy) return;
+    const list = document.getElementById('skills-list');
+    const status = document.getElementById('skills-status');
+    skillsBusy = true;
+    list.setAttribute('aria-busy', 'true');
+    status.textContent = 'Loading skills…';
+    try {
+      drawSkillRows(await skillRequest());
+      status.textContent = '';
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      skillsBusy = false;
+      list.setAttribute('aria-busy', 'false');
+    }
+  }
+
+  function drawSkillRows(skills) {
+    const list = document.getElementById('skills-list');
+    list.replaceChildren();
+    for (const skill of skills) {
+      const row = document.createElement('div');
+      row.className = 'skill-row';
+      const info = document.createElement('div');
+      info.className = 'skill-info';
+      const name = document.createElement('div');
+      name.className = 'skill-name';
+      name.textContent = skill.name;
+      const state = document.createElement('span');
+      state.className = 'skill-state';
+      state.textContent = skill.conflict ? 'Conflicting copies' : skill.enabled ? 'Active' : skill.installed ? 'Inactive' : 'Not installed';
+      name.append(' ', state);
+      const location = document.createElement('div');
+      location.className = 'skill-path';
+      location.textContent = skill.path;
+      info.append(name, location);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'skill-action';
+      button.textContent = skill.enabled ? 'Deactivate' : skill.installed ? 'Activate' : 'Install';
+      button.setAttribute('aria-label', `${button.textContent} TerminalVibe skill for ${skill.name}`);
+      button.disabled = skill.conflict;
+      button.dataset.conflict = String(skill.conflict);
+      button.addEventListener('click', async () => {
+        if (skillsBusy) return;
+        skillsBusy = true;
+        const status = document.getElementById('skills-status');
+        list.setAttribute('aria-busy', 'true');
+        list.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        status.textContent = 'Updating skill…';
+        try {
+          drawSkillRows(await skillRequest(skill.id, !skill.enabled));
+          status.textContent = `Skill ${skill.enabled ? 'deactivated' : 'activated'} for ${skill.name}. Start a new agent session to apply.`;
+          list.querySelector(`[aria-label$="for ${skill.name}"]`)?.focus();
+        } catch (error) {
+          status.textContent = error.message;
+          list.querySelectorAll('button').forEach(b => { b.disabled = b.dataset.conflict === 'true'; });
+        } finally {
+          skillsBusy = false;
+          list.setAttribute('aria-busy', 'false');
+        }
+      });
+      row.append(info, button);
+      list.append(row);
+    }
+  }
+
+  function switchSettingsCat(cat) {
+    closeActiveDropdown?.();
+    if (!document.querySelector(`.settings-cat-btn[data-cat="${CSS.escape(cat)}"]`)) cat = 'general';
+    const prevCat = document.querySelector('.settings-cat-btn.active')?.dataset.cat;
+    document.querySelectorAll('.settings-cat-btn').forEach(b => { b.classList.toggle('active', b.dataset.cat === cat); b.setAttribute('aria-pressed', String(b.dataset.cat === cat)); });
+    document.querySelectorAll('.settings-section[data-cat]').forEach(s => s.classList.toggle('active', s.dataset.cat === cat));
     // Reset scroll to top of the new section
     document.querySelector('.settings-section')?.parentElement?.scrollTo({ top: 0 });
+    const categoryTitle = document.getElementById('settings-category-title');
+    if (categoryTitle) categoryTitle.textContent = document.querySelector('.settings-cat-btn.active span')?.textContent || 'Settings';
     settingsCategory = cat;
     saveState();
     if (cat === 'plugins') renderPluginsSettings();
+    if (cat === 'skills') renderSkillsSettings();
     if (prevCat === 'plugins' && cat !== 'plugins') _pluginsView = { mode: 'list' };
-  }
-
-  // Track theme editor mode so it persists across category switches
-  let themeEditorMode = 'new';
-  let themeEditorEditKey = '';
-
-  function restoreThemeEditorState() {
-    // Re-init editing theme (we reverted preview on exit)
-    if (themeEditorMode === 'new') {
-      initEditingTheme(currentThemeName);
-    } else if (themeEditorEditKey) {
-      initEditingTheme(themeEditorEditKey);
-    } else {
-      initEditingTheme(currentThemeName);
-    }
-    previewTheme();
-    // Restore mode toggle
-    document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === themeEditorMode));
-    const nameRow = document.querySelector('.theme-name-row');
-    const editRow = document.querySelector('.theme-edit-row');
-    if (themeEditorMode === 'new') {
-      nameRow?.classList.remove('hidden'); nameRow?.classList.add('flex');
-      editRow?.classList.add('hidden'); editRow?.classList.remove('flex');
-    } else {
-      nameRow?.classList.add('hidden'); nameRow?.classList.remove('flex');
-      editRow?.classList.remove('hidden'); editRow?.classList.add('flex');
-      refreshThemeCustomSelect();
-      // Restore dropdown selection
-      const sel = document.getElementById('set-theme-custom-select');
-      if (sel && themeEditorEditKey) { sel.value = themeEditorEditKey; }
-      const dd = document.querySelector('.custom-dropdown[data-for="set-theme-custom-select"]');
-      if (dd) initCustomDropdown(dd);
-    }
-    // Restore name input
-    document.getElementById('set-theme-name').value = editingTheme?.label || '';
-    renderThemeEditor();
   }
 
   // Category button click handlers
   document.querySelectorAll('.settings-cat-btn').forEach(btn => {
+    makeKeyboardButton(btn);
     btn.addEventListener('click', () => {
       switchSettingsCat(btn.dataset.cat);
-      if (btn.dataset.cat === 'theme-editor') restoreThemeEditorState();
     });
   });
 
@@ -8783,7 +9570,7 @@
       if (t.type === 'browser') continue;
       t._customFontSize = currentFontSize; // Reset temporary zoom on global change
       t.term.options.fontSize = currentFontSize;
-      t.term.options.fontFamily = currentFontFamily;
+      t.term.options.fontFamily = terminalFontFamily(currentFontFamily);
       t.term.options.lineHeight = currentLineHeight;
       t.term.options.cursorStyle = currentCursorStyle;
       t.term.options.cursorBlink = currentCursorBlink;
@@ -8809,7 +9596,8 @@
         if (raw) state = JSON.parse(raw);
       }
       await resolveStateImages(state);
-      if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
+      if (['system', 'light', 'dark'].includes(state.colorScheme)) currentColorScheme = state.colorScheme;
+      if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = resolveAppearanceTheme(THEMES[currentThemeName], resolvedDarkScheme()); }
       if (state.fontSize) currentFontSize = state.fontSize;
       if (state.fontFamily) currentFontFamily = state.fontFamily;
       if (state.customFonts) {
@@ -8820,10 +9608,11 @@
         injectCustomFonts();
       }
       if (state.lineHeight) currentLineHeight = state.lineHeight;
-      if (state.cornerStyle) cornerStyle = state.cornerStyle;
       if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
       if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
       if (state.scrollback) currentScrollback = state.scrollback;
+      animationsEnabled = state.animationsEnabled !== false;
+      applyAnimationsSetting();
       if (typeof state.settingsCategory === 'string') settingsCategory = state.settingsCategory;
       if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
       if (state.sidebarMode) {
@@ -8834,6 +9623,7 @@
       }
       if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
+      if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -9009,10 +9799,11 @@
     document.body.classList.add('settings-only');
     const splash = document.getElementById('splash');
     if (splash) splash.classList.add('hide');
-    openSettings('appearance');
+    openSettings();
   }
 
   async function detachedOnlyBoot() {
+    await document.fonts.load('14px "Geist Mono"');
     await loadCustomThemes();
     // Restore only theme/font settings (not workspaces) for the detached window
     try {
@@ -9025,7 +9816,8 @@
       if (!raw) raw = localStorage.getItem(STATE_KEY);
       if (raw) {
         const state = JSON.parse(raw);
-        if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = THEMES[currentThemeName]; }
+        if (['system', 'light', 'dark'].includes(state.colorScheme)) currentColorScheme = state.colorScheme;
+        if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = resolveAppearanceTheme(THEMES[currentThemeName], resolvedDarkScheme()); }
         if (state.fontSize) currentFontSize = state.fontSize;
         if (state.fontFamily) currentFontFamily = state.fontFamily;
         if (state.customFonts) {
@@ -9036,7 +9828,6 @@
           injectCustomFonts();
         }
         if (state.lineHeight) currentLineHeight = state.lineHeight;
-        if (state.cornerStyle) cornerStyle = state.cornerStyle;
         if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
         if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
         if (state.scrollback !== undefined) currentScrollback = state.scrollback;
@@ -9228,14 +10019,169 @@
   if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
 
   // Detached-terminal bootstrap: minimal terminal-only window.
+  function setupServersDropdown() {
+    const button = document.getElementById('btn-servers');
+    const dropdown = document.getElementById('servers-dropdown');
+    const list = document.getElementById('servers-list');
+    const refresh = document.getElementById('servers-refresh');
+    if (!button || !dropdown || !list || !refresh) return;
+    const CACHE_TTL = 30000;
+    let loading = false, hasResult = false, loadedAt = 0, signature = null;
+    const message = text => {
+      const el = document.createElement('p');
+      el.className = 'servers-message'; el.textContent = text;
+      list.replaceChildren(el);
+    };
+    const position = () => {
+      const rect = button.getBoundingClientRect();
+      dropdown.style.top = (rect.bottom + 6) + 'px';
+      dropdown.style.right = Math.max(8, window.innerWidth - rect.right) + 'px';
+    };
+    const finishClose = e => {
+      if (e.target !== dropdown || !dropdown.hidden || !dropdown.classList.contains('closing')) return;
+      if (dropdown.getAnimations().some(animation => animation.transitionProperty === 'opacity' && animation.playState === 'running')) return;
+      dropdown.classList.remove('closing');syncBrowserSlots();
+    };
+    dropdown.addEventListener('transitionend', finishClose);
+    dropdown.addEventListener('transitioncancel', finishClose);
+    const close = () => {
+      const restoreFocus = dropdown.contains(document.activeElement);
+      dropdown.hidden = true;dropdown.inert = true;
+      // Keep native browser views behind the painted dropdown during its fade.
+      const fades = dropdown.getAnimations().filter(animation => animation.transitionProperty === 'opacity');
+      dropdown.classList.toggle('closing', fades.length > 0);
+      if (fades.length) Promise.allSettled(fades.map(animation => animation.finished)).then(() => finishClose({target:dropdown}));
+      button.setAttribute('aria-expanded', 'false');
+      if (restoreFocus) button.focus({preventScroll:true});
+      syncBrowserSlots();
+    };
+    const load = async (force = false) => {
+      if (loading || (!force && hasResult && Date.now() - loadedAt < CACHE_TTL)) return;
+      loading = true; refresh.disabled = true;refresh.title = 'Refresh servers';
+      list.setAttribute('aria-busy', 'true');
+      if (!hasResult) message('Checking listening ports…');
+      try {
+        let servers;
+        if (window.electronAPI?.listRunningServers) servers = await window.electronAPI.listRunningServers();
+        else {
+          const response = await fetch('/api/servers');
+          if (!response.ok) throw new Error('Server discovery failed');
+          servers = (await response.json()).servers;
+        }
+        if (!Array.isArray(servers)) throw new Error('Invalid server list');
+        const fragment = document.createDocumentFragment();
+        const normalized = [];
+        for (const server of servers) {
+          const url = new URL(server.url);
+          if (!['http:', 'https:'].includes(url.protocol)) continue;
+          normalized.push([url.href, server.process, server.port, server.pid]);
+          const row = document.createElement('a');
+          row.className = 'server-row'; row.href = url.href;
+          row.title = `Open ${url.origin}${server.pid ? ' · PID ' + server.pid : ''}`;
+          const icon = document.createElement('span'); icon.className = 'server-icon'; icon.innerHTML = procIconHtml(server.process || '', 'ph-globe'); icon.setAttribute('aria-hidden', 'true');
+          const details = document.createElement('span'); details.className = 'server-details';
+          const name = document.createElement('span'); name.className = 'server-name'; name.textContent = server.process || 'Listening server';
+          const address = document.createElement('span'); address.className = 'server-address'; address.textContent = url.origin;
+          const port = document.createElement('span'); port.className = 'server-port'; port.textContent = ':' + server.port;
+          details.append(name, address); row.append(icon, details, port);
+          row.addEventListener('click', event => {
+            event.preventDefault(); close();
+            const wsp = activeWs();
+            if (wsp) addBrowserTab(wsp.id, null, url.href);
+            else openExternalUrl(url.href);
+          });
+          const entry = document.createElement('div'); entry.className = 'server-entry';
+          entry.append(row);
+          if (server.pid) {
+            // Sibling of the link, not nested: an <a> must not contain a button.
+            const kill = document.createElement('button');
+            kill.type = 'button'; kill.className = 'server-kill';
+            kill.title = `Stop ${name.textContent} (PID ${server.pid})`;
+            kill.setAttribute('aria-label', kill.title);
+            kill.innerHTML = '<i class="ph ph-stop-circle" aria-hidden="true"></i>';
+            kill.addEventListener('click', () => {
+              showConfirm(`Stop ${name.textContent} on port ${server.port} (PID ${server.pid})?`, async () => {
+                kill.disabled = true;
+                try {
+                  if (window.electronAPI?.killRunningServer) await window.electronAPI.killRunningServer(server.pid, server.port);
+                  else {
+                    const response = await fetch('/api/servers/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid: server.pid, port: server.port }) });
+                    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Could not stop the server.');
+                  }
+                  // Give the process a moment to release its port before re-listing.
+                  setTimeout(() => load(true), 400);
+                } catch (error) {
+                  kill.disabled = false;
+                  address.textContent = String(error.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+                  entry.classList.add('failed');
+                }
+              });
+            });
+            entry.append(kill);
+          }
+          fragment.appendChild(entry);
+        }
+        const nextSignature = JSON.stringify(normalized);
+        if (nextSignature !== signature) {
+          if (normalized.length) list.replaceChildren(fragment);
+          else message('No listening servers found.');
+          signature = nextSignature;
+        }
+        hasResult = true;loadedAt = Date.now();
+      } catch (error) {
+        console.warn('[servers]', error);
+        if (!hasResult) message('Could not load servers. Refresh to try again.');
+        else refresh.title = 'Could not refresh servers. Showing previous results; click to retry.';
+      } finally {
+        loading = false; refresh.disabled = false; list.setAttribute('aria-busy', 'false');
+      }
+    };
+    button.addEventListener('click', () => {
+      if (!dropdown.hidden) { close(); return; }
+      dropdown.classList.remove('closing');dropdown.hidden = false;dropdown.inert = false;
+      button.setAttribute('aria-expanded', 'true');
+      position(); syncBrowserSlots(); load();
+    });
+    refresh.addEventListener('click', () => load(true));
+    document.addEventListener('mousedown', event => {
+      if (!dropdown.hidden && !dropdown.contains(event.target) && !button.contains(event.target)) close();
+    });
+    document.addEventListener('keydown', event => {
+      if (dropdown.hidden) return;
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); button.focus(); }
+      if (['ArrowDown', 'ArrowUp'].includes(event.key) && (dropdown.contains(document.activeElement) || document.activeElement === button)) {
+        event.preventDefault();
+        const items = [...dropdown.querySelectorAll('button:not(:disabled), a')];
+        const index = items.indexOf(document.activeElement);
+        items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+      }
+    });
+    window.addEventListener('resize', () => { if (!dropdown.hidden) position(); });
+  }
+  setupServersDropdown();
+
   if (DETACHED_ONLY) { detachedOnlyBoot(); return; }
 
   // Open/close
   document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
+  const startSession = () => activeWs() ? addTerminal() : createWorkspace();
+  document.getElementById('empty-new-terminal').addEventListener('click', startSession);
   const btnProfiles = document.getElementById('btn-profiles');
   if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
+  // Native browser views sit above DOM overlays; hide them while the picker
+  // is visible and restore them when it closes, including Escape and switching.
+  const profilePickerObserver = new MutationObserver(() => syncBrowserSlots());
+  profilePickerObserver.observe(document.getElementById('profile-picker'), { attributes: true, attributeFilter: ['style'] });
   const btnSidebarRight = document.getElementById('btn-sidebar-right');
-  if (btnSidebarRight) btnSidebarRight.addEventListener('click', () => document.body.classList.toggle('sb-right-hidden'));
+  if (btnSidebarRight) btnSidebarRight.addEventListener('click', () => {
+    const hidden = document.body.classList.toggle('sb-right-hidden');
+    const sidebar = document.getElementById('sidebar-right');
+    sidebar.inert = hidden;
+    if (hidden) sidebar.querySelectorAll('.sbr-page').forEach(page => {
+      page.style.display = page.id === 'sbr-main' ? 'flex' : 'none';
+    });
+    btnSidebarRight.setAttribute('aria-expanded', String(!hidden));
+  });
 
   // Right sidebar pages (main / clipboard)
   const sbrOpen = document.getElementById('sbr-open-clipboard');
@@ -9244,38 +10190,135 @@
   const sbrClip = document.getElementById('sbr-clipboard');
   const sbrClipContent = document.getElementById('sbr-clipboard-content');
   if (sbrOpen && sbrBack && sbrMain && sbrClip) {
+    let clipboardView = 'clipboard';
+    const clipboardTabs = [...sbrClip.querySelectorAll('[data-clipboard-view]')];
     const CLIP_KEY = 'terminalvibe.clipboardHistory';
     const CLIP_MAX = 200;
+    const CLIP_FAVORITES_KEY = CLIP_KEY + '.favorites';
+    const CLIP_LAST_KEY = CLIP_KEY + '.lastSeen';
+    let favorites = new Set(), lastCapturedText = null, editingText = null, editDraft = '';
     let clipHistory = [];
     try { clipHistory = JSON.parse(localStorage.getItem(CLIP_KEY) || '[]'); } catch { clipHistory = []; }
     if (!Array.isArray(clipHistory)) clipHistory = [];
+    clipHistory = [...new Set(clipHistory.filter(text => typeof text === 'string' && text.trim()))];
+    try {
+      const saved = JSON.parse(localStorage.getItem(CLIP_FAVORITES_KEY) || '[]');
+      if (Array.isArray(saved)) favorites = new Set(saved.filter(text => clipHistory.includes(text)));
+      lastCapturedText = localStorage.getItem(CLIP_LAST_KEY);
+    } catch {}
+    const saveClipHistory = () => {
+      localStorage.setItem(CLIP_KEY, JSON.stringify(clipHistory));
+      localStorage.setItem(CLIP_FAVORITES_KEY, JSON.stringify([...favorites]));
+    };
     const readClip = async () => (isDesktop() && window.electronAPI?.clipboardRead)
       ? window.electronAPI.clipboardRead()
       : navigator.clipboard.readText();
     const renderClipHistory = () => {
       sbrClipContent.textContent = '';
-      if (!clipHistory.length) { sbrClipContent.textContent = '(clipboard history is empty)'; return; }
-      clipHistory.forEach(text => {
-        const el = document.createElement('div');
-        el.className = 'sbr-clip-item';
-        el.textContent = text;
-        el.title = 'Click to paste';
+      clipboardTabs.forEach(tab => {
+        const selected = tab.dataset.clipboardView === clipboardView;
+        tab.setAttribute('aria-selected', String(selected));tab.tabIndex = selected ? 0 : -1;
+        if (selected) sbrClipContent.setAttribute('aria-labelledby', tab.id);
+      });
+      if (clipboardView === 'favorites' && !clipHistory.some(text => favorites.has(text))) {
+        sbrClipContent.innerHTML = '<div class="clipboard-empty"><h3>No favorites yet</h3><p>Star a clipboard entry to find it here.</p></div>';
+        return;
+      }
+      if (!clipHistory.length) {
+        sbrClipContent.innerHTML = '<div class="clipboard-empty"><span class="clipboard-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1.5"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M8 12h8M8 16h5"/></svg></span><h3>Nothing copied yet</h3><p>Copy some text to see it here.</p><p class="clipboard-empty-hint">Select an item to paste it into the active terminal.</p></div>';
+        return;
+      }
+      const ordered = clipboardView === 'favorites' ? clipHistory.filter(text => favorites.has(text)) : clipHistory;
+      ordered.forEach(text => {
+        const el = document.createElement('div');el.className = 'sbr-clip-item';
+        el.classList.toggle('is-favorite', favorites.has(text));
+        const editing = editingText === text;
+        const preview = document.createElement(editing ? 'textarea' : 'div');
+        preview.className = editing ? 'sbr-clip-editor' : 'sbr-clip-text';
+        if (editing) {
+          preview.value = editDraft;preview.setAttribute('aria-label', 'Edit clipboard entry');
+          preview.addEventListener('input', () => { editDraft = preview.value; });
+          preview.addEventListener('click', e => e.stopPropagation());
+          preview.addEventListener('keydown', e => {
+            e.stopPropagation();
+            if (e.key === 'Escape') { e.preventDefault();editingText = null;renderClipHistory(); }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault();saveEdit(); }
+          });
+        } else {
+          preview.textContent = text;preview.tabIndex = 0;preview.setAttribute('role', 'button');
+          preview.setAttribute('aria-label', 'Paste clipboard entry');preview.title = 'Click to paste';
+          preview.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault();e.stopPropagation();preview.click(); }
+          });
+        }
+        const saveEdit = () => {
+          if (!editDraft.trim()) return;
+          const wasFavorite = favorites.delete(text);
+          clipHistory = clipHistory.filter(item => item !== editDraft || item === text).map(item => item === text ? editDraft : item);
+          if (wasFavorite) favorites.add(editDraft);
+          editingText = null;saveClipHistory();renderClipHistory();
+        };
+        const actions = document.createElement('div');actions.className = 'sbr-clip-actions';
+        actions.addEventListener('click', e => e.stopPropagation());
+        const action = (name, title, icon, callback) => {
+          const button = document.createElement('button');button.type = 'button';button.className = 'sbr-clip-action';
+          button.dataset.action = name;button.title = title;button.setAttribute('aria-label', title);
+          button.innerHTML = '<i class="ph ' + icon + '" aria-hidden="true"></i>';
+          button.addEventListener('click', callback);actions.append(button);return button;
+        };
+        action('edit', editing ? 'Save changes (Ctrl+Enter; Escape to cancel)' : 'Edit entry', editing ? 'ph-check' : 'ph-pencil-simple', () => {
+          if (editing) saveEdit();
+          else { editingText = text;editDraft = text;renderClipHistory();sbrClipContent.querySelector('textarea')?.focus(); }
+        });
+        action('delete', 'Delete entry', 'ph-trash', () => {
+          clipHistory = clipHistory.filter(item => item !== text);favorites.delete(text);
+          if (editingText === text) editingText = null;
+          saveClipHistory();renderClipHistory();
+        });
+        const favorite = action('favorite', favorites.has(text) ? 'Remove favorite' : 'Favorite entry', 'ph-star', () => {
+          if (favorites.has(text)) favorites.delete(text);else favorites.add(text);
+          saveClipHistory();renderClipHistory();
+        });
+        favorite.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="' + (favorites.has(text) ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3L12 17.4l-5.6 3 1.1-6.3L3 9.6l6.2-.9Z"/></svg>';
+        favorite.setAttribute('aria-pressed', String(favorites.has(text)));
+        el.append(preview, actions);
         el.addEventListener('click', () => {
+          if (editing) return;
           if (isDesktop() && window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text);
-          else navigator.clipboard.writeText(text).catch(() => { });
+          else navigator.clipboard.writeText(text).catch(() => {});
           const t = activeTerminal();
-          if (t && t.term && t.type !== 'browser') { t.term.paste(text); t.term.focus?.(); }
+          if (t?.term && t.type !== 'browser' && !t.locked && !t.dead) { t.term.paste(text);t.term.focus?.(); }
         });
         sbrClipContent.appendChild(el);
       });
     };
+    const selectClipboardView = view => {
+      clipboardView = view;renderClipHistory();sbrClipContent.scrollTop = 0;
+    };
+    clipboardTabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => selectClipboardView(tab.dataset.clipboardView));
+      tab.addEventListener('keydown', e => {
+        if (!['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) return;
+        e.preventDefault();e.stopPropagation();
+        const next = e.key === 'Home' ? 0 : e.key === 'End' ? clipboardTabs.length - 1
+          : (index + (e.key === 'ArrowRight' ? 1 : -1) + clipboardTabs.length) % clipboardTabs.length;
+        clipboardTabs[next].click();clipboardTabs[next].focus();
+      });
+    });
     const captureClip = async () => {
       try {
         const text = await readClip();
-        if (!text || !text.trim() || clipHistory[0] === text) return;
-        clipHistory = [text, ...clipHistory.filter(t => t !== text)].slice(0, CLIP_MAX);
-        localStorage.setItem(CLIP_KEY, JSON.stringify(clipHistory));
-        if (sbrClip.style.display !== 'none') renderClipHistory();
+        if (!text || !text.trim() || lastCapturedText === text) return;
+        lastCapturedText = text;localStorage.setItem(CLIP_LAST_KEY, text);
+        if (clipHistory[0] === text) return;
+        clipHistory = [text, ...clipHistory.filter(t => t !== text)];
+        while (clipHistory.length > CLIP_MAX) {
+          let index = clipHistory.length - 1;
+          while (index > 0 && favorites.has(clipHistory[index])) index--;
+          clipHistory.splice(index, 1);
+        }
+        saveClipHistory();
+        if (sbrClip.style.display !== 'none' && editingText === null) renderClipHistory();
       } catch { }
     };
     captureClip();
@@ -9283,6 +10326,7 @@
     window.addEventListener('focus', captureClip);
     setInterval(() => { if (!document.hidden) captureClip(); }, 3000);
     const showClipboardPage = async () => {
+      clipboardView = 'clipboard';
       sbrMain.style.display = 'none';
       sbrClip.style.display = 'flex';
       await captureClip();
@@ -9297,6 +10341,534 @@
 
   // ── Auto-run workspaces: a saved workspace layout whose tabs each start a
   // command (or open a URL) when launched from the right panel.
+  // Live agent orchestration. Launch arguments are passed directly to the PTY,
+  // never typed into an interactive shell. Running entries survive rearrangement.
+  // Capture every tab, including hidden splits and both xterm buffers. Keep
+  // large snapshots in a file rather than forcing them through Claude's draft.
+  async function buildWorkspaceContext(wsp) {
+    const clean = value => String(value ?? '').replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+    const layout = node => !node ? null : node.type === 'group' ?
+      { type: node.type, id: node.id, activeTermId: node.activeTermId, tabs: node.terminals.map(t => t.id) } :
+      { type: node.type, id: node.id, direction: node.direction, sizes: node.sizes, children: node.children.map(layout) };
+    const parts = [`# Workspace: ${clean(wsp.label)}`, `Captured: ${new Date().toISOString()}`, `Workspace ID: ${wsp.id}`,
+      'Reference data from all splits and tabs, including the receiving chat. Terminal content includes all scrollback still retained by TerminalVibe; previously discarded output cannot be recovered. Browser content is the accessible loaded document, not nested frames, images or canvas.',
+      `## Split layout\n${JSON.stringify(layout(wsp.layout), null, 2)}`];
+    const sessionIds = new Set();
+    for (const t of getWorkspaceTerminals(wsp)) {
+      parts.push(`## ${t.type === 'browser' ? 'Browser' : 'Terminal'}: ${clean(t.label)}`,
+        `Tab ID: ${t.id}\nWorking directory: ${clean(t.cwd) || 'unknown'}\nLocked: ${!!t.locked}\nExited: ${!!t.dead}`);
+      if (t.claudeSessionId) { sessionIds.add(t.claudeSessionId); parts.push(`Claude session ID: ${t.claudeSessionId}`); }
+      if (t.argv?.length) parts.push(`Launch arguments: ${JSON.stringify(t.argv)}`);
+      if (t.type === 'browser') {
+        parts.push(`Stored URL: ${clean(t.url)}`);
+        try {
+          const snapshot = await handleAgentRequest({method:'read', params:{paneId:t.id, full:true}});
+          parts.push(snapshot.accessible ? `Loaded browser document:\n${clean(JSON.stringify(snapshot, null, 2))}` :
+            `Browser content unavailable: ${clean(snapshot.reason)}`);
+        } catch (error) { parts.push(`Browser content unavailable: ${clean(error.message)}`); }
+        continue;
+      }
+      const buffers = t.term?.buffer;
+      if (!buffers) { parts.push('Terminal buffer unavailable.'); continue; }
+      const seen = new Set();
+      for (const [name, buffer] of [['normal', buffers.normal], ['alternate', buffers.alternate], ['active', buffers.active]]) {
+        if (!buffer || seen.has(buffer)) continue;
+        seen.add(buffer);
+        const lines = [];
+        for (let i = 0; i < buffer.length; i++) {
+          const line = buffer.getLine(i);
+          const text = line?.translateToString(!buffer.getLine(i + 1)?.isWrapped) || '';
+          // Rejoin soft-wrapped rows so long commands and paths remain intact.
+          if (line?.isWrapped && lines.length) lines[lines.length - 1] += text;
+          else lines.push(text);
+        }
+        parts.push(`### ${name} terminal buffer (${buffer.length} retained rows)\n${clean(lines.join('\n'))}`);
+      }
+    }
+    return {title:clean(wsp.label), text:parts.join('\n\n'), sessionIds:[...sessionIds]};
+  }
+
+  async function attachContextToChat(entry, sessionId, workspaceContext = null) {
+    const notice=document.createElement('div');notice.className='session-drop-feedback';notice.setAttribute('role','status');
+    const host=entry?.el; if(!host) return;
+    const say=(icon,text,cls='')=>{notice.className='session-drop-feedback '+cls;notice.innerHTML=`<i class="ph ${icon}" aria-hidden="true"></i>`;const t=document.createElement('span');t.textContent=text;notice.append(t);};
+    say('ph-circle-notch',workspaceContext ? 'Adding workspace context…' : 'Adding saved session context…','is-pending');host.append(notice);
+    try {
+      if(entry.type==='browser' || entry.locked || entry.dead) throw new Error('Choose an unlocked, running Claude terminal');
+      let result;
+      if(workspaceContext) {
+        // Check the dedicated capability before gathering potentially large data.
+        // Older preloads must never pass a workspace to the session-ID channel.
+        if(isDesktop() && !window.electronAPI?.attachWorkspaceContext) throw new Error('Save your work and fully restart TerminalVibe to enable workspace context attachments.');
+        if(!isDesktop() && !workspaceContextReady) throw new Error('Restart the TerminalVibe backend and reload to enable workspace context attachments.');
+        workspaceContext = await (typeof workspaceContext === 'function' ? workspaceContext() : workspaceContext);
+        if(entry.type==='browser' || entry.locked || entry.dead) throw new Error('The target chat is no longer available');
+      }
+      if(workspaceContext && window.electronAPI?.attachWorkspaceContext) result=await window.electronAPI.attachWorkspaceContext(entry.id,workspaceContext);
+      else if(!workspaceContext && window.electronAPI?.attachSessionContext) result=await window.electronAPI.attachSessionContext(entry.id,sessionId);
+      else {
+        if(isDesktop()) throw new Error('Save active work and restart Electron to enable session context drops.');
+        if(!wsReady) throw new Error('Terminal backend is disconnected');
+        if(!sessionContextReady) throw new Error('Save active work, restart the dev backend, and reload TerminalVibe to enable session context drops.');
+        result=await new Promise((resolve,reject)=>{
+          const requestId=uuid();const timer=setTimeout(()=>{sessionContextRequests.delete(requestId);reject(new Error('Context attachment timed out. Update the backend if it does not support session drops.'));},60000);
+          sessionContextRequests.set(requestId,{resolve,reject,timer});
+          ws.send(JSON.stringify({type:workspaceContext ? 'workspace-context' : 'session-context',id:entry.id,sessionId,workspaceContext,requestId}));
+        });
+      }
+      say('ph-check-circle',workspaceContext ? 'Workspace context file added' : 'Session context added','is-success');
+      document.dispatchEvent(new CustomEvent('session-context:attached',{detail:result}));
+      entry.term?.focus();
+    } catch(error) {
+      say('ph-warning-circle',error.message,'is-error');
+      document.dispatchEvent(new CustomEvent('session-context:attached',{detail:{error:error.message}}));
+    }
+    setTimeout(()=>notice.remove(),2000);
+  }
+
+  const claudeHistoryCache = new Map();
+  const CLAUDE_HISTORY_TTL = 30000;
+  function cachedClaudeHistory(cwd) { return claudeHistoryCache.get(cwd || '')?.data || null; }
+  function loadClaudeHistory(cwd, force = false) {
+    const key = cwd || '';
+    let cache = claudeHistoryCache.get(key);
+    if (!cache) {
+      cache = {data:null,loadedAt:0,pending:null};claudeHistoryCache.set(key,cache);
+      // Keep history in memory only, and bound it when many projects are used.
+      if (claudeHistoryCache.size > 8) for (const [oldKey,entry] of claudeHistoryCache) {
+        if (oldKey !== key && !entry.pending) { claudeHistoryCache.delete(oldKey);break; }
+      }
+    }
+    if (cache.pending) return cache.pending;
+    if (!force && cache.data && Date.now() - cache.loadedAt < CLAUDE_HISTORY_TTL) return Promise.resolve(cache.data);
+    cache.pending = (async () => {
+      let data;
+      if (window.electronAPI?.claudeSessions) data = await window.electronAPI.claudeSessions(cwd);
+      else {
+        const response = await fetch('/api/claude-sessions?cwd=' + encodeURIComponent(cwd || ''));
+        if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Session history API is unavailable on this app server. Update the frontend dev server, then reopen this drawer.');
+        data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Could not load local sessions');
+        if (data.scope !== 'all-projects') throw new Error('Session history backend is outdated. Load the updated server to browse Claude history across projects.');
+      }
+      if (!Array.isArray(data?.sessions)) throw new Error('Invalid session history response');
+      cache.data = data;cache.loadedAt = Date.now();return data;
+    })().finally(() => {
+      cache.pending = null;
+      for (const [oldKey,entry] of claudeHistoryCache) {
+        if (claudeHistoryCache.size <= 8) break;
+        if (oldKey !== key && !entry.pending) claudeHistoryCache.delete(oldKey);
+      }
+    });
+    return cache.pending;
+  }
+
+  async function openClaudeHistory(wsp, entry, trigger) {
+    if (!entry || entry.type === 'browser') return;
+    const cwd = entry.cwd;
+    let history = cachedClaudeHistory(cwd);
+    window.openSessionDrawer({ host:entry.el, trigger, initialData:history, cwd: 'Claude Code · All projects', project: cwd, currentId: entry.claudeSessionId,
+      load: async (force = false) => (history = await loadClaudeHistory(cwd,force)),
+      canReplace: async () => {
+        if (entry.locked) return false;
+        const process = await checkTerminalRunning(entry.id);
+        return process === null || /^(claude|claude-code)(\.exe)?$/i.test(process || '');
+      },
+      start: async (session, mode) => {
+        if (!history?.executable) throw new Error('Claude executable not found. Install Claude Code or add it to the backend PATH.');
+        if (findTermById(entry.id)?.term !== entry) throw new Error('The original terminal was closed. Reopen session history from another tab.');
+        const id = session?.id || uuid();
+        const argv = [session ? '--resume' : '--session-id', id];
+        const sessionCwd = session ? session.cwd : history.cwd;
+        if (!sessionCwd) throw new Error('This conversation has no saved working directory and cannot be resumed here.');
+        let target;
+        if (mode === 'here') {
+          const process = await checkTerminalRunning(entry.id);
+          if (entry.locked || (process !== null && !/^(claude|claude-code)(\.exe)?$/i.test(process || ''))) throw new Error('This terminal is running another process. Stop it before resuming a conversation here.');
+          const started = await createAgentTerminal({ id:entry.id, ...getSlotDimensions(entry), cwd:sessionCwd,
+            executable:history.executable, argv, returnToShell:true, replaceIdle:true, replaceClaude:true });
+          if (!started) {
+            if (await checkTerminalRunning(entry.id) === null) {
+              const restored = await createAgentTerminal({ id:entry.id, ...getSlotDimensions(entry), cwd:cwd || history.cwd });
+              if (restored) { entry.dead=false; entry.term.options.disableStdin=false; }
+            }
+            throw new Error('Could not start Claude here. The terminal may have become busy or the executable failed; inspect the terminal and try a split.');
+          }
+          target = entry; target.dead = false; target.term.options.disableStdin = false;
+          target.term.write('\r\n[Claude session started]\r\n');
+        } else {
+          const result = await handleAgentRequest({ method:'launch', params:{ workspaceId:wsp.id, anchorPaneId:entry.id,
+            placement:{split:'row',compact:false}, layout:{ name:session?.title || 'Claude', cwd:sessionCwd, argv:[history.executable,...argv], returnToShell:true } } });
+          target = findTermById(result.launches[0].id)?.term;
+          if (!result.launches[0].started) throw new Error('Claude failed to start. Inspect the new terminal for details.');
+        }
+        target.cwd = sessionCwd; target.toolProvider = 'claude'; target.claudeSessionId = id;
+        target._claudeRunning = true; target._atShellPrompt = false;
+        target._historyRevision = (target._historyRevision || 0) + 1;
+        claudeHistoryCache.forEach(cache => {cache.loadedAt = -Infinity;});
+        saveState(); renderPaneArea();
+      }
+    });
+  }
+  async function openSavedSessionTab(sessionId, wsp, anchorPaneId) {
+    // If TerminalVibe already owns this live session, select it instead of
+    // starting another Claude process against the same conversation log.
+    const existing = workspaces.flatMap(ws => getWorkspaceTerminals(ws).map(term => ({ws,term})))
+      .find(({term}) => term.claudeSessionId === sessionId && !term.dead && term._claudeRunning === true);
+    if (existing) { activateWorkspace(existing.ws.id); activateTerminal(existing.ws.id,existing.term.id); return; }
+    const anchor = findTermById(anchorPaneId);
+    if (!anchor || anchor.ws !== wsp) throw new Error('The destination tab group is no longer available');
+    const group = findGroupContainingTerm(wsp.layout,anchorPaneId);
+    let history = await loadClaudeHistory(anchor.term.cwd);
+    let session = history.sessions.find(item => item.id === sessionId);
+    if (!session) {
+      history = await loadClaudeHistory(anchor.term.cwd,true);
+      session = history.sessions.find(item => item.id === sessionId);
+    }
+    if (!session) throw new Error('This conversation is no longer in session history. Reopen history and try again.');
+    if (!history.executable) throw new Error('Claude executable not found');
+    if (!session.cwd) throw new Error('This conversation has no saved working directory');
+    if (findTermById(anchorPaneId)?.ws !== wsp || findGroupContainingTerm(wsp.layout,anchorPaneId) !== group) throw new Error('The destination tab group changed. Drop again.');
+    const result = await handleAgentRequest({method:'launch',params:{workspaceId:wsp.id,anchorPaneId,
+      placement:{mode:'tab'},layout:{name:session.title || 'Claude',cwd:session.cwd,
+        argv:[history.executable,'--resume',session.id],returnToShell:true}}});
+    const launch = result.launches[0];
+    if (!launch?.started) throw new Error('Could not resume Claude. Inspect the new tab for details.');
+    const target = findTermById(launch.id)?.term;
+    if (!target) return;
+    target.toolProvider='claude';target.claudeSessionId=session.id;
+    target._claudeRunning=true;target._atShellPrompt=false;
+    activateTerminal(wsp.id,target.id);
+    syncClaudeHistoryButton(target);
+    saveState();
+  }
+
+  function setupSessionTabDrops() {
+    const pending = new Set();
+    const clear = () => document.querySelectorAll('.session-tab-drop-target').forEach(el => el.classList.remove('session-tab-drop-target'));
+    const destination = e => {
+      if (!e.dataTransfer?.types.includes('application/x-terminalvibe-session')) return null;
+      const header = e.target.closest?.('.term-group-header');
+      if (!header) return null;
+      const groupId = header.closest('.term-group')?.dataset.groupId;
+      for (const wsp of workspaces) {
+        const group = findGroupById(wsp.layout,groupId);
+        if (group?.terminals.length) return {header,wsp,anchorPaneId:group.activeTermId || group.terminals[0].id};
+      }
+      return null;
+    };
+    for (const type of ['dragenter','dragover']) document.addEventListener(type,e => {
+      const target = destination(e); if (!target) return;
+      e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect='copy';
+      clear();target.header.classList.add('session-tab-drop-target');
+    },true);
+    document.addEventListener('dragleave',e => {
+      const header=e.target.closest?.('.session-tab-drop-target');
+      if (header && !header.contains(e.relatedTarget)) header.classList.remove('session-tab-drop-target');
+    },true);
+    document.addEventListener('dragend',clear,true);
+    document.addEventListener('drop',e => {
+      clear();
+      const target = destination(e);if (!target) return;
+      e.preventDefault();e.stopPropagation();
+      const id=e.dataTransfer.getData('application/x-terminalvibe-session');
+      if (!id || pending.has(id)) return;
+      pending.add(id);
+      const host=target.header.closest('.term-group');
+      const notice=document.createElement('div');notice.className='session-drop-feedback is-pending';
+      notice.setAttribute('role','status');notice.textContent='Opening conversation…';host.append(notice);
+      openSavedSessionTab(id,target.wsp,target.anchorPaneId).then(()=>notice.remove(),error=>{
+        const currentHost=document.getElementById(host.id) || host;
+        if (!notice.isConnected && currentHost.isConnected) currentHost.append(notice);
+        notice.className='session-drop-feedback is-error';notice.textContent=error.message;
+        setTimeout(()=>notice.remove(),4000);
+      }).finally(()=>pending.delete(id));
+    },true);
+  }
+
+  function addTabSessionHistory(tab, wsp, entry) {
+    if (entry.type === 'browser') return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'session-history-trigger';
+    button.dataset.claudeHistory = entry.id;
+    button.title = 'Claude session history';
+    button.setAttribute('aria-label', 'Claude session history');
+    button.innerHTML = '<i class="ph ph-clock-counter-clockwise"></i>';
+    button.hidden = !hasClaudeHistory(entry);
+    button.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); });
+    button.addEventListener('dblclick', e => e.stopPropagation());
+    button.addEventListener('dragstart', e => { e.preventDefault(); e.stopPropagation(); });
+    button.addEventListener('click', e => {
+      e.stopPropagation();
+      openClaudeHistory(wsp, entry, button);
+    });
+    tab.prepend(button);
+    syncClaudeHistoryButton(entry);
+    scheduleClaudeHistoryRefresh(entry);
+  }
+
+  setInterval(() => {
+    if (document.hidden) return;
+    const wsp = activeWs(); if (!wsp) return;
+    for (const button of document.querySelectorAll('[data-claude-history]')) {
+      const entry = getWorkspaceTerminals(wsp).find(t => t.id === button.dataset.claudeHistory);
+      if (!entry || entry.type === 'browser') { button.hidden=true; continue; }
+      void refreshClaudeHistoryButton(entry);
+    }
+  }, 1000);
+
+  setupSessionTabDrops();
+
+  function createAgentTerminal(spec) {
+    if (nativePtyReady) return window.electronAPI.terminalCreate(spec);
+    if (!wsReady) return Promise.reject(new Error('Terminal backend is not connected'));
+    return new Promise((resolve, reject) => {
+      const requestId = uuid();
+      const timer = setTimeout(() => { agentCreates.delete(requestId); reject(new Error('Terminal creation timed out; inspect list before retrying')); }, 10000);
+      agentCreates.set(requestId, { resolve, reject, timer });
+      ws.send(JSON.stringify({ ...spec, type: 'create', requestId }));
+    });
+  }
+
+  function agentNodeSize(size, previous = {}) {
+    if (!size || typeof size !== 'object' || Array.isArray(size)) throw new Error('size must contain width and/or height');
+    const result = { ...previous };
+    for (const axis of Object.keys(size)) {
+      const value = size[axis];
+      if (!['width', 'height'].includes(axis) || (value !== 'min' && value !== 'auto' && (!Number.isFinite(value) || value <= 0))) throw new Error('Use positive pixel sizes, min, or auto');
+      if (value === 'auto') delete result[axis];
+      else result[axis] = value;
+    }
+    return Object.keys(result).length ? result : undefined;
+  }
+
+  function agentBrowserUrl(value) {
+    let url;
+    try { url = typeof value === 'string' && new URL(value); } catch {}
+    if (!url || !['http:', 'https:'].includes(url.protocol)) throw new Error('Browser url must be an absolute http(s) URL');
+    return url.href;
+  }
+
+  async function handleAgentRequest({ method, params: p = {} }) {
+    const describe = wsp => ({ id: wsp.id, name: wsp.label, layout: serializeLayout(wsp.layout),
+      panes: getWorkspaceTerminals(wsp).map(t => {
+        const group = findGroupContainingTerm(wsp.layout, t.id);
+        const rect = document.getElementById('group-' + group?.id)?.getBoundingClientRect();
+        return { id: t.id, name: t.label, cwd: t.cwd, dead: !!t.dead, type: t.type || 'terminal',
+          ...(t.type === 'browser' ? { url: t.url } : {}),
+          agentManaged: !!t.agentManaged, groupId: group?.id, size: group?.size,
+          bounds: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null };
+      }) });
+    if (method === 'list') return {
+      capabilities: { launchAsTab: true, launchIntoWorkspace: true, launchBesidePane: true, paneSizing: true, panePlacement: true, compactPanes: true, browserRead: true, browserLaunch: true, browserNavigate: true },
+      minimumPaneSize: { width: SPLIT_MIN_PX, height: SPLIT_MIN_PX },
+      activeWorkspaceId: activeWsId,
+      activePaneId: findWs(activeWsId)?.activeTermId || null,
+      workspaces: workspaces.map(describe)
+    };
+    if (method === 'launch') {
+      const needsPty = node => node.split ? node.children.some(needsPty) : node.type !== 'browser' && node.url === undefined;
+      if (needsPty(p.layout) && !nativePtyReady && !wsReady) throw new Error('Terminal backend is not ready');
+      const existing = p.workspaceId !== undefined || p.anchorPaneId !== undefined;
+      const anchor = p.anchorPaneId !== undefined ? findTermById(p.anchorPaneId) : null;
+      if (p.anchorPaneId !== undefined && !anchor) throw new Error('Unknown anchorPaneId');
+      const wsp = existing
+        ? (p.workspaceId !== undefined ? findWs(p.workspaceId === 'current' ? activeWsId : p.workspaceId) : anchor.ws)
+        : { id: uuid(), label: p.name, layout: null, activeTermId: null };
+      if (!wsp) throw new Error('Unknown workspaceId; list workspaces before retrying');
+      if (anchor && anchor.ws !== wsp) throw new Error('anchorPaneId does not belong to the target workspace');
+      const placement = p.placement || {};
+      const asTab = placement.mode === 'tab';
+      if (asTab && (!existing || p.layout.split || ['split', 'sizes', 'before', 'compact'].some(key => placement[key] !== undefined))) throw new Error('Tab placement requires an existing workspace, one leaf and no split sizing options');
+      const anchorGroup = anchor ? findGroupContainingTerm(wsp.layout, p.anchorPaneId)
+        : asTab ? findGroupContainingTerm(wsp.layout, wsp.activeTermId) : null;
+      if (asTab && !anchorGroup) throw new Error('No target tab group; specify anchorPaneId');
+      // Resolve the destination before the first await so focus changes cannot
+      // redirect a launch. Existing terminal entries and PTYs are reused.
+      const specs = new Map();
+      const terms = [];
+      const build = node => {
+        if (node.split) return { type: 'split', id: uuid(), direction: node.split, sizes: node.sizes || [50, 50], children: node.children.map(build) };
+        const id = uuid();
+        specs.set(id, node);
+        const entry = node.type === 'browser' || node.url !== undefined
+          ? { id, label: node.name, type: 'browser', url: agentBrowserUrl(node.url), iframe: null, el: null, opened: false }
+          : _createTermEntry(wsp, id, node.name);
+        entry.cwd = node.cwd;
+        entry.pinLabel = true;
+        entry.agentManaged = true;
+        terms.push(entry);
+        return { type: 'group', id: uuid(), activeTermId: id, terminals: [entry] };
+      };
+      const additions = build(p.layout);
+      if (existing && !asTab && (placement.compact ?? !placement.sizes)) additions.size = { [placement.split === 'column' ? 'height' : 'width']: 'min' };
+      const dock = node => ({ type: 'split', id: uuid(), direction: placement.split || 'row',
+        sizes: placement.sizes || [50, 50], children: placement.before ? [additions, node] : [node, additions] });
+      if (asTab) {
+        anchorGroup.terminals.push(...terms);
+      } else if (existing && wsp.layout) {
+        const insert = node => node === anchorGroup ? dock(node) : node.type === 'split' ? { ...node, children: node.children.map(insert) } : node;
+        wsp.layout = anchorGroup ? insert(wsp.layout) : dock(wsp.layout);
+      } else wsp.layout = additions;
+      if (!wsp.activeTermId) wsp.activeTermId = terms[0].id;
+      delete wsp._maximizedGroupId;
+      if (!existing) {
+        workspaces.push(wsp);
+        sideOrder.push({ type: 'ws', id: wsp.id });
+      }
+      renderSidebar();
+      activateWorkspace(wsp.id);
+      // activateWorkspace is a no-op when already current: rebuild its splits.
+      if (existing) renderPaneArea();
+      const launches = [];
+      for (const t of terms) {
+        if (t.type === 'browser') {
+          launches.push({ id: t.id, name: t.label, type: 'browser', url: t.url, started: true });
+          continue;
+        }
+        const spec = specs.get(t.id);
+        // A background tab has no visible rectangle yet; use its selected sibling.
+        const slot = getSlotDimensions(asTab ? findTermById(anchorGroup.activeTermId)?.term || t : t);
+        const started = await createAgentTerminal({ id: t.id, ...slot, cwd: spec.cwd, executable: spec.argv[0], argv: spec.argv.slice(1), returnToShell: spec.returnToShell !== false });
+        if (!started) {
+          t.dead = true;
+          t.term.write('\r\n[Could not launch agent. Check executable and cwd.]\r\n');
+          t.term.options.disableStdin = true;
+        }
+        launches.push({ id: t.id, name: t.label, started });
+      }
+      renderPaneArea();
+      saveState();
+      return { workspace: describe(wsp), launches };
+    }
+    if (method === 'arrange') {
+      const wsp = findWs(p.workspaceId);
+      if (!wsp) throw new Error('Unknown workspaceId');
+      const entries = new Map(getWorkspaceTerminals(wsp).map(t => [t.id, t]));
+      const used = new Set();
+      const build = (node, depth = 0) => {
+        if (!node || depth > 8) throw new Error('Invalid layout');
+        if (node.split) {
+          if (!['row', 'column'].includes(node.split) || !Array.isArray(node.children) || node.children.length !== 2) throw new Error('Invalid split');
+          const sizes = node.sizes || [50, 50];
+          if (!Array.isArray(sizes) || sizes.length !== 2 || sizes.some(n => !Number.isFinite(n) || n <= 0) || Math.abs(sizes[0] + sizes[1] - 100) > 0.01) throw new Error('Invalid sizes');
+          return { type: 'split', id: uuid(), direction: node.split, sizes,
+            ...(node.size ? { size: agentNodeSize(node.size) } : {}), children: node.children.map(n => build(n, depth + 1)) };
+        }
+        if (!entries.has(node.paneId) || used.has(node.paneId)) throw new Error('Unknown or repeated paneId');
+        used.add(node.paneId);
+        return { type: 'group', id: uuid(), activeTermId: node.paneId, terminals: [entries.get(node.paneId)],
+          ...(node.size ? { size: agentNodeSize(node.size) } : {}) };
+      };
+      const layout = build(p.layout);
+      if (used.size !== entries.size) throw new Error('Include every workspace pane exactly once');
+      wsp.layout = layout;
+      delete wsp._maximizedGroupId;
+      activateWorkspace(wsp.id);
+      renderPaneArea();
+      saveState();
+      return describe(wsp);
+    }
+    const found = findTermById(p.paneId);
+    if (!found) throw new Error('Unknown paneId');
+    const t = found.term;
+    const wsp = workspaces.find(w => getWorkspaceTerminals(w).some(entry => entry.id === t.id));
+    if (method === 'resize' || method === 'place') {
+      const group = findGroupContainingTerm(wsp.layout, t.id);
+      const requested = Object.fromEntries(['width', 'height'].filter(axis => p[axis] !== undefined).map(axis => [axis, p[axis]]));
+      if (method === 'resize') {
+        if (!Object.keys(requested).length) throw new Error('resize needs width and/or height');
+        group.size = agentNodeSize(requested, group.size);
+      } else {
+        if (!['left', 'right', 'top', 'bottom'].includes(p.side)) throw new Error('side must be left, right, top, or bottom');
+        if (p.compact !== undefined && typeof p.compact !== 'boolean') throw new Error('compact must be boolean');
+        const anchor = findTermById(p.anchorPaneId);
+        if (!anchor || anchor.ws !== wsp || p.anchorPaneId === t.id) throw new Error('Use a different anchorPaneId in the same workspace');
+        const size = agentNodeSize(requested, p.compact === false ? {} : { [['left', 'right'].includes(p.side) ? 'width' : 'height']: 'min' });
+        // Build a new tree before committing. Entries/PTYs and sibling tabs survive.
+        const detach = node => {
+          if (node.type === 'group') {
+            const terminals = node.terminals.filter(entry => entry.id !== t.id);
+            return terminals.length ? { ...node, terminals,
+              activeTermId: terminals.some(entry => entry.id === node.activeTermId) ? node.activeTermId : terminals[0].id } : null;
+          }
+          const survivors = node.children.map((child, i) => ({ node: detach(child), weight: node.sizes[i] })).filter(child => child.node);
+          if (survivors.length === 1) return { ...survivors[0].node,
+            ...(node.size ? { size: { ...node.size, ...survivors[0].node.size } } : {}) };
+          const total = survivors.reduce((sum, child) => sum + child.weight, 0);
+          return { ...node, children: survivors.map(child => child.node), sizes: survivors.map(child => child.weight * 100 / total) };
+        };
+        const remaining = detach(wsp.layout);
+        const anchorGroup = findGroupContainingTerm(remaining, p.anchorPaneId);
+        const moved = { type: 'group', id: uuid(), activeTermId: t.id, terminals: [t], ...(size ? { size } : {}) };
+        const before = p.side === 'left' || p.side === 'top';
+        const insert = node => node.id === anchorGroup.id
+          ? { type: 'split', id: uuid(), direction: ['left', 'right'].includes(p.side) ? 'row' : 'column',
+            sizes: [50, 50], children: before ? [moved, node] : [node, moved] }
+          : node.type === 'split' ? { ...node, children: node.children.map(insert) } : node;
+        wsp.layout = insert(remaining);
+      }
+      delete wsp._maximizedGroupId;
+      activateWorkspace(wsp.id);
+      renderPaneArea();
+      saveState();
+      return describe(wsp);
+    }
+    if (method === 'focus') {
+      activateWorkspace(wsp.id);
+      activateTerminal(wsp.id, t.id);
+      return { paneId: t.id };
+    }
+    if (method === 'navigate') {
+      if (t.type !== 'browser') throw new Error('Expected a browser pane');
+      const url = agentBrowserUrl(p.url);
+      if (t._loadUrl) await t._loadUrl(url);
+      else t.url = url; // A lazy, unopened tab loads this URL on first display.
+      saveState();
+      return { paneId: t.id, type: 'browser', url, navigated: true,
+        note: 'Navigation requested; page load success is not confirmed.' };
+    }
+    if (t.type === 'browser' && method === 'read') {
+      const options = { maxChars: p.maxChars ?? 20000, offset: p.offset ?? 0, ...(p.full === true ? {full:true} : {}) };
+      if (!Number.isInteger(options.maxChars) || options.maxChars < 1 || options.maxChars > 100000 ||
+          !Number.isInteger(options.offset) || options.offset < 0) throw new Error('Use maxChars 1–100000 and a nonnegative integer offset');
+      const metadata = { paneId: t.id, type: 'browser', storedUrl: t.url };
+      try {
+        const surface = t.browserContainer?.querySelector('.browser-surface');
+        let snapshot;
+        if (surface?.tagName?.toLowerCase() === 'webview') {
+          snapshot = await surface.executeJavaScript(`(${snapshotBrowserPage.toString()})(document, ${JSON.stringify(options)})`);
+        } else if (t._viewCreated && window.electronAPI?.browserRead) {
+          snapshot = await window.electronAPI.browserRead(t.id, options);
+        } else if (surface) {
+          const doc = surface.contentDocument;
+          if (!doc) throw new Error('Cross-origin iframe content is inaccessible');
+          snapshot = snapshotBrowserPage(doc, options);
+        } else throw new Error('Browser page has not been opened or loaded');
+        return { ...metadata, accessible: true, ...snapshot };
+      } catch (error) {
+        return { ...metadata, accessible: false, reason: error.message,
+          note: 'Only stored metadata is available; do not infer page content or search terms from it.' };
+      }
+    }
+    if (t.type === 'browser') throw new Error('Expected a terminal pane');
+    if (method === 'send') {
+      if (t.locked || t.dead) throw new Error('Pane is locked or exited');
+      if (typeof p.text !== 'string' || (p.enter !== undefined && typeof p.enter !== 'boolean')) throw new Error('text must be a string; enter must be boolean');
+      _sendStdinRaw(t.id, new TextEncoder().encode(p.text + (p.enter ? '\r' : '')));
+      return { paneId: t.id, sent: true };
+    }
+    if (method === 'read') {
+      const lines = p.lines === undefined ? 100 : p.lines;
+      if (!Number.isInteger(lines) || lines < 1 || lines > 2000) throw new Error('lines must be 1–2000');
+      const buffer = t.term.buffer.active, output = [];
+      for (let i = Math.max(0, buffer.length - lines); i < buffer.length; i++) output.push(buffer.getLine(i)?.translateToString(true) || '');
+      return { paneId: t.id, dead: !!t.dead, text: output.join('\n') };
+    }
+    throw new Error('Unknown method');
+  }
+
   const AR_KEY = 'terminalvibe.autorunWorkspaces';
   const loadAutoRuns = () => { try { const a = JSON.parse(localStorage.getItem(AR_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
   const saveAutoRuns = list => { try { localStorage.setItem(AR_KEY, JSON.stringify(list)); } catch { } };
@@ -9352,7 +10924,17 @@
       const save = () => saveAutoRuns(list);
       arList.textContent = '';
       if (!list.length) {
-        arList.innerHTML = '<div class="sbr-empty">No auto-run workspaces yet.<br>Arrange a workspace with the splits and tabs you want, then press <b>+</b> to save its layout and set what each tab runs.</div>';
+        const canSave = !!activeWs()?.layout;
+        arList.innerHTML = '<div class="sbr-empty ar-empty"><h3>No saved workspaces</h3><p>Save your tabs and splits, then choose a startup command for each terminal.</p><button type="button" class="ar-empty-save">Save current workspace</button></div>';
+        const saveButton = arList.querySelector('.ar-empty-save');
+        saveButton.disabled = !canSave;
+        saveButton.addEventListener('click', () => document.getElementById('sbr-autorun-add').click());
+        if (!canSave) {
+          const hint = document.createElement('p');
+          hint.className = 'ar-empty-hint';
+          hint.textContent = 'Open a workspace to save its layout.';
+          arList.firstElementChild.appendChild(hint);
+        }
         return;
       }
       for (const tpl of list) {
@@ -9426,7 +11008,26 @@
       renderAutoRuns();
     });
   }
+  document.getElementById('settings-nav-search').addEventListener('input', e => {
+    const query = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('.settings-cat-btn').forEach(btn => { btn.hidden = !btn.textContent.toLowerCase().includes(query); });
+  });
+  document.querySelectorAll('.settings-cat-btn').forEach(btn => {
+    btn.setAttribute('role', 'button'); btn.tabIndex = 0;
+    btn.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); btn.click(); }
+    });
+  });
   document.getElementById('settings-close').addEventListener('click', closeSettings);
+  settingsOverlay.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const controls = [...settingsOverlay.querySelectorAll('button,input,select,textarea,[tabindex="0"],a[href]')]
+      .filter(el => !el.disabled && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+    const first = controls[0], last = controls[controls.length - 1];
+    if (!first) return;
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === settingsOverlay)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || document.activeElement === settingsOverlay)) { e.preventDefault(); first.focus(); }
+  });
   settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) { closeSettings(); e.stopPropagation(); }
@@ -9444,6 +11045,22 @@
       if (api && api.configOpenPluginsDir) api.configOpenPluginsDir();
     });
   }
+
+  systemColorScheme.addEventListener('change', () => {
+    if (currentColorScheme !== 'system') return;
+    applyTheme(currentThemeName);
+  });
+  document.querySelectorAll('.scheme-choice').forEach(card => {
+    card.addEventListener('click', () => {
+      currentColorScheme = card.dataset.scheme;
+      applyTheme(currentThemeName);
+      saveState();
+    });
+  });
+
+  document.getElementById('theme-gallery-import').addEventListener('click', () => {
+    document.getElementById('theme-import-input').click();
+  });
 
   // Theme change
   document.getElementById('set-theme').addEventListener('change', e => {
@@ -9537,6 +11154,11 @@
       }
     });
   }
+
+  document.getElementById('set-link-target').addEventListener('change', e => {
+    terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';
+    saveState();
+  });
 
   // Search engine
   document.getElementById('set-search-engine').addEventListener('change', e => {
@@ -9632,153 +11254,53 @@
     refreshBgSettingsUI();
   });
 
-  // Theme editor — Save
-  document.getElementById('theme-btn-save').addEventListener('click', async () => {
-    const nameInput = document.getElementById('set-theme-name');
-    const name = nameInput.value.trim();
-    if (!name) { nameInput.focus(); return; }
-    if (BUILTIN_THEME_KEYS.has(name)) { alert('Cannot overwrite a built-in theme.'); return; }
-    editingTheme.label = name;
-    const customs = await getCustomThemes();
-    customs[name] = { ...editingTheme, _custom: true };
-    await saveCustomThemes(customs);
-    applyTheme(name);
-    saveState();
-    refreshThemeDropdown();
-  });
-
-  // Theme editor — Delete
-  document.getElementById('theme-btn-delete').addEventListener('click', async () => {
-    const nameInput = document.getElementById('set-theme-name');
-    const name = nameInput.value.trim();
-    if (!name || BUILTIN_THEME_KEYS.has(name)) return;
-    if (!(await getCustomThemes())[name]) return;
-    await deleteCustomTheme(name);
-    initEditingTheme(currentThemeName);
-    nameInput.value = editingTheme.label || '';
-    renderThemeEditor();
-    saveState();
-    refreshThemeDropdown();
-  });
-
-  // Theme editor — Reset
-  document.getElementById('theme-btn-import').addEventListener('click', () => {
-    document.getElementById('theme-import-input').click();
-  });
-  document.getElementById('theme-import-input').addEventListener('change', e => {
+  // Import directly into the gallery; selection follows the same path as built-ins.
+  document.getElementById('theme-import-input').addEventListener('change', async e => {
     const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result);
-        if (!data.bg || !data.fg || !data.palette || !Array.isArray(data.palette) || data.palette.length < 16) {
-          alert('Invalid theme JSON: missing bg, fg, or palette[16].');
-          return;
-        }
-        const name = data.name || file.name.replace(/\.json$/i, '') || 'Imported Theme';
-        editingTheme = {
-          label: name,
-          bg: data.bg, fg: data.fg, cursor: data.cursor || data.fg, selection: data.selection || data.bg,
-          swatches: data.swatches || [data.bg, data.fg, data.palette[4] || data.fg],
-          palette: [...data.palette],
-          ui: data.ui ? { ...data.ui } : {},
-        };
-        document.getElementById('set-theme-name').value = name;
-        renderThemeEditor();
-        previewTheme();
-      } catch { alert('Failed to parse JSON.'); }
-    };
-    reader.readAsText(file);
     e.target.value = '';
-  });
-
-  // Theme editor — Export
-  document.getElementById('theme-btn-export').addEventListener('click', () => {
-    if (!editingTheme) return;
-    const json = JSON.stringify({
-      name: editingTheme.label || 'Custom Theme',
-      bg: editingTheme.bg, fg: editingTheme.fg, cursor: editingTheme.cursor, selection: editingTheme.selection,
-      palette: editingTheme.palette,
-      ui: editingTheme.ui,
-    }, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = (editingTheme.label || 'custom-theme').replace(/[^a-z0-9_-]/gi, '_') + '.json';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  });
-
-  // Theme editor — name input sync
-  document.getElementById('set-theme-name').addEventListener('input', e => {
-    if (editingTheme) editingTheme.label = e.target.value.trim();
-  });
-
-  // Theme editor — Clone Current
-  document.getElementById('theme-btn-clone').addEventListener('click', () => {
-    initEditingTheme(currentThemeName);
-    editingTheme.label = THEMES[currentThemeName]?.label + ' Copy' || 'Copy';
-    document.getElementById('set-theme-name').value = editingTheme.label;
-    renderThemeEditor();
-    previewTheme();
-  });
-
-  // Theme editor — Load existing dropdown
-  function refreshThemeCustomSelect() {
-    const sel = document.getElementById('set-theme-custom-select');
-    if (!sel) return;
-    sel.innerHTML = '';
-    for (const [key, t] of Object.entries(THEMES)) {
-      if (BUILTIN_THEME_KEYS.has(key)) continue;
-      const opt = document.createElement('option');
-      opt.value = key;
-      opt.textContent = t.label || key;
-      sel.appendChild(opt);
-    }
-    const dd = document.querySelector('.custom-dropdown[data-for="set-theme-custom-select"]');
-    if (dd) initCustomDropdown(dd);
-  }
-
-  // Theme mode toggle (New / Edit Existing)
-  document.querySelectorAll('.theme-mode-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const mode = btn.dataset.mode;
-      themeEditorMode = mode;
-      document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
-      const nameRow = document.querySelector('.theme-name-row');
-      const editRow = document.querySelector('.theme-edit-row');
-      if (mode === 'new') {
-        nameRow?.classList.remove('hidden');
-        nameRow?.classList.add('flex');
-        editRow?.classList.add('hidden');
-        editRow?.classList.remove('flex');
-        initEditingTheme(currentThemeName);
-        document.getElementById('set-theme-name').value = '';
-        renderThemeEditor();
-        previewTheme();
-      } else {
-        nameRow?.classList.add('hidden');
-        nameRow?.classList.remove('flex');
-        editRow?.classList.remove('hidden');
-        editRow?.classList.add('flex');
-        refreshThemeCustomSelect();
-        const sel = document.getElementById('set-theme-custom-select');
-        if (sel && sel.value) {
-          themeEditorEditKey = sel.value;
-          initEditingTheme(sel.value);
-          renderThemeEditor();
-          previewTheme();
+    if (!file) return;
+    const button = document.getElementById('theme-gallery-import');
+    const status = document.getElementById('theme-import-status');
+    button.disabled = true;
+    status.hidden = false;
+    status.textContent = 'Importing theme…';
+    status.classList.remove('is-error');
+    try {
+      const data = JSON.parse(await file.text());
+      const color = value => typeof value === 'string' && /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value);
+      if (!data || !color(data.bg) || !color(data.fg) || !Array.isArray(data.palette) || data.palette.length !== 16 || !data.palette.every(color)) {
+        throw new Error('Use a theme JSON with bg, fg, and 16 palette colors in hex format (#RRGGBB).');
+      }
+      for (const key of ['cursor', 'selection']) {
+        if (data[key] != null && !color(data[key])) throw new Error(`Invalid ${key} color. Use hex format (#RRGGBB).`);
+      }
+      const ui = {};
+      for (const key of ['accent', 'border', 'multiSelect', 'tabActiveBg', 'tabHoverBg', 'dimText', 'mutedText', 'sidebarBg', 'surfaceBg', 'hoverBg', 'activeBg']) {
+        if (data.ui?.[key] != null) {
+          if (!color(data.ui[key])) throw new Error(`Invalid ${key} color. Use hex format (#RRGGBB).`);
+          ui[key] = data.ui[key];
         }
       }
-    });
-  });
-  document.getElementById('set-theme-custom-select')?.addEventListener('change', e => {
-    themeEditorEditKey = e.target.value;
-    initEditingTheme(e.target.value);
-    document.getElementById('set-theme-name').value = editingTheme.label || '';
-    renderThemeEditor();
-    previewTheme();
+      const base = (typeof data.name === 'string' && data.name.trim()) || (typeof data.label === 'string' && data.label.trim()) || file.name.replace(/\.json$/i, '') || 'Imported theme';
+      // Keep existing themes intact when names collide.
+      let name = base;
+      for (let suffix = 2; Object.hasOwn(THEMES, name) || ['__proto__', 'constructor', 'prototype'].includes(name); suffix++) name = `${base} (${suffix})`;
+      const theme = { label: name, bg: data.bg, fg: data.fg, cursor: data.cursor || data.fg,
+        selection: data.selection || data.bg, palette: [...data.palette], ui,
+        swatches: [data.bg, data.fg, ui.accent || data.palette[4]], _custom: true };
+      const customs = await getCustomThemes();
+      customs[name] = theme;
+      await saveCustomThemes(customs);
+      applyTheme(name);
+      saveState();
+      refreshThemeDropdown();
+      status.textContent = `“${name}” imported and selected.`;
+    } catch (error) {
+      status.classList.add('is-error');
+      status.textContent = error instanceof SyntaxError ? 'This file is not valid JSON. Choose a theme JSON file.' : (error.message || 'Could not import this theme. Try another file.');
+    } finally {
+      button.disabled = false;
+    }
   });
 
   function refreshThemeDropdown() {
@@ -9793,7 +11315,7 @@
     }
     const themeDD = document.querySelector('.custom-dropdown[data-for="set-theme"]');
     if (themeDD) initCustomDropdown(themeDD);
-    refreshThemeCustomSelect();
+    renderThemeCards();
   }
 
   // Prevent sidebar from stealing terminal focus
@@ -9915,11 +11437,17 @@
     sidebarSplit.setSizes([0, 100]);
   }
   function sbFit() {
+    document.getElementById('sidebar').inert = document.body.classList.contains('sb-hidden');
     const wsp = activeWs();
     if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
   }
 
   const sbEl = document.getElementById('sidebar');
+  sbEl.addEventListener('transitionend', e => {
+    if (e.target !== sbEl || e.propertyName !== 'flex-basis') return;
+    sbFit();
+    syncBrowserSlots();
+  });
 
   window.__sidebarCtl = {
     apply(mode) {
@@ -10085,7 +11613,7 @@
       e.stopPropagation();
       _suppressPasteUntil = Date.now() + 200;
       const wsId = btn.dataset.wsid;
-      if (wsId) removeWorkspace(wsId);
+      if (wsId && !e.target.closest('.ws-proc')) removeWorkspace(wsId);
     }
   }
   document.addEventListener('mousedown', e => {
@@ -10135,8 +11663,9 @@
     document.body.classList.remove('resizing');
     if (document.body.classList.contains('tab-dragging')) {
       document.body.classList.remove('tab-dragging');
-      syncBrowserSlots();
     }
+    syncBrowserSlots();
+    settleBrowserSurfaces();
   }
 
   let resizeRaf = null;
@@ -10336,7 +11865,7 @@
     setInterval(saveState, 30000);
 
     // Keep the workspace buttons' running-process lists up to date
-    setInterval(() => { if (!document.hidden) refreshAllWorkspaceProcs(); }, 5000);
+    setInterval(() => { if (!document.hidden) refreshAllWorkspaceProcs(); }, 1000);
 
     // Save on close (browser)
     window.addEventListener('beforeunload', (e) => {
@@ -10387,5 +11916,11 @@
       }, 50);
     });
 
+    if (!DETACHED_ONLY && !SETTINGS_ONLY && window.electronAPI?.onAgentRequest) {
+      window.electronAPI.onAgentRequest(handleAgentRequest);
+    } else if (!isDesktop() && !DETACHED_ONLY && !SETTINGS_ONLY) {
+      agentBrowserReady = true;
+      if (wsReady) ws.send(JSON.stringify({ type: 'agent:ready' }));
+    }
   })(); // async boot
 })();

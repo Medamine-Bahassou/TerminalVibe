@@ -1,9 +1,38 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, Notification, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, Notification, dialog, Menu } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
 const yaml = require('js-yaml');
-const { hasRunningProcess, runningProcessInfo } = require('./proc');
+const { hasRunningProcess, runningProcessInfo, processWorkingDirectory } = require('./proc');
+const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession } = require('./agent-control');
+const { listRunningServers, killServer } = require('./servers');
+const { terminalEnv } = require('./terminal-env');
+const { prepareShellStartup } = require('./shell-startup');
+let agentControl = null;
+const agentRequests = new Map();
+ipcMain.on('agent:result', (event, { id, result, error }) => {
+  const pending = agentRequests.get(id);
+  if (!pending || event.sender !== pending.sender) return;
+  clearTimeout(pending.timer);
+  agentRequests.delete(id);
+  if (error) pending.reject(new Error(error)); else pending.resolve(result);
+});
+function dispatchAgentRequest(request) {
+  if (!request || !['list', 'launch', 'read', 'send', 'focus', 'arrange', 'resize', 'place', 'navigate'].includes(request.method)) throw new Error('Unknown method');
+  if (request.method === 'launch') validateLaunch(request.params);
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) throw new Error('Main window is not ready');
+  const sender = mainWindow.webContents;
+  return dispatchWithCapabilities(request, request => new Promise((resolve, reject) => {
+    if (sender.isDestroyed() || sender.isLoading()) return reject(new Error('Main window is not ready'));
+    const id = require('crypto').randomUUID();
+    const timer = setTimeout(() => {
+      agentRequests.delete(id);
+      reject(new Error('Control request timed out; inspect list before retrying a mutation'));
+    }, 15000);
+    agentRequests.set(id, { resolve, reject, timer, sender });
+    sender.send('agent:request', { ...request, id });
+  }));
+}
 
 // ── Helpers ──
 
@@ -468,6 +497,32 @@ ipcMain.handle('shell:open-external', (_e, url) => {
 });
 
 // ── IPC: clipboard (terminal text; navigator.clipboard also works) ──
+ipcMain.handle('servers:list', () => listRunningServers());
+ipcMain.handle('servers:kill', (_e, { pid, port } = {}) => killServer(pid, port));
+
+const skillManager = require('./skill-manager').createSkillManager({
+  source: app.isPackaged
+    ? path.join(process.resourcesPath, 'skills', 'terminalvibe-orchestration')
+    : path.join(__dirname, '..', 'skills', 'terminalvibe-orchestration'),
+});
+ipcMain.handle('skills:list', () => skillManager.list());
+ipcMain.handle('skills:set-enabled', (_event, id, enabled) => skillManager.setEnabled(id, enabled));
+
+// ── IPC: native context menu. Renderer sends a plain template; resolves with the clicked item id (or null). ──
+ipcMain.handle('context-menu:popup', (e, template) => new Promise(resolve => {
+  const build = items => (Array.isArray(items) ? items : []).map(it => it && it.type === 'separator' ? { type: 'separator' } : {
+    label: String(it?.label ?? ''),
+    type: it?.checked ? 'checkbox' : 'normal',
+    checked: !!it?.checked,
+    accelerator: typeof it?.accelerator === 'string' && /^[A-Za-z0-9+]+$/.test(it.accelerator) ? it.accelerator : undefined,
+    registerAccelerator: false,
+    submenu: it?.submenu ? build(it.submenu) : undefined,
+    click: it?.submenu ? undefined : () => resolve(it?.id ?? null),
+  });
+  const win = BrowserWindow.fromWebContents(e.sender);
+  // Close fires before click on some platforms; give the click a moment to win.
+  Menu.buildFromTemplate(build(template)).popup({ window: win, callback: () => setTimeout(() => resolve(null), 100) });
+}));
 ipcMain.handle('clipboard:write-text', (_e, text) => clipboard.writeText(String(text ?? '')));
 ipcMain.handle('clipboard:read-text', () => clipboard.readText());
 
@@ -512,13 +567,7 @@ ipcMain.handle('plugin-fs:read', async (_e, file, opts = {}) => {
 });
 
 // ── IPC: local files ──
-ipcMain.handle('file:save-temp', (_e, name, bytes) => {
-  try {
-    const fp = path.join(require('os').tmpdir(), `terminalvibe-${Date.now()}-${path.basename(String(name || 'drop'))}`);
-    fs.writeFileSync(fp, Buffer.from(bytes));
-    return fp;
-  } catch (err) { console.error('[drop] save-temp failed:', err); return null; }
-});
+ipcMain.handle('file:save-temp', (_e, name, bytes) => require('./dropped-files').saveDroppedFile(name, bytes));
 ipcMain.handle('file:resolve', (_e, p) => {
   try {
     const resolved = path.resolve(p);
@@ -1027,8 +1076,23 @@ const sendToRenderer = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
 
-ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
+ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-sessions').listClaudeSessions(cwd));
+ipcMain.handle('terminal:session-context', (event, id, sessionId) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized chat target');
+  return require('./session-context').attachSessionContext({sessionId,
+    getTarget: () => { const terminal=ptys.get(id); return terminal && {token:terminal,info:runningProcessInfo(terminal.pid)}; },
+    write: (terminal,text) => terminal.write(text) });
+});
+ipcMain.handle('terminal:workspace-context', (event, id, context) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized chat target');
+  return require('./session-context').attachWorkspaceContext({context,
+    getTarget: () => { const terminal=ptys.get(id); return terminal && {token:terminal,info:runningProcessInfo(terminal.pid)}; },
+    write: (terminal,text) => terminal.write(text) });
+});
+function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId }) {
+  let startup;
   try {
+    if (replaceIdle && ptys.has(id) && !canReplaceSession(runningProcessInfo(ptys.get(id).pid), replaceClaude === true)) return false;
     if (ptys.has(id)) {
       // Replace old PTY — remove exit listener first to avoid sending
       // terminal:exit to the detached window that's about to reuse this id
@@ -1036,7 +1100,7 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
       try { old.kill(); } catch {}
       ptys.delete(id);
     }
-    let spawnCwd = cwd || undefined;
+    let spawnCwd = processWorkingDirectory(ptys.get(inheritFromId)?.pid) || cwd || undefined;
     const homeDir = require('os').homedir();
     if (spawnCwd && typeof spawnCwd === 'string') {
       spawnCwd = spawnCwd.trim().replace(/^["']|["']$/g, '');
@@ -1059,12 +1123,15 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
       spawnCwd = homeDir;
     }
     const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
-    const t = pty.spawn(shell, argv && argv.length ? argv : [], {
+    const env = terminalEnv();
+    startup = executable || argv?.length ? { args: [], env: {}, tmpDir: null } : prepareShellStartup(shell, env);
+    const t = pty.spawn(executable || shell, argv && argv.length ? argv : startup.args, {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
       cwd: spawnCwd,
-      env: { ...process.env, TERM: 'xterm-256color' },
+      env: { ...env, ...startup.env, TERMINALVIBE_PANE_ID: id,
+        ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}) },
     });
     ptys.set(id, t);
     // Coalesce PTY output: the first chunk goes out immediately (zero-latency
@@ -1084,12 +1151,20 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
       outTimer = setTimeout(flushOut, 5);
     });
     t.onExit(({ exitCode }) => {
+      if (startup.tmpDir) {
+        try { fs.rmSync(startup.tmpDir, { recursive: true, force: true }); } catch {}
+      }
       notifyBusy.delete(id);
       clearTimeout(outTimer);
       if (outBuf && ptys.get(id) === t) sendToRenderer('terminal:data', { id, data: outBuf });
       outBuf = '';
       if (ptys.get(id) !== t) return;
       ptys.delete(id);
+      // Only natural agent exit returns to a shell. Close/replacement removes
+      // this PTY from the map, so its stale exit callback cannot resurrect it.
+      if (executable && returnToShell === true && createTerminal(_e, {
+        id, cols: t.cols || cols, rows: t.rows || rows, cwd: spawnCwd,
+      })) return;
       sendToRenderer('terminal:exit', { id, code: exitCode });
     });
 
@@ -1104,10 +1179,14 @@ ipcMain.handle('terminal:create', (_e, { id, cols, rows, cwd, argv }) => {
 
     return true;
   } catch (err) {
+    if (startup?.tmpDir) {
+      try { fs.rmSync(startup.tmpDir, { recursive: true, force: true }); } catch {}
+    }
     console.error('[pty] create failed:', err);
     return false;
   }
-});
+}
+ipcMain.handle('terminal:create', createTerminal);
 ipcMain.on('terminal:resize', (_e, { id, cols, rows }) => {
   const t = ptys.get(id);
   if (t) { try { t.resize(cols, rows); } catch {} }
@@ -1524,6 +1603,13 @@ ipcMain.on('tab-drag:drop', (e, p) => {
 // WebContentsView is owned here in main, placed by renderer-reported bounds.
 const bviews = new Map(); // id -> WebContentsView
 const bviewOwner = new WeakMap(); // guest webContents -> id
+ipcMain.handle('browser:read', async (event, id, options = {}) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized browser reader');
+  const guest = bviews.get(id)?.webContents;
+  if (!guest || guest.isDestroyed()) throw new Error('Browser page is not ready');
+  const snapshot = require('../browser-snapshot');
+  return guest.executeJavaScript(`(${snapshot.toString()})(document, ${JSON.stringify(options)})`);
+});
 // Keys pressed inside a <webview> guest never reach the renderer's keydown
 // listeners, so app shortcuts (pushed here by the renderer) are matched on the
 // guest and replayed in the main window.
@@ -1595,7 +1681,7 @@ ipcMain.on('browser:destroy', (_e, id) => {
 // ── App lifecycle ──
 const cliArgs = parseCli();
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (cliArgs.cmd === 'help') { console.log(CLI_USAGE); app.quit(); return; }
   ensureConfigDir();
   initActiveProfile();
@@ -1610,12 +1696,16 @@ app.whenReady().then(() => {
     return;
   }
   if (cliArgs.cmd === 'attach') {
-    if (headlessAttach(cliArgs)) createWindow();
+    if (headlessAttach(cliArgs)) {
+      agentControl = await startAgentControl({ directory: path.join(CONFIG_DIR, 'control'), dispatch: dispatchAgentRequest });
+      createWindow();
+    }
     else app.quit();
     return;
   }
   // new / create / no-subcommand → open the GUI (new/create pre-build state)
   if (cliArgs.cmd === 'new' || cliArgs.cmd === 'create') setupCliLaunch(cliArgs);
+  agentControl = await startAgentControl({ directory: path.join(CONFIG_DIR, 'control'), dispatch: dispatchAgentRequest });
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1649,6 +1739,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
+  if (agentControl) agentControl.close();
   ipcMain.emit('terminal:kill-all');
   if (_cliTempProfile) {
     const meta = readProfilesMeta();

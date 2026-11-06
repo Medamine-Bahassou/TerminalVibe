@@ -2,11 +2,24 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  listSkills: () => ipcRenderer.invoke('skills:list'),
+  setSkillEnabled: (id, enabled) => ipcRenderer.invoke('skills:set-enabled', id, enabled),
+  listRunningServers: () => ipcRenderer.invoke('servers:list'),
+  killRunningServer: (pid, port) => ipcRenderer.invoke('servers:kill', { pid, port }),
+  onAgentRequest: (cb) => {
+    const listener = async (_event, request) => {
+      try { ipcRenderer.send('agent:result', { id: request.id, result: await cb(request) }); }
+      catch (err) { ipcRenderer.send('agent:result', { id: request.id, error: err.message }); }
+    };
+    ipcRenderer.on('agent:request', listener);
+    return () => ipcRenderer.removeListener('agent:request', listener);
+  },
 
   // External links
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 
   // Clipboard
+  popupContextMenu: (template) => ipcRenderer.invoke('context-menu:popup', template),
   clipboardWrite: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   clipboardRead: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardPasteImage: () => ipcRenderer.invoke('clipboard:paste-image'),
@@ -26,6 +39,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalWrite: (o) => ipcRenderer.send('terminal:write', o),
   terminalClose: (id) => ipcRenderer.send('terminal:close', id),
   terminalHasRunningProcess: (id) => ipcRenderer.invoke('terminal:hasRunningProcess', id),
+  claudeSessions: (cwd) => ipcRenderer.invoke('history:claude-sessions', cwd),
+  attachSessionContext: (id, sessionId) => ipcRenderer.invoke('terminal:session-context', id, sessionId),
+  attachWorkspaceContext: (id, context) => ipcRenderer.invoke('terminal:workspace-context', id, context),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),
   terminalAttached: (id) => ipcRenderer.send('terminal:attached', id),
   attachWindow: (o) => ipcRenderer.send('terminal:attach-window', o),
@@ -78,6 +94,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Native WebContentsView browser tabs (owned in the main process)
   browserCreate: (id, url) => ipcRenderer.send('browser:create', id, url),
+  browserRead: (id, options) => ipcRenderer.invoke('browser:read', id, options),
   browserResize: (id, rect) => ipcRenderer.send('browser:resize', id, rect),
   browserShow: (id) => ipcRenderer.send('browser:show', id),
   browserHide: (id) => ipcRenderer.send('browser:hide', id),

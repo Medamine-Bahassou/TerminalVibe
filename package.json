@@ -9,11 +9,22 @@
     "email": "md.amine.com@gmail.com"
   },
   "scripts": {
+    "postinstall": "node scripts/build-vendor.js",
     "start": "node server.js",
     "dev": "node electron/dev-server.js & node server.js & wait",
     "electron": "electron .",
     "electron:dev": "node electron/dev-server.js & DEV_PID=$!; trap \"kill $DEV_PID 2>/dev/null\" EXIT INT TERM; electron .; kill $DEV_PID 2>/dev/null",
-    "test": "node scripts/test-cli.js",
+    "test": "node scripts/test-cli.js && node scripts/test-skills.js && node scripts/test-settings-sync.js && node scripts/test-process-startup.js && node scripts/test-agent-control.js && node scripts/test-servers.js && node scripts/test-shell-startup.js && node scripts/test-history-terminal.js && node scripts/test-claude-sessions.js",
+    "test:sessions": "node scripts/test-history-terminal.js && node scripts/test-claude-sessions.js && node scripts/test-session-context.js && node scripts/test-history-http.js && node scripts/test-session-cache.js && node scripts/test-session-drawer.js && node scripts/test-session-context-menu.js && node scripts/test-session-native-drag.js && node scripts/test-file-drop.js && node scripts/test-workspace-context.js",
+    "test:browser": "node scripts/test-browser-resizing.js && node scripts/test-browser-snapshot.js",
+    "test:files": "node scripts/test-file-drop.js",
+    "test:servers": "node scripts/test-servers.js && node scripts/test-servers-dropdown.js",
+    "test:history": "node scripts/test-session-cache.js && node scripts/test-session-drawer.js && node scripts/test-session-context-menu.js",
+    "test:clipboard": "node scripts/test-clipboard-history.js",
+    "test:rendering": "node scripts/test-terminal-rendering.js && node scripts/test-terminal-zoom.js",
+    "test:zoom": "node scripts/test-terminal-zoom.js",
+    "test:images": "node scripts/test-terminal-images.js",
+    "test:images:yazi": "node scripts/test-terminal-images.js --yazi",
     "build": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux dir --publish never",
     "build:appimage": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux AppImage --publish never",
     "build:deb": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux deb --publish never",
@@ -32,6 +43,7 @@
     "split.js": "^1.6.5",
     "ws": "^8.18.0",
     "xterm": "^5.3.0",
+    "xterm-addon-canvas": "^0.5.0",
     "xterm-addon-fit": "^0.8.0",
     "xterm-addon-image": "^0.5.0",
     "xterm-addon-search": "^0.13.0",
@@ -55,11 +67,16 @@
     "files": [
       "electron/**/*",
       "dist/**/*",
+      "browser-snapshot.js",
       "node_modules/node-pty/**/*",
       "node_modules/js-yaml/**/*",
       "node_modules/argparse/**/*"
     ],
     "extraResources": [
+      {
+        "from": "skills/terminalvibe-orchestration",
+        "to": "skills/terminalvibe-orchestration"
+      },
       {
         "from": "logo.png",
         "to": "logo.png"

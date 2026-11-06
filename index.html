@@ -5,9 +5,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TerminalVibe</title>
+  <link rel="icon" type="image/png" href="logo.png">
   <link rel="stylesheet" href="vendor/xterm/xterm.css">
   <link rel="stylesheet" href="vendor/coloris.min.css">
   <link rel="stylesheet" href="style.css">
+  <link rel="preload" href="fonts/GeistSans.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/GeistMono.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="workspace.css">
   <script src="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="vendor/xterm/xterm.js"></script>
@@ -16,6 +20,8 @@
   <script src="vendor/xterm/xterm-addon-search.js"></script>
   <script src="vendor/xterm/xterm-addon-unicode11.js"></script>
   <script src="vendor/xterm/xterm-addon-webgl.js"></script>
+  <script src="vendor/xterm/xterm-addon-canvas.js"></script>
+  <script src="vendor/xterm/xterm-addon-image.js"></script>
   <script src="vendor/coloris.min.js"></script>
 </head>
 
@@ -41,12 +47,20 @@
   </div>
   <!-- Tab search overlay (Ctrl+Shift+O) -->
   <div id="tab-search" style="display:none">
-    <div class="ts-inner">
+    <div class="ts-inner" role="dialog" aria-modal="true" aria-label="Find tabs and commands">
+      <div class="ts-modes" role="group" aria-label="Search in">
+        <button type="button" data-palette-mode="tabs" aria-pressed="true">Tabs</button>
+        <button type="button" data-palette-mode="cmds" aria-pressed="false">Commands</button>
+        <button type="button" data-palette-mode="snips" aria-pressed="false">Snippets</button>
+        <button type="button" data-palette-mode="history" aria-pressed="false">History</button>
+      </div>
       <div class="ts-input-row">
         <i class="ph ph-magnifying-glass"></i>
-        <input id="ts-input" placeholder="Search tabs…" spellcheck="false" autocomplete="off">
+        <input id="ts-input" role="combobox" aria-label="Search tabs" aria-autocomplete="list" aria-expanded="false" aria-controls="ts-results" placeholder="Search tabs…" spellcheck="false" autocomplete="off">
       </div>
-      <div id="ts-results"></div>
+      <div id="ts-results" role="listbox" aria-label="Search results"></div>
+      <div class="ts-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate <kbd>Enter</kbd> Open</span><span><kbd>Esc</kbd> Close</span></div>
+      <span id="ts-status" class="sr-only" role="status"></span>
     </div>
   </div>
   <div id="titlebar">
@@ -55,7 +69,7 @@
       <rect x="228" y="60" width="237" height="80" />
       <rect x="228" y="260" width="237" height="80" />
     </svg>
-    <button id="btn-sidebar-toggle" class="titlebar-btn" title="Toggle sidebar">
+    <button id="btn-sidebar-toggle" class="titlebar-btn" title="Toggle sidebar" aria-label="Toggle workspaces sidebar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <rect x="3" y="4" width="18" height="16" rx="2" />
         <line x1="9" y1="4" x2="9" y2="20" />
@@ -65,27 +79,34 @@
     <div id="btn-attach-main" class="titlebar-btn no-drag" title="Attach to main window (keeps splits)">
       <i class="ph ph-arrow-square-in"></i>
     </div>
-    <div id="btn-profiles" class="titlebar-btn no-drag" title="Profiles">
+    <button id="btn-profiles" class="titlebar-btn no-drag" title="Profiles" aria-label="Choose a profile">
       <i class="ph ph-users"></i>
-    </div>
-    <div id="btn-sidebar-right" class="titlebar-btn no-drag" title="Toggle right sidebar">
+    </button>
+    <button id="btn-servers" class="titlebar-btn no-drag" title="Running servers" aria-label="Running servers" aria-expanded="false" aria-controls="servers-dropdown">
+      <i class="ph ph-hard-drives"></i>
+    </button>
+    <button id="btn-sidebar-right" class="titlebar-btn no-drag" title="Toggle right sidebar" aria-label="Toggle tools panel">
       <i class="ph ph-sidebar-simple" style="transform:scaleX(-1)"></i>
-    </div>
+    </button>
     <div class="titlebar-overlay-gap"></div>
   </div>
+  <section id="servers-dropdown" class="no-drag" aria-label="Running servers" hidden>
+    <div class="servers-heading"><span>Running servers</span><button id="servers-refresh" type="button" title="Refresh servers" aria-label="Refresh servers"><i class="ph ph-arrow-clockwise"></i></button></div>
+    <div id="servers-list" aria-live="polite"></div>
+  </section>
   <div id="app">
     <!-- ── Sidebar ── -->
-    <nav id="sidebar">
+    <nav id="sidebar" class="expanded" aria-label="Workspaces">
       <div id="sidebar-inner">
         <!-- workspace buttons injected here -->
         <div class="sidebar-actions">
-          <div class="sa-btn" id="btn-settings" title="Settings">
+          <button class="sa-btn" id="btn-settings" title="Settings" aria-label="Open settings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <circle cx="12" cy="12" r="3" />
               <path
                 d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
             </svg>
-          </div>
+          </button>
         </div>
       </div>
     </nav>
@@ -99,7 +120,11 @@
             <polyline points="8,9 4.5,12 8,15" />
             <line x1="12" y1="15" x2="16" y2="15" />
           </svg>
-          <p>No terminal open — press <kbd>Ctrl+Shift+T</kbd> or click <kbd>+</kbd></p>
+          <h1>Your next session starts here.</h1>
+          <p>Open a terminal to get back to work.</p>
+          <button id="empty-new-terminal" class="workspace-new">Open a terminal <span aria-hidden="true">↗</span></button>
+          <button id="empty-commands" class="empty-commands" type="button">Explore commands <i class="ph ph-arrow-right" aria-hidden="true"></i></button>
+          <span class="empty-hint">Keep terminals and browser tabs together.<br>Split panes when you need more room.</span>
         </div>
         <!-- split containers injected here -->
 
@@ -110,10 +135,10 @@
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input id="search-input" placeholder="Search…" spellcheck="false" autocomplete="off">
-          <span class="sb-nav" id="search-prev" title="Previous">▲</span>
-          <span class="sb-nav" id="search-next" title="Next">▼</span>
-          <span class="sb-close-btn" id="search-close">✕</span>
+          <input id="search-input" aria-label="Find in terminal" placeholder="Search…" spellcheck="false" autocomplete="off">
+          <button type="button" class="sb-nav" id="search-prev" title="Previous match (Shift+Enter)" aria-label="Previous match"><i class="ph ph-caret-up" aria-hidden="true"></i></button>
+          <button type="button" class="sb-nav" id="search-next" title="Next match (Enter)" aria-label="Next match"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+          <button type="button" class="sb-close-btn" id="search-close" title="Close search (Esc)" aria-label="Close search"><i class="ph ph-x" aria-hidden="true"></i></button>
         </div>
       </div>
 
@@ -140,8 +165,8 @@
       <div id="sbr-autorun" class="sbr-page" style="display:none">
         <div class="sbr-header">
           <button class="sbr-btn" id="sbr-autorun-back" title="Back"><i class="ph ph-arrow-left"></i></button>
-          <span class="sbr-title">Auto-run workspaces</span>
-          <button class="sbr-btn" id="sbr-autorun-add" title="Save current workspace as auto-run"><i class="ph ph-plus"></i></button>
+          <span class="sbr-title">Auto-run</span>
+          <button class="sbr-btn" id="sbr-autorun-add" title="Save current workspace" aria-label="Save current workspace"><i class="ph ph-plus"></i></button>
         </div>
         <div id="sbr-autorun-list" class="sbr-autorun-list"></div>
       </div>
@@ -150,7 +175,11 @@
           <button class="sbr-btn" id="sbr-clipboard-back" title="Back"><i class="ph ph-arrow-left"></i></button>
           <span class="sbr-title">Clipboard</span>
         </div>
-        <div id="sbr-clipboard-content" class="sbr-clipboard-content"></div>
+        <div class="sbr-clipboard-tabs" role="tablist" aria-label="Clipboard views">
+          <button type="button" id="sbr-clipboard-history-tab" role="tab" data-clipboard-view="clipboard" aria-selected="true" aria-controls="sbr-clipboard-content">Clipboard</button>
+          <button type="button" id="sbr-clipboard-favorites-tab" role="tab" data-clipboard-view="favorites" aria-selected="false" aria-controls="sbr-clipboard-content" tabindex="-1">Favorites</button>
+        </div>
+        <div id="sbr-clipboard-content" class="sbr-clipboard-content" role="tabpanel" aria-labelledby="sbr-clipboard-history-tab"></div>
       </div>
     </aside>
   </div>
@@ -209,20 +238,26 @@
   <!-- Settings -->
   <div id="settings-overlay" tabindex="-1"
     class="fixed inset-0 z-[10000] hidden flex flex-col opacity-0 transition-opacity duration-150">
-    <div id="settings-modal" class="w-full h-full flex flex-col select-none bg-[var(--bg)]">
+    <div id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings" class="w-full h-full flex flex-col select-none bg-[var(--bg)]">
       <div class="settings-header flex items-center gap-1.5 pl-3 pr-2 h-8 shrink-0 border-b border-[var(--border)]">
-        <div id="settings-close" class="settings-back-btn no-drag" title="Close settings">
+        <button type="button" id="settings-close" class="settings-back-btn no-drag" title="Close settings" aria-label="Close settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
             stroke-linejoin="round" class="w-[16px] h-[16px]">
-            <line x1="19" y1="12" x2="5" y2="12" />
-            <polyline points="12 19 5 12 12 5" />
+            <path d="M6 6l12 12M6 18L18 6" />
           </svg>
-        </div>
-        <h2 class="text-[12.5px] font-semibold text-[var(--fg)] m-0">Settings</h2>
+        </button>
+        <h2 class="settings-breadcrumb text-[12.5px] font-semibold text-[var(--fg)] m-0">Settings <span aria-hidden="true">/</span> <span id="settings-category-title">Appearance</span></h2>
       </div>
-      <div class="flex flex-1 min-h-0 overflow-hidden">
+      <div class="settings-layout flex flex-1 min-h-0 overflow-hidden">
         <div
-          class="w-[200px] shrink-0 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col overflow-y-auto">
+          class="settings-nav w-[200px] shrink-0 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col overflow-y-auto">
+          <label class="settings-nav-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input id="settings-nav-search" type="search" placeholder="Search settings" aria-label="Search settings categories"></label>
+          <div
+            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
+            data-cat="general">
+            <i class="ph ph-gear-six shrink-0"></i>
+            <span>General</span>
+          </div>
           <div
             class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
             data-cat="appearance">
@@ -241,11 +276,9 @@
             <i class="ph ph-keyboard shrink-0"></i>
             <span>Shortcuts</span>
           </div>
-          <div
-            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
-            data-cat="theme-editor">
-            <i class="ph ph-palette shrink-0"></i>
-            <span>Theme Editor</span>
+          <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="skills">
+            <i class="ph ph-sparkle shrink-0"></i>
+            <span>Skills</span>
           </div>
           <div
             class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
@@ -260,39 +293,111 @@
             <span>Advanced</span>
           </div>
         </div>
-        <div class="flex-1 p-4 px-6 overflow-y-auto relative">
-          <!-- Appearance -->
-          <div class="settings-section active select-none" data-cat="appearance">
-            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Color
-              Scheme</div>
+        <div class="settings-content flex-1 p-4 px-6 overflow-y-auto relative">
+          <!-- General -->
+          <div class="settings-section active select-none" data-cat="general">
+            <div class="settings-section-label mt-0 mb-1.5 ml-1">Behavior
+            </div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Theme</span>
-                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Select the active color
-                    palette</span>
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Open terminal links in</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Where clicked web links
+                    from a terminal open. Shift+click uses the other option</span>
                 </div>
                 <div class="flex-1 flex items-center justify-end gap-3">
-                  <select id="set-theme" class="native-select-hidden"></select>
-                  <div class="custom-dropdown" data-for="set-theme"></div>
+                  <select id="set-link-target" class="native-select-hidden">
+                    <option value="tab">Browser tab</option>
+                    <option value="external">System browser</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-link-target"></div>
                 </div>
               </div>
               <div
-                class="flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] hover:bg-white/[0.01]">
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Corner style</span>
-                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Component border
-                    radius</span>
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Notify when a command finishes</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Desktop notification
+                    when a terminal command ends while the app isn't focused</span>
                 </div>
                 <div class="flex-1 flex items-center justify-end gap-3">
-                  <select id="set-corner-style" class="native-select-hidden">
-                    <option value="rounded">Rounded</option>
-                    <option value="sharp">Sharp</option>
-                  </select>
-                  <div class="custom-dropdown" data-for="set-corner-style"></div>
+                  <label class="inline-flex items-center cursor-pointer">
+                    <input type="checkbox" class="sr-only peer" id="set-notify-finish">
+                    <div
+                      class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]">
+                    </div>
+                  </label>
                 </div>
               </div>
+              <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Search Engine</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Used when typing search
+                    queries in the browser</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-search-engine" class="native-select-hidden">
+                    <option value="google">Google</option>
+                    <option value="duckduckgo">DuckDuckGo</option>
+                    <option value="brave">Brave</option>
+                    <option value="startpage">Startpage</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-search-engine"></div>
+                </div>
+              </div>
+              <div id="set-custom-search-row"
+                class="hidden items-center justify-between px-3 py-2.5 border-t border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Custom Search URL</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Use %s as the search
+                    query placeholder</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <input type="text" id="set-custom-search-url" spellcheck="false" autocomplete="off"
+                    placeholder="https://example.com/search?q=%s"
+                    class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[260px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Appearance -->
+          <div class="settings-section select-none" data-cat="appearance">
+            <section class="scheme-gallery" aria-labelledby="scheme-gallery-title">
+              <h3 id="scheme-gallery-title">Color scheme</h3>
+              <div class="scheme-card-grid" role="group" aria-label="Color scheme">
+                <button type="button" class="scheme-choice" data-scheme="system" aria-pressed="false"><span class="scheme-preview scheme-preview-system" aria-hidden="true"><span class="scheme-preview-nav"><i></i><i></i><i></i></span><span class="scheme-preview-main"><i></i><i></i><i></i><span class="scheme-preview-input"></span></span></span><span>System</span></button>
+                <button type="button" class="scheme-choice" data-scheme="light" aria-pressed="false"><span class="scheme-preview scheme-preview-light" aria-hidden="true"><span class="scheme-preview-nav"><i></i><i></i><i></i></span><span class="scheme-preview-main"><i></i><i></i><i></i><span class="scheme-preview-input"></span></span></span><span>Light</span></button>
+                <button type="button" class="scheme-choice" data-scheme="dark" aria-pressed="true"><span class="scheme-preview scheme-preview-dark" aria-hidden="true"><span class="scheme-preview-nav"><i></i><i></i><i></i></span><span class="scheme-preview-main"><i></i><i></i><i></i><span class="scheme-preview-input"></span></span></span><span>Dark</span></button>
+              </div>
+            </section>
+            <section class="theme-gallery" aria-labelledby="theme-gallery-title">
+              <div class="theme-gallery-header">
+                <h3 id="theme-gallery-title">Themes</h3>
+                <div class="theme-gallery-actions">
+                  <button type="button" id="theme-gallery-import"><i class="ph ph-plus" aria-hidden="true"></i>Import theme</button>
+                </div>
+              </div>
+              <p class="theme-gallery-description">Choose a palette for your workspace and terminals.</p>
+              <input type="file" id="theme-import-input" accept=".json,application/json" hidden>
+              <p id="theme-import-status" class="theme-import-status" role="status" aria-live="polite" hidden></p>
+              <select id="set-theme" hidden aria-label="Theme"></select>
+              <div id="theme-card-grid" class="theme-card-grid" role="group" aria-label="Available themes"></div>
+            </section>
+            <div class="flex items-center justify-between px-3 py-2.5 gap-3 mb-3 border border-[var(--border)]">
+              <div class="flex flex-col gap-1">
+                <label for="set-animations" class="text-[12.5px] font-medium text-[var(--fg)]">Animations</label>
+                <span id="animations-description" class="text-[11px] text-[var(--muted-text)]">Fade and scale modals, fade menus, and slide drawers. Respects reduced motion.</span>
+              </div>
+              <label class="inline-flex items-center cursor-pointer">
+                <input type="checkbox" class="sr-only peer" id="set-animations" aria-describedby="animations-description" aria-label="Animations" checked>
+                <div class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]"></div>
+              </label>
+            </div>
+            <div class="settings-section-label mt-0 mb-1.5 ml-1">Workspace</div>
+            <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] mb-3 flex flex-col">
               <div
                 class="flex items-center justify-between px-3 py-2.5 gap-3 border-t border-[var(--border)] hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
@@ -325,7 +430,7 @@
                 </div>
               </div>
             </div>
-            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">
+            <div class="settings-section-label mt-4 mb-1.5 ml-1">
               Typography</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
@@ -391,7 +496,7 @@
                 </div>
               </div>
             </div>
-            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">
+            <div class="settings-section-label mt-4 mb-1.5 ml-1">
               Background</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
@@ -440,7 +545,7 @@
           </div>
           <!-- Terminal -->
           <div class="settings-section select-none" data-cat="terminal">
-            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Cursor
+            <div class="settings-section-label mt-0 mb-1.5 ml-1">Cursor
             </div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
@@ -472,7 +577,7 @@
                 </div>
               </div>
             </div>
-            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-4 mb-1.5 ml-1">
+            <div class="settings-section-label mt-4 mb-1.5 ml-1">
               Behavior</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
@@ -508,12 +613,12 @@
           </div>
           <!-- Shortcuts -->
           <div class="settings-section select-none" data-cat="shortcuts">
-            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">
+            <div class="settings-section-label mt-0 mb-1.5 ml-1">
               Keyboard Shortcuts</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col px-4 py-2.5">
               <div class="shortcuts-search-box relative mb-2">
-                <input type="text" id="shortcuts-search" placeholder="Search shortcuts…" spellcheck="false"
+                <input type="text" id="shortcuts-search" aria-label="Search keyboard shortcuts" placeholder="Search shortcuts…" spellcheck="false"
                   autocomplete="off">
                 <i class="ph ph-magnifying-glass"></i>
               </div>
@@ -525,64 +630,17 @@
               </div>
             </div>
           </div>
-          <!-- Theme Editor -->
-          <div class="settings-section select-none" data-cat="theme-editor">
-            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">Theme
-              Profile</div>
-            <div
-              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-              <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-3">
-                <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Mode</span>
-                </div>
-                <div class="flex-1 flex items-center justify-end gap-3">
-                  <div class="inline-flex  border border-[var(--border)] overflow-hidden">
-                    <button
-                      class="theme-mode-btn active px-3 py-1.5 text-[11px] font-medium cursor-pointer transition-colors"
-                      data-mode="new">New Theme</button>
-                    <button
-                      class="theme-mode-btn px-3 py-1.5 text-[11px] font-medium cursor-pointer transition-colors border-l border-[var(--border)]"
-                      data-mode="edit">Edit Existing</button>
-                  </div>
-                </div>
-              </div>
-              <div class="theme-name-row flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-                <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Theme name</span>
-                </div>
-                <div class="flex-1 flex items-center justify-end gap-3">
-                  <input type="text" id="set-theme-name" spellcheck="false" autocomplete="off"
-                    placeholder="My Custom Theme"
-                    class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
-                </div>
-              </div>
-              <div class="theme-edit-row hidden items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
-                <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Select theme</span>
-                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Choose a custom theme
-                    to edit</span>
-                </div>
-                <div class="flex-1 flex items-center justify-end gap-3">
-                  <select id="set-theme-custom-select" class="native-select-hidden"></select>
-                  <div class="custom-dropdown" data-for="set-theme-custom-select"></div>
-                </div>
-              </div>
-            </div>
-            <div id="theme-editor-groups"></div>
-            <div class="theme-actions flex flex-wrap gap-1.5 mt-3 justify-end pt-2 border-t border-[var(--border)]">
-              <button class="theme-action-btn" id="theme-btn-import">Import JSON</button>
-              <button class="theme-action-btn" id="theme-btn-export">Export</button>
-              <span class="theme-actions-sep w-px bg-[var(--border)] mx-1"></span>
-              <button class="theme-action-btn" id="theme-btn-clone">Clone Active</button>
-              <button class="theme-action-btn" id="theme-btn-delete">Delete</button>
-              <button class="theme-action-btn theme-action-primary" id="theme-btn-save">Save Theme</button>
-            </div>
-            <input type="file" id="theme-import-input" accept=".json" class="hidden">
+          <div class="settings-section select-none" data-cat="skills">
+            <div class="settings-section-label mt-0 mb-1.5 ml-1">TerminalVibe orchestration</div>
+            <p class="skills-description">Let your agent open and arrange splits, inspect output, and use browser panes. Install once, then ask naturally without a slash command.</p>
+            <div id="skills-list" aria-busy="false"></div>
+            <p id="skills-status" class="skills-description" role="status" aria-live="polite"></p>
+            <p class="skills-description">Available across projects for your user account. Start a new agent session after installing or toggling. Deactivation affects future discovery; a running conversation may still have the skill loaded. Separately installed project copies remain available.</p>
           </div>
           <!-- Plugins -->
           <div class="settings-section select-none" data-cat="plugins">
             <div class="flex items-center justify-between mt-0 mb-1.5 ml-1">
-              <div id="plugins-title" class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)]">
+              <div id="plugins-title" class="settings-section-label">
                 Plugins</div>
               <button type="button" id="plugins-open-dir" class="plugin-icon-btn" title="Open the plugins directory">
                 <i class="ph ph-folder-open"></i>
@@ -598,12 +656,12 @@
           </div>
           <!-- Advanced -->
           <div class="settings-section select-none" data-cat="advanced">
-            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-0 mb-1.5 ml-1">System
+            <div class="settings-section-label mt-0 mb-1.5 ml-1">System
             </div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Default Shell</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Override system default
@@ -614,54 +672,8 @@
                     class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
                 </div>
               </div>
-              <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-                <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Notify when a command finishes</span>
-                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Desktop notification
-                    when a terminal command ends while the app isn't focused</span>
-                </div>
-                <div class="flex-1 flex items-center justify-end gap-3">
-                  <label class="inline-flex items-center cursor-pointer">
-                    <input type="checkbox" class="sr-only peer" id="set-notify-finish">
-                    <div
-                      class="relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]">
-                    </div>
-                  </label>
-                </div>
-              </div>
-              <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
-                <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Search Engine</span>
-                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Used when typing search
-                    queries in the browser</span>
-                </div>
-                <div class="flex-1 flex items-center justify-end gap-3">
-                  <select id="set-search-engine" class="native-select-hidden">
-                    <option value="google">Google</option>
-                    <option value="duckduckgo">DuckDuckGo</option>
-                    <option value="brave">Brave</option>
-                    <option value="startpage">Startpage</option>
-                    <option value="custom">Custom</option>
-                  </select>
-                  <div class="custom-dropdown" data-for="set-search-engine"></div>
-                </div>
-              </div>
-              <div id="set-custom-search-row"
-                class="hidden items-center justify-between px-3 py-2.5 border-t border-[var(--border)] gap-4 hover:bg-white/[0.01]">
-                <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Custom Search URL</span>
-                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Use %s as the search
-                    query placeholder</span>
-                </div>
-                <div class="flex-1 flex items-center justify-end gap-3">
-                  <input type="text" id="set-custom-search-url" spellcheck="false" autocomplete="off"
-                    placeholder="https://example.com/search?q=%s"
-                    class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[260px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
-                </div>
-              </div>
             </div>
-            <div class="text-[11px] font-bold uppercase tracking-[1.2px] text-[var(--dim-text)] mt-3 mb-1.5 ml-1">
+            <div class="settings-section-label mt-3 mb-1.5 ml-1">
               Command Line</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
@@ -712,6 +724,9 @@ Examples:
   </div>
 
   <script src="vendor/split.min.js"></script>
+  <script src="browser-snapshot.js"></script>
+  <script src="proc-icons.js"></script>
+  <script src="session-drawer.js"></script>
   <script src="app.js"></script>
   <script>
     // Boot watchdog: if app.js never executed (parse error, missing vendor

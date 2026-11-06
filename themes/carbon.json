@@ -1,0 +1,37 @@
+{
+  "name": "Carbon",
+  "bg": "#050505",
+  "fg": "#eeeeee",
+  "cursor": "#eeeeee",
+  "selection": "#303030",
+  "palette": [
+    "#161616",
+    "#e76975",
+    "#72bc98",
+    "#d5b477",
+    "#70a9ed",
+    "#b59adb",
+    "#79b9c1",
+    "#c9c9c9",
+    "#707070",
+    "#f08c95",
+    "#92d1ad",
+    "#e4ca96",
+    "#96c1f5",
+    "#ccb5eb",
+    "#9dd0d5",
+    "#f5f5f5"
+  ],
+  "ui": {
+    "accent": "#70a9ed",
+    "border": "#2b2b2b",
+    "tabActiveBg": "#161616",
+    "tabHoverBg": "#222222",
+    "dimText": "#909090",
+    "mutedText": "#b0b0b0",
+    "sidebarBg": "#0c0c0c",
+    "surfaceBg": "#161616",
+    "hoverBg": "#222222",
+    "activeBg": "#262626"
+  }
+}

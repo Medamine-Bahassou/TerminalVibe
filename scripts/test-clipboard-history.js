@@ -1,0 +1,82 @@
+// Real DOM checks with a fake clipboard and isolated storage; no user text is read.
+const fs=require('fs'),path=require('path');
+if(!process.versions.electron) {
+  const result=require('child_process').spawnSync(require('electron'),[__filename,'--no-sandbox'],{stdio:'inherit',env:{...process.env,ELECTRON_RUN_AS_NODE:''}});
+  process.exit(result.status??1);
+}
+const {app,BrowserWindow}=require('electron');
+const timer=setTimeout(()=>app.exit(1),20000);
+app.whenReady().then(async()=>{
+  const win=new BrowserWindow({show:false,webPreferences:{backgroundThrottling:false}});await win.loadURL('about:blank');
+  for(const file of ['style.css','workspace.css'])await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname,'..',file),'utf8'));
+  const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const clipboard=source.slice(source.indexOf("  const sbrOpen ="),source.indexOf('  // ── Auto-run workspaces:'));
+  const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  const page=html.slice(html.indexOf('<div id="sbr-clipboard"'),html.indexOf('</aside>',html.indexOf('<div id="sbr-clipboard"')));
+  console.log(await win.webContents.executeJavaScript(`(async()=>{
+    const check=(ok,message)=>{if(!ok)throw Error(message);};
+    const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
+    const key='terminalvibe.clipboardHistory';
+    const initial=['short',Array(30).fill('long clipboard line').join('\\n'),'third'];
+    window.store={[key]:JSON.stringify(initial)};
+    window.nativeText='short';window.pasted=[];window.poll=[];
+    const boot=()=>{
+      document.body.innerHTML='<aside id="sidebar-right" style="height:600px"><div id="sbr-main"><button id="sbr-open-clipboard">Clipboard</button></div>'+${JSON.stringify(page)}+'</aside>';
+      const localStorage={getItem:k=>store[k]??null,setItem:(k,v)=>store[k]=String(v)};
+      const setInterval=fn=>poll.push(fn);
+      const isDesktop=()=>true;
+      window.electronAPI={clipboardRead:async()=>nativeText,clipboardWrite:async text=>{nativeText=text;}};
+      const activeTerminal=()=>({term:{paste:text=>pasted.push(text),focus(){}}});
+      ${clipboard}
+    };
+    const rows=()=>[...document.querySelectorAll('.sbr-clip-item')];
+    const action=(row,name)=>row.querySelector('[data-action="'+name+'"]');
+    const text=row=>row.querySelector('.sbr-clip-text')?.textContent;
+    boot();document.querySelector('#sbr-open-clipboard').click();await tick();
+    check(rows().length===3,'Existing clipboard entries were lost');
+    check(rows().every(row=>row.getBoundingClientRect().height===120),'Short and long entries must have the same fixed height');
+    check(rows().every(row=>row.querySelectorAll('.sbr-clip-action').length===3),'Every card needs Edit, Delete and Favorite');
+    for(const row of rows())check(row.querySelector('.sbr-clip-actions').getBoundingClientRect().bottom<=row.getBoundingClientRect().bottom,'Card actions are clipped');
+    action(rows()[2],'favorite').click();
+    check(rows().map(text).join('|')===initial.join('|'),'Favoriting must not reorder clipboard history');
+    check(action(rows()[2],'favorite').getAttribute('aria-pressed')==='true','Favorite state must remain visible in history');
+    const favoritesTab=()=>document.querySelector('[data-clipboard-view="favorites"]');
+    const historyTab=()=>document.querySelector('[data-clipboard-view="clipboard"]');
+    favoritesTab().click();
+    check(rows().length===1 && text(rows()[0])==='third','Favorites tab must show only starred entries');
+    check(favoritesTab().getAttribute('aria-selected')==='true' && favoritesTab().tabIndex===0 && historyTab().tabIndex===-1,'Tabs must expose selected state and one keyboard focus stop');
+    check(document.querySelector('[role="tabpanel"]').getAttribute('aria-labelledby')===favoritesTab().id,'Tab panel must be labelled by its selected tab');
+    check(JSON.parse(store[key+'.favorites'])[0]==='third' && !pasted.length,'Favorite must persist without pasting');
+    action(rows()[0],'edit').click();
+    let editor=document.querySelector('.sbr-clip-editor');editor.value='Edited favorite\\nsecond line';editor.dispatchEvent(new Event('input'));
+    nativeText='new incoming clipboard';poll[poll.length-1]();await tick();
+    check(document.querySelector('.sbr-clip-editor')===editor && editor.value.startsWith('Edited'),'Clipboard polling destroyed the active edit');
+    editor.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',ctrlKey:true,bubbles:true,cancelable:true}));
+    check(text(rows()[0])==='Edited favorite\\nsecond line','Edit was not saved');
+    check(JSON.parse(store[key+'.favorites'])[0]==='Edited favorite\\nsecond line','Editing a favorite lost its favorite state');
+    check(!pasted.length,'Editing a clipboard card pasted into the terminal');
+    action(rows()[0],'edit').click();editor=document.querySelector('textarea');editor.value='discard this';editor.dispatchEvent(new Event('input'));
+    editor.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+    check(text(rows()[0])==='Edited favorite\\nsecond line','Escape must cancel edits');
+    historyTab().click();
+    const current=rows().find(row=>text(row)==='new incoming clipboard');action(current,'delete').click();
+    poll[poll.length-1]();await tick();
+    check(!rows().some(row=>text(row)==='new incoming clipboard'),'Deleted current clipboard text immediately returned');
+    rows().find(row=>text(row)==='Edited favorite\\nsecond line').querySelector('.sbr-clip-text').click();check(pasted.length===1 && pasted[0]==='Edited favorite\\nsecond line','Preview click must paste the full text');
+    await tick();poll[poll.length-1]();await tick();
+    poll=[];boot();document.querySelector('#sbr-open-clipboard').click();await tick();
+    check(historyTab().getAttribute('aria-selected')==='true','Clipboard page must initially open history');
+    historyTab().dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));
+    check(document.activeElement===favoritesTab(),'Arrow keys must switch and focus clipboard tabs');
+    check(text(rows()[0])==='Edited favorite\\nsecond line' && action(rows()[0],'favorite').getAttribute('aria-pressed')==='true','History/favorites did not survive reinitialization');
+    action(rows()[0],'favorite').click();
+    check(!rows().length && document.querySelector('.clipboard-empty h3').textContent==='No favorites yet','Unstarring must remove the entry from Favorites and show its empty state');
+    historyTab().click();
+    check(rows().some(row=>text(row)==='Edited favorite\\nsecond line'),'Unstarring must preserve the original clipboard entry');
+    action(rows().find(row=>text(row)==='Edited favorite\\nsecond line'),'favorite').click();
+    favoritesTab().click();
+    action(rows()[0],'delete').click();check(JSON.parse(store[key+'.favorites']).length===0,'Deleting a favorite left a stale favorite');
+    return 'PASS: fixed clipboard card heights, visible controls, edit/save/cancel, polling stability, delete, chronological history, Favorites tabs, keyboard access, persistence and paste isolation';
+  })()`));
+  clearTimeout(timer);app.exit(0);
+}).catch(error=>{console.error(error);clearTimeout(timer);app.exit(1);});

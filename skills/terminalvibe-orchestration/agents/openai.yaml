@@ -1,0 +1,6 @@
+interface:
+  display_name: "TerminalVibe orchestration"
+  short_description: "Control TerminalVibe terminal and browser splits"
+  default_prompt: "Use $terminalvibe-orchestration to arrange and inspect panes in TerminalVibe."
+policy:
+  allow_implicit_invocation: true

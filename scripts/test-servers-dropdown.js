@@ -1,0 +1,73 @@
+// Isolated renderer checks: server cache, background refresh and close fades.
+const fs=require('fs'),path=require('path');
+if(!process.versions.electron) {
+  const result=require('child_process').spawnSync(require('electron'),[__filename,'--no-sandbox'],{stdio:'inherit',env:{...process.env,ELECTRON_RUN_AS_NODE:''}});
+  process.exit(result.status??1);
+}
+const {app,BrowserWindow}=require('electron');
+const timer=setTimeout(()=>app.exit(1),20000);
+app.whenReady().then(async()=>{
+  const win=new BrowserWindow({show:false,width:800,height:650,webPreferences:{offscreen:true,backgroundThrottling:false}});await win.loadURL('about:blank');
+  win.webContents.debugger.attach('1.3');
+  const motion=value=>win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value}]});
+  await motion('no-preference');
+  for(const file of ['style.css','workspace.css'])await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname,'..',file),'utf8'));
+  const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const setup=source.slice(source.indexOf('  function setupServersDropdown('),source.indexOf('  setupServersDropdown();'));
+  console.log(await win.webContents.executeJavaScript(`(async()=>{
+    const check=(ok,text)=>{if(!ok)throw Error(text);};
+    const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+    document.body.className='ui-animations';document.body.innerHTML='<button id="btn-servers">Servers</button><section id="servers-dropdown" hidden><button id="servers-refresh">Refresh</button><div id="servers-list"></div></section>';
+    let now=1000,calls=0,finish=null,fail=false,slow=false,viewsHidden=false,opened=null;
+    const Date={now:()=>now};
+    let data=[{url:'http://127.0.0.1:3000',port:3000,process:'node',pid:123}];
+    let killed=null;const showConfirm=(text,ok)=>ok();
+    window.electronAPI={killRunningServer:async(pid,port)=>{killed=[pid,port];},listRunningServers:async()=>{calls++;if(slow)return new Promise(resolve=>finish=resolve);if(fail)throw Error('Fixture failure');return data;}};
+    const dropdown=document.querySelector('#servers-dropdown'),button=document.querySelector('#btn-servers'),refresh=document.querySelector('#servers-refresh'),list=document.querySelector('#servers-list');
+    const syncBrowserSlots=()=>viewsHidden=!dropdown.hidden || dropdown.classList.contains('closing');
+    const activeWs=()=>({id:'workspace'}),addBrowserTab=(ws,group,url)=>opened=url,openExternalUrl=()=>{},procIconHtml=()=>'<i></i>';
+    ${setup}
+    setupServersDropdown();
+    getComputedStyle(dropdown).display;
+    button.click();getComputedStyle(dropdown).opacity;await wait(160);
+    check(calls===1 && list.querySelector('.server-row'),'First open must fetch servers');
+    const kill=list.querySelector('.server-kill');
+    check(kill && kill.parentElement===list.firstElementChild && !list.querySelector('a button'),'Each server with a PID gets a stop button outside its link');
+    kill.click();await wait(10);
+    check(killed?.join()==='123,3000' && !dropdown.hidden && opened===null,'Stop must target its PID and port without opening the server');
+    await wait(450);calls=1;
+    const original=list.firstElementChild;
+    button.click();
+    check(dropdown.hidden && dropdown.inert && dropdown.getAnimations().some(a=>a.transitionProperty==='opacity'),'Closing must fade and become inert immediately');
+    check(getComputedStyle(dropdown).display==='block' && getComputedStyle(dropdown).pointerEvents==='none' && viewsHidden,'Closing dropdown must remain painted without intercepting clicks or exposing native views');
+    button.click();await wait(160);
+    check(calls===1 && list.firstElementChild===original && !dropdown.hidden && !dropdown.inert,'Rapid reopen must reuse nodes and cancel closure without refetching');
+    button.click();await wait(160);
+    check(getComputedStyle(dropdown).display==='none' && !viewsHidden && !dropdown.classList.contains('closing'),'Fade completion must hide the popover and restore native views');
+    now+=31000;slow=true;button.click();await wait(20);
+    check(calls===2 && list.firstElementChild===original && !list.textContent.includes('Checking'),'Stale cache must refresh without replacing visible data with a loader');
+    button.click();button.click();await wait(10);check(calls===2,'Reopening during a pending request must not duplicate it');
+    finish(data);slow=false;await wait(160);
+    check(list.firstElementChild===original,'Unchanged data must preserve the current hover/focus target');
+    fail=true;refresh.click();await wait(20);
+    check(calls===3 && list.firstElementChild===original && refresh.title.includes('Could not refresh'),'Failed refresh must preserve cached data');
+    fail=false;data=[];refresh.click();await wait(20);
+    check(calls===4 && list.textContent.includes('No listening servers'),'Explicit refresh must bypass the cache');
+    button.click();await wait(160);button.click();await wait(160);
+    check(calls===4 && list.textContent.includes('No listening servers'),'Empty results must also be cached');
+    data=[{url:'http://localhost:4000',port:4000,process:'api'}];refresh.click();await wait(20);
+    check(!list.querySelector('.server-kill'),'Servers without a PID cannot be stopped');
+    list.querySelector('a').click();await wait(160);
+    check(opened==='http://localhost:4000/' && dropdown.hidden,'Cached rows must still open their server and close the menu');
+    document.body.classList.remove('ui-animations');button.click();await wait(20);button.click();
+    check(getComputedStyle(dropdown).display==='none' && !dropdown.classList.contains('closing'),'Disabling animations must close immediately');
+    document.body.classList.add('ui-animations');button.click();await wait(160);button.click();
+    document.body.classList.remove('ui-animations');getComputedStyle(dropdown).display;await wait(20);
+    check(!dropdown.classList.contains('closing') && !viewsHidden,'Disabling animations mid-fade must release native views');
+    document.body.classList.add('ui-animations');window.serverDropdown=dropdown;window.serverButton=button;
+    return 'PASS: cached reopens, stale background refresh, in-flight deduplication, stable rows, empty/error states, native view handling, fade reversal and animation toggle';
+  })()`));
+  await motion('reduce');
+  console.log(await win.webContents.executeJavaScript(`(async()=>{serverButton.click();await new Promise(r=>setTimeout(r,20));serverButton.click();if(getComputedStyle(serverDropdown).display!=='none'||serverDropdown.getAnimations().length)throw Error('Reduced motion must close servers instantly');return 'PASS: reduced-motion server dropdown';})()`));
+  clearTimeout(timer);app.exit(0);
+}).catch(error=>{console.error(error);clearTimeout(timer);app.exit(1);});

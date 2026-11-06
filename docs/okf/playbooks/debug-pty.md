@@ -22,6 +22,23 @@ timestamp: 2026-08-15T00:00:00Z
 2. Check for `create` frame errors in server logs
 3. Ensure `node-pty` is installed: `ls node_modules/node-pty`
 
+## Symptom: Shell Prompt Appears Slowly
+
+New tabs spawn the shell as soon as their slot is mounted, without a fixed
+startup timer. Both desktop and browser tabs use interactive, non-login shells.
+Browser integration sources Bash's `.bashrc` once and restores the user's
+`ZDOTDIR` before loading zsh configuration, keeping completion caches reusable
+across tabs. Integration files are temporary; user configuration is never edited.
+
+If the tab appears immediately but the prompt remains delayed, profile shell
+startup separately. Version managers such as NVM, completion initialization and
+prompt plugins run before the shell can accept commands. Compare normal startup
+with `zsh -f` or `bash --norc` in a disposable terminal to isolate configuration
+cost. Skipping configuration is a diagnostic only, since it omits user settings.
+
+Run `node scripts/test-shell-startup.js` to check new-tab dispatch and startup
+integration with isolated fixture configurations.
+
 ## Symptom: No Output
 
 ### Check PTY output path
