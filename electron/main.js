@@ -8,6 +8,7 @@ const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceS
 const { listRunningServers, killServer } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
 const { prepareShellStartup } = require('./shell-startup');
+const { listShells, findShell } = require('./shells');
 let agentControl = null;
 const agentRequests = new Map();
 ipcMain.on('agent:result', (event, { id, result, error }) => {
@@ -1091,6 +1092,10 @@ ipcMain.handle('terminal:workspace-context', (event, id, context) => {
     getTarget: () => { const terminal=ptys.get(id); return terminal && {token:terminal,info:runningProcessInfo(terminal.pid)}; },
     write: (terminal,text) => terminal.write(text) });
 });
+let defaultShellId = '';
+ipcMain.on('shell:set-default', (_e, id) => { defaultShellId = String(id || ''); });
+ipcMain.handle('shell:list', () => listShells(true).map(({ id, label }) => ({ id, label })));
+
 function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId }) {
   let startup;
   try {
@@ -1104,6 +1109,7 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
     }
     let spawnCwd = processWorkingDirectory(ptys.get(inheritFromId)?.pid) || cwd || undefined;
     const homeDir = require('os').homedir();
+    const cwdRequested = !!spawnCwd;
     if (spawnCwd && typeof spawnCwd === 'string') {
       spawnCwd = spawnCwd.trim().replace(/^["']|["']$/g, '');
       if (spawnCwd === '~') {
@@ -1124,10 +1130,12 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       // which on Windows is inside LocalAppData instead of ~.
       spawnCwd = homeDir;
     }
-    const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
+    const profile = executable || argv?.length ? null : findShell(defaultShellId);
+    const shell = profile?.command || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
     const env = terminalEnv();
     startup = executable || argv?.length ? { args: [], env: {}, tmpDir: null } : prepareShellStartup(shell, env);
-    const t = pty.spawn(executable || shell, argv && argv.length ? argv : startup.args, {
+    const shellArgs = [...(profile?.args || []), ...(!cwdRequested && profile?.homeArgs || []), ...startup.args];
+    const t = pty.spawn(executable || shell, argv && argv.length ? argv : shellArgs, {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,

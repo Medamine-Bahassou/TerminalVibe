@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Local file path resolution
   resolveLocalPath: (p) => ipcRenderer.invoke('file:resolve', p),
   selectDirectory: (defaultPath) => ipcRenderer.invoke('dialog:openDirectory', defaultPath),
+  listShells: () => ipcRenderer.invoke('shell:list'),
+  setDefaultShell: (id) => ipcRenderer.send('shell:set-default', id),
 
   // Native PTY (node-pty runs in the main process)
   terminalCreate: (o) => ipcRenderer.invoke('terminal:create', o),

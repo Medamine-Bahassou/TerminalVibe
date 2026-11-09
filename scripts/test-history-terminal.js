@@ -26,6 +26,7 @@ function desktopBackend() {
     require, fs, path, processWorkingDirectory, process: { env: { SHELL: '/bin/bash' }, platform: process.platform },
     pty: { spawn(...args) { spawns++; return pty.spawn(...args); } }, ptys,
     terminalEnv: () => ({ ...process.env, HOME: temp }), prepareShellStartup, agentControl: null,
+    defaultShellId: '', findShell: () => null,
     detachedWindows: new Map(), notifyBusy: new Map(), ptyIO: new Map(), console, setTimeout, clearTimeout,
     sendToRenderer(channel, payload) {
       if (channel === 'terminal:data') output += payload.data;

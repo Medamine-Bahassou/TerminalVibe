@@ -1646,6 +1646,7 @@
   let currentCursorBlink = true;
   let currentScrollback = 10000;
   let defaultTerminalPath = '';      // default working directory for new terminals
+  let defaultShell = '';             // id from electron/shells.js; '' = system default
   let backgroundMode = 'none';       // 'none' | 'per-tab' | 'per-workspace' | 'global'
   let globalBackgroundImage = '';    // data URL for global bg
   let backgroundOpacity = 0.85;       // 0..1
@@ -2908,6 +2909,7 @@
         searchEngine,
         customSearchUrl,
         defaultTerminalPath,
+        defaultShell,
         pluginStates: Object.fromEntries(_pluginStates),
         pluginConfigs: Object.fromEntries(_pluginConfigs),
       };
@@ -2951,6 +2953,7 @@
       searchEngine,
       customSearchUrl,
       defaultTerminalPath,
+      defaultShell,
       sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
       sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
       shortcuts: customShortcuts,
@@ -3028,6 +3031,7 @@
       if (state.searchEngine) searchEngine = state.searchEngine;
       if (state.customSearchUrl) customSearchUrl = state.customSearchUrl;
       if (state.defaultTerminalPath !== undefined) defaultTerminalPath = state.defaultTerminalPath;
+      if (state.defaultShell !== undefined) { defaultShell = state.defaultShell; window.electronAPI?.setDefaultShell?.(defaultShell); }
       if (state.shortcuts) {
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
@@ -5331,20 +5335,8 @@
       activeTermId: id
     };
 
-    // Update layout tree: split the target group
-    if (wsp.layout.id === groupId) {
-      // Target is the root — replace root with a split node
-      const isFirst = true;
-      wsp.layout = {
-        type: 'split',
-        id: 'split-' + uuid(),
-        direction,
-        children: isFirst ? [newGroup, wsp.layout] : [wsp.layout, newGroup],
-        sizes: [50, 50]
-      };
-    } else {
-      splitGroupNodeInTree(wsp.layout, groupId, newGroup, direction, false);
-    }
+    // Horizontal puts the new pane on the right, vertical at the bottom.
+    wsp.layout = splitGroupNodeInTree(wsp.layout, groupId, newGroup, direction, false);
 
     wsp.activeTermId = id;
     renderPaneArea();
@@ -9009,6 +9001,38 @@
     if (dd) initCustomDropdown(dd);
   }
 
+  // simple-icons has no Microsoft shell logos, so these two are drawn: a prompt cut out of a console window / PowerShell's slanted panel.
+  const SHELL_GLYPHS = {
+    terminal: 'M2 4h20v16H2zM5.2 9l3.4 3-3.4 3 1.2 1.4 4.8-4.4-4.8-4.4zM12 14.6v1.8h6.5v-1.8z',
+    powershell: 'M6 4h16.5L18 20H1.5zM7 8.8l3.4 3.2-4.7 3 1.2 1.4 6.1-4.5-4.7-4.5zM11.6 14.7l-.4 1.7h5.4l.4-1.7z',
+  };
+  const SHELL_ICON_SLUGS = [
+    [/^git bash$/, 'git'], [/^bash$/, 'gnubash'], [/^zsh$/, 'zsh'], [/^fish$/, 'fishshell'], [/^nu$/, 'nushell'],
+    [/ubuntu/, 'ubuntu'], [/debian/, 'debian'], [/alpine/, 'alpinelinux'], [/fedora/, 'fedora'], [/arch/, 'archlinux'],
+    [/suse/, 'opensuse'], [/kali/, 'kalilinux'], [/alma/, 'almalinux'],
+  ];
+  function shellIconPath({ id, label }) {
+    if (id === 'powershell' || id === 'pwsh') return SHELL_GLYPHS.powershell;
+    const name = label.toLowerCase();
+    const slug = SHELL_ICON_SLUGS.find(([pattern]) => pattern.test(name))?.[1] || (id.startsWith('wsl:') ? 'linux' : null);
+    return window.PROC_ICON_PATHS?.[slug] || SHELL_GLYPHS.terminal;
+  }
+
+  async function refreshDefaultShellSetting() {
+    // Browser mode's server picks its own shell.
+    if (!window.electronAPI?.listShells) { document.getElementById('set-default-shell-row').style.display = 'none'; return; }
+    const shells = await window.electronAPI.listShells();
+    const select = document.getElementById('set-default-shell');
+    select.replaceChildren(...[{ id: '', label: 'System default' }, ...shells].map(shell => {
+      const option = new Option(shell.label, shell.id);
+      option.dataset.icon = shellIconPath(shell);
+      return option;
+    }));
+    select.value = shells.some(shell => shell.id === defaultShell) ? defaultShell : '';
+    const dd = document.querySelector('.custom-dropdown[data-for="set-default-shell"]');
+    if (dd) initCustomDropdown(dd);
+  }
+
   let closeActiveDropdown = null;
   let dropdownSequence = 0;
   function initCustomDropdown(dd) {
@@ -9303,6 +9327,8 @@
     if (defaultPathBrowse) {
       defaultPathBrowse.style.display = (isDesktop() && window.electronAPI?.selectDirectory) ? 'inline-flex' : 'none';
     }
+
+    refreshDefaultShellSetting();
 
     // Terminal links
     const linkSelect = document.getElementById('set-link-target');
@@ -9700,6 +9726,7 @@
       if (state.searchEngine) searchEngine = state.searchEngine;
       if (state.customSearchUrl) customSearchUrl = state.customSearchUrl;
       if (state.defaultTerminalPath !== undefined) defaultTerminalPath = state.defaultTerminalPath;
+      if (state.defaultShell !== undefined) { defaultShell = state.defaultShell; window.electronAPI?.setDefaultShell?.(defaultShell); }
       if (state.shortcuts) {
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
@@ -11230,6 +11257,12 @@
       }
     });
   }
+
+  document.getElementById('set-default-shell').addEventListener('change', e => {
+    defaultShell = e.target.value;
+    window.electronAPI?.setDefaultShell?.(defaultShell);
+    saveState();
+  });
 
   document.getElementById('set-link-target').addEventListener('change', e => {
     terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';

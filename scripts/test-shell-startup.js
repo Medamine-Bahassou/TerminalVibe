@@ -89,6 +89,65 @@ assert.equal(titles.shortTitle('/home/demo'), 'demo');
 assert.equal(titles.shortTitle('user@host:/home/demo'), 'demo');
 console.log('PASS: Windows and POSIX OSC 7 paths, PowerShell cwd hook, Windows tab titles');
 
+const { parseWslList, windowsShells, posixShells, findShell } = require('../electron/shells');
+assert.deepEqual(parseWslList(Buffer.from('docker-desktop\r\nUbuntu\r\n\r\nDebian\r\n', 'utf16le')), ['Ubuntu', 'Debian']);
+const winEnv = { SystemRoot: 'C:\\Windows', ProgramFiles: 'C:\\Program Files', ComSpec: 'C:\\Windows\\system32\\cmd.exe' };
+const installed = new Set([
+  'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'C:\\Windows\\system32\\cmd.exe',
+  'C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Windows\\System32\\wsl.exe',
+]);
+const detected = windowsShells(winEnv, file => installed.has(file), () => ['Ubuntu']);
+assert.deepEqual(detected.map(shell => shell.id), ['powershell', 'cmd', 'git-bash', 'wsl:Ubuntu'], 'Missing PowerShell 7 must not be offered');
+assert.deepEqual(detected.at(-1).args, ['-d', 'Ubuntu']);
+assert.deepEqual(windowsShells({ SystemRoot: 'C:\\Windows' }, () => false, () => ['Ubuntu']), [], 'Nothing installed offers nothing');
+assert.deepEqual(posixShells(() => '# comment\n/bin/bash\n/usr/bin/bash\n/usr/sbin/nologin\n/usr/bin/tmux\n/bin/zsh\n/bin/gone\n', file => file !== '/bin/gone').map(shell => shell.id),
+  ['/bin/bash', '/bin/zsh'], 'Duplicates, non-shells and missing files must be dropped');
+assert.deepEqual(posixShells(() => { throw new Error('no /etc/shells'); }), []);
+assert.equal(findShell('shell-that-was-uninstalled'), null, 'A missing saved shell must fall back to the system default');
+assert.equal(findShell(''), null);
+const cmdPrompt = prepareShellStartup('cmd.exe', { PROMPT: '$G' }).env.PROMPT;
+assert(cmdPrompt.startsWith('$e]7;file:///$P$e\\$e]133;A$e\\') && cmdPrompt.endsWith('$G'), 'cmd must signal its folder and keep the user prompt');
+console.log('PASS: shell detection, uninstalled shell fallback, cmd folder and prompt signals');
+
+const icons = vm.createContext({ window: {} });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'proc-icons.js'), 'utf8'), icons);
+vm.runInContext(source.slice(source.indexOf('  const SHELL_GLYPHS = {'), source.indexOf('  async function refreshDefaultShellSetting(')), icons);
+const logos = icons.window.PROC_ICON_PATHS;
+const iconFor = (id, label) => icons.shellIconPath({ id, label });
+const generic = iconFor('', 'System default');
+assert.equal(iconFor('git-bash', 'Git Bash'), logos.git);
+assert.equal(iconFor('wsl:Ubuntu-22.04', 'Ubuntu-22.04'), logos.ubuntu);
+assert.equal(iconFor('wsl:MyDistro', 'MyDistro'), logos.linux, 'Unknown WSL distros use the Linux logo');
+for (const [label, slug] of [['bash', 'gnubash'], ['zsh', 'zsh'], ['fish', 'fishshell'], ['nu', 'nushell']]) assert.equal(iconFor(`/bin/${label}`, label), logos[slug]);
+for (const name of ['debian', 'alpine', 'fedora', 'archlinux', 'opensuse', 'kali-linux', 'almalinux']) assert(iconFor(`wsl:${name}`, name) && iconFor(`wsl:${name}`, name) !== logos.linux, `${name} needs its logo`);
+assert.equal(iconFor('cmd', 'Command Prompt'), generic);
+assert.notEqual(iconFor('powershell', 'Windows PowerShell'), generic);
+assert.equal(iconFor('pwsh', 'PowerShell 7'), iconFor('powershell', 'Windows PowerShell'));
+
+const splitStart = source.indexOf('  function splitGroupDirectly(');
+const splitEnd = source.indexOf('\n  function ', source.indexOf('  function splitGroupNodeInTree('));
+const splitWs = { id: 'w', layout: { type: 'group', id: 'root', terminals: [] } };
+let splitIds = 0;
+const splits = vm.createContext({
+  findWs: () => splitWs, _getFocusedCwd: () => null, defaultTerminalPath: '', SPLIT_MIN_PX: 1, document: { getElementById: () => null },
+  findGroupById: (node, id) => { const find = n => n.id === id ? n : (n.children || []).map(find).find(Boolean); return find(node); },
+  uuid: () => String(++splitIds), _createTermEntry: (_w, id, label) => ({ id, label }), renderPaneArea() {}, activateTerminal() {}, saveState() {},
+  setTimeout() {},
+});
+vm.runInContext(source.slice(splitStart, splitEnd), splits);
+splits.splitGroupDirectly('w', 'root', 'row');
+const [originalPane, addedPane] = splitWs.layout.children;
+assert.equal(splitWs.layout.direction, 'row');
+assert.equal(originalPane.id, 'root', 'Splitting the only pane must put the new pane on the right');
+splits.splitGroupDirectly('w', addedPane.id, 'column');
+const [upperPane, lowerPane] = splitWs.layout.children[1].children;
+assert.equal(upperPane.id, addedPane.id, 'Splitting a nested pane must put the new pane at the bottom');
+assert.notEqual(lowerPane.id, addedPane.id);
+splitWs.layout = { type: 'group', id: 'root', terminals: [] };
+splits.splitGroupDirectly('w', 'root', 'column');
+assert.equal(splitWs.layout.children[0].id, 'root', 'Splitting the only pane must put the new pane at the bottom');
+console.log('PASS: shell icons, new split pane goes right or below');
+
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-startup-test-'));
 const generated = [];
 function run(shell, command, extraEnv = {}) {
@@ -112,6 +171,12 @@ try {
     assert(!bash.includes('UNEXPECTED_LOGIN_PROFILE'));
     assert.match(bash, /\x1b\]7;file:\/\//);
     assert.match(bash, /\x1b\]133;A\x07/);
+    fs.mkdirSync(path.join(home, 'my project é'));
+    const spaced = run('/bin/bash', 'cd "$HOME/my project é"; __terminal_vibe_cwd');
+    assert.match(spaced, /\/my%20project%20é\x07/, 'A folder with a space must not be read as a printf format');
+    const wrapped = prepareShellStartup('bash.exe');
+    generated.push(wrapped.tmpDir);
+    assert.equal(wrapped.args[0], '--rcfile', 'Windows executable names must get the shell hook');
 
     if (spawnSync('/bin/zsh', ['--version']).status === 0) {
       const custom = path.join(home, "custom ' dotdir");
