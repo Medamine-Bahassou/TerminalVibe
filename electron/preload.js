@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   attachWorkspaceContext: (id, context) => ipcRenderer.invoke('terminal:workspace-context', id, context),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),
   terminalAttached: (id) => ipcRenderer.send('terminal:attached', id),
+  terminalAck: (id, n) => ipcRenderer.send('terminal:ack', { id, n }),
   attachWindow: (o) => ipcRenderer.send('terminal:attach-window', o),
   onTerminalReattachLayout: (cb) => {
     const l = (_e, d) => cb(d);

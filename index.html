@@ -17,8 +17,7 @@
   <link rel="preload" href="fonts/GeistSans.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/GeistMono.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="workspace.css">
-  <script src="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="vendor/phosphor/style.css">
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/xterm-addon-fit.js"></script>
   <script src="vendor/xterm/xterm-addon-web-links.js"></script>
@@ -28,6 +27,9 @@
   <script src="vendor/xterm/xterm-addon-canvas.js"></script>
   <script src="vendor/xterm/xterm-addon-image.js"></script>
   <script src="vendor/coloris.min.js"></script>
+  <!-- Last on purpose: the Tailwind CDN script this replaces appended its
+       styles to the end of <head>, so utilities keep winning ties. -->
+  <link rel="stylesheet" href="vendor/tailwind.css">
 </head>
 
 <body class="roundless sb-right-hidden">

@@ -29,6 +29,7 @@ function desktopBackend() {
     terminalEnv: () => ({ ...process.env, HOME: temp }), prepareShellStartup, agentControl: null,
     defaultShellId: '', findShell: () => null, resolveExecutable,
     detachedWindows: new Map(), notifyBusy: new Map(), ptyIO: new Map(), console, setTimeout, clearTimeout,
+    ptyFlow: new Map(), createPtyFlow: require('../electron/pty-flow').createPtyFlow,
     sendToRenderer(channel, payload) {
       if (channel === 'terminal:data') output += payload.data;
       if (channel === 'terminal:exit') exits++;

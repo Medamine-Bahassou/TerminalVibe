@@ -2136,6 +2136,18 @@
   /* ═══════════════════════════════════════════════════════════════
    N A*TIVE PTY (Electron)
    ═══════════════════════════════════════════════════════════════ */
+  // Write PTY output, then tell main once xterm has parsed it. Main pauses a
+  // PTY that floods faster than we parse (electron/pty-flow.js), so output
+  // we cannot show must be acked too or its PTY would stall. A hidden window
+  // parses on throttled timers, which would slow a background build down to
+  // that pace, so there we ack at once (no flow control, as before).
+  function writePtyData(result, id, data) {
+    const ack = () => window.electronAPI.terminalAck?.(id, data.length);
+    const xterm = result?.term?.type !== 'browser' && result?.term?.term;
+    if (xterm && !document.hidden) xterm.write(data, ack);
+    else { xterm?.write(data); ack(); }
+  }
+
   function connectNativePTY() {
     // Electron: node-pty runs natively in the main process over IPC
     if (isDesktop() && window.electronAPI) {
@@ -2148,8 +2160,8 @@
         if (result) {
           const oscCwd = _extractOSC7CwdStr(data);
           if (oscCwd) result.term.cwd = oscCwd;
-          result.term.term.write(data);
         }
+        writePtyData(result, id, data);
       });
       api.onTerminalExit(({ id, code }) => handleExit(id, code));
       if (api.onTerminalFinished) api.onTerminalFinished(onTerminalFinished);
@@ -10061,12 +10073,7 @@
       const api = window.electronAPI;
       wsReady = true;
       nativePtyReady = true;
-      api.onTerminalData(({ id, data }) => {
-        const result = findTermById(id);
-        if (result && result.term && result.term.type !== 'browser') {
-          result.term.term.write(data);
-        }
-      });
+      api.onTerminalData(({ id, data }) => writePtyData(findTermById(id), id, data));
       // A split's shell exiting removes just that tab; handleExit closes
       // the window only when it was the last one.
       api.onTerminalExit(({ id, code }) => handleExit(id, code));
