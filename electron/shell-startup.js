@@ -4,9 +4,17 @@ const path = require('path');
 
 const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
 
+// Windows has no /proc, so PowerShell reports its cwd after each prompt. Inline because
+// execution policy can block script files; profiles still load, and the wrapped prompt runs first so themes see $?.
+const POWERSHELL_CWD_HOOK = "$__tvPrompt=$function:prompt;function global:prompt{$p=& $__tvPrompt;"
+  + "[Console]::Write([char]27+']7;file:///'+[uri]::EscapeDataString((Get-Location -PSProvider FileSystem).ProviderPath)+[char]7+[char]27+']133;A'+[char]7);$p}";
+
 // Temporary integration files only; never modify the user's shell config.
 function prepareShellStartup(shell, env = process.env) {
   const name = path.basename(shell).toLowerCase();
+  if (name === 'powershell.exe' || name === 'pwsh.exe') {
+    return { args: ['-NoExit', '-Command', POWERSHELL_CWD_HOOK], env: {}, tmpDir: null };
+  }
   if (name !== 'bash' && name !== 'zsh') return { args: [], env: {}, tmpDir: null };
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `tv-${name}-`));
   try {
