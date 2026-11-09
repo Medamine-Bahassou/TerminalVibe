@@ -4,6 +4,7 @@ const path = require('path');
 const pty = require('node-pty');
 const yaml = require('js-yaml');
 const { hasRunningProcess, runningProcessInfo, processWorkingDirectory } = require('./proc');
+const { createPtyFlow } = require('./pty-flow');
 const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession } = require('./agent-control');
 const { listRunningServers, killServer } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
@@ -1059,6 +1060,7 @@ const detachedWindows = new Map(); // termId -> BrowserWindow
 // While a detached window is booting its renderer, PTY output for its terminal
 // is buffered here so nothing is lost; flushed on 'terminal:attached'.
 const detachedPending = new Map(); // termId -> [{ channel, payload }]
+const ptyFlow = new Map(); // termId -> flow control for its PTY (pty-flow.js)
 // termIds whose detached window is closing because the tab was dragged back
 // into the main window — the PTY must survive the window close.
 const reattachingIds = new Set();
@@ -1149,6 +1151,8 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
     // one IPC message. Floods (cat, builds) drop from thousands of IPC
     // messages/sec to ~200, which is where the renderer was spending its time.
     let outBuf = '', outTimer = null;
+    const flow = createPtyFlow(t);
+    ptyFlow.set(id, flow);
     const flushOut = () => {
       if (!outBuf) { outTimer = null; return; }
       sendToRenderer('terminal:data', { id, data: outBuf });
@@ -1157,6 +1161,7 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
     };
     t.onData((data) => {
       const io = ptyIO.get(id) || {}; io.out = Date.now(); ptyIO.set(id, io);
+      flow.sent(data.length);
       if (outTimer) { outBuf += data; return; }
       sendToRenderer('terminal:data', { id, data });
       outTimer = setTimeout(flushOut, 5);
@@ -1167,6 +1172,8 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       }
       notifyBusy.delete(id); ptyIO.delete(id);
       clearTimeout(outTimer);
+      flow.stop();
+      if (ptyFlow.get(id) === flow) ptyFlow.delete(id);
       if (outBuf && ptys.get(id) === t) sendToRenderer('terminal:data', { id, data: outBuf });
       outBuf = '';
       if (ptys.get(id) !== t) return;
@@ -1208,6 +1215,8 @@ ipcMain.on('terminal:write', (_e, { id, data }) => {
   const io = ptyIO.get(id) || {}; io.in = Date.now(); ptyIO.set(id, io);
   try { t.write(Buffer.isBuffer(data) ? data : Buffer.from(data || [])); } catch {}
 });
+// xterm parsed `n` chars of this terminal's output (see pty-flow.js).
+ipcMain.on('terminal:ack', (_e, { id, n }) => ptyFlow.get(id)?.ack(n));
 // The detached window's renderer is up and has replayed the captured buffer;
 // flush any output that was buffered while it was booting.
 ipcMain.on('terminal:attached', (_e, id) => {

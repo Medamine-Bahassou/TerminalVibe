@@ -17,7 +17,7 @@ node --check app.js      # quick syntax check (no linter/type checker in this re
 
 | File | Role |
 |---|---|
-| `index.html` | Static markup: titlebar, sidebar, modals, settings (Tailwind CDN utility classes) |
+| `index.html` | Static markup: titlebar, sidebar, modals, settings (Tailwind utility classes, prebuilt into `vendor/tailwind.css`) |
 | `app.js` | All renderer logic in one IIFE: state, layout, terminals, browser tabs, settings, menus |
 | `session-drawer.js` | Claude sessions history drawer |
 | `proc-icons.js` | Generated brand logo paths (from `simple-icons`) for running processes |
@@ -105,3 +105,5 @@ body #sidebar.expanded .ws-btn { border-radius:6px !important; }
 - Browser tabs are `<webview>` overlays positioned by `syncBrowserSlots()`. Keep resize syncing in the same frame (ResizeObserver callback, not rAF). `settleBrowserSurfaces()` fixes stale guest widths after a resize.
 - Workspace running-process list: `refreshAllWorkspaceProcs()` polls every 1s, and `refreshWorkspaceProcsSoon()` runs on Enter/Ctrl+C/Ctrl+D.
 - Settings dropdowns are custom (`initCustomDropdown`) over a hidden native `<select class="native-select-hidden">`.
+- Tailwind is prebuilt, not loaded from the CDN: a Tailwind class that is new to `index.html`/`app.js` does nothing until `node scripts/build-dist.js` (or `scripts/build-tailwind.js`) regenerates `vendor/tailwind.css`. Phosphor icons are vendored too, so the app makes no network requests at launch.
+- PTY output is flow-controlled (`electron/pty-flow.js`): every `terminal:data` chunk must be acked with `terminalAck` once written, or its PTY pauses. Use `writePtyData()` in `app.js`.
