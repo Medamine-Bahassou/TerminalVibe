@@ -1762,7 +1762,12 @@
   }
   // ResizeObserver fires after layout, before paint: syncing here moves the
   // overlay in the same frame as its slot (a RAF would lag one frame behind).
-  const browserSlotRo = new ResizeObserver(() => { syncBrowserSlots(); settleBrowserSurfaces(); });
+  // No settle mid-drag: its 1px nudge re-lays out every guest page whenever the
+  // pointer pauses, which made dragging stutter. stopResizing() settles once.
+  const browserSlotRo = new ResizeObserver(() => {
+    syncBrowserSlots();
+    if (!document.body.classList.contains('resizing')) settleBrowserSurfaces();
+  });
 
   // A fast resize can leave the webview guest composited at a stale width
   // (blank strip on one edge). Once resizing goes quiet, nudge each visible
@@ -5044,8 +5049,9 @@
     // Fallback: if the split was destroyed, pass focus to the next available terminal
     const remainingTerms = getWorkspaceTerminals(wsp);
     if (remainingTerms.length > 0 && !remainingTerms.some(t => t.id === wsp.activeTermId)) {
-      wsp.activeTermId = remainingTerms[0].id;
-      const fallbackGroup = findGroupContainingTerm(wsp.layout, wsp.activeTermId);
+      // Keep the fallback group's selected tab; its first tab may be hidden.
+      const fallbackGroup = findGroupContainingTerm(wsp.layout, remainingTerms[0].id);
+      wsp.activeTermId = fallbackGroup?.activeTermId || remainingTerms[0].id;
       if (fallbackGroup && !fallbackGroup.activeTermId) {
         fallbackGroup.activeTermId = wsp.activeTermId;
       }
@@ -7176,8 +7182,8 @@
     } else {
       const remaining = getWorkspaceTerminals(srcWs);
       if (remaining.length && !remaining.some(t => t.id === srcWs.activeTermId)) {
-        srcWs.activeTermId = remaining[0].id;
-        const fallbackGroup = findGroupContainingTerm(srcWs.layout, srcWs.activeTermId);
+        const fallbackGroup = findGroupContainingTerm(srcWs.layout, remaining[0].id);
+        srcWs.activeTermId = fallbackGroup?.activeTermId || remaining[0].id;
         if (fallbackGroup && !fallbackGroup.activeTermId) fallbackGroup.activeTermId = srcWs.activeTermId;
       } else if (!remaining.length) {
         srcWs.activeTermId = null;
