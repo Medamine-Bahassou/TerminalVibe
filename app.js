@@ -1754,7 +1754,12 @@
   }
   // ResizeObserver fires after layout, before paint: syncing here moves the
   // overlay in the same frame as its slot (a RAF would lag one frame behind).
-  const browserSlotRo = new ResizeObserver(() => { syncBrowserSlots(); settleBrowserSurfaces(); });
+  // No settle mid-drag: its 1px nudge re-lays out every guest page whenever the
+  // pointer pauses, which made dragging stutter. stopResizing() settles once.
+  const browserSlotRo = new ResizeObserver(() => {
+    syncBrowserSlots();
+    if (!document.body.classList.contains('resizing')) settleBrowserSurfaces();
+  });
 
   // A fast resize can leave the webview guest composited at a stale width
   // (blank strip on one edge). Once resizing goes quiet, nudge each visible
