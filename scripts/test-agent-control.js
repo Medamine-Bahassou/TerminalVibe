@@ -224,6 +224,24 @@ async function main() {
     assert.equal(activeTab.status, 200);
     assert.equal(sandbox.findGroupContainingTerm(tabTree, activeTab.result.launches[0].id), activeGroup);
     assert.equal(spawns.at(-1).returnToShell, false, 'Explicit exited-pane opt-out is retained');
+    {
+      // Exit handling: a pane that returned to a shell closes; the opt-out pane stays to show its output.
+      const exitSource = source.slice(source.indexOf('  function handleExit('), source.indexOf('  function handleError('));
+      const removed = [], written = [];
+      const entries = { shell: { id: 'shell', agentManaged: true }, kept: { id: 'kept', agentManaged: true, keepOnExit: true } };
+      for (const t of Object.values(entries)) t.term = { write: s => written.push([t.id, s]), options: {} };
+      const exits = vm.createContext({ workspaces: [{}, {}], DETACHED_ONLY: false, isDesktop: () => true,
+        findTermById: id => ({ ws: { id: 'w' }, term: entries[id] }), getWorkspaceTerminals: () => [{}, {}],
+        pluginEmit() {}, renderPaneArea() {}, saveState() {}, sendControl() {}, removeTerminal: (_w, id) => removed.push(id) });
+      vm.runInContext(exitSource, exits);
+      exits.handleExit('shell', 0);
+      assert.deepEqual(removed, ['shell'], 'Exiting the shell an agent pane returned to closes the tab');
+      exits.handleExit('kept', 1);
+      assert.deepEqual(removed, ['shell'], 'A returnToShell:false pane stays open after exit');
+      assert(written.some(([id, s]) => id === 'kept' && s.includes('[Agent process exited: 1]')));
+      assert.equal(all(tabTree).find(t => t.id === activeTab.result.launches[0].id).keepOnExit, true, 'Launch marks the opt-out pane');
+      assert(!all(tabTree).find(t => t.id === tabLaunch.launches[0].id).keepOnExit, 'Ordinary launches are not marked');
+    }
     const tabsBeforeInvalid = all(tabTree).length, spawnsBeforeInvalid = spawns.length;
     for (const invalid of [
       { ...tabSpec, placement: { mode: 'unknown' } },

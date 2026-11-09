@@ -1646,6 +1646,7 @@
   let currentCursorBlink = true;
   let currentScrollback = 10000;
   let defaultTerminalPath = '';      // default working directory for new terminals
+  let defaultShell = '';             // id from electron/shells.js; '' = system default
   let backgroundMode = 'none';       // 'none' | 'per-tab' | 'per-workspace' | 'global'
   let globalBackgroundImage = '';    // data URL for global bg
   let backgroundOpacity = 0.85;       // 0..1
@@ -1747,9 +1748,16 @@
   let workspaceContextReady = false;
 
   const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
+  let browserDevToolsHeight = 0; // Last dragged DevTools drawer height, shared by tabs; 0 = 40% of the tab
   if (isDesktop() && window.electronAPI) {
     window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
     window.electronAPI.onBrowserKey?.(d => document.dispatchEvent(new KeyboardEvent('keydown', { ...d, bubbles: true, cancelable: true })));
+    // The key came from a tab's page or from its DevTools drawer.
+    window.electronAPI.onBrowserDevToolsToggle?.(id => {
+      const ownsGuest = view => { try { return view.getWebContentsId() === id; } catch { return false; } };
+      workspaces.flatMap(getWorkspaceTerminals).find(t => t.type === 'browser' &&
+        [...(t.browserContainer?.querySelectorAll('webview.browser-surface, .browser-devtools webview') || [])].some(ownsGuest))?._toggleDevTools?.();
+    });
     syncBrowserShortcuts();
   }
   // ResizeObserver fires after layout, before paint: syncing here moves the
@@ -2000,24 +2008,7 @@
   }
 
   function _extractOSC7Cwd(uint8Data) {
-    // OSC 7: \x1b]7;file://hostname/path\x07  or  \x1b]7;file:///path\x07
-    const str = new TextDecoder().decode(uint8Data);
-    // Match the entire OSC 7 file:// URI
-    const match = str.match(/\x1b\]7;(file:\/\/[^\x07\x1b]+)/);
-    if (match) {
-      try {
-        let uri = match[1];
-        let pathPart = uri.slice(7); // strip 'file://'
-        // If pathPart doesn't start with /, it's file://hostname/path → remove hostname
-        if (!pathPart.startsWith('/')) {
-          const slashIdx = pathPart.indexOf('/');
-          if (slashIdx !== -1) pathPart = pathPart.slice(slashIdx);
-          else pathPart = '/' + pathPart;
-        }
-        return decodeURIComponent(pathPart);
-      } catch { }
-    }
-    return null;
+    return _extractOSC7CwdStr(new TextDecoder().decode(uint8Data));
   }
 
   function _extractOSC7CwdStr(str) {
@@ -2032,7 +2023,8 @@
           if (slashIdx !== -1) pathPart = pathPart.slice(slashIdx);
           else pathPart = '/' + pathPart;
         }
-        return decodeURIComponent(pathPart);
+        // Windows paths arrive as /C:\dir or /\\server\share: drop the URI's leading slash.
+        return decodeURIComponent(pathPart).replace(/^\/(?=[A-Za-z]:|\\\\)/, '');
       } catch { }
     }
     return null;
@@ -2707,6 +2699,7 @@
           if (t.bgImage) o.bgImage = t.bgImage;
           if (t.dead) o.dead = true;
           if (t.agentManaged) o.agentManaged = true;
+          if (t.keepOnExit) o.keepOnExit = true;
           if (t.locked) o.locked = true;
           if (t.pinLabel) o.pinLabel = true;
           if (t.toolProvider) o.toolProvider = t.toolProvider;
@@ -2757,6 +2750,7 @@
         if (tData.bgImage) entry.bgImage = tData.bgImage;
         if (tData.dead) entry.dead = true;
         if (tData.agentManaged) entry.agentManaged = true;
+        if (tData.keepOnExit) entry.keepOnExit = true;
         if (tData.locked) entry.locked = true;
         if (tData.pinLabel) entry.pinLabel = true;
         if (tData.toolProvider) entry.toolProvider = tData.toolProvider;
@@ -2929,6 +2923,7 @@
         searchEngine,
         customSearchUrl,
         defaultTerminalPath,
+        defaultShell,
         pluginStates: Object.fromEntries(_pluginStates),
         pluginConfigs: Object.fromEntries(_pluginConfigs),
       };
@@ -2972,6 +2967,7 @@
       searchEngine,
       customSearchUrl,
       defaultTerminalPath,
+      defaultShell,
       sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
       sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
       shortcuts: customShortcuts,
@@ -3049,6 +3045,7 @@
       if (state.searchEngine) searchEngine = state.searchEngine;
       if (state.customSearchUrl) customSearchUrl = state.customSearchUrl;
       if (state.defaultTerminalPath !== undefined) defaultTerminalPath = state.defaultTerminalPath;
+      if (state.defaultShell !== undefined) { defaultShell = state.defaultShell; window.electronAPI?.setDefaultShell?.(defaultShell); }
       if (state.shortcuts) {
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
@@ -3862,7 +3859,7 @@
   function shortTitle(title) {
     const path = title.includes('@') && title.includes(':') ? title.slice(title.indexOf(':') + 1) : title;
     if (!path || path === '~') return path;
-    return path.split('/').filter(Boolean).pop() || path;
+    return path.split(/[\\/]/).filter(Boolean).pop() || path;
   }
 
   function renameWorkspace(id) {
@@ -5216,7 +5213,8 @@
     const { ws, term: t } = result;
     t.dead = true;
     pluginEmit('terminal:exit', { termId: id, code });
-    if (t.agentManaged) {
+    // Other agent panes returned to a shell when the agent ended, so this exit is the user's: close like any tab.
+    if (t.agentManaged && t.keepOnExit) {
       t.term.write(`\r\n[Agent process exited: ${code}]\r\n`);
       t.term.options.disableStdin = true;
       renderPaneArea();
@@ -5353,7 +5351,7 @@
       activeTermId: id
     };
 
-    // New pane goes after (right/below) the current one, root or nested alike.
+    // Horizontal puts the new pane on the right, vertical at the bottom.
     wsp.layout = splitGroupNodeInTree(wsp.layout, groupId, newGroup, direction, false);
 
     wsp.activeTermId = id;
@@ -6277,6 +6275,67 @@
         toolbar.appendChild(urlInput);
         toolbar.appendChild(btnHistory);
         toolbar.appendChild(btnOpenExt);
+        // DevTools dock in a drawer under the page, as in Chrome. Desktop only: browser mode's iframe has none.
+        if (isDesktop() && window.electronAPI?.browserDevTools) {
+          const btnDevTools = document.createElement('button');
+          btnDevTools.className = 'browser-btn browser-devtools-btn';
+          btnDevTools.title = 'Developer tools (F12)';
+          btnDevTools.setAttribute('aria-label', 'Developer tools');
+          btnDevTools.setAttribute('aria-pressed', 'false');
+          btnDevTools.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+          let drawer = null;
+          const page = () => {
+            const surface = contentWrap.querySelector('webview.browser-surface');
+            return surface?._guestReady ? surface : null; // The webview API throws before dom-ready.
+          };
+          entry._closeDevTools = () => {
+            if (!drawer) return;
+            const surface = page();
+            if (surface) window.electronAPI.browserDevTools(surface.getWebContentsId(), null).catch(() => {});
+            drawer.sash.remove(); drawer.el.remove(); drawer = null;
+            btnDevTools.classList.remove('active'); btnDevTools.setAttribute('aria-pressed', 'false');
+            settleBrowserSurfaces();
+          };
+          entry._toggleDevTools = () => {
+            if (drawer) return entry._closeDevTools();
+            const surface = page();
+            if (!surface) return;
+            const sash = document.createElement('div');
+            sash.className = 'browser-devtools-sash';
+            sash.setAttribute('role', 'separator');
+            sash.setAttribute('aria-orientation', 'horizontal');
+            const el = document.createElement('div');
+            el.className = 'browser-devtools';
+            const clamp = h => Math.max(80, Math.min(bc.clientHeight - 120, h));
+            el.style.height = `${clamp(browserDevToolsHeight || Math.round(bc.clientHeight * 0.4))}px`;
+            const view = document.createElement('webview');
+            view.className = 'browser-devtools-surface';
+            view.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
+            view.src = 'about:blank';
+            el.appendChild(view);
+            bc.append(sash, el);
+            // Same guest-iframe stretch as the page webview, or Electron keeps it 150px tall.
+            const pin = () => { const f = view.shadowRoot?.querySelector('iframe'); if (f) f.style.cssText = 'display:block;flex:1 1 auto;width:100%;height:100%;border:0'; return !!f; };
+            if (!pin()) { const mo = new MutationObserver(() => { if (pin()) mo.disconnect(); }); mo.observe(view, { childList: true, subtree: true }); }
+            const mine = drawer = { sash, el };
+            btnDevTools.classList.add('active'); btnDevTools.setAttribute('aria-pressed', 'true');
+            view.addEventListener('dom-ready', () => {
+              if (drawer === mine) window.electronAPI.browserDevTools(surface.getWebContentsId(), view.getWebContentsId()).catch(() => entry._closeDevTools());
+            }, { once: true });
+            sash.addEventListener('pointerdown', e => {
+              e.preventDefault();
+              startResizing();
+              const bottom = bc.getBoundingClientRect().bottom;
+              const move = ev => { browserDevToolsHeight = clamp(Math.round(bottom - ev.clientY)); el.style.height = `${browserDevToolsHeight}px`; };
+              const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); stopResizing(); };
+              window.addEventListener('pointermove', move);
+              window.addEventListener('pointerup', up);
+            });
+            settleBrowserSurfaces();
+          };
+          btnDevTools.addEventListener('click', () => entry._toggleDevTools());
+          toolbar.appendChild(btnDevTools);
+        }
 
         // ── Content area ──
         const contentWrap = document.createElement('div');
@@ -6400,6 +6459,8 @@
                 if (entry.type === 'browser') focusSlot(entry);
               });
               surface.addEventListener('dom-ready', () => { surface._guestReady = true; pinIframe(); });
+              // The DevTools' own close button ends them without the toolbar button.
+              surface.addEventListener('devtools-closed', () => entry._closeDevTools?.());
               surface.addEventListener('did-start-loading', () => showLoading(true));
               surface.addEventListener('did-stop-loading', () => {
                 entry._retryCount = 0;
@@ -9019,6 +9080,38 @@
     if (dd) initCustomDropdown(dd);
   }
 
+  // simple-icons has no Microsoft shell logos, so these two are drawn: a prompt cut out of a console window / PowerShell's slanted panel.
+  const SHELL_GLYPHS = {
+    terminal: 'M2 4h20v16H2zM5.2 9l3.4 3-3.4 3 1.2 1.4 4.8-4.4-4.8-4.4zM12 14.6v1.8h6.5v-1.8z',
+    powershell: 'M6 4h16.5L18 20H1.5zM7 8.8l3.4 3.2-4.7 3 1.2 1.4 6.1-4.5-4.7-4.5zM11.6 14.7l-.4 1.7h5.4l.4-1.7z',
+  };
+  const SHELL_ICON_SLUGS = [
+    [/^git bash$/, 'git'], [/^bash$/, 'gnubash'], [/^zsh$/, 'zsh'], [/^fish$/, 'fishshell'], [/^nu$/, 'nushell'],
+    [/ubuntu/, 'ubuntu'], [/debian/, 'debian'], [/alpine/, 'alpinelinux'], [/fedora/, 'fedora'], [/arch/, 'archlinux'],
+    [/suse/, 'opensuse'], [/kali/, 'kalilinux'], [/alma/, 'almalinux'],
+  ];
+  function shellIconPath({ id, label }) {
+    if (id === 'powershell' || id === 'pwsh') return SHELL_GLYPHS.powershell;
+    const name = label.toLowerCase();
+    const slug = SHELL_ICON_SLUGS.find(([pattern]) => pattern.test(name))?.[1] || (id.startsWith('wsl:') ? 'linux' : null);
+    return window.PROC_ICON_PATHS?.[slug] || SHELL_GLYPHS.terminal;
+  }
+
+  async function refreshDefaultShellSetting() {
+    // Browser mode's server picks its own shell.
+    if (!window.electronAPI?.listShells) { document.getElementById('set-default-shell-row').style.display = 'none'; return; }
+    const shells = await window.electronAPI.listShells();
+    const select = document.getElementById('set-default-shell');
+    select.replaceChildren(...[{ id: '', label: 'System default' }, ...shells].map(shell => {
+      const option = new Option(shell.label, shell.id);
+      option.dataset.icon = shellIconPath(shell);
+      return option;
+    }));
+    select.value = shells.some(shell => shell.id === defaultShell) ? defaultShell : '';
+    const dd = document.querySelector('.custom-dropdown[data-for="set-default-shell"]');
+    if (dd) initCustomDropdown(dd);
+  }
+
   let closeActiveDropdown = null;
   let dropdownSequence = 0;
   function initCustomDropdown(dd) {
@@ -9313,6 +9406,8 @@
     if (defaultPathBrowse) {
       defaultPathBrowse.style.display = (isDesktop() && window.electronAPI?.selectDirectory) ? 'inline-flex' : 'none';
     }
+
+    refreshDefaultShellSetting();
 
     // Terminal links
     const linkSelect = document.getElementById('set-link-target');
@@ -9710,6 +9805,7 @@
       if (state.searchEngine) searchEngine = state.searchEngine;
       if (state.customSearchUrl) customSearchUrl = state.customSearchUrl;
       if (state.defaultTerminalPath !== undefined) defaultTerminalPath = state.defaultTerminalPath;
+      if (state.defaultShell !== undefined) { defaultShell = state.defaultShell; window.electronAPI?.setDefaultShell?.(defaultShell); }
       if (state.shortcuts) {
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
@@ -10784,6 +10880,7 @@
         entry.cwd = node.cwd;
         entry.pinLabel = true;
         entry.agentManaged = true;
+        if (node.returnToShell === false) entry.keepOnExit = true;
         terms.push(entry);
         return { type: 'group', id: uuid(), activeTermId: id, terminals: [entry] };
       };
@@ -11240,6 +11337,12 @@
       }
     });
   }
+
+  document.getElementById('set-default-shell').addEventListener('change', e => {
+    defaultShell = e.target.value;
+    window.electronAPI?.setDefaultShell?.(defaultShell);
+    saveState();
+  });
 
   document.getElementById('set-link-target').addEventListener('change', e => {
     terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';

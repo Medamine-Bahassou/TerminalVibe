@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, dialog, Menu } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, dialog, Menu, webContents } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
@@ -8,6 +8,7 @@ const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceS
 const { listRunningServers, killServer } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
 const { prepareShellStartup } = require('./shell-startup');
+const { listShells, findShell, resolveExecutable } = require('./shells');
 let agentControl = null;
 const agentRequests = new Map();
 ipcMain.on('agent:result', (event, { id, result, error }) => {
@@ -1091,6 +1092,10 @@ ipcMain.handle('terminal:workspace-context', (event, id, context) => {
     getTarget: () => { const terminal=ptys.get(id); return terminal && {token:terminal,info:runningProcessInfo(terminal.pid)}; },
     write: (terminal,text) => terminal.write(text) });
 });
+let defaultShellId = '';
+ipcMain.on('shell:set-default', (_e, id) => { defaultShellId = String(id || ''); });
+ipcMain.handle('shell:list', () => listShells(true).map(({ id, label }) => ({ id, label })));
+
 function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId }) {
   let startup;
   try {
@@ -1104,6 +1109,7 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
     }
     let spawnCwd = processWorkingDirectory(ptys.get(inheritFromId)?.pid) || cwd || undefined;
     const homeDir = require('os').homedir();
+    const cwdRequested = !!spawnCwd;
     if (spawnCwd && typeof spawnCwd === 'string') {
       spawnCwd = spawnCwd.trim().replace(/^["']|["']$/g, '');
       if (spawnCwd === '~') {
@@ -1124,10 +1130,12 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       // which on Windows is inside LocalAppData instead of ~.
       spawnCwd = homeDir;
     }
-    const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
+    const profile = executable || argv?.length ? null : findShell(defaultShellId);
+    const shell = profile?.command || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
     const env = terminalEnv();
     startup = executable || argv?.length ? { args: [], env: {}, tmpDir: null } : prepareShellStartup(shell, env);
-    const t = pty.spawn(executable || shell, argv && argv.length ? argv : startup.args, {
+    const shellArgs = [...(profile?.args || []), ...(!cwdRequested && profile?.homeArgs || []), ...startup.args];
+    const t = pty.spawn(resolveExecutable(executable || shell), argv && argv.length ? argv : shellArgs, {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
@@ -1613,6 +1621,21 @@ ipcMain.handle('browser:read', async (event, id, options = {}) => {
 // guest and replayed in the main window.
 let browserShortcuts = [];
 ipcMain.on('browser:shortcuts', (_e, list) => { browserShortcuts = Array.isArray(list) ? list : []; });
+// A browser tab's DevTools dock into a second <webview> (the drawer). Both must be guests of the caller.
+ipcMain.handle('browser:devtools', (event, pageId, drawerId) => {
+  const guest = id => {
+    const wc = Number.isInteger(id) && webContents.fromId(id);
+    return wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.hostWebContents?.id === event.sender.id ? wc : null;
+  };
+  const page = guest(pageId);
+  if (!page) throw new Error('Unknown browser tab');
+  if (drawerId == null) { page.closeDevTools(); return false; }
+  const drawer = guest(drawerId);
+  if (!drawer || drawer === page) throw new Error('Unknown DevTools view');
+  page.setDevToolsWebContents(drawer);
+  page.openDevTools();
+  return true;
+});
 function matchBrowserShortcut(input) {
   return browserShortcuts.some(s => s && s.key
     && (s.key.length === 1 ? input.key.toLowerCase() === s.key.toLowerCase() : input.key === s.key || input.code === s.key)
@@ -1718,6 +1741,13 @@ app.whenReady().then(async () => {
     });
     if (wc.getType() === 'webview') {
       wc.on('before-input-event', (event, input) => {
+        // F12 / Ctrl+Shift+I in a browser tab, or in its DevTools drawer, toggles that tab's drawer.
+        if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) {
+          event.preventDefault();
+          const host = wc.hostWebContents;
+          if (host && !host.isDestroyed()) host.send('browser:devtools-toggle', wc.id);
+          return;
+        }
         const host = wc.hostWebContents;
         if (input.type !== 'keyDown' || !host || host.isDestroyed() || !matchBrowserShortcut(input)) return;
         event.preventDefault();

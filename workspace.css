@@ -414,10 +414,11 @@ button,.tg-tab,.ctx-item,.custom-dropdown-option { transition:background-color 1
 @media(max-width:700px) { .term-wrap { inset:4px 8px; } }
 
 /* Settings dialog: persistent navigation beside a quiet, scrollable canvas. */
-#settings-overlay { align-items:center; justify-content:center; padding:24px; }
+/* The top padding keeps the modal clear of the native window controls (0 in browser mode). */
+#settings-overlay { align-items:center; justify-content:center; padding:max(24px,calc(env(titlebar-area-height,0px) + 8px)) 24px 24px; }
 #settings-modal {
   display:grid; grid-template-columns:220px minmax(0,1fr); grid-template-rows:48px minmax(0,1fr);
-  width:min(1440px,100%); height:min(760px,calc(100dvh - 48px));
+  width:min(1440px,100%); height:min(760px,100%);
   overflow:hidden; border:1px solid var(--ui-line); border-radius:16px !important;
   background:var(--bg); box-shadow:0 24px 80px #0006;
 }
@@ -450,8 +451,8 @@ button,.tg-tab,.ctx-item,.custom-dropdown-option { transition:background-color 1
 body.settings-only #settings-overlay { padding:0; }
 body.settings-only #settings-modal { width:100%; height:100%; border:0; border-radius:0 !important; }
 @media(max-width:700px) {
-  #settings-overlay { padding:12px; }
-  #settings-modal { grid-template-columns:160px minmax(0,1fr); height:calc(100dvh - 24px); }
+  #settings-overlay { padding:max(12px,calc(env(titlebar-area-height,0px) + 8px)) 12px 12px; }
+  #settings-modal { grid-template-columns:160px minmax(0,1fr); height:100%; }
   #settings-modal .settings-content { padding:20px 12px; }
   #settings-modal .settings-section > .border > .justify-between { flex-wrap:wrap; padding:12px; }
 }
@@ -1343,3 +1344,13 @@ body #settings-modal .bg-upload-area.compact .bg-clear-btn { position:static; wi
 /* ── Pane-header / titlebar icon buttons: the global focus ring sits 2px
    outside, which the 32px header clips top/bottom — draw it inside instead. ── */
 body .tg-btn:focus-visible, body .titlebar-btn:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+
+/* ── Browser tab DevTools drawer: docked under the page, as in Chrome. The
+   page area shrinks through .browser-slot's flex column; the sash resizes. ── */
+body .browser-devtools { position:relative; flex:0 0 auto; min-height:80px; background:var(--bg); }
+body webview.browser-devtools-surface { position:absolute; inset:0; display:flex; width:100%; height:100%; border:0; }
+body .browser-devtools-sash { flex:0 0 auto; height:5px; margin-bottom:-4px; position:relative; z-index:3; cursor:row-resize; border-top:1px solid var(--ui-line); transition:background-color 150ms, border-color 150ms; }
+body .browser-devtools-sash:hover, body.resizing .browser-devtools-sash:active { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 25%, transparent); }
+body.resizing .browser-devtools { pointer-events:none; }
+body .browser-devtools-btn.active { background:var(--ui-hover); color:var(--fg); }
+@media (prefers-reduced-motion: reduce) { body .browser-devtools-sash { transition:none; } }

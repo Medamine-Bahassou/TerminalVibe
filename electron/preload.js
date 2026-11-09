@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Local file path resolution
   resolveLocalPath: (p) => ipcRenderer.invoke('file:resolve', p),
   selectDirectory: (defaultPath) => ipcRenderer.invoke('dialog:openDirectory', defaultPath),
+  listShells: () => ipcRenderer.invoke('shell:list'),
+  setDefaultShell: (id) => ipcRenderer.send('shell:set-default', id),
 
   // Native PTY (node-pty runs in the main process)
   terminalCreate: (o) => ipcRenderer.invoke('terminal:create', o),
@@ -112,6 +114,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   browserZoom: (id, level) => ipcRenderer.send('browser:zoom', id, level),
   browserDestroy: (id) => ipcRenderer.send('browser:destroy', id),
   browserSetShortcuts: (list) => ipcRenderer.send('browser:shortcuts', list),
+  browserDevTools: (pageId, drawerId) => ipcRenderer.invoke('browser:devtools', pageId, drawerId),
+  onBrowserDevToolsToggle: (cb) => {
+    const l = (_e, id) => cb(id);
+    ipcRenderer.on('browser:devtools-toggle', l);
+    return () => ipcRenderer.removeListener('browser:devtools-toggle', l);
+  },
   onBrowserKey: (cb) => {
     const l = (_e, d) => cb(d);
     ipcRenderer.on('browser:key', l);

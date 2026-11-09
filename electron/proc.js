@@ -106,7 +106,7 @@ function runningProcessInfo(pid) {
 // Console helpers (conhost / openconsole) and nested shells are ignored.
 
 // Names that alone mean "idle at a prompt" — never reported as busy.
-const WIN_IDLE_RE = /^(powershell|pwsh|cmd|wsl|bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|nu|conhost|openconsole|windowsterminal)$/i;
+const WIN_IDLE_RE = /^(powershell|pwsh|cmd|wsl|wslhost|wslrelay|bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|nu|conhost|openconsole|windowsterminal)$/i;
 
 // Cached whole-system process table: parentPid -> [{pid, name}].
 // ponytail: async background refresh avoids blocking main event loop with powershell/wmic

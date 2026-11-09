@@ -11,7 +11,7 @@ const save=source.slice(source.indexOf('  function saveState()'),source.indexOf(
     currentLineHeight:1.2,currentCursorStyle:'block',currentCursorBlink:true,currentScrollback:1000,
     animationsEnabled:true,settingsCategory:'appearance',pinnedCollapsed:false,sidebarMode:'normal',showWsProcs:true,
     notifyOnCommandFinish:false,notificationSound:true,terminalLinkTarget:'tab',backgroundMode:'none',globalBackgroundImage:null,backgroundOpacity:0,
-    customShortcuts:{},searchEngine:'google',customSearchUrl:'',defaultTerminalPath:'',_pluginStates:new Map(),_pluginConfigs:new Map(),
+    customShortcuts:{},searchEngine:'google',customSearchUrl:'',defaultTerminalPath:'',defaultShell:'',_pluginStates:new Map(),_pluginConfigs:new Map(),
     localStorage:{getItem:()=>JSON.stringify(live)},
     persistStateToStorage:state=>{writes++;return new Promise(resolve=>{complete=()=>{disk=state;resolve();};});},
     window:{electronAPI:{settingsChanged:()=>{notifications++;observed=disk.showWsProcs;}}},
