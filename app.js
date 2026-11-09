@@ -5052,8 +5052,9 @@
     // Fallback: if the split was destroyed, pass focus to the next available terminal
     const remainingTerms = getWorkspaceTerminals(wsp);
     if (remainingTerms.length > 0 && !remainingTerms.some(t => t.id === wsp.activeTermId)) {
-      wsp.activeTermId = remainingTerms[0].id;
-      const fallbackGroup = findGroupContainingTerm(wsp.layout, wsp.activeTermId);
+      // Keep the fallback group's selected tab; its first tab may be hidden.
+      const fallbackGroup = findGroupContainingTerm(wsp.layout, remainingTerms[0].id);
+      wsp.activeTermId = fallbackGroup?.activeTermId || remainingTerms[0].id;
       if (fallbackGroup && !fallbackGroup.activeTermId) {
         fallbackGroup.activeTermId = wsp.activeTermId;
       }
@@ -5352,20 +5353,8 @@
       activeTermId: id
     };
 
-    // Update layout tree: split the target group
-    if (wsp.layout.id === groupId) {
-      // Target is the root — replace root with a split node
-      const isFirst = true;
-      wsp.layout = {
-        type: 'split',
-        id: 'split-' + uuid(),
-        direction,
-        children: isFirst ? [newGroup, wsp.layout] : [wsp.layout, newGroup],
-        sizes: [50, 50]
-      };
-    } else {
-      splitGroupNodeInTree(wsp.layout, groupId, newGroup, direction, false);
-    }
+    // New pane goes after (right/below) the current one, root or nested alike.
+    wsp.layout = splitGroupNodeInTree(wsp.layout, groupId, newGroup, direction, false);
 
     wsp.activeTermId = id;
     renderPaneArea();
@@ -7132,8 +7121,8 @@
     } else {
       const remaining = getWorkspaceTerminals(srcWs);
       if (remaining.length && !remaining.some(t => t.id === srcWs.activeTermId)) {
-        srcWs.activeTermId = remaining[0].id;
-        const fallbackGroup = findGroupContainingTerm(srcWs.layout, srcWs.activeTermId);
+        const fallbackGroup = findGroupContainingTerm(srcWs.layout, remaining[0].id);
+        srcWs.activeTermId = fallbackGroup?.activeTermId || remaining[0].id;
         if (fallbackGroup && !fallbackGroup.activeTermId) fallbackGroup.activeTermId = srcWs.activeTermId;
       } else if (!remaining.length) {
         srcWs.activeTermId = null;
