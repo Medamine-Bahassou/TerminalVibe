@@ -30,7 +30,7 @@
     "build:deb": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux deb --publish never",
     "build:rpm": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux rpm --publish never",
     "build:linux": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux AppImage deb rpm --publish never",
-    "build:win": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --win --publish never",
+    "build:win": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --win --publish never -c.npmRebuild=false",
     "dist": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux dir --publish never",
     "electron:install": "node node_modules/electron/install.js"
   },
