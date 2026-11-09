@@ -1995,24 +1995,7 @@
   }
 
   function _extractOSC7Cwd(uint8Data) {
-    // OSC 7: \x1b]7;file://hostname/path\x07  or  \x1b]7;file:///path\x07
-    const str = new TextDecoder().decode(uint8Data);
-    // Match the entire OSC 7 file:// URI
-    const match = str.match(/\x1b\]7;(file:\/\/[^\x07\x1b]+)/);
-    if (match) {
-      try {
-        let uri = match[1];
-        let pathPart = uri.slice(7); // strip 'file://'
-        // If pathPart doesn't start with /, it's file://hostname/path → remove hostname
-        if (!pathPart.startsWith('/')) {
-          const slashIdx = pathPart.indexOf('/');
-          if (slashIdx !== -1) pathPart = pathPart.slice(slashIdx);
-          else pathPart = '/' + pathPart;
-        }
-        return decodeURIComponent(pathPart);
-      } catch { }
-    }
-    return null;
+    return _extractOSC7CwdStr(new TextDecoder().decode(uint8Data));
   }
 
   function _extractOSC7CwdStr(str) {
@@ -2027,7 +2010,8 @@
           if (slashIdx !== -1) pathPart = pathPart.slice(slashIdx);
           else pathPart = '/' + pathPart;
         }
-        return decodeURIComponent(pathPart);
+        // Windows paths arrive as /C:\dir or /\\server\share: drop the URI's leading slash.
+        return decodeURIComponent(pathPart).replace(/^\/(?=[A-Za-z]:|\\\\)/, '');
       } catch { }
     }
     return null;
@@ -3857,7 +3841,7 @@
   function shortTitle(title) {
     const path = title.includes('@') && title.includes(':') ? title.slice(title.indexOf(':') + 1) : title;
     if (!path || path === '~') return path;
-    return path.split('/').filter(Boolean).pop() || path;
+    return path.split(/[\\/]/).filter(Boolean).pop() || path;
   }
 
   function renameWorkspace(id) {

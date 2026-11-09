@@ -62,6 +62,33 @@ transport.sendControl({type:'create',id:'new',cols:80,rows:24,cwd:'/cached',inhe
 assert.equal(forwarded[0].inheritFromId,'previous','Native IPC must preserve the source terminal ID');
 console.log('PASS: immediate new tabs, correct split directory, previous-tab precedence, default fallback and native inheritance forwarding');
 
+const osc = vm.createContext({ TextDecoder });
+vm.runInContext(source.slice(source.indexOf('  function _extractOSC7Cwd('), source.indexOf('  function _getFocusedCwd(')), osc);
+const parse = uri => osc._extractOSC7CwdStr(`\x1b]7;${uri}\x07`);
+assert.equal(parse('file:///C%3A%5CUsers%5Cdemo%20%C3%A9'), 'C:\\Users\\demo é');
+assert.equal(parse('file:///%5C%5Cwsl.localhost%5CUbuntu%5Chome'), '\\\\wsl.localhost\\Ubuntu\\home');
+assert.equal(parse('file://host/home/demo%20dir'), '/home/demo dir');
+assert.equal(osc._extractOSC7Cwd(new TextEncoder().encode('\x1b]7;file:///C%3A%5Cbytes\x07')), 'C:\\bytes');
+for (const shell of ['powershell.exe', 'pwsh.exe']) assert.equal(prepareShellStartup(shell).args[0], '-NoExit');
+if (process.platform === 'win32') {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'tv ps é '));
+  const hook = prepareShellStartup('powershell.exe').args[2];
+  const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', `function prompt { 'custom> ' }; ${hook}; prompt`],
+    { cwd, encoding: 'utf8', timeout: 30000 });
+  fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  assert.equal(path.basename(osc._extractOSC7CwdStr(out)), path.basename(cwd));
+  assert(out.includes('custom> '), 'The user prompt must still render');
+  assert(out.includes('\x1b]133;A\x07'), 'PowerShell must signal the prompt so the tab title resets to the folder');
+}
+const titles = vm.createContext({});
+vm.runInContext(source.slice(source.indexOf('  function shortTitle('), source.indexOf('  function renameWorkspace(')), titles);
+assert.equal(titles.shortTitle('C:\\Users\\demo\\my project'), 'my project');
+assert.equal(titles.shortTitle('C:\\'), 'C:');
+assert.equal(titles.shortTitle('\\\\wsl.localhost\\Ubuntu\\home'), 'home');
+assert.equal(titles.shortTitle('/home/demo'), 'demo');
+assert.equal(titles.shortTitle('user@host:/home/demo'), 'demo');
+console.log('PASS: Windows and POSIX OSC 7 paths, PowerShell cwd hook, Windows tab titles');
+
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-startup-test-'));
 const generated = [];
 function run(shell, command, extraEnv = {}) {
