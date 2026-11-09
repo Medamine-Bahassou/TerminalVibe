@@ -8,7 +8,7 @@ const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceS
 const { listRunningServers, killServer } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
 const { prepareShellStartup } = require('./shell-startup');
-const { listShells, findShell } = require('./shells');
+const { listShells, findShell, resolveExecutable } = require('./shells');
 let agentControl = null;
 const agentRequests = new Map();
 ipcMain.on('agent:result', (event, { id, result, error }) => {
@@ -1135,7 +1135,7 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
     const env = terminalEnv();
     startup = executable || argv?.length ? { args: [], env: {}, tmpDir: null } : prepareShellStartup(shell, env);
     const shellArgs = [...(profile?.args || []), ...(!cwdRequested && profile?.homeArgs || []), ...startup.args];
-    const t = pty.spawn(executable || shell, argv && argv.length ? argv : shellArgs, {
+    const t = pty.spawn(resolveExecutable(executable || shell), argv && argv.length ? argv : shellArgs, {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,

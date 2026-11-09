@@ -89,7 +89,26 @@ assert.equal(titles.shortTitle('/home/demo'), 'demo');
 assert.equal(titles.shortTitle('user@host:/home/demo'), 'demo');
 console.log('PASS: Windows and POSIX OSC 7 paths, PowerShell cwd hook, Windows tab titles');
 
-const { parseWslList, windowsShells, posixShells, findShell } = require('../electron/shells');
+const { parseWslList, windowsShells, posixShells, findShell, resolveExecutable } = require('../electron/shells');
+{
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-bin-'));
+  for (const name of ['tool.exe', 'helper.com', 'npm.cmd', 'tool']) fs.writeFileSync(path.join(bin, name), '');
+  fs.mkdirSync(path.join(bin, 'folder.exe'));
+  // ';' join, as on Windows, with an empty entry and a quoted one.
+  const env = { PATH: ['', `"${bin}"`].join(';') };
+  const win = name => resolveExecutable(name, env, 'win32');
+  assert.equal(win('tool'), path.join(bin, 'tool.exe'), 'A bare name finds the .exe, not the extensionless file');
+  assert.equal(win('tool.exe'), path.join(bin, 'tool.exe'));
+  assert.equal(win('helper'), path.join(bin, 'helper.com'));
+  assert.equal(win('npm.cmd'), path.join(bin, 'npm.cmd'), 'An explicit extension is kept');
+  assert.equal(win('npm'), 'npm', 'A bare name never picks a .cmd script');
+  assert.equal(win('folder'), 'folder', 'Folders are not programs');
+  assert.equal(win('missing'), 'missing', 'Not found leaves the name for node-pty to report');
+  assert.equal(win('C:\\Windows\\System32\\wsl.exe'), 'C:\\Windows\\System32\\wsl.exe');
+  assert.equal(win('.\\tool.exe'), '.\\tool.exe');
+  assert.equal(resolveExecutable('tool', env, 'linux'), 'tool', 'Other systems use their own PATH lookup');
+  fs.rmSync(bin, { recursive: true, force: true });
+}
 assert.deepEqual(parseWslList(Buffer.from('docker-desktop\r\nUbuntu\r\n\r\nDebian\r\n', 'utf16le')), ['Ubuntu', 'Debian']);
 const winEnv = { SystemRoot: 'C:\\Windows', ProgramFiles: 'C:\\Program Files', ComSpec: 'C:\\Windows\\system32\\cmd.exe' };
 const installed = new Set([

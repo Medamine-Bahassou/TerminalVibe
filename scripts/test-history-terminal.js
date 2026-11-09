@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const pty = require('node-pty');
 const { prepareShellStartup } = require('../electron/shell-startup');
 const { processWorkingDirectory } = require('../electron/proc');
+const { resolveExecutable } = require('../electron/shells');
 const root = path.join(__dirname, '..');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-history-terminal-'));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -26,7 +27,7 @@ function desktopBackend() {
     require, fs, path, processWorkingDirectory, process: { env: { SHELL: '/bin/bash' }, platform: process.platform },
     pty: { spawn(...args) { spawns++; return pty.spawn(...args); } }, ptys,
     terminalEnv: () => ({ ...process.env, HOME: temp }), prepareShellStartup, agentControl: null,
-    defaultShellId: '', findShell: () => null,
+    defaultShellId: '', findShell: () => null, resolveExecutable,
     detachedWindows: new Map(), notifyBusy: new Map(), ptyIO: new Map(), console, setTimeout, clearTimeout,
     sendToRenderer(channel, payload) {
       if (channel === 'terminal:data') output += payload.data;
@@ -49,7 +50,7 @@ function webBackend() {
     fs, os, path, Buffer, process: { env: { SHELL: '/bin/bash' }, platform: process.platform },
     pty: { spawn(...args) { spawns++; return pty.spawn(...args); } },
     terminalEnv: () => ({ ...process.env, HOME: temp }), agentControl: null,
-    prepareShellStartup, SESSIONS, ID_LEN: 36, setTimeout, clearTimeout,
+    prepareShellStartup, resolveExecutable, SESSIONS, ID_LEN: 36, setTimeout, clearTimeout,
   });
   vm.runInContext(source.slice(source.indexOf('class PTYSession {'), source.indexOf('const wss =')) + '\nthis.PTYSession = PTYSession;', context);
   return {
