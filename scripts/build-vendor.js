@@ -34,4 +34,11 @@ cp(path.join(root, 'node_modules/split.js/dist/split.min.js'), path.join(vendor,
 cp(path.join(root, 'node_modules/@melloware/coloris/dist/umd/coloris.min.js'), path.join(vendor, 'coloris.min.js'));
 cp(path.join(root, 'node_modules/@melloware/coloris/dist/coloris.min.css'), path.join(vendor, 'coloris.min.css'));
 
+// Phosphor icons (regular weight only; Chromium never asks for the non-woff2 fallbacks)
+for (const f of ['style.css', 'Phosphor.woff2']) {
+  cp(path.join(root, 'node_modules/@phosphor-icons/web/src/regular', f), path.join(vendor, 'phosphor', f));
+}
+
+require('./build-tailwind.js');
+
 console.log('[vendor] done →', vendor);
