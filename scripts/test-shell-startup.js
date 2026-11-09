@@ -178,6 +178,65 @@ try {
     generated.push(wrapped.tmpDir);
     assert.equal(wrapped.args[0], '--rcfile', 'Windows executable names must get the shell hook');
 
+    // WSL: fake wslpath, getent and shells, so this runs on any Linux.
+    const wslStartup = prepareShellStartup('wsl.exe', { WSLENV: 'MINE/p' });
+    generated.push(wslStartup.tmpDir);
+    assert.deepEqual(wslStartup.args.slice(0, 3), ['-e', 'sh', '-c']);
+    assert.equal(wslStartup.env.WSLENV, 'MINE/p:TV_WSL_DIR/p', 'The user\'s WSLENV must be kept');
+    const fakes = path.join(home, 'fakes');
+    fs.mkdirSync(fakes);
+    const fake = (name, body) => fs.writeFileSync(path.join(fakes, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    const wslFolder = '\\\\wsl.localhost\\Ubuntu\\tmp\\my 100% é';
+    fake('wslpath', `printf '%s\\n' '${wslFolder}'`);
+    const fakePath = `${fakes}:${process.env.PATH}`;
+    const wslEnv = { ...process.env, HOME: home, PATH: fakePath, TV_WSL_DIR: wslStartup.tmpDir };
+    delete wslEnv.ZDOTDIR;
+    fs.writeFileSync(path.join(home, '.bash_profile'), 'TV_PROFILE=1\n');
+    const wslRc = path.join(wslStartup.tmpDir, 'bashrc');
+    const wslBash = execFileSync('/bin/bash', ['--rcfile', wslRc, '-i', '-c', 'printf "profile=%s\\n" "$TV_PROFILE"; __terminal_vibe_cwd'], { env: wslEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
+    assert.match(wslBash, /profile=1/, 'A WSL tab must read login files, as a plain WSL tab does');
+    assert.equal(osc._extractOSC7CwdStr(wslBash), wslFolder);
+    assert.match(wslBash, /\x1b\]133;A\x07/);
+    fake('wslpath', 'exit 1');
+    const noPath = execFileSync('/bin/bash', ['--rcfile', wslRc, '-i', '-c', '__terminal_vibe_cwd'], { env: wslEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
+    assert(!noPath.includes('\x1b]7;'), 'A failed wslpath must not report a folder');
+    if (spawnSync('/bin/zsh', ['--version']).status === 0) {
+      fake('wslpath', `printf '%s\\n' '${wslFolder}'`);
+      fs.writeFileSync(path.join(home, '.zprofile'), 'TV_ZPROFILE=$(( TV_ZPROFILE + 1 ))\n');
+      fs.writeFileSync(path.join(home, '.zshrc'), 'TV_ZSHRC=$(( TV_ZSHRC + 1 ))\n');
+      const wslZsh = execFileSync('/bin/zsh', ['-l', '-i', '-c', 'printf "zprofile=%s zshrc=%s zdotdir=[%s]\\n" "$TV_ZPROFILE" "$TV_ZSHRC" "$ZDOTDIR"; __terminal_vibe_cwd'],
+        { env: { ...wslEnv, ZDOTDIR: wslStartup.tmpDir }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
+      assert(wslZsh.includes('zprofile=1 zshrc=1 zdotdir=[]'), wslZsh);
+      assert.equal(osc._extractOSC7CwdStr(wslZsh), wslFolder);
+      const hookedZsh = (extraEnv) => execFileSync('/bin/zsh', ['-l', '-i', '-c', 'print -r -- "body=$TV_COMPINIT"'],
+        { env: { ...wslEnv, ZDOTDIR: wslStartup.tmpDir, ...extraEnv }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000 });
+      const hookDump = path.join(wslStartup.tmpDir, '.zcompdump');
+      // Ubuntu's own compinit, where the distro has one.
+      fs.writeFileSync(path.join(home, '.zprofile'), '');
+      hookedZsh({});
+      assert(!fs.existsSync(hookDump), 'The distro compinit must not rebuild its dump in the hook folder for every tab');
+      // A single compinit at the same stage, on any distro: .zprofile also runs while ZDOTDIR is the hook folder.
+      fs.writeFileSync(path.join(home, '.zprofile'), 'autoload -U compinit; compinit\n');
+      fs.rmSync(path.join(home, '.zcompdump'), { force: true });
+      hookedZsh({ skip_global_compinit: '1' });
+      assert(!fs.existsSync(hookDump), 'compinit must not write its dump to the hook folder');
+      assert(fs.existsSync(path.join(home, '.zcompdump')), 'compinit must use the user\'s normal dump');
+      // Nobody called it yet: the user's .zshrc must see the normal compinit.
+      fs.writeFileSync(path.join(home, '.zprofile'), '');
+      fs.writeFileSync(path.join(home, '.zshrc'), 'TV_COMPINIT=${functions[compinit]}\n');
+      assert(!hookedZsh({ skip_global_compinit: '1' }).includes('__terminal_vibe'), 'The redirect must be gone before the user\'s .zshrc');
+    }
+    const startWith = (login, dir) => {
+      fake('getent', `echo "me:x:1:1::/home/me:${login}"`);
+      return execFileSync('sh', ['-c', wslStartup.args[3]], { env: { ...wslEnv, TV_WSL_DIR: dir, ZDOTDIR: '' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 }).trim();
+    };
+    for (const name of ['zsh', 'bash', 'fish']) fake(name, `echo "${name} $* zdotdir=$ZDOTDIR"`);
+    const hookDir = wslStartup.tmpDir;
+    assert.equal(startWith(path.join(fakes, 'zsh'), hookDir), `zsh -l zdotdir=${hookDir}`);
+    assert.equal(startWith(path.join(fakes, 'bash'), hookDir), `bash --rcfile ${hookDir}/bashrc zdotdir=`);
+    assert.equal(startWith(path.join(fakes, 'fish'), hookDir), 'fish -l zdotdir=', 'Other shells still open, as login shells');
+    assert.equal(startWith(path.join(fakes, 'zsh'), '/not/reachable'), 'zsh -l zdotdir=', 'Unreachable hook files must not stop the tab opening');
+
     if (spawnSync('/bin/zsh', ['--version']).status === 0) {
       const custom = path.join(home, "custom ' dotdir");
       fs.mkdirSync(custom);
