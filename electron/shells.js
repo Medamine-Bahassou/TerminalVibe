@@ -66,4 +66,18 @@ function findShell(id) {
   return id ? listShells().find(shell => shell.id === id) || null : null;
 }
 
-module.exports = { listShells, findShell, parseWslList, windowsShells, posixShells };
+// node-pty's PATH lookup returns an empty path when the name also exists in the app's
+// current folder, which is System32 when Windows starts the app, so wsl.exe and cmd.exe failed.
+function resolveExecutable(file, env = process.env, platform = process.platform) {
+  if (platform !== 'win32' || /[\\/]/.test(file)) return file;
+  const names = path.win32.extname(file) ? [file] : [`${file}.exe`, `${file}.com`];
+  for (const dir of String(env.PATH ?? env.Path ?? '').split(';')) {
+    for (const name of dir ? names : []) {
+      const full = path.join(dir.replace(/^"|"$/g, ''), name);
+      try { if (fs.statSync(full).isFile()) return full; } catch {}
+    }
+  }
+  return file; // Not on PATH: node-pty reports it.
+}
+
+module.exports = { listShells, findShell, parseWslList, windowsShells, posixShells, resolveExecutable };

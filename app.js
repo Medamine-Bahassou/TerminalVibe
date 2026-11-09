@@ -2687,6 +2687,7 @@
           if (t.bgImage) o.bgImage = t.bgImage;
           if (t.dead) o.dead = true;
           if (t.agentManaged) o.agentManaged = true;
+          if (t.keepOnExit) o.keepOnExit = true;
           if (t.locked) o.locked = true;
           if (t.pinLabel) o.pinLabel = true;
           if (t.toolProvider) o.toolProvider = t.toolProvider;
@@ -2737,6 +2738,7 @@
         if (tData.bgImage) entry.bgImage = tData.bgImage;
         if (tData.dead) entry.dead = true;
         if (tData.agentManaged) entry.agentManaged = true;
+        if (tData.keepOnExit) entry.keepOnExit = true;
         if (tData.locked) entry.locked = true;
         if (tData.pinLabel) entry.pinLabel = true;
         if (tData.toolProvider) entry.toolProvider = tData.toolProvider;
@@ -5198,7 +5200,8 @@
     const { ws, term: t } = result;
     t.dead = true;
     pluginEmit('terminal:exit', { termId: id, code });
-    if (t.agentManaged) {
+    // Other agent panes returned to a shell when the agent ended, so this exit is the user's: close like any tab.
+    if (t.agentManaged && t.keepOnExit) {
       t.term.write(`\r\n[Agent process exited: ${code}]\r\n`);
       t.term.options.disableStdin = true;
       renderPaneArea();
@@ -10801,6 +10804,7 @@
         entry.cwd = node.cwd;
         entry.pinLabel = true;
         entry.agentManaged = true;
+        if (node.returnToShell === false) entry.keepOnExit = true;
         terms.push(entry);
         return { type: 'group', id: uuid(), activeTermId: id, terminals: [entry] };
       };

@@ -19,6 +19,7 @@ const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceS
 const { listRunningServers, killServer } = require('./electron/servers');
 const { terminalEnv } = require('./electron/terminal-env');
 const { prepareShellStartup } = require('./electron/shell-startup');
+const { resolveExecutable } = require('./electron/shells');
 const { randomUUID } = require('crypto');
 let agentControl;
 const agentClients = new Set();
@@ -210,7 +211,7 @@ class PTYSession {
       : prepareShellStartup(this.shell);
     this._tmpDir = tmpDir;
 
-    this._proc = pty.spawn(this.executable || this.shell, this.executable ? this.argv || [] : shellArgs, {
+    this._proc = pty.spawn(resolveExecutable(this.executable || this.shell), this.executable ? this.argv || [] : shellArgs, {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
