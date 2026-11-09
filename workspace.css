@@ -1354,3 +1354,12 @@ body .browser-devtools-sash:hover, body.resizing .browser-devtools-sash:active {
 body.resizing .browser-devtools { pointer-events:none; }
 body .browser-devtools-btn.active { background:var(--ui-hover); color:var(--fg); }
 @media (prefers-reduced-motion: reduce) { body .browser-devtools-sash { transition:none; } }
+
+/* ── Empty state: shortcut cheat sheet (rows built by refreshShortcutHints) ── */
+.empty-keys { display:flex; flex-direction:column; width:min(300px,100%); margin:12px 0 0; flex-shrink:0; }
+.empty-keys > div { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:32px; border-top:1px solid var(--ui-line); }
+.empty-keys > div:first-child { border-top:0; }
+.empty-keys dt { font-size:12px; color:var(--muted-text); }
+.empty-keys dd { display:flex; gap:4px; margin:0; }
+body .empty-keys kbd { min-width:20px; padding:1px 5px; text-align:center; border:1px solid var(--border); border-radius:4px !important; background:var(--bg); color:var(--muted-text); font:500 11px/16px var(--mono-font); }
+@media (max-height: 560px) { .empty-keys { display:none; } }

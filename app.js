@@ -226,10 +226,39 @@
   // Push shortcuts to main so they still fire while a native browser view has
   // focus (plus the hardcoded Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+, combos).
   function syncBrowserShortcuts() {
+    refreshShortcutHints();
     window.electronAPI?.browserSetShortcuts?.([
       ...Object.values(customShortcuts),
       { ctrl: true, key: 'Tab' }, { ctrl: true, shift: true, key: 'Tab' }, { ctrl: true, key: ',' },
     ]);
+  }
+
+  // "New terminal (Ctrl+Shift+T)" — tooltip text carrying the live binding.
+  function withKey(text, action) {
+    const s = customShortcuts[action];
+    return s && s.key ? `${text} (${formatKeyCombo(s)})` : text;
+  }
+
+  // Keep tooltips and the empty-state cheat sheet in step with rebinds.
+  function refreshShortcutHints() {
+    const tips = { 'btn-sidebar-toggle': ['Toggle sidebar', 'toggleSidebar'], 'btn-profiles': ['Profiles', 'profiles'] };
+    for (const [id, [text, action]] of Object.entries(tips)) {
+      const el = document.getElementById(id), tip = withKey(text, action);
+      if (el && el.dataset.tip !== tip) el.title = tip;
+    }
+    const keys = document.getElementById('empty-keys');
+    if (!keys) return;
+    keys.replaceChildren(...['newTerminal', 'browserTab', 'commandPalette', 'tabSearch']
+      .filter(a => customShortcuts[a]?.key)
+      .map(a => {
+        const row = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd');
+        dt.textContent = SHORTCUT_LABELS[a];
+        for (const part of formatKeyCombo(customShortcuts[a]).split('+')) {
+          const kbd = document.createElement('kbd'); kbd.textContent = part; dd.append(kbd);
+        }
+        row.append(dt, dd);
+        return row;
+      }));
   }
 
   function matchShortcutMouse(e, action) {
@@ -5475,7 +5504,7 @@
       if (maxBtn) {
         const isNowMax = wsp._maximizedGroupId && el.id === 'group-' + wsp._maximizedGroupId;
         maxBtn.innerHTML = isNowMax ? RESTORE_ICON : MAXIMIZE_ICON;
-        maxBtn.title = isNowMax ? 'Restore' : 'Maximize';
+        maxBtn.title = withKey(isNowMax ? 'Restore' : 'Maximize', 'maximizeTab');
       }
     });
 
@@ -6043,25 +6072,25 @@
 
       const addTabBtn = document.createElement('div');
       addTabBtn.className = 'tg-btn';
-      addTabBtn.title = 'New terminal in this group';
+      addTabBtn.title = withKey('New terminal in this group', 'newTerminal');
       addTabBtn.innerHTML = '<i class="ph ph-plus"></i>';
       addTabBtn.addEventListener('click', () => addTerminal(wsp.id, node.id));
 
       const splitH = document.createElement('div');
       splitH.className = 'tg-btn';
-      splitH.title = 'Split Horizontal';
+      splitH.title = withKey('Split horizontal', 'splitH');
       splitH.innerHTML = '<i class="ph ph-square-split-horizontal"></i>';
       splitH.onclick = () => splitGroupDirectly(wsp.id, node.id, 'row');
 
       const splitV = document.createElement('div');
       splitV.className = 'tg-btn';
-      splitV.title = 'Split Vertical';
+      splitV.title = withKey('Split vertical', 'splitV');
       splitV.innerHTML = '<i class="ph ph-square-split-vertical"></i>';
       splitV.onclick = () => splitGroupDirectly(wsp.id, node.id, 'column');
 
       const addBrowserBtn = document.createElement('div');
       addBrowserBtn.className = 'tg-btn';
-      addBrowserBtn.title = 'New browser tab';
+      addBrowserBtn.title = withKey('New browser tab', 'browserTab');
       addBrowserBtn.innerHTML = '<i class="ph ph-globe"></i>';
       addBrowserBtn.onclick = () => addBrowserTab(wsp.id, node.id);
 
@@ -6069,7 +6098,7 @@
       const maxBtn = document.createElement('div');
       maxBtn.className = 'tg-btn';
       maxBtn.dataset.action = 'maximize';
-      maxBtn.title = isMax ? 'Restore' : 'Maximize';
+      maxBtn.title = withKey(isMax ? 'Restore' : 'Maximize', 'maximizeTab');
       maxBtn.innerHTML = isMax
         ? '<i class="ph ph-corners-in"></i>'
         : '<i class="ph ph-corners-out"></i>';
