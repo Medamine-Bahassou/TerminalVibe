@@ -11,20 +11,29 @@ const POWERSHELL_CWD_HOOK = "$__tvPrompt=$function:prompt;function global:prompt
 
 // Temporary integration files only; never modify the user's shell config.
 function prepareShellStartup(shell, env = process.env) {
-  const name = path.basename(shell).toLowerCase();
-  if (name === 'powershell.exe' || name === 'pwsh.exe') {
+  const name = path.basename(shell).toLowerCase().replace(/\.exe$/, '');
+  if (name === 'powershell' || name === 'pwsh') {
     return { args: ['-NoExit', '-Command', POWERSHELL_CWD_HOOK], env: {}, tmpDir: null };
+  }
+  if (name === 'cmd') {
+    // shortcut: $P isn't URI-encoded, so a folder name containing % stops updating the cwd. Encoding needs a real hook.
+    return { args: [], env: { PROMPT: `$e]7;file:///$P$e\\$e]133;A$e\\${env.PROMPT || '$P$G'}` }, tmpDir: null };
   }
   if (name !== 'bash' && name !== 'zsh') return { args: [], env: {}, tmpDir: null };
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `tv-${name}-`));
   try {
     if (name === 'bash') {
       const rc = path.join(tmpDir, 'bashrc');
+      const gitBash = process.platform === 'win32';
       fs.writeFileSync(rc, [
+        // Git Bash gets its PATH and prompt from the login profile.
+        ...(gitBash ? ['source /etc/profile'] : []),
         '# Interactive tabs load bashrc once; login profiles may source it again.',
         '[ ! -r ~/.bashrc ] || source ~/.bashrc',
         '__terminal_vibe_cwd() {',
-        '  printf "\\e]7;file://${HOSTNAME:-localhost}${PWD// /%20}\\a"',
+        // Paths like /tmp only exist inside Git Bash, so it reports the Windows path.
+        `  local dir="${gitBash ? '/$(pwd -W)' : '$PWD'}"`,
+        '  printf "\\e]7;file://%s%s\\a" "${HOSTNAME:-localhost}" "${dir// /%20}"',
         '  printf "\\e]133;A\\a"',
         '}',
         // Preserve both scalar and array PROMPT_COMMAND configurations.
