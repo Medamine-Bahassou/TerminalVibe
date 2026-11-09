@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, dialog, Menu } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, dialog, Menu, webContents } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
@@ -1621,6 +1621,21 @@ ipcMain.handle('browser:read', async (event, id, options = {}) => {
 // guest and replayed in the main window.
 let browserShortcuts = [];
 ipcMain.on('browser:shortcuts', (_e, list) => { browserShortcuts = Array.isArray(list) ? list : []; });
+// A browser tab's DevTools dock into a second <webview> (the drawer). Both must be guests of the caller.
+ipcMain.handle('browser:devtools', (event, pageId, drawerId) => {
+  const guest = id => {
+    const wc = Number.isInteger(id) && webContents.fromId(id);
+    return wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.hostWebContents?.id === event.sender.id ? wc : null;
+  };
+  const page = guest(pageId);
+  if (!page) throw new Error('Unknown browser tab');
+  if (drawerId == null) { page.closeDevTools(); return false; }
+  const drawer = guest(drawerId);
+  if (!drawer || drawer === page) throw new Error('Unknown DevTools view');
+  page.setDevToolsWebContents(drawer);
+  page.openDevTools();
+  return true;
+});
 function matchBrowserShortcut(input) {
   return browserShortcuts.some(s => s && s.key
     && (s.key.length === 1 ? input.key.toLowerCase() === s.key.toLowerCase() : input.key === s.key || input.code === s.key)
@@ -1726,6 +1741,13 @@ app.whenReady().then(async () => {
     });
     if (wc.getType() === 'webview') {
       wc.on('before-input-event', (event, input) => {
+        // F12 / Ctrl+Shift+I in a browser tab, or in its DevTools drawer, toggles that tab's drawer.
+        if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) {
+          event.preventDefault();
+          const host = wc.hostWebContents;
+          if (host && !host.isDestroyed()) host.send('browser:devtools-toggle', wc.id);
+          return;
+        }
         const host = wc.hostWebContents;
         if (input.type !== 'keyDown' || !host || host.isDestroyed() || !matchBrowserShortcut(input)) return;
         event.preventDefault();

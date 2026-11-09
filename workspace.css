@@ -1344,3 +1344,13 @@ body #settings-modal .bg-upload-area.compact .bg-clear-btn { position:static; wi
 /* ── Pane-header / titlebar icon buttons: the global focus ring sits 2px
    outside, which the 32px header clips top/bottom — draw it inside instead. ── */
 body .tg-btn:focus-visible, body .titlebar-btn:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+
+/* ── Browser tab DevTools drawer: docked under the page, as in Chrome. The
+   page area shrinks through .browser-slot's flex column; the sash resizes. ── */
+body .browser-devtools { position:relative; flex:0 0 auto; min-height:80px; background:var(--bg); }
+body webview.browser-devtools-surface { position:absolute; inset:0; display:flex; width:100%; height:100%; border:0; }
+body .browser-devtools-sash { flex:0 0 auto; height:5px; margin-bottom:-4px; position:relative; z-index:3; cursor:row-resize; border-top:1px solid var(--ui-line); transition:background-color 150ms, border-color 150ms; }
+body .browser-devtools-sash:hover, body.resizing .browser-devtools-sash:active { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 25%, transparent); }
+body.resizing .browser-devtools { pointer-events:none; }
+body .browser-devtools-btn.active { background:var(--ui-hover); color:var(--fg); }
+@media (prefers-reduced-motion: reduce) { body .browser-devtools-sash { transition:none; } }

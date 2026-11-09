@@ -1748,9 +1748,16 @@
   let workspaceContextReady = false;
 
   const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
+  let browserDevToolsHeight = 0; // Last dragged DevTools drawer height, shared by tabs; 0 = 40% of the tab
   if (isDesktop() && window.electronAPI) {
     window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
     window.electronAPI.onBrowserKey?.(d => document.dispatchEvent(new KeyboardEvent('keydown', { ...d, bubbles: true, cancelable: true })));
+    // The key came from a tab's page or from its DevTools drawer.
+    window.electronAPI.onBrowserDevToolsToggle?.(id => {
+      const ownsGuest = view => { try { return view.getWebContentsId() === id; } catch { return false; } };
+      workspaces.flatMap(getWorkspaceTerminals).find(t => t.type === 'browser' &&
+        [...(t.browserContainer?.querySelectorAll('webview.browser-surface, .browser-devtools webview') || [])].some(ownsGuest))?._toggleDevTools?.();
+    });
     syncBrowserShortcuts();
   }
   // ResizeObserver fires after layout, before paint: syncing here moves the
@@ -6262,6 +6269,67 @@
         toolbar.appendChild(urlInput);
         toolbar.appendChild(btnHistory);
         toolbar.appendChild(btnOpenExt);
+        // DevTools dock in a drawer under the page, as in Chrome. Desktop only: browser mode's iframe has none.
+        if (isDesktop() && window.electronAPI?.browserDevTools) {
+          const btnDevTools = document.createElement('button');
+          btnDevTools.className = 'browser-btn browser-devtools-btn';
+          btnDevTools.title = 'Developer tools (F12)';
+          btnDevTools.setAttribute('aria-label', 'Developer tools');
+          btnDevTools.setAttribute('aria-pressed', 'false');
+          btnDevTools.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+          let drawer = null;
+          const page = () => {
+            const surface = contentWrap.querySelector('webview.browser-surface');
+            return surface?._guestReady ? surface : null; // The webview API throws before dom-ready.
+          };
+          entry._closeDevTools = () => {
+            if (!drawer) return;
+            const surface = page();
+            if (surface) window.electronAPI.browserDevTools(surface.getWebContentsId(), null).catch(() => {});
+            drawer.sash.remove(); drawer.el.remove(); drawer = null;
+            btnDevTools.classList.remove('active'); btnDevTools.setAttribute('aria-pressed', 'false');
+            settleBrowserSurfaces();
+          };
+          entry._toggleDevTools = () => {
+            if (drawer) return entry._closeDevTools();
+            const surface = page();
+            if (!surface) return;
+            const sash = document.createElement('div');
+            sash.className = 'browser-devtools-sash';
+            sash.setAttribute('role', 'separator');
+            sash.setAttribute('aria-orientation', 'horizontal');
+            const el = document.createElement('div');
+            el.className = 'browser-devtools';
+            const clamp = h => Math.max(80, Math.min(bc.clientHeight - 120, h));
+            el.style.height = `${clamp(browserDevToolsHeight || Math.round(bc.clientHeight * 0.4))}px`;
+            const view = document.createElement('webview');
+            view.className = 'browser-devtools-surface';
+            view.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
+            view.src = 'about:blank';
+            el.appendChild(view);
+            bc.append(sash, el);
+            // Same guest-iframe stretch as the page webview, or Electron keeps it 150px tall.
+            const pin = () => { const f = view.shadowRoot?.querySelector('iframe'); if (f) f.style.cssText = 'display:block;flex:1 1 auto;width:100%;height:100%;border:0'; return !!f; };
+            if (!pin()) { const mo = new MutationObserver(() => { if (pin()) mo.disconnect(); }); mo.observe(view, { childList: true, subtree: true }); }
+            const mine = drawer = { sash, el };
+            btnDevTools.classList.add('active'); btnDevTools.setAttribute('aria-pressed', 'true');
+            view.addEventListener('dom-ready', () => {
+              if (drawer === mine) window.electronAPI.browserDevTools(surface.getWebContentsId(), view.getWebContentsId()).catch(() => entry._closeDevTools());
+            }, { once: true });
+            sash.addEventListener('pointerdown', e => {
+              e.preventDefault();
+              startResizing();
+              const bottom = bc.getBoundingClientRect().bottom;
+              const move = ev => { browserDevToolsHeight = clamp(Math.round(bottom - ev.clientY)); el.style.height = `${browserDevToolsHeight}px`; };
+              const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); stopResizing(); };
+              window.addEventListener('pointermove', move);
+              window.addEventListener('pointerup', up);
+            });
+            settleBrowserSurfaces();
+          };
+          btnDevTools.addEventListener('click', () => entry._toggleDevTools());
+          toolbar.appendChild(btnDevTools);
+        }
 
         // ── Content area ──
         const contentWrap = document.createElement('div');
@@ -6385,6 +6453,8 @@
                 if (entry.type === 'browser') focusSlot(entry);
               });
               surface.addEventListener('dom-ready', () => { surface._guestReady = true; pinIframe(); });
+              // The DevTools' own close button ends them without the toolbar button.
+              surface.addEventListener('devtools-closed', () => entry._closeDevTools?.());
               surface.addEventListener('did-start-loading', () => showLoading(true));
               surface.addEventListener('did-stop-loading', () => {
                 entry._retryCount = 0;
