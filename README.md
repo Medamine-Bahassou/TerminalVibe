@@ -190,6 +190,10 @@ npm run build:linux      # AppImage + deb + rpm
 npm run build:win        # NSIS installer + portable
 ```
 
+Run `build:win` from a checkout on a Windows drive, with Windows Node. It uses node-pty's
+prebuilt binaries, so Visual Studio isn't needed. It can't run from a `\\wsl.localhost` path,
+and running it inside Linux or WSL needs `wine`.
+
 ## Project layout
 
 | Path | Role |
