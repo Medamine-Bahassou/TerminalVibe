@@ -1363,3 +1363,34 @@ body .browser-devtools-btn.active { background:var(--ui-hover); color:var(--fg);
 .empty-keys dd { display:flex; gap:4px; margin:0; }
 body .empty-keys kbd { min-width:20px; padding:1px 5px; text-align:center; border:1px solid var(--border); border-radius:4px !important; background:var(--bg); color:var(--muted-text); font:500 11px/16px var(--mono-font); }
 @media (max-height: 560px) { .empty-keys { display:none; } }
+
+/* ── Claude "[Image #N]" hover preview + full-size viewer ───────────────── */
+body .claude-image-pop {
+  position:fixed; z-index:9000; max-width:min(360px, calc(100vw - 16px)); padding:4px;
+  background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important;
+  box-shadow:0 8px 24px #0005; pointer-events:none; font:400 11px/1.4 var(--ui-font); color:var(--dim-text);
+}
+body .claude-image-pop img { display:block; max-width:100%; max-height:260px; border-radius:6px !important; }
+.claude-image-pop .claude-image-meta { display:flex; align-items:center; gap:6px; justify-content:space-between; padding:6px 6px 2px; font-variant-numeric:tabular-nums; }
+.claude-image-pop .claude-image-meta span:first-child { font-weight:500; color:var(--muted-text); }
+.claude-image-pop .claude-image-meta i { font-size:14px; }
+.claude-image-pop .ph-warning-circle { color:var(--ui-error); }
+.claude-image-pop .ph-circle-notch { animation:claude-image-spin .8s linear infinite; }
+@keyframes claude-image-spin { to { transform:rotate(360deg); } }
+body .claude-image-viewer {
+  position:fixed; inset:0; z-index:9001; display:flex; align-items:center; justify-content:center;
+  background:color-mix(in srgb, var(--bg) 20%, #000c); cursor:zoom-out; outline:none;
+}
+body .claude-image-viewer img { max-width:92vw; max-height:90vh; border-radius:10px !important; box-shadow:0 8px 24px #0008; }
+@media (prefers-reduced-motion: reduce) { .claude-image-pop .ph-circle-notch { animation:none; } }
+/* Pasted text: same popover/viewer, text body instead of an image */
+body .claude-image-pop:has(pre) { max-width:min(520px, calc(100vw - 16px)); }
+body .claude-image-pop pre.claude-paste-text {
+  margin:0; padding:8px 10px; max-height:280px; overflow:hidden; border-radius:6px !important;
+  background:var(--ui-surface); color:var(--fg); font:400 11.5px/1.5 var(--mono-font); white-space:pre-wrap; word-break:break-word;
+}
+body .claude-image-viewer pre.claude-paste-text {
+  width:min(900px, 92vw); max-height:86vh; margin:0; padding:16px 18px; overflow:auto; cursor:text; user-select:text;
+  background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:10px !important; box-shadow:0 8px 24px #0008;
+  font:400 12.5px/1.55 var(--mono-font); white-space:pre-wrap; word-break:break-word;
+}

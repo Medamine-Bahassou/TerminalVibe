@@ -79,4 +79,147 @@ function findClaudeLauncher(home) {
   }
   return null;
 }
-module.exports = { listClaudeSessions, textContent, readEdges };
+// Pasted images live in the transcript as base64 blocks on user rows; Claude's
+// "[Image #N]" ids come from row.imagePasteIds, else they count up per session.
+async function findClaudeImage({ sessionId, cwd, n, prompt } = {}, home = os.homedir()) {
+  n = Number(n);
+  if (!Number.isInteger(n) || n < 1) return null;
+  const projects = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'projects');
+  const candidates = [];
+  if (typeof sessionId === 'string' && UUID.test(sessionId)) {
+    try {
+      for (const folder of await fs.promises.readdir(projects)) candidates.push(path.join(projects, folder, sessionId + '.jsonl'));
+    } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
+  if (typeof cwd === 'string' && path.isAbsolute(cwd)) {
+    // shortcut: mirrors Claude's folder naming; very long cwds get a hash suffix and are missed.
+    const dir = path.join(projects, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+    try {
+      const files = (await fs.promises.readdir(dir)).filter(f => f.endsWith('.jsonl') && UUID.test(f.slice(0, -6)));
+      const stats = await Promise.all(files.map(f => fs.promises.stat(path.join(dir, f)).then(s => [s.mtimeMs, f], () => [0, f])));
+      stats.sort((a, b) => b[0] - a[0]).forEach(([, f]) => candidates.push(path.join(dir, f)));
+    } catch (e) { if (!['ENOENT', 'EACCES'].includes(e.code)) throw e; }
+  }
+  // The pane cwd can be stale (PowerShell sends no OSC 7), so also scan the newest transcripts anywhere,
+  // but trust those only when the prompt shown in the terminal matches the message holding the image.
+  const trusted = new Set(candidates);
+  const recent = [];
+  try {
+    for (const folder of await fs.promises.readdir(projects, { withFileTypes: true })) {
+      if (!folder.isDirectory()) continue;
+      const dir = path.join(projects, folder.name);
+      let files; try { files = await fs.promises.readdir(dir); } catch { continue; }
+      for (const f of files) {
+        if (!f.endsWith('.jsonl') || !UUID.test(f.slice(0, -6))) continue;
+        try { recent.push([(await fs.promises.stat(path.join(dir, f))).mtimeMs, path.join(dir, f)]); } catch {}
+      }
+    }
+  } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  recent.sort((a, b) => b[0] - a[0]).slice(0, 10).forEach(([, f]) => { if (!candidates.includes(f)) candidates.push(f); });
+  const norm = s => s.replace(/\s+/g, ' ').trim();
+  const want = typeof prompt === 'string' ? norm(prompt).slice(0, 80) : '';
+  let fallback = null;
+  for (const file of candidates) {
+    let raw;
+    try { raw = await fs.promises.readFile(file, 'utf8'); } catch (e) { if (['ENOENT', 'EACCES'].includes(e.code)) continue; throw e; }
+    let seq = 0, found = null, matched = null;
+    for (const line of raw.split('\n')) {
+      if (!line.includes('"image"')) continue;
+      let row; try { row = JSON.parse(line); } catch { continue; }
+      if (row?.type !== 'user' || !Array.isArray(row.message?.content)) continue;
+      const images = row.message.content.filter(b => b?.type === 'image' && b.source?.type === 'base64' && typeof b.source.data === 'string');
+      if (!images.length) continue;
+      const ids = Array.isArray(row.imagePasteIds) && row.imagePasteIds.length === images.length ? row.imagePasteIds : null;
+      const isMatch = want && norm(textContent(row.message.content)).startsWith(want);
+      images.forEach((b, i) => {
+        const id = ids ? Number(ids[i]) : ++seq;
+        if (ids) seq = Math.max(seq, id);
+        if (id !== n || !/^image\/(png|jpeg|gif|webp)$/.test(b.source.media_type)) return;
+        found = b.source; // latest wins: ids restart after /clear in the same file
+        if (isMatch) matched = b.source;
+      });
+    }
+    if (matched) return { mediaType: matched.media_type, data: matched.data };
+    if (found && trusted.has(file) && !fallback) fallback = { mediaType: found.media_type, data: found.data };
+  }
+  return fallback;
+}
+// Sent "[Pasted text #N +M lines]" prompts are kept in history.jsonl: inline `content`, or a
+// `contentHash` pointing into paste-cache/. Only a prompt that matches the visible one is trusted.
+async function findClaudePaste({ n, lines: breaks, prompt } = {}, home = os.homedir()) {
+  n = Number(n); breaks = Number(breaks) || 0;
+  if (!Number.isInteger(n) || n < 1 || typeof prompt !== 'string' || !prompt.trim()) return null;
+  const config = process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+  let raw;
+  try { raw = await fs.promises.readFile(path.join(config, 'history.jsonl'), 'utf8'); }
+  catch (e) { if (['ENOENT', 'EACCES'].includes(e.code)) return null; throw e; }
+  // Recalling a prompt (↑) renumbers its pastes, so compare without the numbers.
+  const norm = s => s.replace(/\s+/g, ' ').trim().replace(/\[Pasted text #\d+/g, '[Pasted text #');
+  const want = norm(prompt).slice(0, 80);
+  const lines = raw.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('pastedContents')) continue;
+    let row; try { row = JSON.parse(lines[i]); } catch { continue; }
+    if (typeof row?.display !== 'string' || !row.pastedContents || !norm(row.display).startsWith(want)) continue;
+    const refs = [...row.display.matchAll(/\[Pasted text #(\d+)(?: \+(\d+) lines?)?\]/g)].filter(m => Number(m[2] || 0) === breaks);
+    const id = (refs.find(m => Number(m[1]) === n) || refs[0])?.[1];
+    const paste = id && row.pastedContents[id];
+    if (paste?.type !== 'text') continue;
+    if (typeof paste.content === 'string') return paste.content;
+    if (typeof paste.contentHash === 'string' && /^[a-f0-9]{8,64}$/.test(paste.contentHash)) {
+      try { return await fs.promises.readFile(path.join(config, 'paste-cache', paste.contentHash + '.txt'), 'utf8'); }
+      catch (e) { if (!['ENOENT', 'EACCES'].includes(e.code)) throw e; }
+    }
+  }
+  return null;
+}
+// Codex rollouts (~/.codex/sessions/YYYY/MM/DD/*.jsonl) keep a sent image as
+// `<image name=[Image #N] …>` text followed by an input_image data URL.
+// `later`: how many identical prompts were sent after this one (Codex numbers every message
+// from #1, so "[Image #1]" can repeat within a session); 0 is the newest.
+async function findCodexImage({ n, prompt, files: paneFiles, later = 0 } = {}, home = os.homedir()) {
+  later = Math.max(0, Number(later) || 0);
+  // A message whose image is a file this pane pasted is certain; a bare prompt match
+  // ("[Image #1]" alone) can belong to any session, so it is only the fallback.
+  const own = new Set(Array.isArray(paneFiles) ? paneFiles.filter(f => typeof f === 'string') : []);
+  n = Number(n);
+  if (!Number.isInteger(n) || n < 1 || typeof prompt !== 'string' || !prompt.trim()) return null;
+  const files = [];
+  // shortcut: only the 3 newest entries per year/month/day level; older sessions are not searched.
+  const walk = async (dir, depth) => {
+    let entries; try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+    if (depth === 3) {
+      for (const e of entries) if (e.isFile() && e.name.endsWith('.jsonl')) {
+        try { files.push([(await fs.promises.stat(path.join(dir, e.name))).mtimeMs, path.join(dir, e.name)]); } catch {}
+      }
+      return;
+    }
+    for (const e of entries.filter(e => e.isDirectory()).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 3)) await walk(path.join(dir, e.name), depth + 1);
+  };
+  await walk(path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'sessions'), 0);
+  const norm = s => s.replace(/\s+/g, ' ').trim(), want = norm(prompt).slice(0, 80);
+  let fallback = null;
+  for (const [, file] of files.sort((a, b) => b[0] - a[0]).slice(0, 10)) {
+    let raw; try { raw = await fs.promises.readFile(file, 'utf8'); } catch { continue; }
+    const hits = []; // one per matching message, oldest first
+    for (const line of raw.split('\n')) {
+      if (!line.includes('"input_image"')) continue;
+      let row; try { row = JSON.parse(line); } catch { continue; }
+      const p = row?.payload;
+      if (p?.type !== 'message' || p.role !== 'user' || !Array.isArray(p.content)) continue;
+      const text = p.content.filter(b => b?.type === 'input_text' && typeof b.text === 'string' && !/^<\/?image\b/.test(b.text)).map(b => b.text).join(' ');
+      if (!norm(text).startsWith(want)) continue;
+      p.content.forEach((b, i) => {
+        const id = /^<image name=\[Image #(\d+)\]/.exec(b?.type === 'input_text' ? b.text : '')?.[1];
+        const url = p.content[i + 1]?.type === 'input_image' ? p.content[i + 1].image_url : null;
+        const m = Number(id) === n && typeof url === 'string' && /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/s.exec(url);
+        if (m) hits.push({ mediaType: m[1], data: m[2], own: own.has(/ path="([^"]*)"/.exec(b.text)?.[1]) });
+      });
+    }
+    const pick = hits[hits.length - 1 - later];
+    if (pick?.own) return pick;
+    if (pick && !fallback) fallback = { mediaType: pick.mediaType, data: pick.data };
+  }
+  return fallback;
+}
+module.exports = { listClaudeSessions, findClaudeImage, findClaudePaste, findCodexImage, textContent, readEdges };
