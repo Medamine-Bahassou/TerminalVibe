@@ -532,21 +532,38 @@ ipcMain.handle('clipboard:read-text', () => clipboard.readText());
 
 // Pasting an image in a terminal: write it to the OS temp dir and
 // type the file path (the terminal can't render images inline).
-const pastedImageFiles = new Set();
 ipcMain.handle('clipboard:paste-image', () => {
   try {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;
     const fp = path.join(require('os').tmpdir(), `terminalvibe-${Date.now()}.png`);
     fs.writeFileSync(fp, img.toPNG());
-    pastedImageFiles.add(fp);
     return fp;
   } catch (err) { console.error('[clipboard] paste-image failed:', err); return null; }
 });
-// Previews of a pasted image Claude hasn't sent yet. Only files written above are readable.
-ipcMain.handle('clipboard:read-pasted-image', (_e, fp) => {
-  if (!pastedImageFiles.has(fp)) return null;
-  try { return fs.readFileSync(fp).toString('base64'); } catch { return null; }
+// Previews of image paths printed in a terminal. Terminal output is untrusted, so only a
+// regular file whose bytes really are an image is returned; anything else gets a reason.
+const IMAGE_SNIFF = [
+  ['image/png', b => b.readUInt32BE(0) === 0x89504e47],
+  ['image/jpeg', b => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff],
+  ['image/gif', b => b.toString('latin1', 0, 4) === 'GIF8'],
+  ['image/webp', b => b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP'],
+  ['image/bmp', b => b.toString('latin1', 0, 2) === 'BM'],
+];
+ipcMain.handle('fs:read-image', async (_e, p, opts) => {
+  if (typeof p !== 'string' || p.length > 4096) return { error: 'invalid' };
+  const fp = expandHome(p);
+  if (!path.isAbsolute(fp) || !/\.(png|jpe?g|gif|webp|bmp)$/i.test(fp)) return { error: 'invalid' };
+  try {
+    const real = await fs.promises.realpath(fp); // a symlink is judged by its target
+    const st = await fs.promises.stat(real);
+    if (!st.isFile()) return { error: 'missing' }; // no FIFOs or devices: they'd block or never end
+    if (opts?.probe) return { ok: true }; // existence check for links, no read
+    if (st.size > 20 * 1024 * 1024) return { error: 'too-large', size: st.size };
+    const buf = await fs.promises.readFile(real);
+    const type = buf.length >= 12 && IMAGE_SNIFF.find(([, ok]) => ok(buf))?.[0];
+    return type ? { mediaType: type, data: buf.toString('base64'), size: st.size } : { error: 'not-image' };
+  } catch (err) { return { error: ['EACCES', 'EPERM'].includes(err.code) ? 'denied' : 'missing' }; }
 });
 
 // ── IPC: read-only file access for plugins (api.fs.list / api.fs.read) ──
@@ -1092,6 +1109,12 @@ ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-session
 ipcMain.handle('history:claude-image', (_e, query) => require('./claude-sessions').findClaudeImage(query));
 ipcMain.handle('history:claude-paste', (_e, query) => require('./claude-sessions').findClaudePaste(query));
 ipcMain.handle('history:codex-image', (_e, query) => require('./claude-sessions').findCodexImage(query));
+// Warm the transcript image indexes after launch, so the first "[Image #N]" hover is quick too.
+setTimeout(() => {
+  const sessions = require('./claude-sessions');
+  sessions.findClaudeImage({ n: 1, prompt: ' ' }).catch(() => {});
+  sessions.findCodexImage({ n: 1, prompt: '-' }).catch(() => {});
+}, 5000).unref?.();
 ipcMain.handle('terminal:session-context', (event, id, sessionId) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized chat target');
   return require('./session-context').attachSessionContext({sessionId,
