@@ -600,6 +600,9 @@
         // clipboard itself; do not also insert a filename or submit the draft.
         const shortcut = window.electronAPI?.platform === 'win32' ? '\x1bv' : '\x16';
         sendStdin(entry.id, new TextEncoder().encode(shortcut));
+        // Same image Claude reads; lets an unsent "[Image #N]" chip be previewed.
+        (entry._claudeImageFiles ||= []).push(path);
+        if (entry._claudeImageFiles.length > 20) entry._claudeImageFiles.shift();
       } else {
         pasteText(shellQuote(path));
       }
@@ -4108,6 +4111,164 @@
     }, ms));
   }
 
+  // Claude Code prints pasted images as "[Image #N]" and long pastes as "[Pasted text #N +M lines]".
+  // Hover previews them, click opens them full size. Desktop only.
+  let claudeRefPop = null, claudeRefHoverToken = 0, claudeRefHovered = null;
+  function hideClaudeRefPop() { claudeRefHoverToken++; claudeRefHovered = null; if (claudeRefPop) claudeRefPop.hidden = true; }
+  // Open on mousedown, not xterm's link activate: a click in Claude's input box redraws that
+  // line and xterm drops the link before mouseup. Swallowing it also keeps the click from Claude.
+  document.addEventListener('mousedown', e => {
+    const hit = claudeRefHovered;
+    if (!hit || e.button !== 0 || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey || !hit.entry.term.element?.contains(e.target)) return;
+    e.preventDefault(); e.stopPropagation();
+    openClaudeRefViewer(hit.entry, hit.ref, hit.prompt);
+  }, true);
+  const claudeRefCache = new Map();
+  const lineBreaks = text => (text.match(/\n/g) || []).length;
+  async function loadClaudeRef(entry, ref, prompt) {
+    if (ref.kind === 'paste') {
+      // Unsent pastes exist only in this pane; Claude's "+M lines" counts line breaks.
+      const local = entry._claudePastes?.findLast(t => lineBreaks(t) === ref.lines);
+      if (local != null) return { text: local };
+    }
+    const files = entry._claudeImageFiles;
+    if (ref.kind === 'image' && ref.draft && files?.length) {
+      // Unsent images: the draft's chips, in number order, are the latest images pasted here.
+      const nums = [...prompt.matchAll(/\[Image #(\d+)\]/g)].map(m => Number(m[1])).sort((a, b) => a - b);
+      const i = nums.indexOf(ref.n);
+      const file = i >= 0 && nums.length <= files.length ? files[files.length - nums.length + i] : files[files.length - 1];
+      const data = await window.electronAPI.readPastedImage(file);
+      if (data) return { src: `data:image/png;base64,${data}` };
+    }
+    // Cache hits only: a miss may be something Claude hasn't written to disk yet.
+    const key = `${entry.id}\n${ref.kind}\n${ref.n}\n${prompt}`;
+    if (claudeRefCache.has(key)) return claudeRefCache.get(key);
+    let found = null;
+    if (ref.kind === 'image') {
+      const img = await window.electronAPI.claudeImage({ sessionId: entry.claudeSessionId, cwd: entry.cwd, n: ref.n, prompt });
+      if (img) found = { src: `data:${img.mediaType};base64,${img.data}` };
+    } else {
+      const text = await window.electronAPI.claudePaste({ n: ref.n, lines: ref.lines, prompt });
+      if (text != null) found = { text: text.replace(/\r\n?/g, '\n') };
+    }
+    if (found) { claudeRefCache.set(key, found); if (claudeRefCache.size > 40) claudeRefCache.delete(claudeRefCache.keys().next().value); }
+    return found;
+  }
+  function claudeRefPre(text, maxLines) {
+    const pre = document.createElement('pre'); pre.className = 'claude-paste-text';
+    const lines = text.split('\n');
+    pre.textContent = maxLines && lines.length > maxLines ? lines.slice(0, maxLines).join('\n') + '\n…' : text;
+    return pre;
+  }
+  async function showClaudeRefPop(entry, ref, prompt, event) {
+    const token = ++claudeRefHoverToken;
+    if (!claudeRefPop) {
+      claudeRefPop = document.createElement('div'); claudeRefPop.className = 'claude-image-pop'; claudeRefPop.hidden = true;
+      document.body.appendChild(claudeRefPop);
+    }
+    const place = () => {
+      const r = claudeRefPop.getBoundingClientRect();
+      let top = event.clientY + 14;
+      if (top + r.height > innerHeight - 8) top = Math.max(8, event.clientY - r.height - 10);
+      claudeRefPop.style.left = Math.max(8, Math.min(event.clientX - 12, innerWidth - r.width - 8)) + 'px';
+      claudeRefPop.style.top = top + 'px';
+    };
+    const meta = document.createElement('div'); meta.className = 'claude-image-meta';
+    const label = document.createElement('span'); label.textContent = ref.label;
+    meta.innerHTML = '<i class="ph ph-circle-notch"></i>'; meta.append(label);
+    claudeRefPop.replaceChildren(meta);
+    claudeRefPop.hidden = false; place();
+    let found = null;
+    try { found = await loadClaudeRef(entry, ref, prompt); } catch (err) { console.error('[claude-ref]', err); }
+    if (token !== claudeRefHoverToken) return;
+    const info = document.createElement('span');
+    meta.replaceChildren(label, info);
+    if (found?.src) {
+      const img = document.createElement('img'); img.alt = ref.label; img.src = found.src;
+      img.onload = () => { if (token === claudeRefHoverToken) { info.textContent = `${img.naturalWidth}×${img.naturalHeight}`; place(); } };
+      claudeRefPop.replaceChildren(img, meta);
+    } else if (found) {
+      info.textContent = `${lineBreaks(found.text) + 1} lines · ${found.text.length.toLocaleString()} chars`;
+      claudeRefPop.replaceChildren(claudeRefPre(found.text, 18), meta);
+    } else {
+      label.textContent = `${ref.label} wasn't found in this pane or Claude's history`;
+      meta.replaceChildren(Object.assign(document.createElement('i'), { className: 'ph ph-warning-circle' }), label);
+    }
+    place();
+  }
+  async function openClaudeRefViewer(entry, ref, prompt) {
+    hideClaudeRefPop();
+    const found = await loadClaudeRef(entry, ref, prompt).catch(() => null);
+    if (!found) return;
+    const overlay = document.createElement('div'); overlay.className = 'claude-image-viewer';
+    overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-label', ref.label); overlay.tabIndex = -1;
+    if (found.src) {
+      const img = document.createElement('img'); img.src = found.src; img.alt = ref.label;
+      overlay.appendChild(img);
+    } else {
+      const pre = claudeRefPre(found.text);
+      pre.onclick = e => e.stopPropagation(); // keep text selectable; the backdrop closes
+      overlay.appendChild(pre);
+    }
+    // Capture on document: xterm refocuses itself after the click, and a stray Esc would interrupt Claude.
+    const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); entry.term.focus(); };
+    overlay.onclick = close;
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(overlay);
+  }
+  function setupClaudeImageLinks(entry) {
+    if (!window.electronAPI?.claudeImage) return;
+    const term = entry.term;
+    entry._claudePastes = [];
+    term.onData(data => {
+      // Bracketed paste (Claude turns it on) marks every paste, whichever path sent it.
+      if (!data.startsWith('\x1b[200~')) return;
+      entry._claudePastes.push(data.slice(6, data.endsWith('\x1b[201~') ? -6 : undefined).replace(/\r\n?/g, '\n'));
+      if (entry._claudePastes.length > 20) entry._claudePastes.shift();
+    });
+    term.registerLinkProvider({
+      provideLinks(y, callback) {
+        const line = term.buffer.active.getLine(y - 1);
+        if (!line) return callback(undefined);
+        // Map string offsets to cell columns so wide glyphs before the match don't shift it.
+        let text = ''; const cols = [];
+        for (let x = 0; x < line.length; x++) {
+          const c = line.getCell(x);
+          if (c && c.getWidth() === 0) continue;
+          const ch = c?.getChars() || ' ';
+          text += ch; for (let k = 0; k < ch.length; k++) cols.push(x);
+        }
+        const links = [];
+        let prompt, draft;
+        for (const m of text.matchAll(/\[(?:Image #(\d+)|Pasted text #(\d+)(?: \+(\d+) lines?)?)\]/g)) {
+          // The sent message is the nearest "❯ " prompt line at or above; it identifies the session.
+          // No "❯" line below means this is Claude's input box: an unsent draft.
+          if (prompt === undefined) {
+            const buf = term.buffer.active, lineText = i => buf.getLine(i)?.translateToString(true) || '';
+            prompt = '';
+            for (let i = y - 1; i >= Math.max(0, y - 40); i--) {
+              const p = /^\s*[❯>]\s+(.*\S)/.exec(lineText(i));
+              if (p) { prompt = p[1]; break; }
+            }
+            draft = true;
+            for (let i = y; i < buf.length; i++) if (/^\s*❯(\s|$)/.test(lineText(i))) { draft = false; break; }
+          }
+          const ref = m[1] ? { kind: 'image', n: Number(m[1]), draft, label: `Image #${m[1]}` }
+            : { kind: 'paste', n: Number(m[2]), lines: Number(m[3] || 0), label: `Pasted text #${m[2]}` };
+          links.push({
+            text: m[0], decorations: { underline: true, pointerCursor: true },
+            range: { start: { x: cols[m.index] + 1, y }, end: { x: cols[m.index + m[0].length - 1] + 1, y } },
+            activate: () => {}, // opened by the mousedown listener above
+            hover: e => { showClaudeRefPop(entry, ref, prompt, e); claudeRefHovered = { entry, ref, prompt }; },
+            leave: hideClaudeRefPop,
+          });
+        }
+        callback(links.length ? links : undefined);
+      },
+    });
+  }
+
   function _createTermEntry(wsp, id, label) {
     const term = new Terminal({
       theme: makeXtermTheme(currentTheme),
@@ -4157,6 +4318,7 @@
 
     const entry = { id, label, term, fit: fitAddon, search: searchAddon, el: null, opened: false, locked: false, _bgTransparent: false };
     setupTerminalTitles(entry);
+    setupClaudeImageLinks(entry);
     term.buffer.onBufferChange(buffer => {
       if (buffer.type !== 'alternate') return;
       // A TUI may enter the alternate screen before its tab's final layout fit.

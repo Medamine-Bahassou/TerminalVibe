@@ -532,14 +532,21 @@ ipcMain.handle('clipboard:read-text', () => clipboard.readText());
 
 // Pasting an image in a terminal: write it to the OS temp dir and
 // type the file path (the terminal can't render images inline).
+const pastedImageFiles = new Set();
 ipcMain.handle('clipboard:paste-image', () => {
   try {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;
     const fp = path.join(require('os').tmpdir(), `terminalvibe-${Date.now()}.png`);
     fs.writeFileSync(fp, img.toPNG());
+    pastedImageFiles.add(fp);
     return fp;
   } catch (err) { console.error('[clipboard] paste-image failed:', err); return null; }
+});
+// Previews of a pasted image Claude hasn't sent yet. Only files written above are readable.
+ipcMain.handle('clipboard:read-pasted-image', (_e, fp) => {
+  if (!pastedImageFiles.has(fp)) return null;
+  try { return fs.readFileSync(fp).toString('base64'); } catch { return null; }
 });
 
 // ── IPC: read-only file access for plugins (api.fs.list / api.fs.read) ──
@@ -1082,6 +1089,8 @@ const sendToRenderer = (channel, payload) => {
 };
 
 ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-sessions').listClaudeSessions(cwd));
+ipcMain.handle('history:claude-image', (_e, query) => require('./claude-sessions').findClaudeImage(query));
+ipcMain.handle('history:claude-paste', (_e, query) => require('./claude-sessions').findClaudePaste(query));
 ipcMain.handle('terminal:session-context', (event, id, sessionId) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized chat target');
   return require('./session-context').attachSessionContext({sessionId,

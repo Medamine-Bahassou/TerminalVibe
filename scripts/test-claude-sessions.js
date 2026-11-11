@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { listClaudeSessions } = require('../electron/claude-sessions');
+const { listClaudeSessions, findClaudeImage, findClaudePaste } = require('../electron/claude-sessions');
 (async () => {
   const temp=fs.mkdtempSync(path.join(os.tmpdir(),'tv-history-'));
   const saved=process.env.CLAUDE_CONFIG_DIR;
@@ -31,6 +31,40 @@ const { listClaudeSessions } = require('../electron/claude-sessions');
     fs.mkdirSync(path.join(temp,'empty'));
     assert.equal((await listClaudeSessions(path.join(temp,'empty'),temp)).sessions.length,2,'Empty terminal directory must not hide Claude history');
     assert.equal((await listClaudeSessions(path.join(temp,'missing'),temp)).sessions.length,2,'Missing terminal directory must not block browsing');
+    const img=d=>({type:'image',source:{type:'base64',media_type:'image/png',data:d}});
+    const imgId='11111111-1234-1234-1234-123456789abc';
+    fs.writeFileSync(path.join(dir,imgId+'.jsonl'),[
+      {type:'user',cwd,message:{content:[{type:'text',text:'[Image #1] [Image #2] look'},img('AAA'),img('BBB')]}},
+      {type:'user',cwd,message:{content:[{type:'tool_result',content:[img('TOOL')]}]}},
+      {type:'user',cwd,imagePasteIds:[5],message:{content:[img('EEE')]}},
+      {type:'user',cwd,message:{content:[{type:'image',source:{type:'base64',media_type:'text/html',data:'X'}}]}},
+    ].map(r=>JSON.stringify(r)).join('\n')+'\n{broken "image"');
+    assert.equal((await findClaudeImage({sessionId:imgId,n:2},temp)).data,'BBB','Images count up per session');
+    assert.equal((await findClaudeImage({sessionId:imgId,n:5},temp)).data,'EEE','imagePasteIds wins');
+    assert.equal((await findClaudeImage({cwd,n:1},temp)).data,'AAA','Falls back to the newest transcript in the cwd');
+    assert.equal(await findClaudeImage({sessionId:imgId,n:6},temp),null,'Non-image media types are refused');
+    assert.equal(await findClaudeImage({sessionId:imgId,n:9},temp),null);
+    const elsewhere=path.join(config,'projects','elsewhere');fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere,'22222222-1234-1234-1234-123456789abc.jsonl'),JSON.stringify({type:'user',message:{content:[{type:'text',text:'[Image #1] other'},img('ZZZ')]}})+'\n');
+    const prompt='[Image #1]   [Image #2] look';
+    assert.equal((await findClaudeImage({cwd:path.join(temp,'stale'),n:2,prompt},temp)).data,'BBB','Stale cwd: the visible prompt finds the right transcript');
+    assert.equal((await findClaudeImage({cwd:path.join(temp,'stale'),n:1,prompt},temp)).data,'AAA','A newer session with the same image number is not used');
+    assert.equal(await findClaudeImage({cwd:path.join(temp,'stale'),n:1},temp),null,'Unmatched transcripts from other projects are never trusted');
+    assert.equal(await findClaudeImage({sessionId:'../etc',n:9},temp),null,'Non-UUID session ids are ignored, not read');
+    fs.mkdirSync(path.join(config,'paste-cache'));fs.writeFileSync(path.join(config,'paste-cache','abcdef0123456789.txt'),'from\ncache');
+    fs.writeFileSync(path.join(config,'history.jsonl'),[
+      {display:'fix [Pasted text #2 +1 lines]',pastedContents:{2:{id:2,type:'text',content:'old\nfix'}}},
+      {display:'fix [Pasted text #2 +1 lines]',pastedContents:{2:{id:2,type:'text',content:'new\nfix'}}},
+      {display:'[Pasted text #1 +1 lines] why',pastedContents:{1:{id:1,type:'text',contentHash:'abcdef0123456789'}}},
+      {display:'[Pasted text #3 +0 lines]',pastedContents:{3:{id:3,type:'text',contentHash:'../../etc/passwd'}}},
+    ].map(r=>JSON.stringify(r)).join('\n')+'\n{bad pastedContents');
+    assert.equal(await findClaudePaste({n:2,lines:1,prompt:'fix  [Pasted text #2 +1 lines]'},temp),'new\nfix','Newest matching prompt wins');
+    assert.equal(await findClaudePaste({n:1,lines:1,prompt:'[Pasted text #1 +1 lines] why'},temp),'from\ncache','contentHash reads paste-cache');
+    assert.equal(await findClaudePaste({n:4,lines:1,prompt:'[Pasted text #4 +1 lines] why'},temp),'from\ncache','A recalled prompt (renumbered paste) still matches');
+    assert.equal(await findClaudePaste({n:1,lines:5,prompt:'[Pasted text #1 +1 lines] why'},temp),null,'Line count must match');
+    assert.equal(await findClaudePaste({n:1,lines:1,prompt:'something else'},temp),null,'Prompt must match');
+    assert.equal(await findClaudePaste({n:1,lines:1},temp),null,'No prompt, no guess');
+    assert.equal(await findClaudePaste({n:3,lines:0,prompt:'[Pasted text #3 +0 lines]'},temp),null,'Hashes must not escape paste-cache');
     const emptyConfig=path.join(temp,'no-history');process.env.CLAUDE_CONFIG_DIR=emptyConfig;
     assert.deepEqual((await listClaudeSessions(cwd,temp)).sessions,[]);
     console.log('PASS: local Claude history, previews, malformed records, all-project discovery, original working directories and empty history');
