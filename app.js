@@ -4145,12 +4145,14 @@
     const other = entry._claudeRunning === false;
     if (other && ref.kind !== 'image') return null;
     // Cache hits only: a miss may be something the CLI hasn't written to disk yet.
-    const key = `${entry.id}\n${other}\n${ref.kind}\n${ref.n}\n${prompt}`;
+    const key = `${entry.id}\n${other}\n${ref.kind}\n${ref.n}\n${ref.later}\n${prompt}`;
     if (claudeRefCache.has(key)) return claudeRefCache.get(key);
     let found = null;
     if (other) {
-      const img = await window.electronAPI.codexImage({ n: ref.n, prompt });
-      if (img) found = { src: `data:${img.mediaType};base64,${img.data}` };
+      const img = await window.electronAPI.codexImage({ n: ref.n, prompt, files: files || [], later: ref.later });
+      // Only cache a match on this pane's own file; a bare prompt match may be replaced by
+      // the right session once Codex writes it.
+      if (img) { const src = { src: `data:${img.mediaType};base64,${img.data}` }; if (!img.own) return src; found = src; }
     } else if (ref.kind === 'image') {
       const img = await window.electronAPI.claudeImage({ sessionId: entry.claudeSessionId, cwd: entry.cwd, n: ref.n, prompt });
       if (img) found = { src: `data:${img.mediaType};base64,${img.data}` };
@@ -4247,21 +4249,26 @@
           text += ch; for (let k = 0; k < ch.length; k++) cols.push(x);
         }
         const links = [];
-        let prompt, draft;
+        let prompt, draft, later = 0;
         for (const m of text.matchAll(/\[(?:Image #(\d+)|Pasted text #(\d+)(?: \+(\d+) lines?)?)\]/g)) {
           // The sent message is the nearest "❯ " prompt line at or above; it identifies the session.
           // No "❯" line below means this is Claude's input box: an unsent draft.
           if (prompt === undefined) {
             const buf = term.buffer.active, lineText = i => buf.getLine(i)?.translateToString(true) || '';
             prompt = '';
+            let at = -1;
             for (let i = y - 1; i >= Math.max(0, y - 40); i--) {
               const p = /^\s*[❯›>]\s+(.*\S)/.exec(lineText(i)); // Claude ❯, Codex ›
-              if (p) { prompt = p[1]; break; }
+              if (p) { prompt = p[1]; at = i; break; }
             }
-            draft = true;
-            for (let i = y; i < buf.length; i++) if (/^\s*[❯›](\s|$)/.test(lineText(i))) { draft = false; break; }
+            // Prompt lines below; the last one is the input box. Identical sent prompts after this
+            // one tell which repeat of e.g. "[Image #1]" this is.
+            const below = [];
+            for (let i = Math.max(at, y - 1) + 1; i < buf.length; i++) if (/^\s*[❯›](\s|$)/.test(lineText(i))) below.push(i);
+            draft = !below.length;
+            later = below.slice(0, -1).filter(i => /^\s*[❯›>]\s+(.*\S)/.exec(lineText(i))?.[1] === prompt).length;
           }
-          const ref = m[1] ? { kind: 'image', n: Number(m[1]), draft, label: `Image #${m[1]}` }
+          const ref = m[1] ? { kind: 'image', n: Number(m[1]), draft, later, label: `Image #${m[1]}` }
             : { kind: 'paste', n: Number(m[2]), lines: Number(m[3] || 0), label: `Pasted text #${m[2]}` };
           links.push({
             text: m[0], decorations: { underline: true, pointerCursor: true },

@@ -175,7 +175,13 @@ async function findClaudePaste({ n, lines: breaks, prompt } = {}, home = os.home
 }
 // Codex rollouts (~/.codex/sessions/YYYY/MM/DD/*.jsonl) keep a sent image as
 // `<image name=[Image #N] …>` text followed by an input_image data URL.
-async function findCodexImage({ n, prompt } = {}, home = os.homedir()) {
+// `later`: how many identical prompts were sent after this one (Codex numbers every message
+// from #1, so "[Image #1]" can repeat within a session); 0 is the newest.
+async function findCodexImage({ n, prompt, files: paneFiles, later = 0 } = {}, home = os.homedir()) {
+  later = Math.max(0, Number(later) || 0);
+  // A message whose image is a file this pane pasted is certain; a bare prompt match
+  // ("[Image #1]" alone) can belong to any session, so it is only the fallback.
+  const own = new Set(Array.isArray(paneFiles) ? paneFiles.filter(f => typeof f === 'string') : []);
   n = Number(n);
   if (!Number.isInteger(n) || n < 1 || typeof prompt !== 'string' || !prompt.trim()) return null;
   const files = [];
@@ -192,9 +198,10 @@ async function findCodexImage({ n, prompt } = {}, home = os.homedir()) {
   };
   await walk(path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'sessions'), 0);
   const norm = s => s.replace(/\s+/g, ' ').trim(), want = norm(prompt).slice(0, 80);
+  let fallback = null;
   for (const [, file] of files.sort((a, b) => b[0] - a[0]).slice(0, 10)) {
     let raw; try { raw = await fs.promises.readFile(file, 'utf8'); } catch { continue; }
-    let found = null;
+    const hits = []; // one per matching message, oldest first
     for (const line of raw.split('\n')) {
       if (!line.includes('"input_image"')) continue;
       let row; try { row = JSON.parse(line); } catch { continue; }
@@ -206,11 +213,13 @@ async function findCodexImage({ n, prompt } = {}, home = os.homedir()) {
         const id = /^<image name=\[Image #(\d+)\]/.exec(b?.type === 'input_text' ? b.text : '')?.[1];
         const url = p.content[i + 1]?.type === 'input_image' ? p.content[i + 1].image_url : null;
         const m = Number(id) === n && typeof url === 'string' && /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/s.exec(url);
-        if (m) found = { mediaType: m[1], data: m[2] };
+        if (m) hits.push({ mediaType: m[1], data: m[2], own: own.has(/ path="([^"]*)"/.exec(b.text)?.[1]) });
       });
     }
-    if (found) return found;
+    const pick = hits[hits.length - 1 - later];
+    if (pick?.own) return pick;
+    if (pick && !fallback) fallback = { mediaType: pick.mediaType, data: pick.data };
   }
-  return null;
+  return fallback;
 }
 module.exports = { listClaudeSessions, findClaudeImage, findClaudePaste, findCodexImage, textContent, readEdges };

@@ -74,6 +74,16 @@ const { listClaudeSessions, findClaudeImage, findClaudePaste, findCodexImage } =
     assert.equal((await findCodexImage({n:1,prompt:'[Image #1]  first'},temp)).data,'C1','Codex: each message keeps its own #1');
     assert.equal(await findCodexImage({n:2,prompt:'[Image #1] first'},temp),null);
     assert.equal(await findCodexImage({n:1},temp),null,'Codex: no prompt, no guess');
+    const older=path.join(codexDay,'rollout-a.jsonl'),newer=path.join(codexDay,'rollout-b.jsonl');
+    fs.writeFileSync(older,fs.readFileSync(older,'utf8').replace('path="x.png">`','')+'\n'+codexMsg('[Image #1]',1,'MINE').replace('x.png','C:\\\\tmp\\\\terminalvibe-1.png'));
+    fs.writeFileSync(newer,codexMsg('[Image #1]',1,'OTHER'));
+    fs.utimesSync(older,new Date(Date.now()-60000),new Date(Date.now()-60000));
+    assert.equal((await findCodexImage({n:1,prompt:'[Image #1]'},temp)).data,'OTHER','Codex: bare prompt match takes the newest session');
+    const own=await findCodexImage({n:1,prompt:'[Image #1]',files:['C:\\tmp\\terminalvibe-1.png']},temp);
+    assert.equal(own.data,'MINE','Codex: the pane\'s own pasted file beats a newer session');assert.equal(own.own,true);
+    fs.appendFileSync(newer,'\n'+codexMsg('[Image #1]',1,'OTHER2'));
+    assert.equal((await findCodexImage({n:1,prompt:'[Image #1]'},temp)).data,'OTHER2','Codex: repeated prompt, newest by default');
+    assert.equal((await findCodexImage({n:1,prompt:'[Image #1]',later:1},temp)).data,'OTHER','Codex: later=1 picks the one before');
     const emptyConfig=path.join(temp,'no-history');process.env.CLAUDE_CONFIG_DIR=emptyConfig;
     assert.deepEqual((await listClaudeSessions(cwd,temp)).sessions,[]);
     console.log('PASS: local Claude history, previews, malformed records, all-project discovery, original working directories and empty history');
