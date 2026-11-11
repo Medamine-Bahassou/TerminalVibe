@@ -595,14 +595,15 @@
       let process = null;
       try { process = await checkTerminalRunning(entry.id); } catch { }
       if (!available()) return;
+      // Same image the CLI gets (Claude via its clipboard, Codex via this path);
+      // lets an unsent "[Image #N]" chip be previewed.
+      (entry._claudeImageFiles ||= []).push(path);
+      if (entry._claudeImageFiles.length > 20) entry._claudeImageFiles.shift();
       if (/^claude(?:[-.\s]|$)/i.test(process || '')) {
         // Send the key, not a bracketed-paste string. Claude reads the local
         // clipboard itself; do not also insert a filename or submit the draft.
         const shortcut = window.electronAPI?.platform === 'win32' ? '\x1bv' : '\x16';
         sendStdin(entry.id, new TextEncoder().encode(shortcut));
-        // Same image Claude reads; lets an unsent "[Image #N]" chip be previewed.
-        (entry._claudeImageFiles ||= []).push(path);
-        if (entry._claudeImageFiles.length > 20) entry._claudeImageFiles.shift();
       } else {
         pasteText(shellQuote(path));
       }
@@ -4140,11 +4141,17 @@
       const data = await window.electronAPI.readPastedImage(file);
       if (data) return { src: `data:image/png;base64,${data}` };
     }
-    // Cache hits only: a miss may be something Claude hasn't written to disk yet.
-    const key = `${entry.id}\n${ref.kind}\n${ref.n}\n${prompt}`;
+    // Not Claude (Codex, …): never fall back to Claude's transcripts, they'd show another session's content.
+    const other = entry._claudeRunning === false;
+    if (other && ref.kind !== 'image') return null;
+    // Cache hits only: a miss may be something the CLI hasn't written to disk yet.
+    const key = `${entry.id}\n${other}\n${ref.kind}\n${ref.n}\n${prompt}`;
     if (claudeRefCache.has(key)) return claudeRefCache.get(key);
     let found = null;
-    if (ref.kind === 'image') {
+    if (other) {
+      const img = await window.electronAPI.codexImage({ n: ref.n, prompt });
+      if (img) found = { src: `data:${img.mediaType};base64,${img.data}` };
+    } else if (ref.kind === 'image') {
       const img = await window.electronAPI.claudeImage({ sessionId: entry.claudeSessionId, cwd: entry.cwd, n: ref.n, prompt });
       if (img) found = { src: `data:${img.mediaType};base64,${img.data}` };
     } else {
@@ -4248,11 +4255,11 @@
             const buf = term.buffer.active, lineText = i => buf.getLine(i)?.translateToString(true) || '';
             prompt = '';
             for (let i = y - 1; i >= Math.max(0, y - 40); i--) {
-              const p = /^\s*[❯>]\s+(.*\S)/.exec(lineText(i));
+              const p = /^\s*[❯›>]\s+(.*\S)/.exec(lineText(i)); // Claude ❯, Codex ›
               if (p) { prompt = p[1]; break; }
             }
             draft = true;
-            for (let i = y; i < buf.length; i++) if (/^\s*❯(\s|$)/.test(lineText(i))) { draft = false; break; }
+            for (let i = y; i < buf.length; i++) if (/^\s*[❯›](\s|$)/.test(lineText(i))) { draft = false; break; }
           }
           const ref = m[1] ? { kind: 'image', n: Number(m[1]), draft, label: `Image #${m[1]}` }
             : { kind: 'paste', n: Number(m[2]), lines: Number(m[3] || 0), label: `Pasted text #${m[2]}` };

@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   claudeImage: (query) => ipcRenderer.invoke('history:claude-image', query),
   claudePaste: (query) => ipcRenderer.invoke('history:claude-paste', query),
   readPastedImage: (file) => ipcRenderer.invoke('clipboard:read-pasted-image', file),
+  codexImage: (query) => ipcRenderer.invoke('history:codex-image', query),
   attachSessionContext: (id, sessionId) => ipcRenderer.invoke('terminal:session-context', id, sessionId),
   attachWorkspaceContext: (id, context) => ipcRenderer.invoke('terminal:workspace-context', id, context),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),

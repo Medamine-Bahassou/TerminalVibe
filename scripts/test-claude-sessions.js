@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { listClaudeSessions, findClaudeImage, findClaudePaste } = require('../electron/claude-sessions');
+const { listClaudeSessions, findClaudeImage, findClaudePaste, findCodexImage } = require('../electron/claude-sessions');
 (async () => {
   const temp=fs.mkdtempSync(path.join(os.tmpdir(),'tv-history-'));
   const saved=process.env.CLAUDE_CONFIG_DIR;
@@ -65,6 +65,15 @@ const { listClaudeSessions, findClaudeImage, findClaudePaste } = require('../ele
     assert.equal(await findClaudePaste({n:1,lines:1,prompt:'something else'},temp),null,'Prompt must match');
     assert.equal(await findClaudePaste({n:1,lines:1},temp),null,'No prompt, no guess');
     assert.equal(await findClaudePaste({n:3,lines:0,prompt:'[Pasted text #3 +0 lines]'},temp),null,'Hashes must not escape paste-cache');
+    const codexDay=path.join(temp,'.codex','sessions','2026','11','11');fs.mkdirSync(codexDay,{recursive:true});
+    const codexMsg=(text,id,data)=>JSON.stringify({type:'response_item',payload:{type:'message',role:'user',content:[
+      {type:'input_text',text:`<image name=[Image #${id}] path="x.png">`},{type:'input_image',image_url:`data:image/png;base64,${data}`},
+      {type:'input_text',text:'</image>'},{type:'input_text',text}]}});
+    fs.writeFileSync(path.join(codexDay,'rollout-a.jsonl'),[codexMsg('[Image #1] first',1,'C1'),codexMsg('[Image #1] second',1,'C2'),'{bad "input_image"'].join('\n'));
+    assert.equal((await findCodexImage({n:1,prompt:'[Image #1] second'},temp)).data,'C2','Codex: the message matching the prompt');
+    assert.equal((await findCodexImage({n:1,prompt:'[Image #1]  first'},temp)).data,'C1','Codex: each message keeps its own #1');
+    assert.equal(await findCodexImage({n:2,prompt:'[Image #1] first'},temp),null);
+    assert.equal(await findCodexImage({n:1},temp),null,'Codex: no prompt, no guess');
     const emptyConfig=path.join(temp,'no-history');process.env.CLAUDE_CONFIG_DIR=emptyConfig;
     assert.deepEqual((await listClaudeSessions(cwd,temp)).sessions,[]);
     console.log('PASS: local Claude history, previews, malformed records, all-project discovery, original working directories and empty history');

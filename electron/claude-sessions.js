@@ -173,4 +173,44 @@ async function findClaudePaste({ n, lines: breaks, prompt } = {}, home = os.home
   }
   return null;
 }
-module.exports = { listClaudeSessions, findClaudeImage, findClaudePaste, textContent, readEdges };
+// Codex rollouts (~/.codex/sessions/YYYY/MM/DD/*.jsonl) keep a sent image as
+// `<image name=[Image #N] …>` text followed by an input_image data URL.
+async function findCodexImage({ n, prompt } = {}, home = os.homedir()) {
+  n = Number(n);
+  if (!Number.isInteger(n) || n < 1 || typeof prompt !== 'string' || !prompt.trim()) return null;
+  const files = [];
+  // shortcut: only the 3 newest entries per year/month/day level; older sessions are not searched.
+  const walk = async (dir, depth) => {
+    let entries; try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+    if (depth === 3) {
+      for (const e of entries) if (e.isFile() && e.name.endsWith('.jsonl')) {
+        try { files.push([(await fs.promises.stat(path.join(dir, e.name))).mtimeMs, path.join(dir, e.name)]); } catch {}
+      }
+      return;
+    }
+    for (const e of entries.filter(e => e.isDirectory()).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 3)) await walk(path.join(dir, e.name), depth + 1);
+  };
+  await walk(path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'sessions'), 0);
+  const norm = s => s.replace(/\s+/g, ' ').trim(), want = norm(prompt).slice(0, 80);
+  for (const [, file] of files.sort((a, b) => b[0] - a[0]).slice(0, 10)) {
+    let raw; try { raw = await fs.promises.readFile(file, 'utf8'); } catch { continue; }
+    let found = null;
+    for (const line of raw.split('\n')) {
+      if (!line.includes('"input_image"')) continue;
+      let row; try { row = JSON.parse(line); } catch { continue; }
+      const p = row?.payload;
+      if (p?.type !== 'message' || p.role !== 'user' || !Array.isArray(p.content)) continue;
+      const text = p.content.filter(b => b?.type === 'input_text' && typeof b.text === 'string' && !/^<\/?image\b/.test(b.text)).map(b => b.text).join(' ');
+      if (!norm(text).startsWith(want)) continue;
+      p.content.forEach((b, i) => {
+        const id = /^<image name=\[Image #(\d+)\]/.exec(b?.type === 'input_text' ? b.text : '')?.[1];
+        const url = p.content[i + 1]?.type === 'input_image' ? p.content[i + 1].image_url : null;
+        const m = Number(id) === n && typeof url === 'string' && /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/s.exec(url);
+        if (m) found = { mediaType: m[1], data: m[2] };
+      });
+    }
+    if (found) return found;
+  }
+  return null;
+}
+module.exports = { listClaudeSessions, findClaudeImage, findClaudePaste, findCodexImage, textContent, readEdges };

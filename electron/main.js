@@ -1091,6 +1091,7 @@ const sendToRenderer = (channel, payload) => {
 ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-sessions').listClaudeSessions(cwd));
 ipcMain.handle('history:claude-image', (_e, query) => require('./claude-sessions').findClaudeImage(query));
 ipcMain.handle('history:claude-paste', (_e, query) => require('./claude-sessions').findClaudePaste(query));
+ipcMain.handle('history:codex-image', (_e, query) => require('./claude-sessions').findCodexImage(query));
 ipcMain.handle('terminal:session-context', (event, id, sessionId) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized chat target');
   return require('./session-context').attachSessionContext({sessionId,
