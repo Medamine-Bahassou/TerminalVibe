@@ -474,10 +474,12 @@
 
   let WS_PORT = 7681;
 
-  // Terminal links follow Settings → General: a browser tab beside the
-  // terminal they were clicked in, or the system browser. Shift+click picks
-  // the other one. Non-web URLs and detached panes always go external.
+  // Terminal links open with Ctrl/Cmd+click, like the image previews; a plain click stays a
+  // terminal click (selection). They follow Settings → General: a browser tab beside the
+  // terminal they were clicked in, or the system browser. Ctrl+Shift+click picks the other
+  // one. Non-web URLs and detached panes always go external.
   function openTerminalLink(termId, uri, event) {
+    if (!event?.ctrlKey && !event?.metaKey) return;
     let url = null;
     try { url = new URL(uri); } catch { }
     const found = findTermById(termId);
@@ -485,6 +487,8 @@
     if (!url || !['http:', 'https:'].includes(url.protocol) || !inTab || !found?.ws) { openExternalUrl(uri); return; }
     addBrowserTab(found.ws.id, findGroupContainingTerm(found.ws.layout, termId)?.id, url.href);
   }
+
+  function hoverWebLink(term, termId, uri) { claudeRefHovered = { el: term.element, term, open: e => openTerminalLink(termId, uri, e) }; }
 
   function openExternalUrl(url) {
     if (isDesktop() && window.electronAPI) {
@@ -525,6 +529,13 @@
       try { ws.send(JSON.stringify({type:'file:save-temp',requestId,id:entry.id,name:file.name,data})); }
       catch(error) { clearTimeout(timer);fileDropRequests.delete(requestId);reject(error); }
     });
+  }
+
+  // Images this pane handed a CLI (pasted or dropped), oldest first: they back the previews of
+  // unsent "[Image #N]" chips and tell this pane's sent Codex images from other sessions'.
+  function trackPaneImage(entry, path) {
+    (entry._claudeImageFiles ||= []).push(path);
+    if (entry._claudeImageFiles.length > 20) entry._claudeImageFiles.shift();
   }
 
   async function dropFilesIntoTerminal(entry, files) {
@@ -597,9 +608,8 @@
       if (!available()) return;
       // Same image the CLI gets (Claude via its clipboard, Codex via this path);
       // lets an unsent "[Image #N]" chip be previewed.
-      (entry._claudeImageFiles ||= []).push(path);
-      if (entry._claudeImageFiles.length > 20) entry._claudeImageFiles.shift();
       if (/^claude(?:[-.\s]|$)/i.test(process || '')) {
+        trackPaneImage(entry, path); // other CLIs get the path as a paste, tracked by setupClaudeImageLinks
         // Send the key, not a bracketed-paste string. Claude reads the local
         // clipboard itself; do not also insert a filename or submit the draft.
         const shortcut = window.electronAPI?.platform === 'win32' ? '\x1bv' : '\x16';
@@ -1785,11 +1795,11 @@
   if (isDesktop() && window.electronAPI) {
     window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
     window.electronAPI.onBrowserKey?.(d => document.dispatchEvent(new KeyboardEvent('keydown', { ...d, bubbles: true, cancelable: true })));
-    // The key came from a tab's page or from its DevTools drawer.
+    // The key came from a tab's page, or from its DevTools (main sends the page's id for both).
     window.electronAPI.onBrowserDevToolsToggle?.(id => {
       const ownsGuest = view => { try { return view.getWebContentsId() === id; } catch { return false; } };
       workspaces.flatMap(getWorkspaceTerminals).find(t => t.type === 'browser' &&
-        [...(t.browserContainer?.querySelectorAll('webview.browser-surface, .browser-devtools webview') || [])].some(ownsGuest))?._toggleDevTools?.();
+        [...(t.browserContainer?.querySelectorAll('webview.browser-surface') || [])].some(ownsGuest))?._toggleDevTools?.();
     });
     syncBrowserShortcuts();
   }
@@ -1841,6 +1851,7 @@
             if (t.type === 'browser' && t._viewCreated) window.electronAPI.browserHide(t.id);
           }
         }
+        syncDevToolsViews(false);
       }
       return;
     }
@@ -1916,6 +1927,20 @@
         } else {
           window.electronAPI.browserHide(v.id);
         }
+      }
+      syncDevToolsViews(true);
+    }
+  }
+
+  // Open DevTools drawers are native views (they paint above the DOM) laid over
+  // their .browser-devtools placeholder; hide them with their tab or under overlays.
+  function syncDevToolsViews(show) {
+    for (const ws of workspaces) {
+      for (const t of getWorkspaceTerminals(ws)) {
+        const dt = t._devtools;
+        if (!dt) continue;
+        const r = show && ws.id === activeWsId && t.browserContainer?.style.visibility !== 'hidden' ? dt.el.getBoundingClientRect() : null;
+        window.electronAPI.browserDevToolsBounds?.(dt.pageId, r && r.width && r.height ? { x: r.left, y: r.top, width: r.width, height: r.height } : null);
       }
     }
   }
@@ -4113,20 +4138,45 @@
   }
 
   // Claude Code prints pasted images as "[Image #N]" and long pastes as "[Pasted text #N +M lines]".
-  // Hover previews them, click opens them full size. Desktop only.
+  // Hover previews them, Ctrl/Cmd+click opens them full size. Desktop only.
   let claudeRefPop = null, claudeRefHoverToken = 0, claudeRefHovered = null;
   function hideClaudeRefPop() { claudeRefHoverToken++; claudeRefHovered = null; if (claudeRefPop) claudeRefPop.hidden = true; }
-  // Open on mousedown, not xterm's link activate: a click in Claude's input box redraws that
-  // line and xterm drops the link before mouseup. Swallowing it also keeps the click from Claude.
+  // Every terminal link (web URLs, OSC 8, previews) opens with Ctrl/Cmd+click; a plain press stays
+  // a terminal press (text selection) and only drops the preview. Links open here on mousedown,
+  // never through xterm's activate: a click in Claude's input box redraws that line and xterm drops
+  // the link before mouseup, and the swallowed press never reaches a CLI that captures the mouse
+  // (Claude Code opens a clicked URL itself, which made links open twice: tab + external browser).
+  // claudeRefHovered = { el: terminal element, term, open(event) } for the link under the mouse.
+  const claudeRefHint = `${window.electronAPI?.platform === 'darwin' ? '⌘' : 'Ctrl'}+click to open`;
+  // Links only open with the modifier held, so show xterm's pointer cursor only then (workspace.css).
+  const syncLinkMod = e => document.body.classList.toggle('link-mod-held', e.ctrlKey || e.metaKey);
+  for (const type of ['keydown', 'keyup', 'mousemove']) window.addEventListener(type, syncLinkMod, true);
+  window.addEventListener('blur', () => document.body.classList.remove('link-mod-held'));
   document.addEventListener('mousedown', e => {
     const hit = claudeRefHovered;
-    if (!hit || e.button !== 0 || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey || !hit.entry.term.element?.contains(e.target)) return;
-    e.preventDefault(); e.stopPropagation();
-    openClaudeRefViewer(hit.entry, hit.ref, hit.prompt);
+    if (!hit || !hit.el?.contains(e.target)) return;
+    if (e.button === 0 && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      e.preventDefault(); e.stopPropagation();
+      hit.open(e); // Shift picks the other target for web links
+      return;
+    }
+    claudeRefHoverToken++; if (claudeRefPop) claudeRefPop.hidden = true; // keep the hit: Ctrl+click may follow
+    // A CLI that captures the mouse (Claude Code, Codex) opens a clicked URL in the system
+    // browser itself; links only open on Ctrl/Cmd+click, so it never gets presses on a link.
+    // Shift+press is xterm's forced selection and still goes through.
+    if (!e.shiftKey && hit.term?.modes.mouseTrackingMode !== 'none') { e.preventDefault(); e.stopPropagation(); hit.term.focus(); }
   }, true);
   const claudeRefCache = new Map();
   const lineBreaks = text => (text.match(/\n/g) || []).length;
+  const IMAGE_FILE_ERRORS = { missing: 'File not found', denied: 'Permission denied', 'not-image': 'Not an image file',
+    invalid: 'Only absolute or ~/ paths can be previewed' };
   async function loadClaudeRef(entry, ref, prompt) {
+    if (ref.kind === 'file') {
+      // Read on every hover, no cache: screenshots get overwritten at the same path.
+      const r = await window.electronAPI.readImageFile(ref.path);
+      if (r?.data) return { src: `data:${r.mediaType};base64,${r.data}` };
+      return { error: r?.error === 'too-large' ? `Too large to preview (${Math.round(r.size / 1048576)} MB)` : IMAGE_FILE_ERRORS[r?.error] || 'Couldn’t read this file' };
+    }
     if (ref.kind === 'paste') {
       // Unsent pastes exist only in this pane; Claude's "+M lines" counts line breaks.
       const local = entry._claudePastes?.findLast(t => lineBreaks(t) === ref.lines);
@@ -4138,14 +4188,16 @@
       const nums = [...prompt.matchAll(/\[Image #(\d+)\]/g)].map(m => Number(m[1])).sort((a, b) => a - b);
       const i = nums.indexOf(ref.n);
       const file = i >= 0 && nums.length <= files.length ? files[files.length - nums.length + i] : files[files.length - 1];
-      const data = await window.electronAPI.readPastedImage(file);
-      if (data) return { src: `data:image/png;base64,${data}` };
+      const r = await window.electronAPI.readImageFile(file);
+      if (r?.data) return { src: `data:${r.mediaType};base64,${r.data}` };
     }
     // Not Claude (Codex, …): never fall back to Claude's transcripts, they'd show another session's content.
     const other = entry._claudeRunning === false;
     if (other && ref.kind !== 'image') return null;
     // Cache hits only: a miss may be something the CLI hasn't written to disk yet.
-    const key = `${entry.id}\n${other}\n${ref.kind}\n${ref.n}\n${ref.later}\n${prompt}`;
+    // `later` counts from the newest message, so it shifts when a new one is sent; the prompt's
+    // buffer line pins which message this is.
+    const key = `${entry.id}\n${other}\n${ref.kind}\n${ref.n}\n${ref.later}\n${ref.at}\n${prompt}`;
     if (claudeRefCache.has(key)) return claudeRefCache.get(key);
     let found = null;
     if (other) {
@@ -4183,7 +4235,7 @@
       claudeRefPop.style.top = top + 'px';
     };
     const meta = document.createElement('div'); meta.className = 'claude-image-meta';
-    const label = document.createElement('span'); label.textContent = ref.label;
+    const label = document.createElement('span'); label.className = 'claude-image-title'; label.textContent = ref.label;
     meta.innerHTML = '<i class="ph ph-circle-notch"></i>'; meta.append(label);
     claudeRefPop.replaceChildren(meta);
     claudeRefPop.hidden = false; place();
@@ -4192,15 +4244,16 @@
     if (token !== claudeRefHoverToken) return;
     const info = document.createElement('span');
     meta.replaceChildren(label, info);
+    if (found?.src || found?.text != null) meta.append(Object.assign(document.createElement('span'), { className: 'claude-image-hint', textContent: claudeRefHint }));
     if (found?.src) {
       const img = document.createElement('img'); img.alt = ref.label; img.src = found.src;
       img.onload = () => { if (token === claudeRefHoverToken) { info.textContent = `${img.naturalWidth}×${img.naturalHeight}`; place(); } };
       claudeRefPop.replaceChildren(img, meta);
-    } else if (found) {
+    } else if (found?.text != null) {
       info.textContent = `${lineBreaks(found.text) + 1} lines · ${found.text.length.toLocaleString()} chars`;
       claudeRefPop.replaceChildren(claudeRefPre(found.text, 18), meta);
     } else {
-      label.textContent = `${ref.label} wasn't found in this pane or Claude's history`;
+      label.textContent = found?.error || `${ref.label} wasn't found in this pane or Claude's history`;
       meta.replaceChildren(Object.assign(document.createElement('i'), { className: 'ph ph-warning-circle' }), label);
     }
     place();
@@ -4208,19 +4261,77 @@
   async function openClaudeRefViewer(entry, ref, prompt) {
     hideClaudeRefPop();
     const found = await loadClaudeRef(entry, ref, prompt).catch(() => null);
-    if (!found) return;
+    if (!found?.src && found?.text == null) return;
     const overlay = document.createElement('div'); overlay.className = 'claude-image-viewer';
     overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-label', ref.label); overlay.tabIndex = -1;
+    let keys = null; // image viewer shortcuts
     if (found.src) {
-      const img = document.createElement('img'); img.src = found.src; img.alt = ref.label;
-      overlay.appendChild(img);
+      const img = document.createElement('img'); img.src = found.src; img.alt = ref.label; img.draggable = false;
+      // Wheel zooms at the cursor, drag pans, toolbar/keys rotate and flip.
+      const v = { s: 1, x: 0, y: 0, r: 0, f: 1 };
+      const pct = document.createElement('span'); pct.className = 'civ-zoom';
+      const apply = () => {
+        img.style.transform = `translate(${v.x}px,${v.y}px) scale(${v.s}) rotate(${v.r}deg) scaleX(${v.f})`;
+        pct.textContent = `${Math.round(v.s * 100)}%`;
+      };
+      // Quarter turns swap width and height, so shrink to keep the whole image on screen.
+      const fitScale = () => v.r % 180 ? Math.min(1, innerWidth * .92 / img.offsetHeight, innerHeight * .84 / img.offsetWidth) : 1;
+      const fit = () => { Object.assign(v, { s: fitScale(), x: 0, y: 0 }); apply(); };
+      const zoomAt = (s2, cx = innerWidth / 2, cy = innerHeight / 2) => {
+        s2 = Math.max(.1, Math.min(20, s2));
+        const r = overlay.getBoundingClientRect(), px = cx - r.left - r.width / 2, py = cy - r.top - r.height / 2;
+        v.x = px - (s2 / v.s) * (px - v.x); v.y = py - (s2 / v.s) * (py - v.y); v.s = s2; apply();
+      };
+      const rotate = d => { v.r = (v.r + d + 360) % 360; fit(); };
+      const flip = () => { v.f *= -1; apply(); };
+      overlay.addEventListener('wheel', e => { e.preventDefault(); zoomAt(v.s * Math.exp(-e.deltaY * .0015), e.clientX, e.clientY); }, { passive: false });
+      let drag = null, dragged = false;
+      img.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return;
+        e.preventDefault(); img.setPointerCapture(e.pointerId);
+        drag = { x: e.clientX - v.x, y: e.clientY - v.y, sx: e.clientX, sy: e.clientY }; dragged = false;
+      });
+      img.addEventListener('pointermove', e => {
+        if (!drag) return;
+        if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) > 3) dragged = true;
+        v.x = e.clientX - drag.x; v.y = e.clientY - drag.y; apply();
+      });
+      img.addEventListener('pointerup', () => { drag = null; });
+      // A click on the image never closes; a double click toggles fit / 2x at the cursor.
+      img.addEventListener('click', e => { e.stopPropagation(); });
+      img.addEventListener('dblclick', e => { if (dragged) return; v.s > fitScale() + .01 ? fit() : zoomAt(2 * fitScale(), e.clientX, e.clientY); });
+
+      const bar = document.createElement('div'); bar.className = 'civ-bar'; bar.setAttribute('role', 'toolbar');
+      bar.onclick = e => e.stopPropagation();
+      const btn = (icon, title, fn) => {
+        const b = document.createElement('button'); b.type = 'button'; b.title = title; b.setAttribute('aria-label', title);
+        b.innerHTML = `<i class="ph ph-${icon}"></i>`; b.onclick = fn; bar.appendChild(b);
+      };
+      const sep = () => bar.appendChild(Object.assign(document.createElement('span'), { className: 'civ-sep' }));
+      btn('magnifying-glass-minus', 'Zoom out (−)', () => zoomAt(v.s / 1.25));
+      bar.appendChild(pct);
+      btn('magnifying-glass-plus', 'Zoom in (+)', () => zoomAt(v.s * 1.25));
+      btn('corners-in', 'Fit to screen (0)', fit);
+      sep();
+      btn('arrow-counter-clockwise', 'Rotate left (Shift+R)', () => rotate(-90));
+      btn('arrow-clockwise', 'Rotate right (R)', () => rotate(90));
+      btn('flip-horizontal', 'Flip (F)', flip);
+      sep();
+      btn('x', 'Close (Esc)', () => close());
+      keys = { '+': () => zoomAt(v.s * 1.25), '=': () => zoomAt(v.s * 1.25), '-': () => zoomAt(v.s / 1.25), '0': fit,
+        r: () => rotate(90), R: () => rotate(-90), f: flip, F: flip };
+      apply();
+      overlay.append(img, bar);
     } else {
       const pre = claudeRefPre(found.text);
       pre.onclick = e => e.stopPropagation(); // keep text selectable; the backdrop closes
       overlay.appendChild(pre);
     }
     // Capture on document: xterm refocuses itself after the click, and a stray Esc would interrupt Claude.
-    const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
+    const onKey = e => {
+      const k = e.key === 'Escape' ? close : !e.ctrlKey && !e.metaKey && !e.altKey && keys?.[e.key];
+      if (k) { e.preventDefault(); e.stopPropagation(); k(); }
+    };
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); entry.term.focus(); };
     overlay.onclick = close;
     document.addEventListener('keydown', onKey, true);
@@ -4233,7 +4344,10 @@
     term.onData(data => {
       // Bracketed paste (Claude turns it on) marks every paste, whichever path sent it.
       if (!data.startsWith('\x1b[200~')) return;
-      entry._claudePastes.push(data.slice(6, data.endsWith('\x1b[201~') ? -6 : undefined).replace(/\r\n?/g, '\n'));
+      const text = data.slice(6, data.endsWith('\x1b[201~') ? -6 : undefined).replace(/\r\n?/g, '\n');
+      entry._claudePastes.push(text);
+      // A pasted or dropped image path becomes an "[Image #N]" chip in Claude/Codex.
+      for (const m of text.matchAll(IMAGE_PATH_RE)) trackPaneImage(entry, m[2] || m[3]);
       if (entry._claudePastes.length > 20) entry._claudePastes.shift();
     });
     term.registerLinkProvider({
@@ -4249,14 +4363,13 @@
           text += ch; for (let k = 0; k < ch.length; k++) cols.push(x);
         }
         const links = [];
-        let prompt, draft, later = 0;
+        let prompt, draft, later = 0, at = -1;
         for (const m of text.matchAll(/\[(?:Image #(\d+)|Pasted text #(\d+)(?: \+(\d+) lines?)?)\]/g)) {
           // The sent message is the nearest "❯ " prompt line at or above; it identifies the session.
           // No "❯" line below means this is Claude's input box: an unsent draft.
           if (prompt === undefined) {
             const buf = term.buffer.active, lineText = i => buf.getLine(i)?.translateToString(true) || '';
             prompt = '';
-            let at = -1;
             for (let i = y - 1; i >= Math.max(0, y - 40); i--) {
               const p = /^\s*[❯›>]\s+(.*\S)/.exec(lineText(i)); // Claude ❯, Codex ›
               if (p) { prompt = p[1]; at = i; break; }
@@ -4268,20 +4381,93 @@
             draft = !below.length;
             later = below.slice(0, -1).filter(i => /^\s*[❯›>]\s+(.*\S)/.exec(lineText(i))?.[1] === prompt).length;
           }
-          const ref = m[1] ? { kind: 'image', n: Number(m[1]), draft, later, label: `Image #${m[1]}` }
+          const ref = m[1] ? { kind: 'image', n: Number(m[1]), draft, later, at, label: `Image #${m[1]}` }
             : { kind: 'paste', n: Number(m[2]), lines: Number(m[3] || 0), label: `Pasted text #${m[2]}` };
           links.push({
             text: m[0], decorations: { underline: true, pointerCursor: true },
             range: { start: { x: cols[m.index] + 1, y }, end: { x: cols[m.index + m[0].length - 1] + 1, y } },
             activate: () => {}, // opened by the mousedown listener above
-            hover: e => { showClaudeRefPop(entry, ref, prompt, e); claudeRefHovered = { entry, ref, prompt }; },
+            hover: e => { if (e.buttons) return; showClaudeRefPop(entry, ref, prompt, e); claudeRefHovered = { el: term.element, term, open: () => openClaudeRefViewer(entry, ref, prompt) }; }, // not mid-selection
             leave: hideClaudeRefPop,
           });
         }
         callback(links.length ? links : undefined);
       },
     });
+    // Image paths in output (absolute, ~/ or C:\, optionally quoted): hover previews, Ctrl/Cmd+click
+    // opens the viewer. A plain click stays a terminal click, so the path can still be selected.
+    if (!window.electronAPI.readImageFile) return;
+    term.registerLinkProvider({
+      provideLinks(y, callback) {
+        const buf = term.buffer.active, rows = [];
+        // A few rows around y: long paths soft-wrap (terminal) or get hard-wrapped by CLIs.
+        for (let r = Math.max(0, y - 9); r < Math.min(buf.length, y + 8); r++) {
+          const line = buf.getLine(r), row = { text: '', pos: [], wrapped: !!line.isWrapped };
+          for (let x = 0; x < line.length; x++) {
+            const c = line.getCell(x);
+            if (c && c.getWidth() === 0) continue;
+            const ch = c?.getChars() || ' ';
+            row.text += ch; for (let k = 0; k < ch.length; k++) row.pos.push({ x: x + 1, y: r + 1 });
+          }
+          rows.push(row);
+        }
+        const { text, pos, glues } = joinTermRows(rows);
+        const found = [];
+        for (const m of text.matchAll(IMAGE_PATH_RE)) {
+          const [s, e] = m.indices[2] || m.indices[3];
+          // Only this row's cells: a hard-wrapped path is one link piece per row, so the
+          // underline skips the continuation's indent.
+          const cells = pos.slice(s, e).filter(c => c?.y === y);
+          if (!cells.length) continue;
+          found.push({ p: m[2] || m[3], glued: glues.some(g => g > s && g < e),
+            range: { start: cells[0], end: cells[cells.length - 1] } });
+        }
+        if (!found.length) return callback(undefined);
+        // A rejoined path may be two unrelated words; link it only if the file exists.
+        Promise.all(found.map(f => f.glued ? window.electronAPI.readImageFile(f.p, { probe: true }).then(r => r?.ok) : true)).then(oks => {
+          const links = found.filter((_, i) => oks[i]).map(({ p, range }) => {
+            const ref = { kind: 'file', path: p, label: p.split(/[\\/]/).pop() };
+            return {
+              text: p, range, decorations: { underline: true, pointerCursor: true },
+              activate: () => {}, // opened by the mousedown listener above
+              hover: ev => { if (ev.buttons) return; showClaudeRefPop(entry, ref, '', ev); claudeRefHovered = { el: term.element, term, open: () => openClaudeRefViewer(entry, ref, '') }; }, // not mid-selection
+              leave: hideClaudeRefPop,
+            };
+          });
+          callback(links.length ? links : undefined);
+        }, () => callback(undefined));
+        return;
+      },
+    });
   }
+  // Join terminal rows into one string with a cell position per char. Soft-wrapped rows
+  // continue directly. A hard break is glued (indent dropped) only when the row above ends
+  // in an unfinished path, as when Claude/Codex wrap a long path themselves; `glues` marks
+  // those joins so callers can double-check matches across them.
+  function joinTermRows(rows) {
+    let text = '', pos = [];
+    const glues = [];
+    rows.forEach((row, i) => {
+      if (i && !row.wrapped) {
+        const tail = /(\S+)\s*$/.exec(text)?.[1] || '';
+        const lead = row.text.length - row.text.trimStart().length;
+        const pathStart = /^['"(]?(?:~|[A-Za-z]:)?[\\/][^\s'"`()<>[\]{}|]*$/.test(tail) && !/\.(?:png|jpe?g|gif|webp|bmp)$/i.test(tail);
+        if (pathStart && /^[^\s'"`()<>[\]{}|]/.test(row.text.slice(lead))) {
+          const keep = text.trimEnd().length;
+          text = text.slice(0, keep); pos = pos.slice(0, keep);
+          glues.push(text.length);
+          text += row.text.slice(lead); pos.push(...row.pos.slice(lead));
+          return;
+        }
+        text += '\n'; pos.push(null);
+      }
+      text += row.text; pos.push(...row.pos);
+    });
+    return { text, pos, glues };
+  }
+  // Quoted (may contain spaces) or bare. A bare path must not continue a word or URL
+  // ("https://x/a.png", "a~/b.png"); trailing sentence punctuation is not part of it.
+  const IMAGE_PATH_RE = /(['"])((?:~|[A-Za-z]:)?[\\/][^'"\n]*?\.(?:png|jpe?g|gif|webp|bmp))\1|(?<![\w.:/~\\-])((?:~|[A-Za-z]:)?[\\/][^\s'"`()<>[\]{}|]*\.(?:png|jpe?g|gif|webp|bmp))(?=[.,:;!?]?(?:$|[\s'"`)\]}>]))/dgi;
 
   function _createTermEntry(wsp, id, label) {
     const term = new Terminal({
@@ -4298,13 +4484,14 @@
       drawBoldTextInBrightColors: true,
       minimumContrastRatio: 1,
       customGlyphs: true,
-      // OSC 8 hyperlinks (Claude, ls --hyperlink, …): same routing as plain URLs.
-      linkHandler: { activate: (e, uri) => openTerminalLink(id, uri, e) },
+      // OSC 8 hyperlinks (Claude, ls --hyperlink, …): same routing as plain URLs, opened by the
+      // Ctrl/Cmd+mousedown listener (see claudeRefHovered), not by xterm's activate.
+      linkHandler: { activate: () => {}, hover: (_e, uri) => hoverWebLink(term, id, uri), leave: () => { claudeRefHovered = null; } },
     });
 
     const fitAddon = new FitAddon.FitAddon();
     const searchAddon = new SearchAddon.SearchAddon();
-    const webLinksAddon = new WebLinksAddon.WebLinksAddon((e, uri) => openTerminalLink(id, uri, e));
+    const webLinksAddon = new WebLinksAddon.WebLinksAddon(() => {}, { hover: (_e, uri) => hoverWebLink(term, id, uri), leave: () => { claudeRefHovered = null; } });
     try { const u11 = new Unicode11Addon.Unicode11Addon(); term.loadAddon(u11); term.unicode.activeVersion = '11'; } catch { }
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
@@ -6490,68 +6677,71 @@
         toolbar.appendChild(btnFwd);
         toolbar.appendChild(btnReload);
         toolbar.appendChild(urlInput);
-        toolbar.appendChild(btnHistory);
         toolbar.appendChild(btnOpenExt);
-        // DevTools dock in a drawer under the page, as in Chrome. Desktop only: browser mode's iframe has none.
-        if (isDesktop() && window.electronAPI?.browserDevTools) {
-          const btnDevTools = document.createElement('button');
-          btnDevTools.className = 'browser-btn browser-devtools-btn';
-          btnDevTools.title = 'Developer tools (F12)';
-          btnDevTools.setAttribute('aria-label', 'Developer tools');
-          btnDevTools.setAttribute('aria-pressed', 'false');
-          btnDevTools.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
-          let drawer = null;
+        // DevTools dock in a drawer under the page, as in Chrome. Desktop only: browser mode's iframe has none,
+        // so there History stays a plain button instead of the ⋮ menu.
+        if (!(isDesktop() && window.electronAPI?.browserDevTools)) {
+          toolbar.insertBefore(btnHistory, btnOpenExt);
+        } else {
+          const btnMore = document.createElement('button');
+          btnMore.className = 'browser-btn browser-more-btn';
+          btnMore.title = 'More';
+          btnMore.setAttribute('aria-label', 'More');
+          btnMore.setAttribute('aria-haspopup', 'menu');
+          btnMore.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>';
+          btnMore.addEventListener('click', e => {
+            e.stopPropagation(); // The document click handler would close the menu right away.
+            if (ctxEl.classList.contains('open') && ctxEl._owner === btnMore) return hideCtxMenu();
+            const r = btnMore.getBoundingClientRect();
+            showCtxMenu({ pageX: r.right, pageY: r.bottom + 6, alignRight: true }, 'browser-more',
+              { entry, history: () => toggleBrowserHistoryDrawer(entry, contentWrap) });
+            ctxEl._owner = btnMore;
+          });
           const page = () => {
             const surface = contentWrap.querySelector('webview.browser-surface');
             return surface?._guestReady ? surface : null; // The webview API throws before dom-ready.
           };
           entry._closeDevTools = () => {
-            if (!drawer) return;
-            const surface = page();
-            if (surface) window.electronAPI.browserDevTools(surface.getWebContentsId(), null).catch(() => {});
-            drawer.sash.remove(); drawer.el.remove(); drawer = null;
-            btnDevTools.classList.remove('active'); btnDevTools.setAttribute('aria-pressed', 'false');
+            const dt = entry._devtools;
+            if (!dt) return;
+            entry._devtools = null;
+            window.electronAPI.browserDevTools(dt.pageId, false).catch(() => {});
+            dt.sash.remove(); dt.el.remove();
             settleBrowserSurfaces();
           };
           entry._toggleDevTools = () => {
-            if (drawer) return entry._closeDevTools();
+            if (entry._devtools) return entry._closeDevTools();
             const surface = page();
             if (!surface) return;
             const sash = document.createElement('div');
             sash.className = 'browser-devtools-sash';
             sash.setAttribute('role', 'separator');
-            sash.setAttribute('aria-orientation', 'horizontal');
+            // Placeholder only: main lays a native DevTools view over it (see syncDevToolsViews).
             const el = document.createElement('div');
             el.className = 'browser-devtools';
+            sash.setAttribute('aria-orientation', 'horizontal');
             const clamp = h => Math.max(80, Math.min(bc.clientHeight - 120, h));
             el.style.height = `${clamp(browserDevToolsHeight || Math.round(bc.clientHeight * 0.4))}px`;
-            const view = document.createElement('webview');
-            view.className = 'browser-devtools-surface';
-            view.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
-            view.src = 'about:blank';
-            el.appendChild(view);
             bc.append(sash, el);
-            // Same guest-iframe stretch as the page webview, or Electron keeps it 150px tall.
-            const pin = () => { const f = view.shadowRoot?.querySelector('iframe'); if (f) f.style.cssText = 'display:block;flex:1 1 auto;width:100%;height:100%;border:0'; return !!f; };
-            if (!pin()) { const mo = new MutationObserver(() => { if (pin()) mo.disconnect(); }); mo.observe(view, { childList: true, subtree: true }); }
-            const mine = drawer = { sash, el };
-            btnDevTools.classList.add('active'); btnDevTools.setAttribute('aria-pressed', 'true');
-            view.addEventListener('dom-ready', () => {
-              if (drawer === mine) window.electronAPI.browserDevTools(surface.getWebContentsId(), view.getWebContentsId()).catch(() => entry._closeDevTools());
-            }, { once: true });
+            const dt = entry._devtools = { sash, el, pageId: surface.getWebContentsId() };
+
+            window.electronAPI.browserDevTools(dt.pageId, true)
+              .then(() => { if (entry._devtools === dt) syncBrowserSlots(); })
+              .catch(() => { if (entry._devtools === dt) entry._closeDevTools(); });
             sash.addEventListener('pointerdown', e => {
               e.preventDefault();
+              sash.setPointerCapture(e.pointerId); // Keep the drag when the pointer crosses the native view.
               startResizing();
               const bottom = bc.getBoundingClientRect().bottom;
-              const move = ev => { browserDevToolsHeight = clamp(Math.round(bottom - ev.clientY)); el.style.height = `${browserDevToolsHeight}px`; };
-              const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); stopResizing(); };
-              window.addEventListener('pointermove', move);
-              window.addEventListener('pointerup', up);
+              const move = ev => { browserDevToolsHeight = clamp(Math.round(bottom - ev.clientY)); el.style.height = `${browserDevToolsHeight}px`; syncBrowserSlots(); };
+              const up = () => { sash.removeEventListener('pointermove', move); sash.removeEventListener('pointerup', up); sash.removeEventListener('pointercancel', up); stopResizing(); };
+              sash.addEventListener('pointermove', move);
+              sash.addEventListener('pointerup', up);
+              sash.addEventListener('pointercancel', up);
             });
             settleBrowserSurfaces();
           };
-          btnDevTools.addEventListener('click', () => entry._toggleDevTools());
-          toolbar.appendChild(btnDevTools);
+          toolbar.appendChild(btnMore);
         }
 
         // ── Content area ──
@@ -6889,7 +7079,7 @@
           if (loading && !entry._suspended) return;
           loadUrl(entry.url);
         });
-        btnHistory.addEventListener('click', () => { focusSlot(entry); openPalette('history'); });
+        btnHistory.addEventListener('click', () => toggleBrowserHistoryDrawer(entry, contentWrap));
         btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') openExternalUrl(entry.url); });
 
         bc.addEventListener('mousedown', (e) => {
@@ -8178,6 +8368,10 @@
       }
       sep();
       item('<i class="ph ph-x"></i>', 'Close workspace', '', () => removeWorkspace(wsId), true);
+    } else if (type === 'browser-more') {
+      const { entry, history } = data;
+      item('<i class="ph ph-clock-counter-clockwise"></i>', 'History', '', history);
+      item('<i class="ph ph-code"></i>', entry._devtools ? 'Close developer tools' : 'Developer tools', 'F12', () => entry._toggleDevTools?.());
     } else if (type === 'folder') {
       const folderId = data;
       const folderPinned = folders.find(f => f.id === folderId)?.pinned;
@@ -8316,7 +8510,7 @@
     ctxEl.classList.add('open');
     const menuW = ctxEl.offsetWidth;
     const menuH = ctxEl.offsetHeight;
-    let x = e.pageX;
+    let x = e.alignRight ? e.pageX - menuW : e.pageX; // alignRight: pageX is the menu's right edge
     let y = e.pageY;
     if (x + menuW > window.innerWidth) x = window.innerWidth - menuW - 4;
     if (y + menuH > window.innerHeight) y = window.innerHeight - menuH - 4;
@@ -8330,6 +8524,7 @@
     const restoreFocus = ctxEl.contains(document.activeElement);
     ctxEl.classList.remove('open');
     ctxEl.inert = true;
+    ctxEl._owner = null;
     if (restoreFocus && ctxPreviousFocus?.isConnected) ctxPreviousFocus.focus({ preventScroll: true });
   }
   document.addEventListener('contextmenu', e => { if (!ctxEl.contains(e.target)) hideCtxMenu(); }, true);
@@ -8988,6 +9183,84 @@
       run: () => { saveBrowserHistory([]); },
     });
     return items;
+  }
+
+  // Per-tab history drawer on the right of the page. It lives inside .browser-content,
+  // so a right-docked DevTools (a native view over its own column) never covers it.
+  function toggleBrowserHistoryDrawer(entry, contentWrap) {
+    const open = contentWrap.querySelector('.browser-history-drawer:not(.is-closing)');
+    if (open) { open._close(); return; }
+    const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
+    const drawer = el('section', 'browser-history-drawer');
+    drawer.setAttribute('role', 'dialog');
+    drawer.setAttribute('aria-label', 'History');
+    const head = el('header', 'bh-head');
+    const close = el('button', 'bh-icon-btn');
+    close.type = 'button'; close.title = 'Close'; close.setAttribute('aria-label', 'Close history');
+    close.innerHTML = '<i class="ph ph-x"></i>';
+    head.append(el('h2', '', 'History'), close);
+    const searchWrap = el('div', 'bh-search');
+    searchWrap.innerHTML = '<i class="ph ph-magnifying-glass" aria-hidden="true"></i>';
+    const search = el('input');
+    search.type = 'search'; search.placeholder = 'Search history'; search.spellcheck = false;
+    search.setAttribute('aria-label', 'Search history');
+    searchWrap.append(search);
+    const list = el('div', 'bh-list');
+    const foot = el('footer', 'bh-foot');
+    const clear = el('button', 'bh-clear', 'Clear history');
+    clear.type = 'button';
+    foot.append(clear);
+    drawer.append(head, searchWrap, list, foot);
+
+    const dayLabel = ts => {
+      const d = new Date(ts), today = new Date(); today.setHours(0, 0, 0, 0);
+      const days = Math.round((today - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
+      return days <= 0 ? 'Today' : days === 1 ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+    };
+    const render = () => {
+      const q = search.value.trim().toLowerCase();
+      const all = loadBrowserHistory();
+      const hits = all.filter(h => !q || ((h.title || '') + ' ' + h.url).toLowerCase().includes(q));
+      list.replaceChildren();
+      clear.disabled = !all.length;
+      if (!hits.length) { list.append(el('div', 'bh-empty', all.length ? 'No matches' : 'No history yet')); return; }
+      let day = null;
+      for (const h of hits) {
+        const label = dayLabel(h.ts || 0);
+        if (label !== day) { day = label; list.append(el('div', 'bh-day', label)); }
+        const row = el('div', 'bh-row');
+        const go = el('button', 'bh-open');
+        go.type = 'button'; go.title = h.url;
+        const text = el('span', 'bh-text');
+        text.append(el('span', 'bh-title', h.title || h.url), el('span', 'bh-url', h.url.replace(/^https?:\/\/(www\.)?/, '')));
+        go.append(text, el('span', 'bh-time', h.ts ? new Date(h.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''));
+        go.addEventListener('click', () => { finish(); entry._loadUrl?.(h.url); });
+        const del = el('button', 'bh-icon-btn bh-del');
+        del.type = 'button'; del.title = 'Remove from history'; del.setAttribute('aria-label', 'Remove from history');
+        del.innerHTML = '<i class="ph ph-x"></i>';
+        del.addEventListener('click', () => { saveBrowserHistory(loadBrowserHistory().filter(x => x.url !== h.url)); render(); });
+        row.append(go, del);
+        list.append(row);
+      }
+    };
+    // Slide out, then remove (workspace.css). The timer covers reduced motion / a missed animationend.
+    const finish = () => {
+      if (drawer.classList.contains('is-closing')) return;
+      drawer.classList.add('is-closing');
+      const done = () => drawer.remove();
+      drawer.addEventListener('animationend', done, { once: true });
+      setTimeout(done, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 250);
+    };
+    drawer._close = finish;
+    close.addEventListener('click', finish);
+    clear.addEventListener('click', () => { saveBrowserHistory([]); render(); });
+    search.addEventListener('input', render);
+    drawer.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); finish(); } });
+    // Keep the slot's mousedown focus handling from pulling focus back to the page.
+    drawer.addEventListener('mousedown', e => e.stopPropagation());
+    render();
+    contentWrap.append(drawer);
+    search.focus();
   }
 
   // ── Snippets (saved commands). Enter = insert, Ctrl+Enter = insert and run.

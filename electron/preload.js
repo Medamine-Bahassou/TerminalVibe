@@ -44,7 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   claudeSessions: (cwd) => ipcRenderer.invoke('history:claude-sessions', cwd),
   claudeImage: (query) => ipcRenderer.invoke('history:claude-image', query),
   claudePaste: (query) => ipcRenderer.invoke('history:claude-paste', query),
-  readPastedImage: (file) => ipcRenderer.invoke('clipboard:read-pasted-image', file),
+  readImageFile: (file, opts) => ipcRenderer.invoke('fs:read-image', file, opts),
   codexImage: (query) => ipcRenderer.invoke('history:codex-image', query),
   attachSessionContext: (id, sessionId) => ipcRenderer.invoke('terminal:session-context', id, sessionId),
   attachWorkspaceContext: (id, context) => ipcRenderer.invoke('terminal:workspace-context', id, context),
@@ -119,7 +119,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   browserZoom: (id, level) => ipcRenderer.send('browser:zoom', id, level),
   browserDestroy: (id) => ipcRenderer.send('browser:destroy', id),
   browserSetShortcuts: (list) => ipcRenderer.send('browser:shortcuts', list),
-  browserDevTools: (pageId, drawerId) => ipcRenderer.invoke('browser:devtools', pageId, drawerId),
+  browserDevTools: (pageId, open) => ipcRenderer.invoke('browser:devtools', pageId, open),
+  browserDevToolsBounds: (pageId, rect) => ipcRenderer.send('browser:devtools-bounds', pageId, rect),
   onBrowserDevToolsToggle: (cb) => {
     const l = (_e, id) => cb(id);
     ipcRenderer.on('browser:devtools-toggle', l);

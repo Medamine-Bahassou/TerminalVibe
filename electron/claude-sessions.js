@@ -81,6 +81,62 @@ function findClaudeLauncher(home) {
 }
 // Pasted images live in the transcript as base64 blocks on user rows; Claude's
 // "[Image #N]" ids come from row.imagePasteIds, else they count up per session.
+// Per-transcript index of image messages, so a hover doesn't re-read and re-parse whole
+// transcripts: the first lookup indexes a file once, later ones read only lines appended
+// since (transcripts are append-only JSONL). Items keep the line's byte range, not the
+// base64 data, so the index stays small; a shrunk or replaced file is re-indexed.
+const imageIndexes = new Map(); // file -> { ino, done, mark, state, items }
+const MARK = 64; // bytes just before `done`, to notice a rewritten (not appended) file
+async function indexImages(file, needle, extract) {
+  const fh = await fs.promises.open(file, 'r');
+  try {
+    const st = await fh.stat();
+    let ix = imageIndexes.get(file);
+    if (ix && (st.ino !== ix.ino || st.size < ix.done)) ix = null;
+    if (ix && ix.done) {
+      const mark = Buffer.alloc(Math.min(MARK, ix.done));
+      await fh.read(mark, 0, mark.length, ix.done - mark.length);
+      if (!mark.equals(ix.mark)) ix = null;
+    }
+    if (!ix) imageIndexes.set(file, ix = { ino: st.ino, done: 0, mark: Buffer.alloc(0), state: {}, items: [] });
+    if (st.size === ix.done) return ix.items;
+    const buf = Buffer.alloc(st.size - ix.done);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, ix.done);
+    const end = buf.subarray(0, bytesRead).lastIndexOf(10) + 1;
+    const scan = (from, to, state, out) => {
+      for (let off = from; off < to;) {
+        let nl = buf.indexOf(10, off); if (nl < 0 || nl > to) nl = to;
+        const line = buf.subarray(off, nl);
+        if (line.includes(needle)) {
+          let row = null; try { row = JSON.parse(line.toString('utf8')); } catch {}
+          if (row) for (const item of extract(row, state)) out.push({ ...item, start: ix.done + off, end: ix.done + nl });
+        }
+        off = nl + 1;
+      }
+    };
+    scan(0, end, ix.state, ix.items);
+    // An unterminated last line is used now but re-read next time (it may still be written).
+    const tail = [];
+    if (end < bytesRead) scan(end, bytesRead, structuredClone(ix.state), tail);
+    ix.done += end;
+    ix.mark = Buffer.from(buf.subarray(Math.max(0, end - MARK), end));
+    if (ix.mark.length < Math.min(MARK, ix.done)) { // short append: the mark spans older bytes too
+      ix.mark = Buffer.alloc(Math.min(MARK, ix.done));
+      await fh.read(ix.mark, 0, ix.mark.length, ix.done - ix.mark.length);
+    }
+    return tail.length ? ix.items.concat(tail) : ix.items;
+  } finally { await fh.close(); }
+}
+// Re-read one indexed line and hand its parsed row to `pick`.
+async function readIndexedRow(file, item, pick) {
+  const fh = await fs.promises.open(file, 'r');
+  try {
+    const buf = Buffer.alloc(item.end - item.start);
+    await fh.read(buf, 0, buf.length, item.start);
+    return pick(JSON.parse(buf.toString('utf8')));
+  } catch { return null; } finally { await fh.close(); }
+}
+const normText = s => s.replace(/\s+/g, ' ').trim();
 async function findClaudeImage({ sessionId, cwd, n, prompt } = {}, home = os.homedir()) {
   n = Number(n);
   if (!Number.isInteger(n) || n < 1) return null;
@@ -109,40 +165,43 @@ async function findClaudeImage({ sessionId, cwd, n, prompt } = {}, home = os.hom
       if (!folder.isDirectory()) continue;
       const dir = path.join(projects, folder.name);
       let files; try { files = await fs.promises.readdir(dir); } catch { continue; }
-      for (const f of files) {
-        if (!f.endsWith('.jsonl') || !UUID.test(f.slice(0, -6))) continue;
-        try { recent.push([(await fs.promises.stat(path.join(dir, f))).mtimeMs, path.join(dir, f)]); } catch {}
-      }
+      await Promise.all(files.filter(f => f.endsWith('.jsonl') && UUID.test(f.slice(0, -6))).map(f =>
+        fs.promises.stat(path.join(dir, f)).then(st => recent.push([st.mtimeMs, path.join(dir, f)]), () => {})));
     }
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
   recent.sort((a, b) => b[0] - a[0]).slice(0, 10).forEach(([, f]) => { if (!candidates.includes(f)) candidates.push(f); });
-  const norm = s => s.replace(/\s+/g, ' ').trim();
-  const want = typeof prompt === 'string' ? norm(prompt).slice(0, 80) : '';
+  const want = typeof prompt === 'string' ? normText(prompt).slice(0, 80) : '';
+  const extract = (row, state) => {
+    if (row?.type !== 'user' || !Array.isArray(row.message?.content)) return [];
+    const images = row.message.content.filter(b => b?.type === 'image' && b.source?.type === 'base64' && typeof b.source.data === 'string');
+    if (!images.length) return [];
+    const ids = Array.isArray(row.imagePasteIds) && row.imagePasteIds.length === images.length ? row.imagePasteIds : null;
+    const text = normText(textContent(row.message.content)).slice(0, 200);
+    state.seq = state.seq || 0;
+    return images.flatMap((b, i) => {
+      const id = ids ? Number(ids[i]) : ++state.seq;
+      if (ids) state.seq = Math.max(state.seq, id);
+      return /^image\/(png|jpeg|gif|webp)$/.test(b.source.media_type) ? [{ id, text, part: i }] : [];
+    });
+  };
+  const load = (file, item) => readIndexedRow(file, item, row => {
+    const b = row.message.content.filter(b => b?.type === 'image' && b.source?.type === 'base64' && typeof b.source.data === 'string')[item.part];
+    return b ? { mediaType: b.source.media_type, data: b.source.data } : null;
+  });
+  // Index candidates in parallel; results are still taken in candidate order.
+  const indexed = await Promise.all(candidates.map(file => indexImages(file, '"image"', extract).catch(e => {
+    if (['ENOENT', 'EACCES', 'EISDIR'].includes(e.code)) return null; throw e;
+  })));
   let fallback = null;
-  for (const file of candidates) {
-    let raw;
-    try { raw = await fs.promises.readFile(file, 'utf8'); } catch (e) { if (['ENOENT', 'EACCES'].includes(e.code)) continue; throw e; }
-    let seq = 0, found = null, matched = null;
-    for (const line of raw.split('\n')) {
-      if (!line.includes('"image"')) continue;
-      let row; try { row = JSON.parse(line); } catch { continue; }
-      if (row?.type !== 'user' || !Array.isArray(row.message?.content)) continue;
-      const images = row.message.content.filter(b => b?.type === 'image' && b.source?.type === 'base64' && typeof b.source.data === 'string');
-      if (!images.length) continue;
-      const ids = Array.isArray(row.imagePasteIds) && row.imagePasteIds.length === images.length ? row.imagePasteIds : null;
-      const isMatch = want && norm(textContent(row.message.content)).startsWith(want);
-      images.forEach((b, i) => {
-        const id = ids ? Number(ids[i]) : ++seq;
-        if (ids) seq = Math.max(seq, id);
-        if (id !== n || !/^image\/(png|jpeg|gif|webp)$/.test(b.source.media_type)) return;
-        found = b.source; // latest wins: ids restart after /clear in the same file
-        if (isMatch) matched = b.source;
-      });
-    }
-    if (matched) return { mediaType: matched.media_type, data: matched.data };
-    if (found && trusted.has(file) && !fallback) fallback = { mediaType: found.media_type, data: found.data };
+  for (const [i, file] of candidates.entries()) {
+    const items = indexed[i]?.filter(it => it.id === n);
+    if (!items?.length) continue;
+    // Latest wins: ids restart after /clear in the same file.
+    const matched = want ? items.findLast(it => it.text.startsWith(want)) : null;
+    if (matched) return load(file, matched);
+    if (trusted.has(file) && !fallback) fallback = [file, items[items.length - 1]];
   }
-  return fallback;
+  return fallback ? load(...fallback) : null;
 }
 // Sent "[Pasted text #N +M lines]" prompts are kept in history.jsonl: inline `content`, or a
 // `contentHash` pointing into paste-cache/. Only a prompt that matches the visible one is trusted.
@@ -197,29 +256,31 @@ async function findCodexImage({ n, prompt, files: paneFiles, later = 0 } = {}, h
     for (const e of entries.filter(e => e.isDirectory()).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 3)) await walk(path.join(dir, e.name), depth + 1);
   };
   await walk(path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'sessions'), 0);
-  const norm = s => s.replace(/\s+/g, ' ').trim(), want = norm(prompt).slice(0, 80);
+  const want = normText(prompt).slice(0, 80);
+  const extract = row => {
+    const p = row?.payload;
+    if (p?.type !== 'message' || p.role !== 'user' || !Array.isArray(p.content)) return [];
+    const text = normText(p.content.filter(b => b?.type === 'input_text' && typeof b.text === 'string' && !/^<\/?image\b/.test(b.text)).map(b => b.text).join(' ')).slice(0, 200);
+    return p.content.flatMap((b, i) => {
+      const id = /^<image name=\[Image #(\d+)\]/.exec(b?.type === 'input_text' ? b.text : '')?.[1];
+      const url = p.content[i + 1]?.type === 'input_image' ? p.content[i + 1].image_url : null;
+      return id && typeof url === 'string' && /^data:image\/(?:png|jpeg|gif|webp);base64,/.test(url)
+        ? [{ id: Number(id), text, part: i + 1, path: / path="([^"]*)"/.exec(b.text)?.[1] }] : [];
+    });
+  };
+  const load = (file, item, own) => readIndexedRow(file, item, row => {
+    const m = /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/s.exec(row.payload.content[item.part]?.image_url || '');
+    return m ? { mediaType: m[1], data: m[2], ...(own ? { own: true } : {}) } : null;
+  });
+  const newest = files.sort((a, b) => b[0] - a[0]).slice(0, 10).map(([, f]) => f);
+  const indexed = await Promise.all(newest.map(f => indexImages(f, '"input_image"', extract).catch(() => null)));
   let fallback = null;
-  for (const [, file] of files.sort((a, b) => b[0] - a[0]).slice(0, 10)) {
-    let raw; try { raw = await fs.promises.readFile(file, 'utf8'); } catch { continue; }
-    const hits = []; // one per matching message, oldest first
-    for (const line of raw.split('\n')) {
-      if (!line.includes('"input_image"')) continue;
-      let row; try { row = JSON.parse(line); } catch { continue; }
-      const p = row?.payload;
-      if (p?.type !== 'message' || p.role !== 'user' || !Array.isArray(p.content)) continue;
-      const text = p.content.filter(b => b?.type === 'input_text' && typeof b.text === 'string' && !/^<\/?image\b/.test(b.text)).map(b => b.text).join(' ');
-      if (!norm(text).startsWith(want)) continue;
-      p.content.forEach((b, i) => {
-        const id = /^<image name=\[Image #(\d+)\]/.exec(b?.type === 'input_text' ? b.text : '')?.[1];
-        const url = p.content[i + 1]?.type === 'input_image' ? p.content[i + 1].image_url : null;
-        const m = Number(id) === n && typeof url === 'string' && /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/s.exec(url);
-        if (m) hits.push({ mediaType: m[1], data: m[2], own: own.has(/ path="([^"]*)"/.exec(b.text)?.[1]) });
-      });
-    }
+  for (const [i, file] of newest.entries()) {
+    const hits = indexed[i]?.filter(it => it.id === n && it.text.startsWith(want)) || []; // oldest first
     const pick = hits[hits.length - 1 - later];
-    if (pick?.own) return pick;
-    if (pick && !fallback) fallback = { mediaType: pick.mediaType, data: pick.data };
+    if (pick && own.has(pick.path)) return load(file, pick, true);
+    if (pick && !fallback) fallback = [file, pick];
   }
-  return fallback;
+  return fallback ? load(...fallback) : null;
 }
 module.exports = { listClaudeSessions, findClaudeImage, findClaudePaste, findCodexImage, textContent, readEdges };

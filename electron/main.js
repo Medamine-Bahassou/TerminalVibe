@@ -532,21 +532,38 @@ ipcMain.handle('clipboard:read-text', () => clipboard.readText());
 
 // Pasting an image in a terminal: write it to the OS temp dir and
 // type the file path (the terminal can't render images inline).
-const pastedImageFiles = new Set();
 ipcMain.handle('clipboard:paste-image', () => {
   try {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;
     const fp = path.join(require('os').tmpdir(), `terminalvibe-${Date.now()}.png`);
     fs.writeFileSync(fp, img.toPNG());
-    pastedImageFiles.add(fp);
     return fp;
   } catch (err) { console.error('[clipboard] paste-image failed:', err); return null; }
 });
-// Previews of a pasted image Claude hasn't sent yet. Only files written above are readable.
-ipcMain.handle('clipboard:read-pasted-image', (_e, fp) => {
-  if (!pastedImageFiles.has(fp)) return null;
-  try { return fs.readFileSync(fp).toString('base64'); } catch { return null; }
+// Previews of image paths printed in a terminal. Terminal output is untrusted, so only a
+// regular file whose bytes really are an image is returned; anything else gets a reason.
+const IMAGE_SNIFF = [
+  ['image/png', b => b.readUInt32BE(0) === 0x89504e47],
+  ['image/jpeg', b => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff],
+  ['image/gif', b => b.toString('latin1', 0, 4) === 'GIF8'],
+  ['image/webp', b => b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP'],
+  ['image/bmp', b => b.toString('latin1', 0, 2) === 'BM'],
+];
+ipcMain.handle('fs:read-image', async (_e, p, opts) => {
+  if (typeof p !== 'string' || p.length > 4096) return { error: 'invalid' };
+  const fp = expandHome(p);
+  if (!path.isAbsolute(fp) || !/\.(png|jpe?g|gif|webp|bmp)$/i.test(fp)) return { error: 'invalid' };
+  try {
+    const real = await fs.promises.realpath(fp); // a symlink is judged by its target
+    const st = await fs.promises.stat(real);
+    if (!st.isFile()) return { error: 'missing' }; // no FIFOs or devices: they'd block or never end
+    if (opts?.probe) return { ok: true }; // existence check for links, no read
+    if (st.size > 20 * 1024 * 1024) return { error: 'too-large', size: st.size };
+    const buf = await fs.promises.readFile(real);
+    const type = buf.length >= 12 && IMAGE_SNIFF.find(([, ok]) => ok(buf))?.[0];
+    return type ? { mediaType: type, data: buf.toString('base64'), size: st.size } : { error: 'not-image' };
+  } catch (err) { return { error: ['EACCES', 'EPERM'].includes(err.code) ? 'denied' : 'missing' }; }
 });
 
 // ── IPC: read-only file access for plugins (api.fs.list / api.fs.read) ──
@@ -1092,6 +1109,12 @@ ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-session
 ipcMain.handle('history:claude-image', (_e, query) => require('./claude-sessions').findClaudeImage(query));
 ipcMain.handle('history:claude-paste', (_e, query) => require('./claude-sessions').findClaudePaste(query));
 ipcMain.handle('history:codex-image', (_e, query) => require('./claude-sessions').findCodexImage(query));
+// Warm the transcript image indexes after launch, so the first "[Image #N]" hover is quick too.
+setTimeout(() => {
+  const sessions = require('./claude-sessions');
+  sessions.findClaudeImage({ n: 1, prompt: ' ' }).catch(() => {});
+  sessions.findCodexImage({ n: 1, prompt: '-' }).catch(() => {});
+}, 5000).unref?.();
 ipcMain.handle('terminal:session-context', (event, id, sessionId) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized chat target');
   return require('./session-context').attachSessionContext({sessionId,
@@ -1640,20 +1663,46 @@ ipcMain.handle('browser:read', async (event, id, options = {}) => {
 // guest and replayed in the main window.
 let browserShortcuts = [];
 ipcMain.on('browser:shortcuts', (_e, list) => { browserShortcuts = Array.isArray(list) ? list : []; });
-// A browser tab's DevTools dock into a second <webview> (the drawer). Both must be guests of the caller.
-ipcMain.handle('browser:devtools', (event, pageId, drawerId) => {
-  const guest = id => {
-    const wc = Number.isInteger(id) && webContents.fromId(id);
-    return wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.hostWebContents?.id === event.sender.id ? wc : null;
-  };
-  const page = guest(pageId);
+// A browser tab's DevTools render in a native view laid over the tab's drawer
+// placeholder. Not a second <webview>: a webview-hosted DevTools frontend loads
+// but never attaches to the page (empty Elements, dead Console).
+const devtoolsViews = new Map(); // page webContents id -> WebContentsView
+function closeDevToolsView(pageId) {
+  const view = devtoolsViews.get(pageId);
+  if (!view) return;
+  devtoolsViews.delete(pageId);
+  try { mainWindow.contentView.removeChildView(view); } catch {}
+  try { view.webContents.close(); } catch {}
+}
+ipcMain.handle('browser:devtools', (event, pageId, open) => {
+  const wc = Number.isInteger(pageId) && webContents.fromId(pageId);
+  const page = wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.hostWebContents?.id === event.sender.id ? wc : null;
   if (!page) throw new Error('Unknown browser tab');
-  if (drawerId == null) { page.closeDevTools(); return false; }
-  const drawer = guest(drawerId);
-  if (!drawer || drawer === page) throw new Error('Unknown DevTools view');
-  page.setDevToolsWebContents(drawer);
+  if (!open) { closeDevToolsView(pageId); if (page.isDevToolsOpened()) page.closeDevTools(); return false; }
+  if (devtoolsViews.has(pageId)) return true;
+  const view = new WebContentsView();
+  devtoolsViews.set(pageId, view);
+  view.setVisible(false); // Shown once the renderer reports the drawer's bounds.
+  mainWindow.contentView.addChildView(view);
+  // F12 / Ctrl+Shift+I inside DevTools toggles the drawer, as it does in the page.
+  view.webContents.on('before-input-event', (e, input) => {
+    if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) {
+      e.preventDefault();
+      if (!event.sender.isDestroyed()) event.sender.send('browser:devtools-toggle', pageId);
+    }
+  });
+  page.once('destroyed', () => closeDevToolsView(pageId));
+  page.setDevToolsWebContents(view.webContents);
   page.openDevTools();
   return true;
+});
+ipcMain.on('browser:devtools-bounds', (_e, pageId, rect) => {
+  const view = devtoolsViews.get(pageId);
+  if (!view) return;
+  if (rect && rect.width > 0 && rect.height > 0) {
+    view.setBounds({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) });
+    view.setVisible(true);
+  } else view.setVisible(false);
 });
 function matchBrowserShortcut(input) {
   return browserShortcuts.some(s => s && s.key
