@@ -1785,11 +1785,11 @@
   if (isDesktop() && window.electronAPI) {
     window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
     window.electronAPI.onBrowserKey?.(d => document.dispatchEvent(new KeyboardEvent('keydown', { ...d, bubbles: true, cancelable: true })));
-    // The key came from a tab's page or from its DevTools drawer.
+    // The key came from a tab's page, or from its DevTools (main sends the page's id for both).
     window.electronAPI.onBrowserDevToolsToggle?.(id => {
       const ownsGuest = view => { try { return view.getWebContentsId() === id; } catch { return false; } };
       workspaces.flatMap(getWorkspaceTerminals).find(t => t.type === 'browser' &&
-        [...(t.browserContainer?.querySelectorAll('webview.browser-surface, .browser-devtools webview') || [])].some(ownsGuest))?._toggleDevTools?.();
+        [...(t.browserContainer?.querySelectorAll('webview.browser-surface') || [])].some(ownsGuest))?._toggleDevTools?.();
     });
     syncBrowserShortcuts();
   }
@@ -1841,6 +1841,7 @@
             if (t.type === 'browser' && t._viewCreated) window.electronAPI.browserHide(t.id);
           }
         }
+        syncDevToolsViews(false);
       }
       return;
     }
@@ -1916,6 +1917,20 @@
         } else {
           window.electronAPI.browserHide(v.id);
         }
+      }
+      syncDevToolsViews(true);
+    }
+  }
+
+  // Open DevTools drawers are native views (they paint above the DOM) laid over
+  // their .browser-devtools placeholder; hide them with their tab or under overlays.
+  function syncDevToolsViews(show) {
+    for (const ws of workspaces) {
+      for (const t of getWorkspaceTerminals(ws)) {
+        const dt = t._devtools;
+        if (!dt) continue;
+        const r = show && ws.id === activeWsId && t.browserContainer?.style.visibility !== 'hidden' ? dt.el.getBoundingClientRect() : null;
+        window.electronAPI.browserDevToolsBounds?.(dt.pageId, r && r.width && r.height ? { x: r.left, y: r.top, width: r.width, height: r.height } : null);
       }
     }
   }
@@ -6490,68 +6505,71 @@
         toolbar.appendChild(btnFwd);
         toolbar.appendChild(btnReload);
         toolbar.appendChild(urlInput);
-        toolbar.appendChild(btnHistory);
         toolbar.appendChild(btnOpenExt);
-        // DevTools dock in a drawer under the page, as in Chrome. Desktop only: browser mode's iframe has none.
-        if (isDesktop() && window.electronAPI?.browserDevTools) {
-          const btnDevTools = document.createElement('button');
-          btnDevTools.className = 'browser-btn browser-devtools-btn';
-          btnDevTools.title = 'Developer tools (F12)';
-          btnDevTools.setAttribute('aria-label', 'Developer tools');
-          btnDevTools.setAttribute('aria-pressed', 'false');
-          btnDevTools.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
-          let drawer = null;
+        // DevTools dock in a drawer under the page, as in Chrome. Desktop only: browser mode's iframe has none,
+        // so there History stays a plain button instead of the ⋮ menu.
+        if (!(isDesktop() && window.electronAPI?.browserDevTools)) {
+          toolbar.insertBefore(btnHistory, btnOpenExt);
+        } else {
+          const btnMore = document.createElement('button');
+          btnMore.className = 'browser-btn browser-more-btn';
+          btnMore.title = 'More';
+          btnMore.setAttribute('aria-label', 'More');
+          btnMore.setAttribute('aria-haspopup', 'menu');
+          btnMore.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>';
+          btnMore.addEventListener('click', e => {
+            e.stopPropagation(); // The document click handler would close the menu right away.
+            if (ctxEl.classList.contains('open') && ctxEl._owner === btnMore) return hideCtxMenu();
+            const r = btnMore.getBoundingClientRect();
+            showCtxMenu({ pageX: r.right, pageY: r.bottom + 6, alignRight: true }, 'browser-more',
+              { entry, history: () => toggleBrowserHistoryDrawer(entry, contentWrap) });
+            ctxEl._owner = btnMore;
+          });
           const page = () => {
             const surface = contentWrap.querySelector('webview.browser-surface');
             return surface?._guestReady ? surface : null; // The webview API throws before dom-ready.
           };
           entry._closeDevTools = () => {
-            if (!drawer) return;
-            const surface = page();
-            if (surface) window.electronAPI.browserDevTools(surface.getWebContentsId(), null).catch(() => {});
-            drawer.sash.remove(); drawer.el.remove(); drawer = null;
-            btnDevTools.classList.remove('active'); btnDevTools.setAttribute('aria-pressed', 'false');
+            const dt = entry._devtools;
+            if (!dt) return;
+            entry._devtools = null;
+            window.electronAPI.browserDevTools(dt.pageId, false).catch(() => {});
+            dt.sash.remove(); dt.el.remove();
             settleBrowserSurfaces();
           };
           entry._toggleDevTools = () => {
-            if (drawer) return entry._closeDevTools();
+            if (entry._devtools) return entry._closeDevTools();
             const surface = page();
             if (!surface) return;
             const sash = document.createElement('div');
             sash.className = 'browser-devtools-sash';
             sash.setAttribute('role', 'separator');
-            sash.setAttribute('aria-orientation', 'horizontal');
+            // Placeholder only: main lays a native DevTools view over it (see syncDevToolsViews).
             const el = document.createElement('div');
             el.className = 'browser-devtools';
+            sash.setAttribute('aria-orientation', 'horizontal');
             const clamp = h => Math.max(80, Math.min(bc.clientHeight - 120, h));
             el.style.height = `${clamp(browserDevToolsHeight || Math.round(bc.clientHeight * 0.4))}px`;
-            const view = document.createElement('webview');
-            view.className = 'browser-devtools-surface';
-            view.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
-            view.src = 'about:blank';
-            el.appendChild(view);
             bc.append(sash, el);
-            // Same guest-iframe stretch as the page webview, or Electron keeps it 150px tall.
-            const pin = () => { const f = view.shadowRoot?.querySelector('iframe'); if (f) f.style.cssText = 'display:block;flex:1 1 auto;width:100%;height:100%;border:0'; return !!f; };
-            if (!pin()) { const mo = new MutationObserver(() => { if (pin()) mo.disconnect(); }); mo.observe(view, { childList: true, subtree: true }); }
-            const mine = drawer = { sash, el };
-            btnDevTools.classList.add('active'); btnDevTools.setAttribute('aria-pressed', 'true');
-            view.addEventListener('dom-ready', () => {
-              if (drawer === mine) window.electronAPI.browserDevTools(surface.getWebContentsId(), view.getWebContentsId()).catch(() => entry._closeDevTools());
-            }, { once: true });
+            const dt = entry._devtools = { sash, el, pageId: surface.getWebContentsId() };
+
+            window.electronAPI.browserDevTools(dt.pageId, true)
+              .then(() => { if (entry._devtools === dt) syncBrowserSlots(); })
+              .catch(() => { if (entry._devtools === dt) entry._closeDevTools(); });
             sash.addEventListener('pointerdown', e => {
               e.preventDefault();
+              sash.setPointerCapture(e.pointerId); // Keep the drag when the pointer crosses the native view.
               startResizing();
               const bottom = bc.getBoundingClientRect().bottom;
-              const move = ev => { browserDevToolsHeight = clamp(Math.round(bottom - ev.clientY)); el.style.height = `${browserDevToolsHeight}px`; };
-              const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); stopResizing(); };
-              window.addEventListener('pointermove', move);
-              window.addEventListener('pointerup', up);
+              const move = ev => { browserDevToolsHeight = clamp(Math.round(bottom - ev.clientY)); el.style.height = `${browserDevToolsHeight}px`; syncBrowserSlots(); };
+              const up = () => { sash.removeEventListener('pointermove', move); sash.removeEventListener('pointerup', up); sash.removeEventListener('pointercancel', up); stopResizing(); };
+              sash.addEventListener('pointermove', move);
+              sash.addEventListener('pointerup', up);
+              sash.addEventListener('pointercancel', up);
             });
             settleBrowserSurfaces();
           };
-          btnDevTools.addEventListener('click', () => entry._toggleDevTools());
-          toolbar.appendChild(btnDevTools);
+          toolbar.appendChild(btnMore);
         }
 
         // ── Content area ──
@@ -6889,7 +6907,7 @@
           if (loading && !entry._suspended) return;
           loadUrl(entry.url);
         });
-        btnHistory.addEventListener('click', () => { focusSlot(entry); openPalette('history'); });
+        btnHistory.addEventListener('click', () => toggleBrowserHistoryDrawer(entry, contentWrap));
         btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') openExternalUrl(entry.url); });
 
         bc.addEventListener('mousedown', (e) => {
@@ -8178,6 +8196,10 @@
       }
       sep();
       item('<i class="ph ph-x"></i>', 'Close workspace', '', () => removeWorkspace(wsId), true);
+    } else if (type === 'browser-more') {
+      const { entry, history } = data;
+      item('<i class="ph ph-clock-counter-clockwise"></i>', 'History', '', history);
+      item('<i class="ph ph-code"></i>', entry._devtools ? 'Close developer tools' : 'Developer tools', 'F12', () => entry._toggleDevTools?.());
     } else if (type === 'folder') {
       const folderId = data;
       const folderPinned = folders.find(f => f.id === folderId)?.pinned;
@@ -8316,7 +8338,7 @@
     ctxEl.classList.add('open');
     const menuW = ctxEl.offsetWidth;
     const menuH = ctxEl.offsetHeight;
-    let x = e.pageX;
+    let x = e.alignRight ? e.pageX - menuW : e.pageX; // alignRight: pageX is the menu's right edge
     let y = e.pageY;
     if (x + menuW > window.innerWidth) x = window.innerWidth - menuW - 4;
     if (y + menuH > window.innerHeight) y = window.innerHeight - menuH - 4;
@@ -8330,6 +8352,7 @@
     const restoreFocus = ctxEl.contains(document.activeElement);
     ctxEl.classList.remove('open');
     ctxEl.inert = true;
+    ctxEl._owner = null;
     if (restoreFocus && ctxPreviousFocus?.isConnected) ctxPreviousFocus.focus({ preventScroll: true });
   }
   document.addEventListener('contextmenu', e => { if (!ctxEl.contains(e.target)) hideCtxMenu(); }, true);
@@ -8988,6 +9011,77 @@
       run: () => { saveBrowserHistory([]); },
     });
     return items;
+  }
+
+  // Per-tab history drawer on the right of the page. It lives inside .browser-content,
+  // so a right-docked DevTools (a native view over its own column) never covers it.
+  function toggleBrowserHistoryDrawer(entry, contentWrap) {
+    const open = contentWrap.querySelector('.browser-history-drawer');
+    if (open) { open._close(); return; }
+    const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
+    const drawer = el('section', 'browser-history-drawer');
+    drawer.setAttribute('role', 'dialog');
+    drawer.setAttribute('aria-label', 'History');
+    const head = el('header', 'bh-head');
+    const close = el('button', 'bh-icon-btn');
+    close.type = 'button'; close.title = 'Close'; close.setAttribute('aria-label', 'Close history');
+    close.innerHTML = '<i class="ph ph-x"></i>';
+    head.append(el('h2', '', 'History'), close);
+    const searchWrap = el('div', 'bh-search');
+    searchWrap.innerHTML = '<i class="ph ph-magnifying-glass" aria-hidden="true"></i>';
+    const search = el('input');
+    search.type = 'search'; search.placeholder = 'Search history'; search.spellcheck = false;
+    search.setAttribute('aria-label', 'Search history');
+    searchWrap.append(search);
+    const list = el('div', 'bh-list');
+    const foot = el('footer', 'bh-foot');
+    const clear = el('button', 'bh-clear', 'Clear history');
+    clear.type = 'button';
+    foot.append(clear);
+    drawer.append(head, searchWrap, list, foot);
+
+    const dayLabel = ts => {
+      const d = new Date(ts), today = new Date(); today.setHours(0, 0, 0, 0);
+      const days = Math.round((today - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
+      return days <= 0 ? 'Today' : days === 1 ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+    };
+    const render = () => {
+      const q = search.value.trim().toLowerCase();
+      const all = loadBrowserHistory();
+      const hits = all.filter(h => !q || ((h.title || '') + ' ' + h.url).toLowerCase().includes(q));
+      list.replaceChildren();
+      clear.disabled = !all.length;
+      if (!hits.length) { list.append(el('div', 'bh-empty', all.length ? 'No matches' : 'No history yet')); return; }
+      let day = null;
+      for (const h of hits) {
+        const label = dayLabel(h.ts || 0);
+        if (label !== day) { day = label; list.append(el('div', 'bh-day', label)); }
+        const row = el('div', 'bh-row');
+        const go = el('button', 'bh-open');
+        go.type = 'button'; go.title = h.url;
+        const text = el('span', 'bh-text');
+        text.append(el('span', 'bh-title', h.title || h.url), el('span', 'bh-url', h.url.replace(/^https?:\/\/(www\.)?/, '')));
+        go.append(text, el('span', 'bh-time', h.ts ? new Date(h.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''));
+        go.addEventListener('click', () => { finish(); entry._loadUrl?.(h.url); });
+        const del = el('button', 'bh-icon-btn bh-del');
+        del.type = 'button'; del.title = 'Remove from history'; del.setAttribute('aria-label', 'Remove from history');
+        del.innerHTML = '<i class="ph ph-x"></i>';
+        del.addEventListener('click', () => { saveBrowserHistory(loadBrowserHistory().filter(x => x.url !== h.url)); render(); });
+        row.append(go, del);
+        list.append(row);
+      }
+    };
+    const finish = () => { drawer.remove(); };
+    drawer._close = finish;
+    close.addEventListener('click', finish);
+    clear.addEventListener('click', () => { saveBrowserHistory([]); render(); });
+    search.addEventListener('input', render);
+    drawer.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); finish(); } });
+    // Keep the slot's mousedown focus handling from pulling focus back to the page.
+    drawer.addEventListener('mousedown', e => e.stopPropagation());
+    render();
+    contentWrap.append(drawer);
+    search.focus();
   }
 
   // ── Snippets (saved commands). Enter = insert, Ctrl+Enter = insert and run.

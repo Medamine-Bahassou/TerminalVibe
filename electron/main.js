@@ -1640,20 +1640,46 @@ ipcMain.handle('browser:read', async (event, id, options = {}) => {
 // guest and replayed in the main window.
 let browserShortcuts = [];
 ipcMain.on('browser:shortcuts', (_e, list) => { browserShortcuts = Array.isArray(list) ? list : []; });
-// A browser tab's DevTools dock into a second <webview> (the drawer). Both must be guests of the caller.
-ipcMain.handle('browser:devtools', (event, pageId, drawerId) => {
-  const guest = id => {
-    const wc = Number.isInteger(id) && webContents.fromId(id);
-    return wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.hostWebContents?.id === event.sender.id ? wc : null;
-  };
-  const page = guest(pageId);
+// A browser tab's DevTools render in a native view laid over the tab's drawer
+// placeholder. Not a second <webview>: a webview-hosted DevTools frontend loads
+// but never attaches to the page (empty Elements, dead Console).
+const devtoolsViews = new Map(); // page webContents id -> WebContentsView
+function closeDevToolsView(pageId) {
+  const view = devtoolsViews.get(pageId);
+  if (!view) return;
+  devtoolsViews.delete(pageId);
+  try { mainWindow.contentView.removeChildView(view); } catch {}
+  try { view.webContents.close(); } catch {}
+}
+ipcMain.handle('browser:devtools', (event, pageId, open) => {
+  const wc = Number.isInteger(pageId) && webContents.fromId(pageId);
+  const page = wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.hostWebContents?.id === event.sender.id ? wc : null;
   if (!page) throw new Error('Unknown browser tab');
-  if (drawerId == null) { page.closeDevTools(); return false; }
-  const drawer = guest(drawerId);
-  if (!drawer || drawer === page) throw new Error('Unknown DevTools view');
-  page.setDevToolsWebContents(drawer);
+  if (!open) { closeDevToolsView(pageId); if (page.isDevToolsOpened()) page.closeDevTools(); return false; }
+  if (devtoolsViews.has(pageId)) return true;
+  const view = new WebContentsView();
+  devtoolsViews.set(pageId, view);
+  view.setVisible(false); // Shown once the renderer reports the drawer's bounds.
+  mainWindow.contentView.addChildView(view);
+  // F12 / Ctrl+Shift+I inside DevTools toggles the drawer, as it does in the page.
+  view.webContents.on('before-input-event', (e, input) => {
+    if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) {
+      e.preventDefault();
+      if (!event.sender.isDestroyed()) event.sender.send('browser:devtools-toggle', pageId);
+    }
+  });
+  page.once('destroyed', () => closeDevToolsView(pageId));
+  page.setDevToolsWebContents(view.webContents);
   page.openDevTools();
   return true;
+});
+ipcMain.on('browser:devtools-bounds', (_e, pageId, rect) => {
+  const view = devtoolsViews.get(pageId);
+  if (!view) return;
+  if (rect && rect.width > 0 && rect.height > 0) {
+    view.setBounds({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) });
+    view.setVisible(true);
+  } else view.setVisible(false);
 });
 function matchBrowserShortcut(input) {
   return browserShortcuts.some(s => s && s.key

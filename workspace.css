@@ -1348,11 +1348,9 @@ body .tg-btn:focus-visible, body .titlebar-btn:focus-visible { outline:2px solid
 /* ── Browser tab DevTools drawer: docked under the page, as in Chrome. The
    page area shrinks through .browser-slot's flex column; the sash resizes. ── */
 body .browser-devtools { position:relative; flex:0 0 auto; min-height:80px; background:var(--bg); }
-body webview.browser-devtools-surface { position:absolute; inset:0; display:flex; width:100%; height:100%; border:0; }
-body .browser-devtools-sash { flex:0 0 auto; height:5px; margin-bottom:-4px; position:relative; z-index:3; cursor:row-resize; border-top:1px solid var(--ui-line); transition:background-color 150ms, border-color 150ms; }
+body .browser-devtools-sash { flex:0 0 auto; height:5px; position:relative; z-index:3; cursor:row-resize; border-top:1px solid var(--ui-line); transition:background-color 150ms, border-color 150ms; }
 body .browser-devtools-sash:hover, body.resizing .browser-devtools-sash:active { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 25%, transparent); }
 body.resizing .browser-devtools { pointer-events:none; }
-body .browser-devtools-btn.active { background:var(--ui-hover); color:var(--fg); }
 @media (prefers-reduced-motion: reduce) { body .browser-devtools-sash { transition:none; } }
 
 /* ── Empty state: shortcut cheat sheet (rows built by refreshShortcutHints) ── */
@@ -1394,3 +1392,37 @@ body .claude-image-viewer pre.claude-paste-text {
   background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:10px !important; box-shadow:0 8px 24px #0008;
   font:400 12.5px/1.55 var(--mono-font); white-space:pre-wrap; word-break:break-word;
 }
+
+/* ── Browser history drawer: right side of a browser tab's page area (app.js toggleBrowserHistoryDrawer). ── */
+body .browser-history-drawer { position:absolute; top:0; right:0; bottom:0; z-index:5; box-sizing:border-box; width:min(340px, 90%); display:flex; flex-direction:column; background:var(--ui-surface); color:var(--fg); border-left:1px solid var(--ui-line); box-shadow:-8px 0 24px #0004; font:13px/1.4 var(--ui-font); }
+body .browser-history-drawer .bh-head { display:flex; align-items:center; gap:8px; padding:14px 12px 10px 16px; }
+body .browser-history-drawer .bh-head h2 { flex:1; margin:0; font:600 14px/1.3 var(--ui-font); }
+body .browser-history-drawer .bh-icon-btn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; border:0; background:transparent; color:var(--muted-text); font-size:15px; cursor:pointer; border-radius:6px !important; transition:background-color 140ms, color 140ms; }
+body .browser-history-drawer .bh-icon-btn:hover { background:var(--ui-hover); color:var(--fg); }
+body .browser-history-drawer .bh-search { position:relative; margin:0 12px 8px; }
+body .browser-history-drawer .bh-search > i { position:absolute; left:10px; top:50%; transform:translateY(-50%); font-size:14px; color:var(--dim-text); pointer-events:none; }
+body .browser-history-drawer .bh-search input { box-sizing:border-box; width:100%; height:32px; padding:0 10px 0 32px; background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:6px !important; font:13px var(--ui-font); transition:border-color 140ms, box-shadow 140ms; }
+body .browser-history-drawer .bh-search input:hover { border-color:var(--muted-text); }
+body .browser-history-drawer .bh-search input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+body .browser-history-drawer .bh-search input::-webkit-search-cancel-button { display:none; }
+body .browser-history-drawer .bh-list { flex:1; min-height:0; overflow-y:auto; padding:0 6px 8px; }
+body .browser-history-drawer .bh-day { padding:12px 10px 4px; font:500 11.5px/1.3 var(--ui-font); color:var(--dim-text); }
+body .browser-history-drawer .bh-row { position:relative; display:flex; align-items:center; border-radius:6px !important; transition:background-color 140ms; }
+body .browser-history-drawer .bh-row:hover, body .browser-history-drawer .bh-row:focus-within { background:var(--ui-hover); }
+body .browser-history-drawer .bh-open { flex:1; min-width:0; display:flex; align-items:center; gap:10px; padding:6px 10px; background:transparent; border:0; color:inherit; text-align:left; cursor:pointer; font:inherit; border-radius:6px !important; }
+body .browser-history-drawer .bh-open:focus-visible, body .browser-history-drawer .bh-icon-btn:focus-visible, body .browser-history-drawer .bh-clear:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+body .browser-history-drawer .bh-text { flex:1; min-width:0; display:flex; flex-direction:column; }
+body .browser-history-drawer .bh-title, body .browser-history-drawer .bh-url { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+body .browser-history-drawer .bh-title { font-weight:500; }
+body .browser-history-drawer .bh-url { font:11px/1.4 var(--mono-font); color:var(--dim-text); }
+body .browser-history-drawer .bh-time { flex-shrink:0; font-size:11px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+/* Remove button takes the time's place on hover. */
+body .browser-history-drawer .bh-del { position:absolute; right:4px; opacity:0; }
+body .browser-history-drawer .bh-row:hover .bh-del, body .browser-history-drawer .bh-del:focus-visible { opacity:1; }
+body .browser-history-drawer .bh-row:hover .bh-time { visibility:hidden; }
+body .browser-history-drawer .bh-empty { padding:32px 16px; text-align:center; color:var(--muted-text); font-size:12px; }
+body .browser-history-drawer .bh-foot { padding:10px 12px; border-top:1px solid var(--ui-line); }
+body .browser-history-drawer .bh-clear { height:32px; padding:0 12px; background:transparent; border:1px solid var(--border); color:var(--ui-error); border-radius:6px !important; font:500 12px var(--ui-font); cursor:pointer; transition:background-color 140ms, border-color 140ms; }
+body .browser-history-drawer .bh-clear:hover:not(:disabled) { background:color-mix(in srgb,var(--ui-error) 12%,transparent); border-color:color-mix(in srgb,var(--ui-error) 40%,transparent); }
+body .browser-history-drawer .bh-clear:disabled { opacity:.4; cursor:default; }
+@media (prefers-reduced-motion: reduce) { body .browser-history-drawer * { transition:none !important; } }
