@@ -3530,7 +3530,8 @@
     if (!folderId) sideOrder.push({ type: 'ws', id });
     else rebuildWorkspaces();
     activateWorkspace(id);
-    addTerminal(id);
+    // Activating an empty workspace already opens its terminal once the backend is up; only add one if it didn't.
+    if (!ws.layout) addTerminal(id);
     return ws;
   }
 
@@ -7453,8 +7454,16 @@
         if(source) attachContextToChat(dropTarget(),null,() => buildWorkspaceContext(source));
       } else attachContextToChat(dropTarget(),e.dataTransfer.getData('application/x-terminalvibe-session'));
     }, true);
+    // Plain text dragged in (a selection from the history panel, a page, another app): pasted like Ctrl+V, no Enter.
+    const isTextDrag = e => {
+      const t = e.dataTransfer?.types || [];
+      return !window.draggedTermId && !window.externalDragTermId && !t.includes('Files') && !t.includes('application/x-terminalvibe-tab')
+        && (t.includes('text/plain') || t.includes('text/uri-list'));
+    };
+    const textTarget = () => { const t = dropTarget(); return t?.term && t.type !== 'browser' && !t.locked && !t.dead ? t : null; };
     bodyEl.addEventListener('dragenter', e => {
       if (isFileDrag(e)) { e.preventDefault(); return; }
+      if (isTextDrag(e)) { if (textTarget()) e.preventDefault(); return; }
       const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
       if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
@@ -7468,6 +7477,7 @@
         if (t && t.type !== 'browser') { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
         return;
       }
+      if (isTextDrag(e)) { if (textTarget()) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } return; }
       const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
       if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
@@ -7516,6 +7526,11 @@
       e.preventDefault();
       e.stopPropagation();
       if (isFileDrag(e)) { dropFilesIntoTerminal(dropTarget(), [...e.dataTransfer.files]).catch(err => console.error('[drop] failed:', err)); return; }
+      if (isTextDrag(e)) {
+        const t = textTarget(), text = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text/uri-list');
+        if (t && text) { t.term.paste(text); t.term.focus(); }
+        return;
+      }
       dragDepth = 0;
       overlay.classList.remove('active');
       if (window.electronAPI && window.electronAPI.tabDragHover) {
@@ -8837,6 +8852,7 @@
       flushTools(i + ':end');
     });
     flow.innerHTML = html;
+    if (thrFind.q) thrFindRun(true); // the re-render dropped the old match ranges
     flow.querySelectorAll('img.thr-img').forEach(async img => {
       const p = img.dataset.path;
       let src = _thrImgCache.get(p);
@@ -8880,6 +8896,73 @@
     }));
     if (atBottom || !flow.dataset.seen) { flow.scrollTop = flow.scrollHeight; flow.dataset.seen = '1'; }
   }
+  // ── Find in the thread history: Ctrl+F while the panel has focus, or the header button ──
+  // Matches are painted with the CSS Highlight API, so the message markup is never touched.
+  // shortcut: a match must sit inside one text node (not across `code` / **bold** boundaries).
+  const thrFind = { q: '', ranges: [], i: -1 };
+  const thrFindEl = id => document.getElementById('sbr-thread-find' + id);
+  function thrFindRun(keepIndex) {
+    const flow = document.getElementById('sbr-thread-flow'), q = thrFind.q.toLowerCase(), ranges = [];
+    if (q && flow) {
+      const walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT, { acceptNode: n =>
+        n.parentElement?.closest('.thr-actions, .thr-more, .thr-tools-time, .thr-seg-time, .thr-img-actions') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+      for (let n; (n = walker.nextNode());) {
+        const text = n.data.toLowerCase();
+        for (let at = text.indexOf(q); at !== -1; at = text.indexOf(q, at + q.length)) {
+          const r = new Range(); r.setStart(n, at); r.setEnd(n, at + q.length); ranges.push(r);
+        }
+      }
+    }
+    thrFind.ranges = ranges;
+    thrFind.i = !ranges.length ? -1 : keepIndex ? Math.min(Math.max(thrFind.i, 0), ranges.length - 1) : 0;
+    thrFindPaint(!keepIndex);
+  }
+  function thrFindPaint(scroll) {
+    const { ranges, i, q } = thrFind, cur = ranges[i];
+    thrFindEl('-count').textContent = !q ? '' : ranges.length ? `${i + 1}/${ranges.length}` : 'No results';
+    if (window.CSS?.highlights) {
+      CSS.highlights.set('thr-find', new Highlight(...ranges.filter(r => r !== cur)));
+      if (cur) CSS.highlights.set('thr-find-current', new Highlight(cur)); else CSS.highlights.delete('thr-find-current');
+    }
+    if (!scroll || !cur) return;
+    // Reveal a match hidden in a folded tool group or a collapsed long message, then center it.
+    for (let d = cur.startContainer.parentElement?.closest('details:not([open])'); d; d = d.parentElement?.closest('details:not([open])')) d.open = true;
+    const long = cur.startContainer.parentElement?.closest('.thr-msg.long:not(.open)');
+    if (long) { long.classList.add('open'); const more = long.querySelector('.thr-more'); if (more) more.textContent = 'Show less'; }
+    const flow = document.getElementById('sbr-thread-flow'), fr = flow.getBoundingClientRect(), rr = cur.getBoundingClientRect();
+    flow.scrollTop += rr.top - fr.top - fr.height / 2;
+  }
+  function thrFindStep(d) {
+    if (!thrFind.ranges.length) return;
+    thrFind.i = (thrFind.i + d + thrFind.ranges.length) % thrFind.ranges.length;
+    thrFindPaint(true);
+  }
+  function openThreadFind() {
+    const bar = thrFindEl(''), input = thrFindEl('-input');
+    // A selection in the history seeds the search, like a browser's find.
+    const sel = String(window.getSelection() || '').trim();
+    if (sel && !sel.includes('\n') && document.getElementById('sbr-thread-flow').contains(window.getSelection().anchorNode)) input.value = sel;
+    bar.hidden = false; input.focus(); input.select();
+    thrFind.q = input.value; thrFindRun(false);
+  }
+  function closeThreadFind() {
+    thrFindEl('').hidden = true; thrFind.q = ''; thrFindRun(false);
+    document.getElementById('sbr-thread-flow')?.focus();
+  }
+  thrFindEl('-btn')?.addEventListener('click', () => thrFindEl('').hidden ? openThreadFind() : closeThreadFind());
+  // Plain Ctrl+F in the history panel (the app-wide Ctrl+Shift+F leaves Ctrl+F to terminal programs).
+  document.getElementById('sbr-thread')?.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); e.stopPropagation(); openThreadFind(); }
+  });
+  thrFindEl('-input')?.addEventListener('input', e => { thrFind.q = e.target.value; thrFindRun(false); });
+  thrFindEl('-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); thrFindStep(e.shiftKey ? -1 : 1); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeThreadFind(); }
+  });
+  thrFindEl('-prev')?.addEventListener('click', () => thrFindStep(-1));
+  thrFindEl('-next')?.addEventListener('click', () => thrFindStep(1));
+  thrFindEl('-close')?.addEventListener('click', closeThreadFind);
+
   document.getElementById('sbr-thread-refresh')?.addEventListener('click', () => { loadThreadAgents(true).then(() => syncThreadPanel(true)); });
 
   /* ── Workspace sidebar: live processes per workspace ──
@@ -11148,7 +11231,12 @@
       }
       return;
     }
-    if (matchShortcut(e, 'search')) { e.preventDefault(); openSearch(); return; }
+    if (matchShortcut(e, 'search')) {
+      e.preventDefault();
+      // Focus in the open thread history: search the history instead of the terminal.
+      if (document.activeElement?.closest?.('#sbr-thread') && rightPanelMode() === 'history') openThreadFind(); else openSearch();
+      return;
+    }
     if (matchShortcut(e, 'tabSearch')) { e.preventDefault(); e.stopPropagation(); openTabSearch(); return; }
     if (matchShortcut(e, 'commandPalette')) { e.preventDefault(); e.stopPropagation(); openPalette('cmds'); return; }
     if (matchShortcut(e, 'snippets')) { e.preventDefault(); e.stopPropagation(); openPalette('snips'); return; }

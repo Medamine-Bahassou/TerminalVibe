@@ -1634,3 +1634,17 @@ body #sidebar.expanded .proj-section.peek :is(.proj-empty, .proj-item:not(.curre
 #sidebar-right .thr-tool[open] .thr-tool-caret { transform:rotate(90deg); }
 #sidebar-right .thr-tool-detail { margin:2px 0 6px 19px; padding:8px 10px; max-height:240px; overflow:auto; background:var(--bg); border:1px solid var(--ui-line); border-radius:6px !important; font:400 11.5px/1.5 var(--mono-font); color:var(--muted-text); white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
 @media (prefers-reduced-motion: reduce) { #sidebar-right .thr-tool-caret { transition:none; } }
+
+/* ── Thread history: find bar (Ctrl+F in the panel) and match highlights ── */
+#sidebar-right .thr-find { display:flex; align-items:center; gap:2px; flex-shrink:0; height:34px; margin:8px 10px 0; padding:0 3px 0 10px; background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; transition:border-color 140ms, box-shadow 140ms; }
+#sidebar-right .thr-find[hidden] { display:none; }
+#sidebar-right .thr-find:hover { border-color:var(--muted-text); }
+#sidebar-right .thr-find:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+#sidebar-right .thr-find > i { font-size:14px; color:var(--muted-text); flex-shrink:0; }
+#sidebar-right .thr-find input { flex:1; min-width:0; height:100%; padding:0 6px; background:transparent; border:0; outline:none; box-shadow:none; color:var(--fg); font:400 13px var(--ui-font); }
+#sidebar-right .thr-find-count { padding:0 4px; color:var(--dim-text); font:400 11px var(--ui-font); font-variant-numeric:tabular-nums; white-space:nowrap; }
+#sidebar-right .thr-find .sbr-btn { width:26px; height:26px; }
+#sidebar-right .thr-flow:focus { outline:none; }
+::highlight(thr-find) { background-color:color-mix(in srgb, var(--accent) 32%, transparent); color:var(--fg); }
+::highlight(thr-find-current) { background-color:var(--accent); color:#0d1017; }
+@media (prefers-reduced-motion: reduce) { #sidebar-right .thr-find { transition:none; } }
