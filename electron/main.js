@@ -1112,6 +1112,7 @@ ipcMain.handle('history:codex-image', (_e, query) => require('./claude-sessions'
 ipcMain.handle('threads:agents', (_e, names) => ({ found: require('./threads').detectAgents(names, terminalEnv()) }));
 ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
+ipcMain.handle('threads:fork', (_e, query) => require('./threads').forkThread(query));
 ipcMain.handle('threads:delete', (_e, id) => require('./threads').deleteThread(id));
 // Warm the transcript image indexes after launch, so the first "[Image #N]" hover is quick too.
 setTimeout(() => {

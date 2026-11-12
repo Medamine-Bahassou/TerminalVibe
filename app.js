@@ -51,14 +51,20 @@
         project.append(Object.assign(document.createElement('span'), { textContent: thread.project || 'No project' }));
         tip.replaceChildren(el('ws-process-tooltip-heading', target.dataset.tip), project);
         if (thread.path) tip.append(el('thr-tip-path', thread.path));
-        // Agents as logos only, one per agent; names stay readable for screen readers.
-        const logos = el('thr-tip-agents');
-        logos.innerHTML = thread.agents.map(a => procIconHtml(a.bin, 'ph-robot')).join('');
-        logos.setAttribute('aria-label', thread.agents.map(a => a.name).join(', ') || 'No agent yet');
-        if (thread.agents.length) tip.append(logos);
+        // Footer: created date and session count, with the agents as logos at the bottom right
+        // (one per agent; names stay readable for screen readers).
         const n = thread.sessions || 0;
-        const foot = [thread.created ? 'Created ' + when(thread.created) : '', n ? `${n} session${n > 1 ? 's' : ''}` : 'No agent yet'].filter(Boolean).join(' · ');
-        tip.append(el('thr-tip-foot', foot));
+        const foot = el('thr-tip-foot');
+        foot.append(Object.assign(document.createElement('span'), { textContent:
+          [thread.created ? 'Created ' + when(thread.created) : '', n ? `${n} session${n > 1 ? 's' : ''}` : 'No agent yet'].filter(Boolean).join(' · ') }));
+        if (thread.agents.length) {
+          const logos = el('thr-tip-agents');
+          // Each logo in its agent's brand color (same as the agent picker).
+          logos.innerHTML = thread.agents.map(a => `<span class="thr-tip-agent"${a.color && /^#[0-9a-f]{3,8}$/i.test(a.color) ? ` style="color:${a.color}"` : ''}>${procIconHtml(a.bin, 'ph-robot')}</span>`).join('');
+          logos.setAttribute('aria-label', thread.agents.map(a => a.name).join(', '));
+          foot.append(logos);
+        }
+        tip.append(foot);
       }
       const workspaceButton = target.closest('.ws-btn, .proj-thread');
       const sideTarget = workspaceButton || sessionRow;
@@ -7527,7 +7533,11 @@
       e.stopPropagation();
       if (isFileDrag(e)) { dropFilesIntoTerminal(dropTarget(), [...e.dataTransfer.files]).catch(err => console.error('[drop] failed:', err)); return; }
       if (isTextDrag(e)) {
-        const t = textTarget(), text = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text/uri-list');
+        const t = textTarget();
+        // A drop inserts, it never submits: no trailing newline, and without bracketed paste
+        // (PowerShell, cmd) every line break would act as Enter, so they become spaces.
+        let text = (e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text/uri-list')).replace(/\s+$/, '');
+        if (t && !t.term.modes?.bracketedPasteMode) text = text.replace(/[ \t]*\r?\n\s*/g, ' ');
         if (t && text) { t.term.paste(text); t.term.focus(); }
         return;
       }
@@ -8411,7 +8421,22 @@
   }
 
   const threadMeta = ws => ({ id: ws.id, title: ws.label, projectId: ws.thread.projectId, cwd: ws.cwd, createdAt: ws.thread.createdAt,
-    segments: threadSegments(ws).map(x => ({ harness: x.harness, sessionId: x.sessionId, cwd: x.cwd || ws.cwd, since: x.since, model: x.model, effort: x.effort, handoff: x.handoff })) });
+    segments: threadSegments(ws).map(x => ({ harness: x.harness, sessionId: x.sessionId, cwd: x.cwd || ws.cwd, since: x.since, model: x.model, effort: x.effort, handoff: x.handoff,
+      ...(x.frozen ? { frozen: true } : {}), ...(x.unsupported ? { unsupported: true } : {}) })) });
+
+  // Fork from a message: a new thread in the same project holding the history up to it.
+  // TerminalVibe owns the fork (frozen copies of the sessions + the usual handoff), so any agent can continue it.
+  async function forkThreadAt(ws, seg, item) {
+    const api = window.electronAPI;
+    if (!api?.threadFork || !ws?.thread) return;
+    const id = uuid(), label = ('Fork: ' + ws.label).slice(0, 60);
+    let segments;
+    try { segments = await api.threadFork({ meta: threadMeta(ws), seg, item, id, title: label }); }
+    catch (e) { console.error('[fork]', e); zoomBadge('Could not fork this thread'); return; }
+    workspaces.push({ id, label, layout: null, activeTermId: null, cwd: ws.cwd,
+      thread: { projectId: ws.thread.projectId, harness: null, model: 'default', effort: null, sessionId: null, createdAt: Date.now(), forkOf: ws.id, segments } });
+    openThread(id); // opens on the agent picker, with the forked history beside it
+  }
 
   function threadArgv(ws, resume) {
     const t = ws.thread;
@@ -8653,12 +8678,9 @@
           // Each agent the thread used, once, in order of first use.
           const segs = threadSegments(w);
           th.dataset.tipThread = JSON.stringify({ project: p.label, path: p.path, created: w.thread.createdAt || null, sessions: segs.length,
-            agents: [...new Set(segs.map(s => s.harness))].map(id => { const h = harnessOf(id); return { name: h?.name || id, bin: h?.bin || '' }; }) });
-          // Every agent this thread has used, in order of first use, as an overlapping logo stack.
-          const used = [...new Set(threadSegments(w).map(x => x.harness))].map(harnessOf).filter(Boolean);
-          const logos = used.slice(0, 3).map(h => `<span class="proj-agent"${h.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')
-            + (used.length > 3 ? `<span class="proj-agents-more">+${used.length - 3}</span>` : '');
-          th.innerHTML = `<span class="proj-agents" role="img" aria-label="${escHtml(used.map(h => h.name).join(', ') || 'No agent yet')}">${logos || '<i class="ws-proc-icon ph ph-chat-circle"></i>'}</span><span class="proj-thread-name">${escHtml(w.label)}</span>`;
+            agents: [...new Set(segs.map(s => s.harness))].map(id => { const h = harnessOf(id); return { name: h?.name || id, bin: h?.bin || '', color: h?.color || '' }; }) });
+          // Title only; the agents used show as logos in the tooltip.
+          th.innerHTML = `<span class="proj-thread-name">${escHtml(w.label)}</span>`;
           th.addEventListener('click', () => openThread(w.id));
           th.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'thread', w.id); });
           kids.appendChild(th);
@@ -8809,6 +8831,7 @@
       return;
     }
     let html = '';
+    if (t.forkOf) html += `<div class="thr-note thr-fork-note"><i class="ph ph-git-fork" aria-hidden="true"></i>Forked from ${escHtml(findWs(t.forkOf)?.label || 'a deleted thread')}</div>`;
     const texts = new Map(); // data-key -> raw message text, for the copy buttons
     segs.forEach((seg, i) => {
       const h = harnessOf(seg.harness), name = h?.name || seg.harness, res = hist[i] || { items: [] };
@@ -8841,7 +8864,10 @@
         const cls = `thr-msg ${m.role}${long ? ' long' : ''}${open.has(key) ? ' open' : ''}`;
         texts.set(key, m.text);
         // Copy + time under the message, shown on hover.
-        const actions = `<div class="thr-actions"><button type="button" class="thr-copy" aria-label="Copy message"><i class="ph ph-copy" aria-hidden="true"></i></button><span class="thr-time">${clockTime(m.ts)}</span></div>`;
+        // Fork points at the full (untrimmed) item index, which is what the main process slices.
+        const actions = `<div class="thr-actions"><button type="button" class="thr-copy" aria-label="Copy message"><i class="ph ph-copy" aria-hidden="true"></i></button>`
+          + `<button type="button" class="thr-fork" title="Fork from here" aria-label="Fork the thread from this message" data-seg="${i}" data-item="${j + (res.trimmed || 0)}"><i class="ph ph-git-fork" aria-hidden="true"></i></button>`
+          + `<span class="thr-time">${clockTime(m.ts)}</span></div>`;
         const imgs = m.images?.length ? `<div class="thr-images">${m.images.map(p => `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(p)}" alt="Pasted image">`
           + '<div class="thr-img-actions"><button type="button" data-act="open" title="Open" aria-label="Open image"><i class="ph ph-arrows-out" aria-hidden="true"></i></button>'
           + '<button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></div></div>').join('')}</div>` : '';
@@ -8883,6 +8909,7 @@
         setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
       });
     });
+    flow.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkThreadAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     flow.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', () => {
       const text = texts.get(b.closest('.thr-msg').dataset.key) || '';
       if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {});
