@@ -1114,6 +1114,12 @@ ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHist
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
 ipcMain.handle('threads:fork', (_e, query) => require('./threads').forkThread(query));
 ipcMain.handle('threads:delete', (_e, id) => require('./threads').deleteThread(id));
+// A thread started with no project gets its own folder that TerminalVibe owns.
+ipcMain.handle('threads:scratch', async () => {
+  const dir = path.join(CONFIG_DIR, 'scratch', require('crypto').randomUUID());
+  await fs.promises.mkdir(dir, { recursive: true });
+  return dir;
+});
 // Warm the transcript image indexes after launch, so the first "[Image #N]" hover is quick too.
 setTimeout(() => {
   const sessions = require('./claude-sessions');

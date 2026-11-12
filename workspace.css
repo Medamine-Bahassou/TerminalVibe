@@ -1440,8 +1440,7 @@ body #sidebar.expanded .proj-fold > .proj-list { overflow-y:auto; }
 body #sidebar.expanded .proj-list { display:flex; flex-direction:column; gap:2px; max-height:min(45vh, 420px); overflow-y:auto; overflow-x:hidden; padding:2px; margin:0 -2px; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
 body #sidebar.expanded .proj-header,
 body #sidebar.expanded .proj-item,
-body #sidebar.expanded .proj-thread,
-body #sidebar.expanded .proj-empty {
+body #sidebar.expanded .proj-thread {
   display:flex; align-items:center; gap:6px; min-height:30px; padding:0 8px;
   background:transparent; border:1px solid transparent; border-radius:6px !important;
   color:var(--muted-text); font:400 13px var(--ui-font); text-align:left; cursor:pointer;
@@ -1451,10 +1450,9 @@ body #sidebar.expanded .proj-header { font-size:11px; font-weight:500; }
 body #sidebar.expanded .proj-item { font-weight:500; color:var(--fg); }
 body #sidebar.expanded .proj-threads { display:flex; flex-direction:column; gap:2px; margin-left:14px; padding-left:6px; }
 body #sidebar.expanded .proj-thread { min-height:28px; font-size:12.5px; }
-body #sidebar.expanded .proj-empty { color:var(--dim-text); font-size:12px; min-height:28px; }
 /* No borders: hover and the active thread only brighten the text. */
-body #sidebar.expanded :is(.proj-header,.proj-item,.proj-thread,.proj-empty):hover { color:var(--fg); }
-body #sidebar.expanded :is(.proj-header,.proj-item,.proj-thread,.proj-empty):focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+body #sidebar.expanded :is(.proj-header,.proj-item,.proj-thread):hover { color:var(--fg); }
+body #sidebar.expanded :is(.proj-header,.proj-item,.proj-thread):focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 body #sidebar.expanded :is(.proj-thread,.proj-item).active { color:var(--fg); font-weight:500; }
 body #sidebar.expanded .proj-thread.active .ws-proc-icon { color:var(--fg); }
 body #sidebar.expanded .proj-caret { font-size:12px; color:var(--dim-text); flex-shrink:0; transition:transform 140ms; }
@@ -1573,9 +1571,9 @@ body #sidebar.expanded .proj-action i { font-size:13px; }
 body.thread-empty.sbr-history #sidebar-right,
 body.thread-empty.sbr-history #sash-right { display:none !important; }
 
-/* ── Empty thread: agent cards without border or fill; hover still highlights ── */
-.thread-home .th-agent { background:transparent; border-color:transparent; }
-.thread-home .th-agent:hover { border-color:transparent; }
+/* ── Empty thread: agent cards get a quiet fill derived from the theme so they read as buttons ── */
+.thread-home .th-agent { background:color-mix(in srgb,var(--fg) 4%,var(--bg)); border-color:var(--ui-line); }
+.thread-home .th-agent:hover { background:color-mix(in srgb,var(--fg) 8%,var(--bg)); border-color:var(--border); }
 
 /* ── Thread history: wider default right sidebar (a sash drag still overrides it inline) ── */
 body.sbr-history #sidebar-right { width:min(690px,46vw); }
@@ -1617,7 +1615,7 @@ body #sidebar.expanded .proj-list { padding-left:20px; }
 body #sidebar.expanded .proj-threads { margin-left:18px; padding-left:0; }
 
 /* ── Projects collapsed while a thread is open: only that project and thread stay visible ── */
-body #sidebar.expanded .proj-section.peek :is(.proj-empty, .proj-item:not(.current), .proj-list > .proj-fold:not(.current), .proj-thread:not(.active)) { display:none; }
+body #sidebar.expanded .proj-section.peek :is(.proj-item:not(.current), .proj-list > .proj-fold:not(.current), .proj-thread:not(.active)) { display:none; }
 
 /* ── Thread history: each tool call expands to its full command / arguments ── */
 #sidebar-right .thr-tools .thr-tool { display:block; min-height:0; }
@@ -1651,3 +1649,13 @@ body #sidebar.expanded .proj-section.peek :is(.proj-empty, .proj-item:not(.curre
 #sidebar-right .thr-fork i { font-size:13px; }
 #sidebar-right .thr-fork-note { margin-bottom:4px; }
 @media (prefers-reduced-motion: reduce) { #sidebar-right .thr-fork { transition:none; } }
+
+/* ── Thread home: plain-terminal link pinned to the bottom ── */
+.thread-home .th-terminal-link { position:absolute; left:50%; bottom:20px; transform:translateX(-50%); display:inline-flex; align-items:center; gap:6px; padding:4px 8px; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:400 12px var(--ui-font); cursor:pointer; transition:color 140ms; }
+.thread-home .th-terminal-link i { font-size:14px; }
+.thread-home .th-terminal-link:hover { color:var(--fg); }
+.thread-home .th-terminal-link:hover span { text-decoration:underline; text-underline-offset:3px; }
+.thread-home .th-terminal-link:focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+
+/* ── Left sidebar keeps its width when the right sidebar opens; #main gives up the space ── */
+body #sidebar.expanded:not(.hover-overlay) { flex-shrink:0; }

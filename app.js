@@ -3525,11 +3525,17 @@
    W O*RKSPACE MANAGEMENT
    ═══════════════════════════════════════════════════════════════ */
   let wsCount = 0;
+  const nextWorkspaceName = () => {
+    const used = new Set(workspaces.map(w => w.label));
+    let n = 1;
+    while (used.has('Workspace ' + n)) n++;
+    return 'Workspace ' + n;
+  };
 
   function createWorkspace(label, folderId, details) {
     wsCount++;
     const id = uuid();
-    const ws = { id, label: label || ('Workspace ' + (workspaces.length + 1)), layout: null, activeTermId: null, folderId: folderId || undefined };
+    const ws = { id, label: label || nextWorkspaceName(), layout: null, activeTermId: null, folderId: folderId || undefined };
     if (details && details.color) ws.color = details.color;
     if (details && details.icon) ws.icon = details.icon;
     workspaces.push(ws);
@@ -7868,7 +7874,7 @@
     addBtn.title = 'New workspace';
     addBtn.innerHTML = '<i class="ph ph-plus"></i>';
     addBtn.addEventListener('click', () => {
-      showPrompt('New workspace', 'Workspace ' + (workspaces.length + 1), { color: '', icon: '' }, (value, color, icon) => {
+      showPrompt('New workspace', nextWorkspaceName(), { color: '', icon: '' }, (value, color, icon) => {
         createWorkspace(value.trim() || undefined, undefined, { color, icon });
         renderSidebar();
         saveState();
@@ -8460,7 +8466,7 @@
   // start is a new session that gets the whole thread so far as a handoff file.
   async function launchThreadAgent(ws, changes = {}) {
     const t = ws.thread;
-    if (!ws.cwd) { zoomBadge('Choose a project first'); return; }
+    if (!await ensureThreadCwd(ws)) return;
     const harness = changes.harness || t.harness;
     if (!harnessOf(harness)) return;
     delete t.draft; // launching an agent makes the draft a real thread in the sidebar
@@ -8523,13 +8529,32 @@
     else showPrompt('Project folder path', '', add);
   }
 
+  // A thread with no project: "Scratch" groups them, each in its own folder under ~/.terminalvibe/scratch.
+  function scratchProject() {
+    let p = projects.find(x => x.scratch);
+    if (!p) { p = { id: uuid(), label: 'Scratch', path: '', scratch: true }; projects.push(p); }
+    return p;
+  }
+  // Give a project-less thread its scratch folder before anything runs in it.
+  async function ensureThreadCwd(ws) {
+    if (ws.cwd) return true;
+    const dir = await window.electronAPI?.threadScratch?.().catch(() => null);
+    if (!dir) { zoomBadge('Choose a project first'); return false; }
+    ws.cwd = dir;
+    ws.thread.projectId = scratchProject().id;
+    return true;
+  }
+
+  // No projectId (or the Scratch one): the thread starts with no project selected.
   function createThread(projectId) {
-    const p = projects.find(x => x.id === projectId);
-    if (!p) return;
-    p.collapsed = false;
-    let ws = workspaces.find(w => w.thread?.draft && w.thread.projectId === projectId);
+    let p = projectId ? projects.find(x => x.id === projectId) : null;
+    if (projectId && !p) return;
+    if (p?.scratch) p = null;
+    if (p) p.collapsed = false;
+    projectId = p?.id || null;
+    let ws = workspaces.find(w => w.thread?.draft && (w.thread.projectId || null) === projectId);
     if (!ws) {
-      ws = { id: uuid(), label: 'New thread', layout: null, activeTermId: null, cwd: p.path,
+      ws = { id: uuid(), label: 'New thread', layout: null, activeTermId: null, cwd: p?.path || null,
         thread: { projectId, draft: true, harness: null, model: 'default', effort: null, sessionId: null, createdAt: Date.now() } };
       workspaces.push(ws);
     }
@@ -8592,11 +8617,14 @@
 
   function chooseThreadProject(ws, trigger) {
     openPickMenu(trigger, [
-      ...projects.map(p => ({ label: p.label, hint: p.path, value: p.id, selected: p.id === ws.thread.projectId, icon: '<i class="ph ph-folder"></i>' })),
+      { label: 'No project', hint: 'scratch folder', value: '', selected: !threadProject(ws), icon: '<i class="ph ph-note-blank"></i>' },
+      ...projects.filter(p => !p.scratch).map(p => ({ label: p.label, hint: p.path, value: p.id, selected: p.id === ws.thread.projectId, icon: '<i class="ph ph-folder"></i>' })),
       { label: 'Add project…', value: '+', icon: '<i class="ph ph-folder-plus"></i>' },
     ], v => {
       const set = p => { ws.thread.projectId = p.id; ws.cwd = p.path; p.collapsed = false; renderSidebar(); switchWorkspacePane(); saveState(); };
-      if (v === '+') addProject(set); else set(projects.find(p => p.id === v));
+      if (v === '+') addProject(set);
+      else if (!v) { ws.thread.projectId = null; ws.cwd = null; renderSidebar(); switchWorkspacePane(); saveState(); }
+      else set(projects.find(p => p.id === v));
     });
   }
 
@@ -8620,12 +8648,7 @@
     head.innerHTML = '<i class="ph ph-caret-down proj-caret" aria-hidden="true"></i><span class="proj-title">Projects</span><button type="button" class="proj-action proj-new" title="New thread" aria-label="New thread"><i class="ph ph-note-pencil"></i></button><button type="button" class="proj-action proj-add" title="Add project" aria-label="Add project"><i class="ph ph-folder-plus"></i></button>';
     head.addEventListener('click', e => {
       if (e.target.closest('.proj-add')) { addProject(p => createThread(p.id)); return; }
-      if (e.target.closest('.proj-new')) {
-        // The open thread's project, else the first one with threads; the picker page can switch it.
-        const p = threadProject(activeWs() || {}) || projects.find(x => workspaces.some(w => w.thread?.projectId === x.id && !threadIsDraft(w))) || projects[0];
-        if (p) createThread(p.id); else addProject(x => createThread(x.id));
-        return;
-      }
+      if (e.target.closest('.proj-new')) { createThread(null); return; } // the picker page chooses the project
       projectsCollapsed = !projectsCollapsed;
       if (peekWs) { saveState(); renderProjectsSection(sb, beforeEl); return; } // the peek rows change too
       sec.classList.toggle('collapsed', projectsCollapsed);
@@ -8641,10 +8664,6 @@
       const list = document.createElement('div');
       list.className = 'proj-list';
       // A project shows up here once it has a thread; until then it's only in the thread page's chooser.
-      if (!projects.some(p => workspaces.some(w => w.thread?.projectId === p.id && !threadIsDraft(w)))) {
-        list.innerHTML = '<button type="button" class="proj-empty">Add a project folder</button>';
-        list.firstChild.addEventListener('click', () => addProject(p => createThread(p.id)));
-      }
       for (const p of projects) {
         const threads = workspaces.filter(w => w.thread?.projectId === p.id && !threadIsDraft(w));
         if (!threads.length) continue;
@@ -8702,9 +8721,16 @@
     const p = threadProject(ws);
     home.innerHTML = `<div class="th-inner">
       <h1 class="th-title">Start a thread</h1>
-      <button type="button" class="th-project" aria-haspopup="menu"><i class="ph ph-folder"></i><span class="th-project-name">${escHtml(p?.label || 'Choose a project')}</span>${p ? `<span class="th-project-path">${escHtml(p.path)}</span>` : ''}<i class="ph ph-caret-down th-caret"></i></button>
+      <button type="button" class="th-project" aria-haspopup="menu"><i class="ph ph-folder"></i><span class="th-project-name">${escHtml(p?.label || 'No project')}</span>${p?.path ? `<span class="th-project-path">${escHtml(p.path)}</span>` : ''}<i class="ph ph-caret-down th-caret"></i></button>
       <div class="th-agents" role="list"><div class="th-status"><i class="ph ph-circle-notch th-spin"></i> Looking for agents…</div></div>
-    </div>`;
+    </div>
+    <button type="button" class="th-terminal-link"><i class="ph ph-terminal-window"></i><span>Open a plain terminal</span></button>`;
+    home.querySelector('.th-terminal-link').addEventListener('click', async () => {
+      if (!await ensureThreadCwd(ws)) return;
+      delete ws.thread.draft; // a draft thread is dropped on switch-away, with its terminal
+      addTerminal(ws.id);
+      renderSidebar(); saveState();
+    });
     const projBtn = home.querySelector('.th-project');
     projBtn.addEventListener('click', () => chooseThreadProject(ws, projBtn));
     const grid = home.querySelector('.th-agents');
@@ -8722,17 +8748,6 @@
         card.addEventListener('click', () => launchThreadAgent(ws, { harness: h.id }));
         grid.appendChild(card);
       }
-      const term = document.createElement('button');
-      term.type = 'button';
-      term.className = 'th-agent';
-      term.setAttribute('role', 'listitem');
-      term.innerHTML = `${procIconHtml('', 'ph-terminal-window')}<span class="th-agent-name">Terminal</span>`;
-      term.addEventListener('click', () => {
-        delete ws.thread.draft; // a draft thread is dropped on switch-away, with its terminal
-        addTerminal(ws.id);
-        renderSidebar(); saveState();
-      });
-      grid.appendChild(term);
     });
     return home;
   }
@@ -8828,6 +8843,11 @@
     const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
     if (!segs.length || note) {
       flow.innerHTML = `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent to start. Your prompts, its replies and its tool calls show up here.</div>'}</div>`;
+      return;
+    }
+    // An agent is running but nothing was said yet: the same empty state, not a lone session header.
+    if (!t.forkOf && !segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
+      flow.innerHTML = '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
       return;
     }
     let html = '';

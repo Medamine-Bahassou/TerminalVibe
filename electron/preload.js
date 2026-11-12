@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   threadHandoff: (query) => ipcRenderer.invoke('threads:handoff', query),
   threadFork: (query) => ipcRenderer.invoke('threads:fork', query),
   threadDelete: (id) => ipcRenderer.invoke('threads:delete', id),
+  threadScratch: () => ipcRenderer.invoke('threads:scratch'),
   attachSessionContext: (id, sessionId) => ipcRenderer.invoke('terminal:session-context', id, sessionId),
   attachWorkspaceContext: (id, context) => ipcRenderer.invoke('terminal:workspace-context', id, context),
   terminalDetach: (o) => ipcRenderer.invoke('terminal:detach', o),
