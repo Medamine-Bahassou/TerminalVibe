@@ -170,9 +170,18 @@
       <div id="sbr-thread" class="sbr-page" style="display:none">
         <div class="sbr-header">
           <span class="sbr-title" id="sbr-thread-title">Thread</span>
+          <button class="sbr-btn" id="sbr-thread-find-btn" title="Find in history (Ctrl+F)" aria-label="Find in history" aria-controls="sbr-thread-find"><i class="ph ph-magnifying-glass"></i></button>
           <button class="sbr-btn" id="sbr-thread-refresh" title="Refresh agents and messages" aria-label="Refresh agents and messages"><i class="ph ph-arrow-clockwise"></i></button>
         </div>
-        <div id="sbr-thread-flow" class="thr-flow" aria-live="polite" aria-label="Thread messages"></div>
+        <div class="thr-find" id="sbr-thread-find" role="search" hidden>
+          <i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+          <input id="sbr-thread-find-input" type="text" aria-label="Find in thread history" placeholder="Find in history" spellcheck="false" autocomplete="off">
+          <span class="thr-find-count" id="sbr-thread-find-count" aria-live="polite"></span>
+          <button type="button" class="sbr-btn" id="sbr-thread-find-prev" title="Previous match (Shift+Enter)" aria-label="Previous match"><i class="ph ph-caret-up"></i></button>
+          <button type="button" class="sbr-btn" id="sbr-thread-find-next" title="Next match (Enter)" aria-label="Next match"><i class="ph ph-caret-down"></i></button>
+          <button type="button" class="sbr-btn" id="sbr-thread-find-close" title="Close (Esc)" aria-label="Close find"><i class="ph ph-x"></i></button>
+        </div>
+        <div id="sbr-thread-flow" class="thr-flow" tabindex="-1" aria-live="polite" aria-label="Thread messages"></div>
       </div>
       <div id="sbr-clipboard" class="sbr-page" style="display:none">
         <div class="sbr-header">
