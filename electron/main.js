@@ -1109,6 +1109,10 @@ ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-session
 ipcMain.handle('history:claude-image', (_e, query) => require('./claude-sessions').findClaudeImage(query));
 ipcMain.handle('history:claude-paste', (_e, query) => require('./claude-sessions').findClaudePaste(query));
 ipcMain.handle('history:codex-image', (_e, query) => require('./claude-sessions').findCodexImage(query));
+ipcMain.handle('threads:agents', (_e, names) => ({ found: require('./threads').detectAgents(names, terminalEnv()) }));
+ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
+ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
+ipcMain.handle('threads:delete', (_e, id) => require('./threads').deleteThread(id));
 // Warm the transcript image indexes after launch, so the first "[Image #N]" hover is quick too.
 setTimeout(() => {
   const sessions = require('./claude-sessions');
@@ -1268,6 +1272,8 @@ ipcMain.on('terminal:close', (_e, id) => {
   const t = ptys.get(id);
   if (t) { try { t.kill(); } catch {} ptys.delete(id); }
 });
+// Is this process still alive? Instant, unlike the cached Windows process table.
+ipcMain.handle('process:alive', (_e, pid) => { try { return Number.isInteger(pid) && pid > 1 && process.kill(pid, 0); } catch (err) { return err.code === 'EPERM'; } });
 ipcMain.handle('terminal:hasRunningProcess', (_e, id) => {
   const t = ptys.get(id);
   return t ? runningProcessInfo(t.pid) : { running: false, name: null };

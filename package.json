@@ -14,7 +14,7 @@
     "dev": "node electron/dev-server.js & node server.js & wait",
     "electron": "electron .",
     "electron:dev": "node electron/dev-server.js & DEV_PID=$!; trap \"kill $DEV_PID 2>/dev/null\" EXIT INT TERM; electron .; kill $DEV_PID 2>/dev/null",
-    "test": "node scripts/test-cli.js && node scripts/test-skills.js && node scripts/test-settings-sync.js && node scripts/test-process-startup.js && node scripts/test-agent-control.js && node scripts/test-servers.js && node scripts/test-finish-notify.js && node scripts/test-pty-flow.js && node scripts/test-shell-startup.js && node scripts/test-history-terminal.js && node scripts/test-claude-sessions.js",
+    "test": "node scripts/test-cli.js && node scripts/test-skills.js && node scripts/test-settings-sync.js && node scripts/test-process-startup.js && node scripts/test-agent-control.js && node scripts/test-servers.js && node scripts/test-finish-notify.js && node scripts/test-pty-flow.js && node scripts/test-shell-startup.js && node scripts/test-history-terminal.js && node scripts/test-claude-sessions.js && node scripts/test-threads.js",
     "test:sessions": "node scripts/test-history-terminal.js && node scripts/test-claude-sessions.js && node scripts/test-session-context.js && node scripts/test-history-http.js && node scripts/test-session-cache.js && node scripts/test-session-drawer.js && node scripts/test-session-context-menu.js && node scripts/test-session-native-drag.js && node scripts/test-file-drop.js && node scripts/test-workspace-context.js",
     "test:browser": "node scripts/test-browser-resizing.js && node scripts/test-browser-snapshot.js",
     "test:files": "node scripts/test-file-drop.js",

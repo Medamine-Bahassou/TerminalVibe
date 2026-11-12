@@ -1464,30 +1464,6 @@ isolation: isolate;
   z-index: 10;
 }
 
-/* Empty state */
-.empty-state {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--dim-text);
-  pointer-events: none;
-}
-.empty-state svg { opacity: 0.25; }
-.empty-state p { font-size: 12px; opacity: 0.4; }
-.empty-state kbd {
-  background: var(--border);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 3px;
-  padding: 1px 6px;
-  font-size: 11px;
-  font-family: inherit;
-  color: var(--muted-text);
-}
-
 /* ──────────────────────────────────────────
  *   STATUS BAR
  * ────────────────────────────────────────── */

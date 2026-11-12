@@ -120,19 +120,6 @@
     <div id="main">
       <!-- ── Pane area ── -->
       <div id="pane-area">
-        <div id="empty-state" class="empty-state" style="display:none">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"
-            stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="3" width="20" height="18" rx="3" />
-            <polyline points="8,9 4.5,12 8,15" />
-            <line x1="12" y1="15" x2="16" y2="15" />
-          </svg>
-          <h1>Your next session starts here.</h1>
-          <p>Open a terminal to get back to work.</p>
-          <button id="empty-new-terminal" class="workspace-new">Open a terminal <span aria-hidden="true">↗</span></button>
-          <button id="empty-commands" class="empty-commands" type="button">Explore commands <i class="ph ph-arrow-right" aria-hidden="true"></i></button>
-          <dl id="empty-keys" class="empty-keys" aria-label="Keyboard shortcuts"></dl>
-        </div>
         <!-- split containers injected here -->
 
         <!-- Search overlay -->
@@ -176,6 +163,13 @@
           <button class="sbr-btn" id="sbr-autorun-add" title="Save current workspace" aria-label="Save current workspace"><i class="ph ph-plus"></i></button>
         </div>
         <div id="sbr-autorun-list" class="sbr-autorun-list"></div>
+      </div>
+      <div id="sbr-thread" class="sbr-page" style="display:none">
+        <div class="sbr-header">
+          <span class="sbr-title" id="sbr-thread-title">Thread</span>
+          <button class="sbr-btn" id="sbr-thread-refresh" title="Refresh agents and messages" aria-label="Refresh agents and messages"><i class="ph ph-arrow-clockwise"></i></button>
+        </div>
+        <div id="sbr-thread-flow" class="thr-flow" aria-live="polite" aria-label="Thread messages"></div>
       </div>
       <div id="sbr-clipboard" class="sbr-page" style="display:none">
         <div class="sbr-header">

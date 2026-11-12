@@ -26,18 +26,6 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 }
 .titlebar-btn { color: var(--muted-text); }
 .titlebar-spacer { min-width: 8px; }
-.workspace-new {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  border: 1px solid var(--ui-line); border-radius: 4px;
-  font-size: 11px; font-weight: 500; height: 24px; padding: 0 8px;
-  color: var(--fg); background: var(--ui-surface); flex-shrink: 0;
-  -webkit-app-region: no-drag;
-  transition: background-color 140ms, border-color 140ms, transform 140ms;
-}
-.workspace-new { background: var(--accent-dim); border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
-.workspace-new > span:first-child { font-size: 16px; line-height: 1; }
-.workspace-new:hover { background: var(--ui-hover); border-color: var(--accent); }
-.workspace-new:active { transform: translateY(1px); }
 #sidebar-inner { background: color-mix(in srgb, var(--bg) 92%, #000); padding: 6px 0; gap: 2px; }
 #sidebar.expanded #sidebar-inner { align-items: stretch; }
 .ws-header { padding: 0 8px; min-height: 30px; margin-bottom: 4px; }
@@ -76,12 +64,6 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 .sbr-body { padding: 14px; gap: 10px; }
 .sbr-big-btn { border: 1px solid var(--border); background: var(--bg); min-height: 78px; }
 .sbr-big-btn:hover { border-color: var(--accent); background: var(--ui-hover); }
-.empty-state { padding: 24px; gap: 16px; text-align: center; pointer-events: auto; }
-.empty-state svg { color: var(--accent); opacity: .8; width: 44px; height: 44px; }
-.empty-state h1 { font-size: clamp(20px, 3vw, 28px); color: var(--fg); font-weight: 500; letter-spacing: -.8px; }
-.empty-state p { font-size: 13px; color: var(--muted-text); opacity: 1; }
-.empty-state .workspace-new { height: 36px; margin-top: 8px; font-size: 12px; gap: 18px; }
-.empty-hint { font-size: 11px; color: var(--dim-text); max-width: 280px; line-height: 1.7; }
 #ctx, .ctx-sub, .tg-dropdown { background: var(--ui-surface); border-color: var(--ui-line); padding: 5px; box-shadow: 0 12px 40px #0005; }
 .ctx-item, .tg-dropdown-item { min-height: 32px; font-size: 12px; padding: 6px 10px; }
 .ctx-item .ci-key { color: var(--dim-text); font-size: 10px; }
@@ -145,14 +127,6 @@ textarea:focus-visible, [role="button"]:focus-visible {
 }
 #sidebar.expanded .ws-folder-header:focus-within .ws-folder-actions { opacity: 1; pointer-events: auto; }
 .ws-folder-actions { background: var(--ui-surface); }
-.empty-state { gap: 14px; overflow-y: auto; }
-.empty-state > svg { padding: 12px; width: 64px; height: 64px; border: 1px solid var(--ui-line); border-radius: 16px; background: var(--ui-surface); opacity: 1; margin-bottom: 6px; flex-shrink: 0; }
-.empty-state h1 { font-weight: 600; letter-spacing: -.6px; }
-.empty-state p { font-size: 14px; line-height: 1.6; }
-.empty-state .workspace-new { min-height: 40px; padding: 0 20px; font-size: 13px; }
-.empty-commands { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; background: transparent; border: 0; color: var(--muted-text); font-size: 12px; }
-.empty-commands:hover { color: var(--accent); background: var(--ui-hover); }
-.empty-hint { margin-top: 12px; font-size: 12px; }
 #tab-search { padding: min(14vh, 100px) 16px 24px; background: #0008; }
 .ts-inner { width: min(640px, 100%); max-width: 100%; max-height: 80dvh; border-radius: var(--ui-radius); overflow: hidden; }
 .ts-modes { display: flex; gap: 4px; padding: 10px 12px; border-bottom: 1px solid var(--ui-line); flex-shrink: 0; }
@@ -174,23 +148,19 @@ textarea:focus-visible, [role="button"]:focus-visible {
 .sb-nav, .sb-close-btn, .settings-back-btn { border: 0; background: transparent; }
 .sb-nav, .sb-close-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; }
 .sb-nav:hover, .sb-close-btn:hover { background: var(--ui-hover); }
-body:not(.roundless) .empty-commands { border-radius: var(--ui-radius); }
 @media (max-width: 560px) {
   .ts-modes { gap: 2px; padding: 8px; }
   .ts-modes button { padding: 0 6px; }
   .ts-item { flex-wrap: wrap; gap: 6px; }
   .ts-item .ts-label { min-width: 60%; }
   .ts-item .ts-ws { max-width: 100%; padding-left: 24px; }
-  .empty-state { padding: 20px; }
 }
 @media (max-height: 440px) {
-  .empty-state { justify-content: flex-start; }
-  .empty-state > svg, .empty-hint { display: none; }
   #tab-search { padding-top: 16px; }
   .ts-inner { max-height: calc(100dvh - 32px); }
 }
 @media (pointer: coarse) {
-  .ts-modes button, .ts-item, .empty-commands, .empty-state .workspace-new { min-height: 44px; }
+  .ts-modes button, .ts-item { min-height: 44px; }
   .sb-nav, .sb-close-btn { min-width: 44px; min-height: 44px; }
 }
 
@@ -326,7 +296,6 @@ body { font-size:13px; line-height:1.5; }
 button,input,select,textarea { font-family:var(--ui-font); }
 kbd,.browser-url-input { font-family:var(--mono-font); }
 #titlebar { background:var(--ui-sidebar); border-bottom:1px solid var(--ui-line); }
-.workspace-new { height:28px; padding:0 10px; font-size:12px; border-radius:var(--ui-radius); }
 #sidebar-inner { background:var(--ui-sidebar); border-right-color:var(--ui-line); }
 /* One outer inset in both corner modes; rows own their internal padding. */
 body #sidebar.expanded #sidebar-inner { padding:6px 0 0; gap:4px; }
@@ -1353,14 +1322,6 @@ body .browser-devtools-sash:hover, body.resizing .browser-devtools-sash:active {
 body.resizing .browser-devtools { pointer-events:none; }
 @media (prefers-reduced-motion: reduce) { body .browser-devtools-sash { transition:none; } }
 
-/* ── Empty state: shortcut cheat sheet (rows built by refreshShortcutHints) ── */
-.empty-keys { display:flex; flex-direction:column; width:min(300px,100%); margin:12px 0 0; flex-shrink:0; }
-.empty-keys > div { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:32px; border-top:1px solid var(--ui-line); }
-.empty-keys > div:first-child { border-top:0; }
-.empty-keys dt { font-size:12px; color:var(--muted-text); }
-.empty-keys dd { display:flex; gap:4px; margin:0; }
-body .empty-keys kbd { min-width:20px; padding:1px 5px; text-align:center; border:1px solid var(--border); border-radius:4px !important; background:var(--bg); color:var(--muted-text); font:500 11px/16px var(--mono-font); }
-@media (max-height: 560px) { .empty-keys { display:none; } }
 
 /* ── Claude "[Image #N]" hover preview + full-size viewer ───────────────── */
 body .claude-image-pop {
@@ -1461,3 +1422,166 @@ body .browser-history-drawer.is-closing { animation:bh-out 140ms ease-in forward
 /* ── Terminal links: pointer cursor only while Ctrl/Cmd is held (they open on Ctrl/Cmd+click;
    app.js toggles body.link-mod-held). Otherwise keep xterm's own text/default cursor. ── */
 body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
+
+/* ── Projects & threads (sidebar section below the workspaces) ──
+   Plain text rows: no fill on hover, only a hairline stroke appears. */
+body #sidebar .proj-section { display:none; }
+/* Docked at the bottom of the sidebar, just above the settings bar. */
+body #sidebar.expanded .proj-section { display:flex; flex-direction:column; width:100%; margin-top:auto; padding:12px 6px 4px; gap:2px; }
+body #sidebar.expanded .proj-section + .sidebar-actions { margin-top:0; }
+/* The thread list scrolls on its own past 45% of the window; the header stays put. Padding keeps focus rings unclipped. */
+/* Dropdown open/close: rows animate 0fr <-> 1fr, the content stays in the DOM. */
+body #sidebar.expanded .proj-fold { display:grid; grid-template-rows:1fr; opacity:1; }
+body #sidebar.expanded .proj-fold.collapsed { grid-template-rows:0fr; opacity:0; }
+body #sidebar.expanded .proj-fold > * { min-height:0; overflow:hidden; }
+body #sidebar.expanded .proj-fold > .proj-list { overflow-y:auto; }
+/* Motion follows the app's Animations setting and the OS motion preference, like the other UI motion. */
+@media (prefers-reduced-motion: no-preference) { body.ui-animations #sidebar.expanded .proj-fold { transition:grid-template-rows 180ms ease, opacity 180ms ease; } }
+body #sidebar.expanded .proj-list { display:flex; flex-direction:column; gap:2px; max-height:min(45vh, 420px); overflow-y:auto; overflow-x:hidden; padding:2px; margin:0 -2px; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+body #sidebar.expanded .proj-header,
+body #sidebar.expanded .proj-item,
+body #sidebar.expanded .proj-thread,
+body #sidebar.expanded .proj-empty {
+  display:flex; align-items:center; gap:6px; min-height:30px; padding:0 8px;
+  background:transparent; border:1px solid transparent; border-radius:6px !important;
+  color:var(--muted-text); font:400 13px var(--ui-font); text-align:left; cursor:pointer;
+  transition:border-color 140ms, color 140ms;
+}
+body #sidebar.expanded .proj-header { font-size:11px; font-weight:500; }
+body #sidebar.expanded .proj-item { font-weight:500; color:var(--fg); }
+body #sidebar.expanded .proj-threads { display:flex; flex-direction:column; gap:2px; margin-left:14px; padding-left:6px; }
+body #sidebar.expanded .proj-thread { min-height:28px; font-size:12.5px; }
+body #sidebar.expanded .proj-empty { color:var(--dim-text); font-size:12px; min-height:28px; }
+/* No borders: hover and the active thread only brighten the text. */
+body #sidebar.expanded :is(.proj-header,.proj-item,.proj-thread,.proj-empty):hover { color:var(--fg); }
+body #sidebar.expanded :is(.proj-header,.proj-item,.proj-thread,.proj-empty):focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+body #sidebar.expanded :is(.proj-thread,.proj-item).active { color:var(--fg); font-weight:500; }
+body #sidebar.expanded .proj-thread.active .ws-proc-icon { color:var(--fg); }
+body #sidebar.expanded .proj-caret { font-size:12px; color:var(--dim-text); flex-shrink:0; transition:transform 140ms; }
+body #sidebar.expanded :is(.proj-section.collapsed > .proj-header, .proj-item.collapsed) .proj-caret { transform:rotate(-90deg); }
+body #sidebar.expanded :is(.proj-title,.proj-name,.proj-thread-name) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+body #sidebar.expanded .proj-thread .ws-proc-icon { width:14px; height:14px; font-size:14px; flex-shrink:0; fill:currentColor; color:var(--dim-text); }
+/* Logos of every agent the thread used, overlapped; each sits on a sidebar-colored disc so the overlap stays readable. */
+body #sidebar.expanded .proj-agents { display:inline-flex; align-items:center; flex-shrink:0; }
+body #sidebar.expanded .proj-agent { display:grid; place-items:center; width:18px; height:18px; border-radius:50% !important; background:var(--ui-sidebar); }
+body #sidebar.expanded .proj-agent + .proj-agent { margin-left:-6px; }
+body #sidebar.expanded .proj-thread .proj-agent .ws-proc-icon { width:13px; height:13px; font-size:13px; color:var(--agent-color, var(--fg)); }
+body #sidebar.expanded .proj-agents-more { margin-left:3px; font-size:10.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+body #sidebar.expanded .proj-action { display:grid; place-items:center; width:22px; height:22px; padding:0; flex-shrink:0; background:transparent; border:1px solid transparent; border-radius:4px !important; color:var(--dim-text); cursor:pointer; opacity:0; transition:color 140ms; }
+/* Header icons (new thread, add project) appear on hover, or when tabbed to. */
+body #sidebar.expanded .proj-header:is(:hover,:focus-within) .proj-action { opacity:1; }
+body #sidebar.expanded :is(.proj-item,.proj-thread):is(:hover,:focus-within) .proj-action { opacity:1; }
+body #sidebar.expanded .proj-action:hover { color:var(--fg); }
+body #sidebar.expanded .proj-action:focus-visible { outline:none; opacity:1; color:var(--fg); box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+body #sidebar.expanded .proj-action i { font-size:13px; }
+
+/* ── Thread home: blank page with the project chooser and agent cards ── */
+#pane-area .thread-home { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:24px 16px; overflow:auto; background:var(--bg); font-family:var(--ui-font); color:var(--fg); }
+.thread-home .th-inner { width:100%; max-width:640px; display:flex; flex-direction:column; align-items:flex-start; gap:12px; }
+.thread-home .th-title { margin:0; font-size:15px; font-weight:600; }
+.thread-home .th-project {
+  display:inline-flex; align-items:center; gap:6px; max-width:100%; height:30px; padding:0 8px;
+  background:transparent; border:1px solid transparent; border-radius:6px !important;
+  color:var(--fg); font:500 13px var(--ui-font); cursor:pointer; transition:border-color 140ms, color 140ms;
+}
+.thread-home .th-project:hover { border-color:var(--border); }
+.thread-home .th-project:focus-visible { outline:none; border-color:var(--accent); }
+.thread-home .th-project i { font-size:14px; color:var(--muted-text); flex-shrink:0; }
+.thread-home .th-project-path { font:400 11px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.thread-home .th-agents { width:100%; display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; margin-top:4px; }
+.thread-home .th-agent { display:flex; flex-direction:column; align-items:flex-start; gap:6px; min-width:0; padding:14px 16px; background:var(--ui-sidebar); border:1px solid var(--ui-line); border-radius:10px !important; color:var(--fg); font:500 13px var(--ui-font); text-align:left; cursor:pointer; transition:border-color 140ms, background-color 140ms; }
+.thread-home .th-agent:hover { border-color:var(--border); background:var(--ui-hover); }
+.thread-home .th-agent:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+/* Agent logos in their original brand colors (black/white logos use the text color). */
+.thread-home .th-agent .ws-proc-icon { width:22px; height:22px; font-size:22px; fill:currentColor; color:var(--agent-color, var(--fg)); }
+.thread-home .th-status { grid-column:1/-1; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted-text); }
+.thread-home .th-status .ph-warning-circle { color:var(--ui-error); font-size:16px; }
+.thread-home .th-spin { animation:th-spin 900ms linear infinite; }
+@keyframes th-spin { to { transform:rotate(360deg); } }
+
+/* ── Pick menu (project chooser, harness / model / effort) ── */
+.tv-pick-menu { position:fixed; z-index:10000; min-width:180px; max-width:360px; max-height:min(360px,70vh); overflow:auto; padding:4px; background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; box-shadow:0 8px 24px #0005; font-family:var(--ui-font); }
+.tv-pick-menu .tv-pick-item { display:flex; align-items:center; gap:8px; width:100%; min-height:32px; padding:6px 10px; background:transparent; border:0; border-radius:6px !important; color:var(--fg); font:400 13px var(--ui-font); text-align:left; cursor:pointer; }
+.tv-pick-menu .tv-pick-item:is(:hover,:focus-visible,.selected) { outline:none; background:var(--ui-hover); }
+.tv-pick-menu .tv-pick-item i, .tv-pick-menu .tv-pick-item .ws-proc-icon { font-size:14px; width:14px; height:14px; fill:currentColor; color:var(--muted-text); flex-shrink:0; }
+.tv-pick-menu .tv-pick-label { flex-shrink:0; }
+.tv-pick-menu .tv-pick-hint { min-width:0; margin-left:auto; font:400 11px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ── Right panel: thread chat (prompt bubbles, plain replies, quiet tool lines) ── */
+#sidebar-right #sbr-thread { flex-direction:column; min-height:0; height:100%; }
+#sidebar-right .thr-flow { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; gap:8px; padding:16px 16px 20px; font-family:var(--ui-font); }
+#sidebar-right .thr-empty { margin:auto 0; display:flex; flex-direction:column; align-items:center; gap:6px; padding:24px 12px; text-align:center; font-size:12px; color:var(--muted-text); }
+#sidebar-right .thr-empty > i { font-size:24px; color:var(--dim-text); }
+#sidebar-right .thr-empty-title { font-size:13px; font-weight:500; color:var(--fg); }
+/* Agent session marker: a muted line, like a status row. */
+#sidebar-right .thr-seg { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--dim-text); }
+#sidebar-right .thr-seg .ws-proc-icon { width:13px; height:13px; font-size:13px; fill:currentColor; color:var(--muted-text); flex-shrink:0; }
+#sidebar-right .thr-seg-name { font-weight:500; color:var(--muted-text); }
+#sidebar-right .thr-seg-meta { font-family:var(--mono-font); font-size:11px; }
+#sidebar-right .thr-seg-time { margin-left:auto; font-size:11px; font-variant-numeric:tabular-nums; }
+#sidebar-right .thr-note { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--dim-text); }
+#sidebar-right .thr-note i { font-size:13px; }
+/* Your prompt: soft rounded bubble on the right. */
+#sidebar-right .thr-msg { display:flex; flex-direction:column; gap:4px; min-width:0; }
+/* Full-width row so hovering anywhere beside the bubble shows copy + time; the bubble stays right. */
+#sidebar-right .thr-msg.user { align-self:stretch; align-items:flex-end; }
+#sidebar-right .thr-bubble { max-width:85%; display:flex; flex-direction:column; gap:4px; min-width:0; padding:10px 14px; background:color-mix(in srgb,var(--fg) 9%,var(--bg)); border-radius:14px !important; }
+/* Copy + time under each message: space kept, shown on hover or keyboard focus. */
+#sidebar-right .thr-actions { display:flex; align-items:center; gap:4px; height:24px; opacity:0; transition:opacity 140ms; }
+#sidebar-right .thr-msg:hover .thr-actions, #sidebar-right .thr-msg:focus-within .thr-actions { opacity:1; }
+#sidebar-right .thr-copy { display:grid; place-items:center; width:24px; height:24px; padding:0; background:transparent; border:1px solid transparent; border-radius:6px !important; color:var(--dim-text); cursor:pointer; transition:border-color 140ms, color 140ms; }
+#sidebar-right .thr-copy:hover { border-color:var(--border); color:var(--fg); }
+#sidebar-right .thr-copy:focus-visible { outline:none; border-color:var(--accent); color:var(--fg); }
+#sidebar-right .thr-copy i { font-size:13px; }
+#sidebar-right .thr-copy .ph-check { color:var(--ui-success); }
+#sidebar-right .thr-time { font-size:11px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+/* Agent reply: plain text on the panel. */
+#sidebar-right .thr-msg-text { font-size:13px; line-height:1.6; color:var(--fg); white-space:pre-wrap; overflow-wrap:anywhere; }
+#sidebar-right .thr-msg-text strong { font-weight:600; }
+#sidebar-right .thr-msg.long:not(.open) .thr-msg-text { max-height:18em; overflow:hidden; -webkit-mask-image:linear-gradient(#000 70%, transparent); mask-image:linear-gradient(#000 70%, transparent); }
+#sidebar-right .thr-msg-text code { font:12px var(--mono-font); padding:1px 5px; background:color-mix(in srgb,var(--fg) 9%,transparent); border-radius:4px !important; }
+#sidebar-right .thr-code { margin:6px 0; padding:10px 12px; overflow:auto; white-space:pre; background:color-mix(in srgb,var(--fg) 5%,var(--bg)); border:1px solid var(--ui-line); border-radius:8px !important; }
+#sidebar-right .thr-code code { padding:0; background:none; font-size:12px; line-height:1.5; }
+#sidebar-right .thr-more { align-self:flex-start; height:24px; padding:0 6px; margin-left:-6px; background:transparent; border:1px solid transparent; border-radius:6px !important; color:var(--muted-text); font:500 12px var(--ui-font); cursor:pointer; transition:border-color 140ms, color 140ms; }
+#sidebar-right .thr-more:hover { border-color:var(--border); color:var(--fg); }
+/* Tool calls: one muted line (icon, what ran, time, caret); expands to every call. */
+#sidebar-right .thr-tools { min-width:0; }
+#sidebar-right .thr-tools summary { display:flex; align-items:center; gap:8px; min-height:30px; list-style:none; border-radius:6px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:color 140ms; }
+#sidebar-right .thr-tools summary::-webkit-details-marker { display:none; }
+/* No border: hover only brightens the line. */
+#sidebar-right .thr-tools summary:hover { color:var(--fg); }
+#sidebar-right .thr-tools summary:hover .thr-tools-caret { color:var(--fg); }
+#sidebar-right .thr-tools summary:focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sidebar-right .thr-tools summary > i { font-size:14px; flex-shrink:0; }
+#sidebar-right .thr-tools-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sidebar-right .thr-tools-count { font-size:11px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+#sidebar-right .thr-tools-time { font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+#sidebar-right .thr-tools-caret { color:var(--dim-text); transition:transform 140ms; }
+#sidebar-right .thr-tools[open] .thr-tools-caret { transform:rotate(90deg); }
+#sidebar-right .thr-tool-list { display:flex; flex-direction:column; gap:2px; margin:2px 0 0 22px; }
+#sidebar-right .thr-tool { display:flex; align-items:center; gap:6px; min-height:24px; font-size:12px; color:var(--muted-text); }
+#sidebar-right .thr-tool > i { font-size:13px; color:var(--dim-text); flex-shrink:0; }
+#sidebar-right .thr-tool-name { font-weight:500; flex-shrink:0; }
+#sidebar-right .thr-tool-sum { min-width:0; font:11.5px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sidebar-right .thr-tool-err { color:var(--ui-error) !important; }
+@media (prefers-reduced-motion: reduce) { #sidebar-right .thr-tools *, #sidebar-right .thr-more, #sidebar-right .thr-actions, #sidebar-right .thr-copy { transition:none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  .thread-home .th-spin { animation:none; }
+  body #sidebar .proj-section *, .thread-home * { transition:none !important; }
+}
+/* Thread home is centered: title, project chooser and agent cards. */
+.thread-home .th-inner { align-items:center; text-align:center; }
+.thread-home .th-agents { display:flex; flex-wrap:wrap; justify-content:center; }
+.thread-home .th-agent { flex:0 1 190px; align-items:center; text-align:center; }
+.thread-home .th-status { justify-content:center; }
+
+/* ── Empty thread: hide the right sidebar until an agent starts ── */
+body.thread-empty #sidebar-right,
+body.thread-empty #sash-right { display:none !important; }
+
+/* ── Empty thread: agent cards without border or fill; hover still highlights ── */
+.thread-home .th-agent { background:transparent; border-color:transparent; }
+.thread-home .th-agent:hover { border-color:transparent; }
+
+/* ── Thread history: wider default right sidebar (a sash drag still overrides it inline) ── */
+#sidebar-right:has(> #sbr-thread[style*="flex"]) { width:min(690px,46vw); }

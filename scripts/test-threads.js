@@ -1,0 +1,94 @@
+// Thread folders: transcript parsing, ~/.terminalvibe/threads/<id>/ files,
+// keeping history after a transcript is deleted, handoff and delete.
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+delete process.env.CLAUDE_CONFIG_DIR;
+delete process.env.CODEX_HOME;
+const { syncThread, threadHistory, writeHandoff, deleteThread } = require('../electron/threads');
+
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-threads-'));
+const jsonl = rows => rows.map(r => JSON.stringify(r)).join('\n') + '\n';
+const cwd = path.join(home, 'project');
+fs.mkdirSync(cwd);
+
+const claudeId = '11111111-2222-4333-8444-555555555555';
+const claudeFile = path.join(home, '.claude', 'projects', 'p', claudeId + '.jsonl');
+fs.mkdirSync(path.dirname(claudeFile), { recursive: true });
+fs.writeFileSync(claudeFile, jsonl([
+  { type: 'user', cwd, timestamp: '2026-01-01T10:00:00Z', message: { content: 'Fix the build <terminalvibe_context history="C:/u/.terminalvibe/threads/t/handoff.xml">Read the history only if my message depends on earlier work.</terminalvibe_context>' } },
+  { type: 'assistant', timestamp: '2026-01-01T10:00:05Z', message: { content: [
+    { type: 'tool_use', id: 't0', name: 'Read', input: { file_path: 'C:\\u\\.terminalvibe\\threads\\t\\handoff.xml' } },
+    { type: 'text', text: 'Running the tests.' },
+    { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm test' } }] } },
+  { type: 'user', timestamp: '2026-01-01T10:00:09Z', message: { content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'fail' }] } },
+  { type: 'user', isMeta: true, message: { content: 'hidden' } },
+]));
+
+const now = new Date();
+const codexDir = path.join(home, '.codex', 'sessions', String(now.getFullYear()), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+fs.mkdirSync(codexDir, { recursive: true });
+fs.writeFileSync(path.join(codexDir, 'rollout-x-codex-1.jsonl'), jsonl([
+  { type: 'session_meta', payload: { id: 'codex-1', cwd } },
+  { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<environment_context>x</environment_context>' }] } },
+  { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Continue this conversation. The full history with the previous agent is in C:/x/handoff.md - read it first.' }] } },
+  { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Now add docs [TerminalVibe thread history: C:/x/handoff.md - read it first for context]' }] } },
+  { type: 'response_item', payload: { type: 'local_shell_call', call_id: 'c1', action: { command: ['ls', '-la'] } } },
+  { type: 'response_item', payload: { type: 'function_call_output', call_id: 'c1', output: JSON.stringify({ metadata: { exit_code: 2 } }) } },
+  { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Docs added.' }] } },
+]));
+
+const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, createdAt: 1, segments: [
+  { harness: 'claude', sessionId: claudeId, cwd, since: 100, model: 'opus', effort: 'high' },
+  { harness: 'codex', sessionId: null, cwd, since: Date.now() - 60000, handoff: true },
+  { harness: 'opencode', sessionId: null, cwd, since: Date.now() },
+] };
+
+(async () => {
+  const dir = path.join(home, '.terminalvibe', 'threads', 'thread-1');
+  const [claude, codex, opencode] = await syncThread(meta, home);
+  assert.deepStrictEqual(claude.items.map(i => i.role), ['user', 'assistant', 'tool']);
+  assert.strictEqual(claude.items[0].text, 'Fix the build', 'context note is not shown as part of the message');
+  assert.strictEqual(claude.items[2].summary, 'npm test');
+  assert.strictEqual(claude.items[2].error, true);
+  assert.deepStrictEqual(codex.items.map(i => i.role), ['user', 'tool', 'assistant'], 'codex skips <environment_context>');
+  assert.strictEqual(codex.items[0].text, 'Now add docs', 'handoff pointer is not shown as part of the message');
+  assert.strictEqual(codex.items[1].summary, 'ls -la');
+  assert.strictEqual(codex.items[1].error, true);
+  assert.strictEqual(codex.sessionId, 'codex-1', 'codex id found from cwd + start time');
+  assert.strictEqual(opencode.unsupported, true);
+
+  const thread = JSON.parse(fs.readFileSync(path.join(dir, 'thread.json'), 'utf8'));
+  assert.strictEqual(thread.title, 'Fix the build');
+  assert.strictEqual(thread.segments[1].sessionId, 'codex-1');
+  assert.strictEqual(thread.segments[1].handoff, true);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'history.json'), 'utf8')).segments[0].items.length, 3);
+
+  // The agent's transcript is gone: the thread keeps its own copy.
+  fs.rmSync(claudeFile);
+  const shown = await threadHistory(meta, home);
+  assert.strictEqual(shown[0].items.length, 3);
+
+  const md = fs.readFileSync(await writeHandoff({ ...meta, names: { claude: 'Claude Code' } }, home), 'utf8');
+  for (const text of ['<terminalvibe_handoff project=', '<instructions>', '<session agent="Claude Code" model="opus">', '<message role="user">\nFix the build\n</message>',
+    'Docs added.', '<tool name="Bash" failed="true">npm test</tool>', '<session agent="opencode" transcript="unavailable">', '</terminalvibe_handoff>']) assert(md.includes(text), text);
+  assert(!md.includes('handoff.xml'), 'the agent reading the handoff file is not part of the history');
+
+  await assert.rejects(syncThread({ ...meta, id: '../escape' }, home), /Invalid thread id/);
+  await assert.rejects(deleteThread('..', home), /Invalid thread id/);
+  await deleteThread('thread-1', home);
+  assert(!fs.existsSync(dir));
+
+  // TerminalVibe started from an agent: agents in its tabs must not look like child sessions
+  // (Claude Code then stops saving transcripts and the thread stays empty).
+  const env = require('../electron/terminal-env').terminalEnv({ PATH: '/keep', CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1',
+    CLAUDE_CODE_SESSION_ID: 'x', CLAUDE_CODE_USE_BEDROCK: '1', T3CODE_THREAD_ID: 'y' });
+  for (const key of ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'T3CODE_THREAD_ID']) assert(!(key in env), key);
+  assert.strictEqual(env.CLAUDE_CODE_USE_BEDROCK, '1', 'user Claude settings stay');
+  assert.strictEqual(env.PATH, '/keep');
+
+  fs.rmSync(home, { recursive: true, force: true });
+  console.log('PASS: thread folders keep every agent session, survive deleted transcripts, hand off and delete');
+})().catch(err => { console.error(err); fs.rmSync(home, { recursive: true, force: true }); process.exit(1); });
