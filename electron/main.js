@@ -1113,7 +1113,35 @@ ipcMain.handle('threads:agents', (_e, names) => ({ found: require('./threads').d
 ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
 ipcMain.handle('threads:fork', (_e, query) => require('./threads').forkThread(query));
-ipcMain.handle('threads:delete', (_e, id) => require('./threads').deleteThread(id));
+// A scratch thread's folder goes with it; only a direct child of ~/.terminalvibe/scratch is ever removed.
+ipcMain.handle('threads:delete', async (_e, id, scratchDir) => {
+  const dir = typeof scratchDir === 'string' && path.resolve(scratchDir);
+  if (dir && path.dirname(dir) === path.join(CONFIG_DIR, 'scratch')) await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+  return require('./threads').deleteThread(id);
+});
+// A thread started with no project gets its own folder that TerminalVibe owns.
+ipcMain.handle('threads:scratch', async () => {
+  const dir = path.join(CONFIG_DIR, 'scratch', require('crypto').randomUUID());
+  await fs.promises.mkdir(dir, { recursive: true });
+  return dir;
+});
+// Current git branch of a folder (or the short commit when detached), read from .git/HEAD; null outside a repo.
+ipcMain.handle('git:branch', async (_e, cwd) => {
+  if (!cwd || typeof cwd !== 'string') return null;
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    const dotGit = path.join(dir, '.git');
+    const st = await fs.promises.stat(dotGit).catch(() => null);
+    if (st) {
+      try {
+        // A worktree or submodule has a .git file pointing at its real git dir.
+        const gitDir = st.isDirectory() ? dotGit : path.resolve(dir, (await fs.promises.readFile(dotGit, 'utf8')).match(/^gitdir:\s*(.+)$/m)[1].trim());
+        const head = (await fs.promises.readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim();
+        return head.startsWith('ref: refs/heads/') ? head.slice(16) : head.slice(0, 7);
+      } catch { return null; }
+    }
+    if (path.dirname(dir) === dir) return null;
+  }
+});
 // Warm the transcript image indexes after launch, so the first "[Image #N]" hover is quick too.
 setTimeout(() => {
   const sessions = require('./claude-sessions');

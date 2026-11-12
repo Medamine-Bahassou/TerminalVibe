@@ -1732,6 +1732,7 @@
   let pinnedCollapsed = false; // "Pinned" section collapsed state
   let sidebarMode = 'normal'; // 'normal' | 'hover' | 'hidden'
   let showWsProcs = true;     // show running processes in workspace buttons
+  let hideEmails = true;      // blur email addresses in terminal output (blurTermEmails)
   let notifyOnCommandFinish = true; // notify when a command / agent response finishes
   let notificationSound = true;     // play sounds/notify.wav with those notifications
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
@@ -3006,6 +3007,7 @@
         pinnedCollapsed,
         sidebarMode,
         showWsProcs,
+        hideEmails,
         notifyOnCommandFinish,
         notificationSound,
         terminalLinkTarget,
@@ -3051,6 +3053,7 @@
       pinnedCollapsed,
       sidebarMode,
       showWsProcs,
+      hideEmails,
       notifyOnCommandFinish,
       notificationSound,
       terminalLinkTarget,
@@ -3074,7 +3077,7 @@
         return o;
       }),
       sideOrder: sideOrder.map(e => ({ t: e.type, id: e.id })),
-      projects: projects.map(p => ({ id: p.id, label: p.label, path: p.path, collapsed: !!p.collapsed })),
+      projects: projects.map(p => ({ id: p.id, label: p.label, path: p.path, collapsed: !!p.collapsed, scratch: !!p.scratch })),
       projectsCollapsed,
       workspaces: workspaces.filter(ws => !threadIsDraft(ws)).map(ws => {
         const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
@@ -3132,6 +3135,8 @@
       if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
       if (state.sidebarMode) sidebarMode = state.sidebarMode;
       if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
+      if (state.hideEmails !== undefined) hideEmails = !!state.hideEmails;
+      document.body.classList.toggle('show-emails', !hideEmails);
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
       if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
@@ -3166,13 +3171,13 @@
       if (state.sidebarWidth) {
         savedSidebarWidth = Math.max(state.sidebarWidth, SB_EXPANDED_MIN);
         if (state.sidebarExpanded && sidebarSplit) {
-          const containerW = document.getElementById('app').offsetWidth;
-          const pct = Math.max(5, (savedSidebarWidth / containerW) * 100);
+          const pct = Math.max(5, (savedSidebarWidth / sbPairWidth()) * 100);
           sidebarSplit.setSizes([pct, 100 - pct]);
         }
       }
 
-      if (Array.isArray(state.projects)) projects = state.projects.filter(p => p && p.id && typeof p.path === 'string');
+      // Only Scratch has no path (older saves dropped its flag).
+      if (Array.isArray(state.projects)) projects = state.projects.filter(p => p && p.id && typeof p.path === 'string').map(p => ({ ...p, scratch: !!p.scratch || !p.path }));
       projectsCollapsed = !!state.projectsCollapsed;
       if (state.folders) {
         for (const fData of state.folders) {
@@ -3525,11 +3530,17 @@
    W O*RKSPACE MANAGEMENT
    ═══════════════════════════════════════════════════════════════ */
   let wsCount = 0;
+  const nextWorkspaceName = () => {
+    const used = new Set(workspaces.map(w => w.label));
+    let n = 1;
+    while (used.has('Workspace ' + n)) n++;
+    return 'Workspace ' + n;
+  };
 
   function createWorkspace(label, folderId, details) {
     wsCount++;
     const id = uuid();
-    const ws = { id, label: label || ('Workspace ' + (workspaces.length + 1)), layout: null, activeTermId: null, folderId: folderId || undefined };
+    const ws = { id, label: label || nextWorkspaceName(), layout: null, activeTermId: null, folderId: folderId || undefined };
     if (details && details.color) ws.color = details.color;
     if (details && details.icon) ws.icon = details.icon;
     workspaces.push(ws);
@@ -3937,7 +3948,11 @@
     }
     _closingWs.add(id);
     const termCount = getWorkspaceTerminals(ws).length;
-    const msg = termCount > 0
+    // Deleting a thread removes its saved history (and a scratch thread's folder): say so.
+    const scratchDir = ws.thread && !threadProject(ws) ? ws.cwd : null;
+    const msg = ws.thread && !ws.thread.draft
+      ? `Delete "${ws.label}"? Its saved history${scratchDir ? ` and its scratch folder ${scratchDir}` : ''} will be deleted${termCount ? `, and its ${termCount} terminal${termCount > 1 ? 's' : ''} closed` : ''}. The agents' own transcripts are kept.`
+      : termCount > 0
       ? `Close "${ws.label}" with ${termCount} terminal${termCount > 1 ? 's' : ''}?`
       : `Close "${ws.label}"?`;
     showConfirm(msg,
@@ -3950,9 +3965,10 @@
   function _removeWorkspace(id) {
     const ws = findWs(id);
     if (!ws) return;
-    if (ws.thread && !ws.thread.draft) window.electronAPI?.threadDelete?.(ws.id).catch(() => {});
     const terms = getWorkspaceTerminals(ws);
     terms.forEach(t => { try { removeTerminal(ws.id, t.id, true); } catch (e) { console.error('removeTerminal failed during workspace teardown', e); } });
+    // After its terminals close, so nothing still runs in the scratch folder being removed.
+    if (ws.thread && !ws.thread.draft) window.electronAPI?.threadDelete?.(ws.id, threadProject(ws) ? null : ws.cwd).catch(() => {});
 
     // Clean up cached DOM
     if (_wsDomCache[id]) { _wsDomCache[id].remove(); delete _wsDomCache[id]; }
@@ -4564,6 +4580,7 @@
         refreshWorkspaceProcsSoon();
         refreshClaudeHistoryAfterInput(entry);
       }
+      if (data.includes('\r')) touchThreadOf(id);
     });
     term.onBinary(data => {
       if (wsReady) {
@@ -4623,7 +4640,80 @@
       } catch { }
     };
     term.onWriteParsed(() => { if (!edgeTimer) edgeTimer = setTimeout(syncEdgeBg, 150); });
+    blurTermEmails(term);
     return entry;
+  }
+
+  // Email addresses on screen are blurred (a top-layer decoration) until clicked;
+  // each occurrence is revealed on its own and stays shown while its cells hold it.
+  // ponytail: one row at a time, so an address soft-wrapped across two rows isn't blurred.
+  const EMAIL_RE = /[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+  function blurTermEmails(term) {
+    let decos = [], timer = false;
+    const cellsText = (y, x, w) => {
+      const line = term.buffer.active.getLine(y);
+      if (!line) return '';
+      const r = termRow(line, y);
+      let s = '';
+      for (let k = 0; k < r.text.length; k++) if (r.pos[k].x - 1 >= x && r.pos[k].x - 1 < x + w) s += r.text[k];
+      return s;
+    };
+    const clear = () => { decos.forEach(d => d.marker.dispose()); decos = []; };
+    const scan = () => {
+      timer = false;
+      if (!term.element) return;
+      const buf = term.buffer.active, top = buf.viewportY, bottom = top + term.rows;
+      // Drop blurs that were trimmed, or whose cells now hold other text (redraws, reflow).
+      // A revealed one is kept while stale: TUIs erase and rewrite lines, so the same address
+      // usually comes back at the same cells, or a row or two away.
+      decos = decos.filter(d => {
+        const y = d.marker.line;
+        if (d.marker.isDisposed || y < 0) { d.marker.dispose(); return false; }
+        if (y < top || y >= bottom) return true;
+        d.stale = cellsText(y, d.x, d.w) !== d.text;
+        if (d.stale && !d.shown) { d.marker.dispose(); return false; }
+        return true;
+      });
+      const drop = d => { d.marker.dispose(); decos.splice(decos.indexOf(d), 1); };
+      for (let y = top; y < bottom; y++) {
+        const line = buf.getLine(y);
+        if (!line || !line.translateToString(true).includes('@')) continue;
+        const row = termRow(line, y);
+        for (const m of row.text.matchAll(EMAIL_RE)) {
+          const x = row.pos[m.index].x - 1, w = row.pos[m.index + m[0].length - 1].x - x;
+          const at = decos.find(d => d.marker.line === y && d.x === x);
+          if (at?.text === m[0]) { at.stale = false; continue; }
+          if (at) drop(at);
+          // Redrawn on another row: a revealed copy that lost its cells hands over its state.
+          const moved = decos.find(d => d.shown && d.stale && d.text === m[0]);
+          if (moved) drop(moved);
+          const marker = term.registerMarker(y - (buf.baseY + buf.cursorY));
+          if (!marker) continue;
+          const deco = term.registerDecoration({ marker, x, width: w, layer: 'top' });
+          if (!deco) { marker.dispose(); continue; }
+          const d = { marker, x, w, text: m[0], shown: !!moved, stale: false };
+          deco.onRender(el => {
+            el.classList.toggle('shown', d.shown);
+            if (el._emailBlur) return;
+            el._emailBlur = true;
+            el.classList.add('term-email-blur');
+            if (!d.shown) el.title = 'Click to show';
+            el.addEventListener('mousedown', e => {
+              e.preventDefault(); e.stopPropagation();
+              d.shown = true; el.classList.add('shown'); el.removeAttribute('title');
+            });
+          });
+          decos.push(d);
+        }
+      }
+    };
+    // A microtask, not a timeout: it runs after the write is parsed and before xterm's next
+    // animation-frame render, so an address is never painted unblurred.
+    const soon = () => { if (!timer) { timer = true; queueMicrotask(scan); } };
+    term.onWriteParsed(soon);
+    term.onScroll(soon);
+    term.onResize(soon);
+    term.buffer.onBufferChange(() => { clear(); soon(); }); // markers belong to one buffer
   }
 
   // opts (plugins: api.terminal.open): { cwd, cmd, label } — start directory,
@@ -4631,6 +4721,8 @@
   function addTerminal(wsId, targetGroupId, opts = {}) {
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
+    // A new tab in a started thread opens on the agent cards (its shell waits underneath).
+    const agentPicker = !!(wsp.thread && wsp.layout && !opts.cmd && !opts.shell);
 
     // Resolve the destination and its previous tab before selecting the new one.
     // The + button may belong to a different split from the focused terminal.
@@ -4782,7 +4874,7 @@
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
                 fitTerm(entry);
-                entry.term.focus();
+                if (!entry.el?.querySelector('.thread-home')) entry.term.focus(); // the agent cards keep focus
               });
             });
           }
@@ -4807,6 +4899,7 @@
     sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd, inheritFromId: previous?.id, argv: entry.argv || [] });
     requestAnimationFrame(() => fitTerm(entry));
 
+    if (agentPicker && entry.el) entry.el.appendChild(buildThreadHome(wsp, entry));
     saveState();
     pluginEmit('terminal:add', { wsId: wsp.id, termId: id, type: 'terminal', label: entry.label });
     return entry;
@@ -7868,7 +7961,7 @@
     addBtn.title = 'New workspace';
     addBtn.innerHTML = '<i class="ph ph-plus"></i>';
     addBtn.addEventListener('click', () => {
-      showPrompt('New workspace', 'Workspace ' + (workspaces.length + 1), { color: '', icon: '' }, (value, color, icon) => {
+      showPrompt('New workspace', nextWorkspaceName(), { color: '', icon: '' }, (value, color, icon) => {
         createWorkspace(value.trim() || undefined, undefined, { color, icon });
         renderSidebar();
         saveState();
@@ -8299,6 +8392,7 @@
     { id: 'claude', name: 'Claude Code', bin: 'claude', color: '#D97757' },
     { id: 'codex', name: 'Codex', bin: 'codex' },
     { id: 'gemini', name: 'Gemini CLI', bin: 'gemini', color: '#8E75B2' },
+    { id: 'antigravity', name: 'Antigravity CLI', bin: 'agy' },
     { id: 'opencode', name: 'OpenCode', bin: 'opencode' },
     { id: 'cursor-agent', name: 'Cursor Agent', bin: 'cursor-agent' },
     { id: 'copilot', name: 'Copilot CLI', bin: 'copilot' },
@@ -8308,7 +8402,8 @@
   ];
   let _threadAgents = null; // { found: {bin: path|null} }
   const harnessOf = id => THREAD_HARNESSES.find(h => h.id === id);
-  const threadProject = ws => projects.find(p => p.id === ws?.thread?.projectId);
+  // Scratch isn't a real project: its threads count as having none.
+  const threadProject = ws => projects.find(p => p.id === ws?.thread?.projectId && !p.scratch);
 
   function loadThreadAgents(refresh) {
     if (_threadAgents && !refresh) return Promise.resolve(_threadAgents);
@@ -8392,7 +8487,7 @@
     const api = window.electronAPI;
     // History before this agent: hand it over only if there is some.
     const hist = segs.length && api?.threadHistory ? await api.threadHistory(threadMeta(ws)).catch(() => []) : [];
-    Object.assign(t, { harness: h.id, sessionId: null, model: 'default', effort: null, agentTermId: term.id });
+    Object.assign(t, { harness: h.id, sessionId: null, agentTermId: term.id });
     segs.push({ harness: h.id, sessionId: null, cwd: ws.cwd, since: Date.now() - 5000 });
     term.toolProvider = h.id;
     saveState();
@@ -8434,7 +8529,7 @@
     try { segments = await api.threadFork({ meta: threadMeta(ws), seg, item, id, title: label }); }
     catch (e) { console.error('[fork]', e); zoomBadge('Could not fork this thread'); return; }
     workspaces.push({ id, label, layout: null, activeTermId: null, cwd: ws.cwd,
-      thread: { projectId: ws.thread.projectId, harness: null, model: 'default', effort: null, sessionId: null, createdAt: Date.now(), forkOf: ws.id, segments } });
+      thread: { projectId: ws.thread.projectId, harness: null, sessionId: null, createdAt: Date.now(), forkOf: ws.id, segments } });
     openThread(id); // opens on the agent picker, with the forked history beside it
   }
 
@@ -8442,26 +8537,17 @@
     const t = ws.thread;
     const h = harnessOf(t.harness);
     const argv = [_threadAgents?.found?.[h.bin] || h.bin];
-    const model = t.model && t.model !== 'default' ? t.model : null;
-    if (t.harness === 'claude') {
-      if (model) argv.push('--model', model);
-      if (t.effort) argv.push('--effort', t.effort);
-      argv.push(resume ? '--resume' : '--session-id', t.sessionId);
-    } else if (t.harness === 'codex') {
-      if (resume && t.sessionId) argv.push('resume', t.sessionId);
-      if (model) argv.push('-m', model);
-      if (t.effort) argv.push('-c', `model_reasoning_effort="${t.effort}"`);
-    }
+    if (t.harness === 'claude') argv.push(resume ? '--resume' : '--session-id', t.sessionId);
+    else if (t.harness === 'codex' && resume && t.sessionId) argv.push('resume', t.sessionId);
     return argv;
   }
 
-  // Start the thread's agent, or restart it with new settings. The same agent
+  // Start an agent in the thread, in a new tab. The same agent
   // with a known session resumes it (it already has the context); any other
   // start is a new session that gets the whole thread so far as a handoff file.
-  async function launchThreadAgent(ws, changes = {}) {
+  async function launchThreadAgent(ws, harness) {
     const t = ws.thread;
-    if (!ws.cwd) { zoomBadge('Choose a project first'); return; }
-    const harness = changes.harness || t.harness;
+    if (!await ensureThreadCwd(ws)) return;
     if (!harnessOf(harness)) return;
     delete t.draft; // launching an agent makes the draft a real thread in the sidebar
     const segs = threadSegments(ws);
@@ -8473,20 +8559,19 @@
       const hist = await window.electronAPI.threadHistory(threadMeta(ws)).catch(() => null);
       if (hist && !hist[hist.length - 1]?.items.length) { resume = false; segs.pop(); cur = segs[segs.length - 1]; }
     }
-    if (harness !== t.harness) Object.assign(t, { model: 'default', effort: null });
-    Object.assign(t, changes, { harness });
+    t.harness = harness;
     const h = harnessOf(harness);
     let handoff = null;
-    if (resume) Object.assign(cur, { model: t.model, effort: t.effort });
-    else {
+    if (!resume) {
       t.sessionId = harness === 'claude' ? uuid() : null;
       if (segs.length && window.electronAPI?.threadHandoff) {
         try { handoff = await window.electronAPI.threadHandoff({ ...threadMeta(ws), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); }
         catch { zoomBadge('Could not write the handoff file'); }
       }
-      segs.push({ harness, sessionId: t.sessionId, cwd: ws.cwd, since: Date.now(), model: t.model, effort: t.effort, ...(handoff ? { handoff: true } : {}) });
+      segs.push({ harness, sessionId: t.sessionId, cwd: ws.cwd, since: Date.now(), ...(handoff ? { handoff: true } : {}) });
     }
     const old = t.agentTermId && getWorkspaceTerminals(ws).find(x => x.id === t.agentTermId);
+    let launched = false;
     try {
       const res = await handleAgentRequest({ method: 'launch', params: {
         workspaceId: ws.id,
@@ -8501,12 +8586,14 @@
         t.agentTermId = id;
         _tabAgent.set(id, harness);
         if (handoff) entry._handoff = handoff; // goes out with your first message
+        launched = true;
       }
-      // Replace the old agent tab, so two processes never share one session.
-      if (old) removeTerminal(ws.id, old.id, false, false, true, true);
+      // Resuming the same session replaces its old tab, so two processes never share one session.
+      if (old && resume) removeTerminal(ws.id, old.id, false, false, true, true);
     } catch (err) { zoomBadge(err.message || 'Could not launch agent'); }
     saveState();
     syncThreadPanel(true);
+    return launched;
   }
 
   function addProject(then) {
@@ -8523,14 +8610,33 @@
     else showPrompt('Project folder path', '', add);
   }
 
+  // A thread with no project: "Scratch" groups them, each in its own folder under ~/.terminalvibe/scratch.
+  function scratchProject() {
+    let p = projects.find(x => x.scratch);
+    if (!p) { p = { id: uuid(), label: 'Scratch', path: '', scratch: true }; projects.push(p); }
+    return p;
+  }
+  // Give a project-less thread its scratch folder before anything runs in it.
+  async function ensureThreadCwd(ws) {
+    if (ws.cwd) return true;
+    const dir = await window.electronAPI?.threadScratch?.().catch(() => null);
+    if (!dir) { zoomBadge('Choose a project first'); return false; }
+    ws.cwd = dir;
+    ws.thread.projectId = scratchProject().id;
+    return true;
+  }
+
+  // No projectId (or the Scratch one): the thread starts with no project selected.
   function createThread(projectId) {
-    const p = projects.find(x => x.id === projectId);
-    if (!p) return;
-    p.collapsed = false;
-    let ws = workspaces.find(w => w.thread?.draft && w.thread.projectId === projectId);
+    let p = projectId ? projects.find(x => x.id === projectId) : null;
+    if (projectId && !p) return;
+    if (p?.scratch) p = null;
+    if (p) p.collapsed = false;
+    projectId = p?.id || null;
+    let ws = workspaces.find(w => w.thread?.draft && (w.thread.projectId || null) === projectId);
     if (!ws) {
-      ws = { id: uuid(), label: 'New thread', layout: null, activeTermId: null, cwd: p.path,
-        thread: { projectId, draft: true, harness: null, model: 'default', effort: null, sessionId: null, createdAt: Date.now() } };
+      ws = { id: uuid(), label: 'New thread', layout: null, activeTermId: null, cwd: p?.path || null,
+        thread: { projectId, draft: true, harness: null, sessionId: null, createdAt: Date.now() } };
       workspaces.push(ws);
     }
     openThread(ws.id);
@@ -8555,7 +8661,7 @@
     });
   }
 
-  // Small popover list, shared by the project chooser and the model pickers.
+  // Small popover list (the thread page's project chooser).
   let _pickMenu = null;
   function closePickMenu() { _pickMenu?.remove(); _pickMenu = null; }
   function openPickMenu(trigger, items, onPick) {
@@ -8592,11 +8698,14 @@
 
   function chooseThreadProject(ws, trigger) {
     openPickMenu(trigger, [
-      ...projects.map(p => ({ label: p.label, hint: p.path, value: p.id, selected: p.id === ws.thread.projectId, icon: '<i class="ph ph-folder"></i>' })),
+      { label: 'No project', hint: 'scratch folder', value: '', selected: !threadProject(ws), icon: '<i class="ph ph-note-blank"></i>' },
+      ...projects.filter(p => !p.scratch).map(p => ({ label: p.label, hint: p.path, value: p.id, selected: p.id === ws.thread.projectId, icon: '<i class="ph ph-folder"></i>' })),
       { label: 'Add project…', value: '+', icon: '<i class="ph ph-folder-plus"></i>' },
     ], v => {
       const set = p => { ws.thread.projectId = p.id; ws.cwd = p.path; p.collapsed = false; renderSidebar(); switchWorkspacePane(); saveState(); };
-      if (v === '+') addProject(set); else set(projects.find(p => p.id === v));
+      if (v === '+') addProject(set);
+      else if (!v) { ws.thread.projectId = null; ws.cwd = null; renderSidebar(); switchWorkspacePane(); saveState(); }
+      else set(projects.find(p => p.id === v));
     });
   }
 
@@ -8607,6 +8716,39 @@
     body.inert = !open;
   }
 
+  // ── Thread row details: updated time and git branch ──
+  const threadAgo = t => { const m = (Date.now() - t) / 6e4;
+    if (m < 1) return 'now'; if (m < 60) return `${m | 0}m`; if (m < 1440) return `${m / 60 | 0}h`; if (m < 10080) return `${m / 1440 | 0}d`;
+    return new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+  function refreshThreadTimes() {
+    document.querySelectorAll('.proj-thread').forEach(th => {
+      const w = findWs(th.dataset.wsid), el = th.querySelector('.proj-thread-time');
+      const ts = w?.thread && (w.thread.updatedAt || w.thread.createdAt);
+      if (el && ts) el.textContent = threadAgo(ts);
+    });
+  }
+  setInterval(refreshThreadTimes, 60e3);
+  // Enter in one of a thread's tabs counts as activity.
+  function touchThreadOf(termId) {
+    const w = workspaces.find(x => x.thread && getWorkspaceTerminals(x).some(t => t.id === termId));
+    if (!w) return;
+    w.thread.updatedAt = Date.now();
+    refreshThreadTimes();
+    loadThreadBranch(w.cwd, true); // a command may have switched branches
+  }
+  const _branches = new Map(); // cwd -> branch name | null
+  // Unknown (not read yet, or browser mode): nothing. Read and not a repo: a dashed folder.
+  const threadBranchHtml = cwd => _branches.get(cwd) ? `<i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(_branches.get(cwd))}</span>`
+    : _branches.has(cwd) ? '<i class="ph ph-folder-simple-dashed" role="img" aria-label="No git repository"></i>' : '';
+  function loadThreadBranch(cwd, refresh) {
+    if (!cwd || !window.electronAPI?.gitBranch || (_branches.has(cwd) && !refresh)) return;
+    window.electronAPI.gitBranch(cwd).then(b => {
+      if (_branches.get(cwd) === b) return;
+      _branches.set(cwd, b);
+      document.querySelectorAll('.proj-thread-branch').forEach(el => { if (el.dataset.cwd === cwd) el.innerHTML = threadBranchHtml(cwd); });
+    }, () => {});
+  }
+
   function renderProjectsSection(sb, beforeEl) {
     sb.querySelector('.proj-section')?.remove();
     const sec = document.createElement('div');
@@ -8615,21 +8757,20 @@
     sec.className = 'proj-section' + (projectsCollapsed ? ' collapsed' : '') + (peek ? ' peek' : '');
     const head = document.createElement('div');
     head.className = 'proj-header';
-    makeKeyboardButton(head, 'Projects');
+    makeKeyboardButton(head, 'Threads');
     head.setAttribute('aria-expanded', String(!projectsCollapsed));
-    head.innerHTML = '<i class="ph ph-caret-down proj-caret" aria-hidden="true"></i><span class="proj-title">Projects</span><button type="button" class="proj-action proj-new" title="New thread" aria-label="New thread"><i class="ph ph-note-pencil"></i></button><button type="button" class="proj-action proj-add" title="Add project" aria-label="Add project"><i class="ph ph-folder-plus"></i></button>';
+    head.innerHTML = '<i class="ph ph-caret-down proj-caret" aria-hidden="true"></i><span class="proj-title">Threads</span><button type="button" class="proj-action proj-new" title="New thread" aria-label="New thread"><i class="ph ph-plus"></i></button><button type="button" class="proj-action proj-add" title="Add project" aria-label="Add project"><i class="ph ph-folder-plus"></i></button>';
     head.addEventListener('click', e => {
       if (e.target.closest('.proj-add')) { addProject(p => createThread(p.id)); return; }
-      if (e.target.closest('.proj-new')) {
-        // The open thread's project, else the first one with threads; the picker page can switch it.
-        const p = threadProject(activeWs() || {}) || projects.find(x => workspaces.some(w => w.thread?.projectId === x.id && !threadIsDraft(w))) || projects[0];
-        if (p) createThread(p.id); else addProject(x => createThread(x.id));
-        return;
-      }
+      if (e.target.closest('.proj-new')) { createThread(null); return; } // the picker page chooses the project
       projectsCollapsed = !projectsCollapsed;
-      if (peekWs) { saveState(); renderProjectsSection(sb, beforeEl); return; } // the peek rows change too
       sec.classList.toggle('collapsed', projectsCollapsed);
-      setFold(head, body, !projectsCollapsed);
+      head.setAttribute('aria-expanded', String(!projectsCollapsed));
+      if (peekWs) {
+        // The body stays open; CSS folds every row but the open thread and its project.
+        sec.classList.toggle('peek', projectsCollapsed);
+        if (curP?.collapsed) { curRow.classList.toggle('collapsed', !projectsCollapsed); setFold(curRow, curFold, projectsCollapsed); }
+      } else setFold(head, body, !projectsCollapsed);
       saveState();
     });
     sec.appendChild(head);
@@ -8637,81 +8778,100 @@
     body.className = 'proj-fold';
     setFold(head, body, !projectsCollapsed || peek);
     head.setAttribute('aria-expanded', String(!projectsCollapsed));
-    {
-      const list = document.createElement('div');
-      list.className = 'proj-list';
-      // A project shows up here once it has a thread; until then it's only in the thread page's chooser.
-      if (!projects.some(p => workspaces.some(w => w.thread?.projectId === p.id && !threadIsDraft(w)))) {
-        list.innerHTML = '<button type="button" class="proj-empty">Add a project folder</button>';
-        list.firstChild.addEventListener('click', () => addProject(p => createThread(p.id)));
-      }
-      for (const p of projects) {
-        const threads = workspaces.filter(w => w.thread?.projectId === p.id && !threadIsDraft(w));
-        if (!threads.length) continue;
-        const row = document.createElement('div');
-        const current = peekWs?.thread.projectId === p.id;
-        row.className = 'proj-item' + (current ? ' current' : '') + (p.collapsed && !(peek && current) ? ' collapsed' : '') +(threadIsDraft(activeWs()) && activeWs().thread.projectId === p.id ? ' active' : '');
-        makeKeyboardButton(row, p.label);
-        row.title = p.path;
-        row.innerHTML = `<i class="ph ph-caret-down proj-caret" aria-hidden="true"></i><span class="proj-name">${escHtml(p.label)}</span>`;
-        row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'project', p.id); });
-        row.addEventListener('click', () => {
-          p.collapsed = !p.collapsed;
-          row.classList.toggle('collapsed', p.collapsed);
-          setFold(row, fold, !p.collapsed);
-          saveState();
-        });
-        list.appendChild(row);
-        const fold = document.createElement('div');
-        fold.className = 'proj-fold' + (current ? ' current' : '');
-        setFold(row, fold, !p.collapsed || (peek && current));
-        const kids = document.createElement('div');
-        kids.className = 'proj-threads';
-        for (const w of threads) {
-          const th = document.createElement('div');
-          th.className = 'proj-thread' + (w.id === activeWsId ? ' active' : '');
-          th.dataset.wsid = w.id;
-          makeKeyboardButton(th, w.label);
-          th.setAttribute('aria-current', String(w.id === activeWsId));
-          // Hover details, shown to the right by the app tooltip.
-          th.dataset.tip = w.label;
-          // Each agent the thread used, once, in order of first use.
-          const segs = threadSegments(w);
-          th.dataset.tipThread = JSON.stringify({ project: p.label, path: p.path, created: w.thread.createdAt || null, sessions: segs.length,
-            agents: [...new Set(segs.map(s => s.harness))].map(id => { const h = harnessOf(id); return { name: h?.name || id, bin: h?.bin || '', color: h?.color || '' }; }) });
-          // Title only; the agents used show as logos in the tooltip.
-          th.innerHTML = `<span class="proj-thread-name">${escHtml(w.label)}</span>`;
-          th.addEventListener('click', () => openThread(w.id));
-          th.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'thread', w.id); });
-          kids.appendChild(th);
-        }
-        fold.appendChild(kids);
-        list.appendChild(fold);
-      }
-      body.appendChild(list);
-      sec.appendChild(body);
+    const list = document.createElement('div');
+    list.className = 'proj-list';
+    let curP = null, curRow = null, curFold = null; // the open thread's project, for the header toggle
+    const threadRow = (w, p) => {
+      const th = document.createElement('div');
+      th.className = 'proj-thread' + (w.id === activeWsId ? ' active' : '');
+      th.dataset.wsid = w.id;
+      makeKeyboardButton(th, w.label);
+      th.setAttribute('aria-current', String(w.id === activeWsId));
+      // Hover details, shown to the right by the app tooltip.
+      th.dataset.tip = w.label;
+      // Each agent the thread used, once, in order of first use.
+      const segs = threadSegments(w);
+      th.dataset.tipThread = JSON.stringify({ project: p?.label || 'No project', path: p?.path || w.cwd || '', created: w.thread.createdAt || null, sessions: segs.length,
+        agents: [...new Set(segs.map(s => s.harness))].map(id => { const h = harnessOf(id); return { name: h?.name || id, bin: h?.bin || '', color: h?.color || '' }; }) });
+      // Title + updated time, then the git branch + a logo per agent used.
+      const ts = w.thread.updatedAt || w.thread.createdAt || 0;
+      const agents = [...new Set(segs.map(s => s.harness))].map(id => procIconHtml(harnessOf(id)?.bin || id, 'ph-robot')).join('');
+      th.innerHTML = `<span class="proj-thread-top"><span class="proj-thread-name">${escHtml(w.label)}</span><span class="proj-thread-time" data-ts="${ts}">${ts ? threadAgo(ts) : ''}</span></span>`
+        + `<span class="proj-thread-meta"><span class="proj-thread-branch" data-cwd="${escHtml(w.cwd || '')}">${threadBranchHtml(w.cwd)}</span><span class="proj-thread-agents">${agents}</span></span>`;
+      loadThreadBranch(w.cwd);
+      th.addEventListener('click', () => openThread(w.id));
+      th.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'thread', w.id); });
+      return th;
+    };
+    // Most recently updated first.
+    const threadsOf = pred => workspaces.filter(w => w.thread && !threadIsDraft(w) && pred(w)).sort((a, b) => (b.thread.updatedAt || b.thread.createdAt || 0) - (a.thread.updatedAt || a.thread.createdAt || 0));
+    // Loose threads (no project, or the hidden Scratch one) sit flat at the top.
+    for (const w of threadsOf(w => !threadProject(w))) list.appendChild(threadRow(w, null));
+    // A project shows up here once it has a thread; until then it's only in the thread page's chooser.
+    for (const p of projects) {
+      if (p.scratch) continue;
+      const threads = threadsOf(w => w.thread.projectId === p.id);
+      if (!threads.length) continue;
+      const row = document.createElement('div');
+      const current = peekWs?.thread.projectId === p.id;
+      row.className = 'proj-item' + (current ? ' current' : '') + (p.collapsed && !(peek && current) ? ' collapsed' : '') +(threadIsDraft(activeWs()) && activeWs().thread.projectId === p.id ? ' active' : '');
+      makeKeyboardButton(row, p.label);
+      row.title = p.path;
+      row.innerHTML = `<i class="ph ph-caret-down proj-caret" aria-hidden="true"></i><span class="proj-name">${escHtml(p.label)}</span>`;
+      row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'project', p.id); });
+      row.addEventListener('click', () => {
+        p.collapsed = !p.collapsed;
+        row.classList.toggle('collapsed', p.collapsed);
+        setFold(row, fold, !p.collapsed);
+        saveState();
+      });
+      list.appendChild(row);
+      const fold = document.createElement('div');
+      fold.className = 'proj-fold' + (current ? ' current' : '');
+      setFold(row, fold, !p.collapsed || (peek && current));
+      if (current) { curP = p; curRow = row; curFold = fold; }
+      const kids = document.createElement('div');
+      kids.className = 'proj-threads';
+      for (const w of threads) kids.appendChild(threadRow(w, p));
+      fold.appendChild(kids);
+      list.appendChild(fold);
     }
+    body.appendChild(list);
+    sec.appendChild(body);
     sb.insertBefore(sec, beforeEl);
   }
 
   // The blank page of an empty thread: project chooser + one card per installed agent.
-  function buildThreadHome(ws) {
+  // With tab (a new tab of a started thread): the same cards over that tab's shell.
+  function buildThreadHome(ws, tab) {
     const home = document.createElement('div');
-    home.id = 'thread-home';
+    if (!tab) home.id = 'thread-home';
     home.className = 'thread-home';
     const p = threadProject(ws);
+    // Once the thread has started, its folder is fixed: the history and sessions live there.
+    const locked = !threadIsDraft(ws);
     home.innerHTML = `<div class="th-inner">
-      <h1 class="th-title">Start a thread</h1>
-      <button type="button" class="th-project" aria-haspopup="menu"><i class="ph ph-folder"></i><span class="th-project-name">${escHtml(p?.label || 'Choose a project')}</span>${p ? `<span class="th-project-path">${escHtml(p.path)}</span>` : ''}<i class="ph ph-caret-down th-caret"></i></button>
+      <h1 class="th-title">${tab ? 'Choose an agent' : 'Start a thread'}</h1>
+      <button type="button" class="th-project" ${locked ? 'disabled title="A started thread keeps its project"' : 'aria-haspopup="menu"'}><i class="ph ph-folder"></i><span class="th-project-name">${escHtml(p?.label || 'No project')}</span>${p?.path ? `<span class="th-project-path">${escHtml(p.path)}</span>` : ''}${locked ? '' : '<i class="ph ph-caret-down th-caret"></i>'}</button>
       <div class="th-agents" role="list"><div class="th-status"><i class="ph ph-circle-notch th-spin"></i> Looking for agents…</div></div>
-    </div>`;
+    </div>
+    <button type="button" class="th-terminal-link"><i class="ph ph-terminal-window"></i><span>${tab ? 'Use as a plain terminal' : 'Open a plain terminal'}</span></button>`;
+    const useShell = () => { home.remove(); tab.term?.focus(); };
+    if (tab) home.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); useShell(); } });
+    home.querySelector('.th-terminal-link').addEventListener('click', async () => {
+      if (tab) { useShell(); return; }
+      if (!await ensureThreadCwd(ws)) return;
+      delete ws.thread.draft; // a draft thread is dropped on switch-away, with its terminal
+      addTerminal(ws.id);
+      renderSidebar(); saveState();
+    });
     const projBtn = home.querySelector('.th-project');
-    projBtn.addEventListener('click', () => chooseThreadProject(ws, projBtn));
+    if (!locked) projBtn.addEventListener('click', () => chooseThreadProject(ws, projBtn));
     const grid = home.querySelector('.th-agents');
     loadThreadAgents().then(({ found }) => {
       if (!home.isConnected) return;
       const avail = THREAD_HARNESSES.filter(h => found?.[h.bin]);
-      grid.innerHTML = avail.length ? '' : '<div class="th-status"><i class="ph ph-warning-circle"></i> No agent CLI found on PATH (claude, codex, gemini, opencode…)</div>';
+      grid.innerHTML = avail.length ? '' : '<div class="th-status"><i class="ph ph-warning-circle"></i> No agent CLI found on PATH (claude, codex, gemini, agy, opencode…)</div>';
       for (const h of avail) {
         const card = document.createElement('button');
         card.type = 'button';
@@ -8719,25 +8879,16 @@
         if (h.color) card.style.setProperty('--agent-color', h.color);
         card.setAttribute('role', 'listitem');
         card.innerHTML = `${procIconHtml(h.bin, 'ph-robot')}<span class="th-agent-name">${escHtml(h.name)}</span>`;
-        card.addEventListener('click', () => launchThreadAgent(ws, { harness: h.id }));
+        // From a tab: the agent opens in a new tab, and this placeholder tab closes.
+        card.addEventListener('click', () => launchThreadAgent(ws, h.id).then(ok => { if (ok && tab) removeTerminal(ws.id, tab.id, false, false, true, true); }));
         grid.appendChild(card);
       }
-      const term = document.createElement('button');
-      term.type = 'button';
-      term.className = 'th-agent';
-      term.setAttribute('role', 'listitem');
-      term.innerHTML = `${procIconHtml('', 'ph-terminal-window')}<span class="th-agent-name">Terminal</span>`;
-      term.addEventListener('click', () => {
-        delete ws.thread.draft; // a draft thread is dropped on switch-away, with its terminal
-        addTerminal(ws.id);
-        renderSidebar(); saveState();
-      });
-      grid.appendChild(term);
+      if (tab) grid.querySelector('.th-agent')?.focus();
     });
     return home;
   }
 
-  // ── Right panel: thread flow + harness / model / effort switches ──
+  // ── Right panel: thread flow ──
   let _threadPoll = null, _flowSig = '';
   const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
   // The right sidebar has two titlebar buttons: tools (clipboard, auto-run, plugin pages) and the
@@ -8808,6 +8959,8 @@
       catch { note = 'Could not read the history.'; }
     }
     if (activeWs() !== ws) return;
+    const lastTs = Math.max(0, ...hist.flatMap(h => h.items).map(m => Date.parse(m.ts) || 0));
+    if (lastTs > (t.updatedAt || 0)) { t.updatedAt = lastTs; refreshThreadTimes(); saveState(); }
     // Codex ids are only known once its transcript exists.
     hist.forEach((h, i) => {
       if (!h.sessionId || segs[i].sessionId) return;
@@ -8830,13 +8983,18 @@
       flow.innerHTML = `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent to start. Your prompts, its replies and its tool calls show up here.</div>'}</div>`;
       return;
     }
+    // An agent is running but nothing was said yet: the same empty state, not a lone session header.
+    if (!t.forkOf && !segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
+      flow.innerHTML = '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
+      return;
+    }
     let html = '';
     if (t.forkOf) html += `<div class="thr-note thr-fork-note"><i class="ph ph-git-fork" aria-hidden="true"></i>Forked from ${escHtml(findWs(t.forkOf)?.label || 'a deleted thread')}</div>`;
     const texts = new Map(); // data-key -> raw message text, for the copy buttons
     segs.forEach((seg, i) => {
       const h = harnessOf(seg.harness), name = h?.name || seg.harness, res = hist[i] || { items: [] };
       const meta = [seg.model && seg.model !== 'default' ? seg.model : '', seg.effort || ''].filter(Boolean).join(' · ');
-      html += `<div class="thr-seg">${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
+      html += `<div class="thr-seg"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
       if (seg.handoff) html += `<div class="thr-note"><i class="ph ph-arrows-left-right" aria-hidden="true"></i>Started with the full history of the ${i} earlier session${i > 1 ? 's' : ''}</div>`;
       if (res.trimmed) html += `<div class="thr-note">${res.trimmed} earlier items not shown</div>`;
       if (res.unsupported) html += `<div class="thr-note">${escHtml(name)} keeps no history TerminalVibe can read yet.</div>`;
@@ -9011,6 +9169,8 @@
   function procIconHtml(name, fallback = 'ph-terminal-window') {
     const key = String(name).toLowerCase().replace(/[\d.]+$/, '');
     if (key === 'codex') return '<i class="ws-proc-icon ph ph-open-ai-logo"></i>';
+    const img = window.PROC_ICON_IMAGES?.[key];
+    if (img) return `<img class="ws-proc-icon" src="${img}" alt="" aria-hidden="true">`;
     const slug = window.PROC_ICON_ALIAS?.[key];
     const d = slug && window.PROC_ICON_PATHS?.[slug];
     return d ? `<svg class="ws-proc-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`
@@ -10704,6 +10864,17 @@
       };
     }
 
+    // Hide email addresses: the blurs stay in place, CSS shows or hides them all at once.
+    const hideEmailsToggle = document.getElementById('set-hide-emails');
+    if (hideEmailsToggle) {
+      hideEmailsToggle.checked = hideEmails;
+      hideEmailsToggle.onchange = e => {
+        hideEmails = e.target.checked;
+        document.body.classList.toggle('show-emails', !hideEmails);
+        saveState();
+      };
+    }
+
     // Font size
     document.getElementById('set-fontsize').value = currentFontSize;
     document.getElementById('set-fontsize-val').textContent = currentFontSize + 'px';
@@ -11124,6 +11295,8 @@
         }
       }
       if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
+      if (state.hideEmails !== undefined) hideEmails = !!state.hideEmails;
+      document.body.classList.toggle('show-emails', !hideEmails);
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
       if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
@@ -12834,12 +13007,18 @@
   let savedSidebarWidth = null;
   const SB_EXPANDED_MIN = 200;
   const SB_MAX = 400;
+  // Width shared by the left sidebar and #main. The right sidebar sits in #app too, so Split's
+  // sizes (percent of this pair) are set in px: a CSS % of #app overshoots while it's open.
+  function sbPairWidth() {
+    const gone = ['sidebar-right', 'sash-right'].reduce((w, id) => w + (document.getElementById(id)?.offsetWidth || 0), 0);
+    return document.getElementById('app').offsetWidth - gone;
+  }
   const SB_SPLIT_OPTS = {
     gutterSize: 4,
     snapOffset: 0,
     maxSize: [SB_MAX, Infinity],
     elementStyle(dimension, size, gutterSize) {
-      return { 'flex-basis': `calc(${size}% - ${gutterSize}px)` };
+      return { 'flex-basis': `${Math.max(0, size / 100 * sbPairWidth() - gutterSize)}px` };
     },
     gutterStyle(dimension, gutterSize) {
       return { 'flex-basis': gutterSize + 'px' };
@@ -12851,7 +13030,7 @@
     const main = document.getElementById('main');
     const expanded = sb.classList.contains('expanded');
     const savedPx = savedSidebarWidth || (expanded ? SB_EXPANDED_MIN : null);
-    const containerW = document.getElementById('app').offsetWidth;
+    const containerW = sbPairWidth();
     const initialPct = savedPx ? Math.max(5, (savedPx / containerW) * 100) : (expanded ? 15 : 0);
 
     sidebarSplit = Split([sb, main], {
@@ -12860,6 +13039,9 @@
       minSize: expanded ? [SB_EXPANDED_MIN, 200] : [0, 200],
       onDragStart() {
         _suppressResize = true;
+        // Split.js turns off pointer events on both sides, so :hover drops whenever the
+        // cursor outruns the gutter (or passes min/max); keep the accent for the whole drag.
+        sb.parentElement.querySelector(':scope > .gutter')?.classList.add('dragging');
         sb.style.willChange = 'flex-basis';
         main.style.willChange = 'flex-basis';
         sb.style.overflowY = 'hidden';
@@ -12867,12 +13049,13 @@
       },
       onDragEnd(sizes) {
         _suppressResize = false;
+        sb.parentElement.querySelector(':scope > .gutter')?.classList.remove('dragging');
         sb.style.willChange = '';
         main.style.willChange = '';
         sb.style.overflowY = '';
         // Remember the resized width so collapse/expand restores it
         if (sb.classList.contains('expanded')) {
-          const containerW = document.getElementById('app').offsetWidth;
+          const containerW = sbPairWidth();
           const sidebarPx = containerW * sizes[0] / 100;
           if (sidebarPx < SB_EXPANDED_MIN) {
             savedSidebarWidth = SB_EXPANDED_MIN;
@@ -12933,7 +13116,7 @@
     sb.classList.add('expanded');
     const px = savedSidebarWidth || Math.max(sb.offsetWidth || 0, SB_EXPANDED_MIN);
     savedSidebarWidth = Math.max(px, SB_EXPANDED_MIN);
-    const pct = Math.max(5, (savedSidebarWidth / document.getElementById('app').offsetWidth) * 100);
+    const pct = Math.max(5, (savedSidebarWidth / sbPairWidth()) * 100);
     sidebarSplit.setSizes([pct, 100 - pct]);
   }
   function sbCollapse() {
