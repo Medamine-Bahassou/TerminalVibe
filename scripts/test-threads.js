@@ -15,10 +15,13 @@ const cwd = path.join(home, 'project');
 fs.mkdirSync(cwd);
 
 const claudeId = '11111111-2222-4333-8444-555555555555';
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]).toString('base64');
 const claudeFile = path.join(home, '.claude', 'projects', 'p', claudeId + '.jsonl');
 fs.mkdirSync(path.dirname(claudeFile), { recursive: true });
 fs.writeFileSync(claudeFile, jsonl([
-  { type: 'user', cwd, timestamp: '2026-01-01T10:00:00Z', message: { content: 'Fix the build <terminalvibe_context history="C:/u/.terminalvibe/threads/t/handoff.xml">Read the history only if my message depends on earlier work.</terminalvibe_context>' } },
+  { type: 'user', cwd, timestamp: '2026-01-01T10:00:00Z', message: { content: [
+    { type: 'text', text: 'Fix the build <terminalvibe_context history="C:/u/.terminalvibe/threads/t/handoff.xml">Read the history only if my message depends on earlier work.</terminalvibe_context>' },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } }] } },
   { type: 'assistant', timestamp: '2026-01-01T10:00:05Z', message: { content: [
     { type: 'tool_use', id: 't0', name: 'Read', input: { file_path: 'C:\\u\\.terminalvibe\\threads\\t\\handoff.xml' } },
     { type: 'text', text: 'Running the tests.' },
@@ -34,7 +37,8 @@ fs.writeFileSync(path.join(codexDir, 'rollout-x-codex-1.jsonl'), jsonl([
   { type: 'session_meta', payload: { id: 'codex-1', cwd } },
   { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<environment_context>x</environment_context>' }] } },
   { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Continue this conversation. The full history with the previous agent is in C:/x/handoff.md - read it first.' }] } },
-  { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Now add docs [TerminalVibe thread history: C:/x/handoff.md - read it first for context]' }] } },
+  { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Now add docs [TerminalVibe thread history: C:/x/handoff.md - read it first for context]' },
+    { type: 'input_text', text: '<image name=[Image #1]>' }, { type: 'input_image', image_url: 'data:image/png;base64,' + PNG }] } },
   { type: 'response_item', payload: { type: 'local_shell_call', call_id: 'c1', action: { command: ['ls', '-la'] } } },
   { type: 'response_item', payload: { type: 'function_call_output', call_id: 'c1', output: JSON.stringify({ metadata: { exit_code: 2 } }) } },
   { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Docs added.' }] } },
@@ -59,6 +63,10 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   assert.strictEqual(codex.items[1].error, true);
   assert.strictEqual(codex.sessionId, 'codex-1', 'codex id found from cwd + start time');
   assert.strictEqual(opencode.unsupported, true);
+  // Pasted images are saved in the thread folder and shown by path, not as base64.
+  const [img] = claude.items[0].images;
+  assert(img.startsWith(path.join(dir, 'images')) && fs.readFileSync(img).equals(Buffer.from(PNG, 'base64')), 'claude image saved');
+  assert.deepStrictEqual(codex.items[0].images, [img], 'codex image saved once (same bytes)');
 
   const thread = JSON.parse(fs.readFileSync(path.join(dir, 'thread.json'), 'utf8'));
   assert.strictEqual(thread.title, 'Fix the build');
@@ -70,9 +78,10 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   fs.rmSync(claudeFile);
   const shown = await threadHistory(meta, home);
   assert.strictEqual(shown[0].items.length, 3);
+  assert.deepStrictEqual(shown[0].items[0].images, [img], 'image survives a deleted transcript');
 
   const md = fs.readFileSync(await writeHandoff({ ...meta, names: { claude: 'Claude Code' } }, home), 'utf8');
-  for (const text of ['<terminalvibe_handoff project=', '<instructions>', '<session agent="Claude Code" model="opus">', '<message role="user">\nFix the build\n</message>',
+  for (const text of ['<terminalvibe_handoff project=', '<instructions>', '<session agent="Claude Code" model="opus">', `<message role="user">\nFix the build\n<image path="${img}"/>\n</message>`,
     'Docs added.', '<tool name="Bash" failed="true">npm test</tool>', '<session agent="opencode" transcript="unavailable">', '</terminalvibe_handoff>']) assert(md.includes(text), text);
   assert(!md.includes('handoff.xml'), 'the agent reading the handoff file is not part of the history');
 

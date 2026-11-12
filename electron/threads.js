@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { readEdges } = require('./claude-sessions');
 
 // shortcut: a transcript over 2 x 2 MB loses its middle, read it in chunks if long threads need it.
@@ -49,6 +50,15 @@ function toolSummary(input) {
 
 // Parsed transcripts, keyed by file and reused until the file changes.
 const parsed = new Map(); // file -> { size, mtimeMs, result }
+const IMG_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+// A user message's pasted images ride on its text item, or on an image-only item.
+function addImages(items, start, ts, images) {
+  if (!images.length) return;
+  let it = items.slice(start).find(x => x.role === 'user');
+  if (!it) items.push(it = { role: 'user', text: '', ts });
+  it.images = images;
+}
+
 async function parseFile(file, parse) {
   const st = await fs.promises.stat(file);
   const hit = parsed.get(file);
@@ -65,6 +75,7 @@ function parseClaude(list) {
     if (!['user', 'assistant'].includes(row.type) || row.isMeta || row.isSidechain) continue;
     const content = row.message?.content;
     const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
+    const start = items.length;
     for (const b of blocks) {
       if (b?.type === 'text') {
         const text = String(b.text || '').trim();
@@ -74,6 +85,9 @@ function parseClaude(list) {
         tools.set(b.id, item); if (!isHandoffTool(item)) items.push(item);
       } else if (b?.type === 'tool_result' && b.is_error && tools.has(b.tool_use_id)) tools.get(b.tool_use_id).error = true;
     }
+    if (row.type === 'user') addImages(items, start, row.timestamp || null, blocks
+      .filter(b => b?.type === 'image' && b.source?.type === 'base64' && IMG_EXT[b.source.media_type] && typeof b.source.data === 'string')
+      .map(b => ({ mediaType: b.source.media_type, data: b.source.data })));
   }
   return items;
 }
@@ -87,7 +101,11 @@ function parseCodex(list) {
     if (r.type !== 'response_item' || !p) continue;
     if (p.type === 'message' && ['user', 'assistant'].includes(p.role)) {
       const text = (p.content || []).map(c => typeof c?.text === 'string' ? c.text : '').filter(t => t && !t.startsWith('<')).join('\n').trim();
+      const start = items.length;
       if (text && !(p.role === 'user' && isOldHandoff(text))) items.push({ role: p.role, text: p.role === 'user' ? stripNote(text) : text, ts: r.timestamp || null });
+      if (p.role === 'user') addImages(items, start, r.timestamp || null, (p.content || [])
+        .map(c => c?.type === 'input_image' && typeof c.image_url === 'string' && /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/.exec(c.image_url))
+        .filter(Boolean).map(m => ({ mediaType: m[1], data: m[2] })));
     } else if (['function_call', 'custom_tool_call', 'local_shell_call'].includes(p.type)) {
       const item = { role: 'tool', name: String(p.name || (p.type === 'local_shell_call' ? 'shell' : 'tool')),
         summary: toolSummary(p.arguments ?? p.input ?? p.action), ts: r.timestamp || null };
@@ -166,6 +184,29 @@ function threadDir(id, root) {
   if (!/^[\w-]{1,64}$/.test(id || '')) throw new Error('Invalid thread id');
   return path.join(root, id);
 }
+const imageFiles = new WeakMap(); // parsed image -> saved file (parse results are cached, so this skips re-hashing)
+// Pasted images are saved in the thread folder: the panel and the handoff get file paths, not base64.
+async function saveImages(dir, items) {
+  return Promise.all(items.map(async it => {
+    if (!it.images) return it;
+    const images = [];
+    for (const im of it.images) {
+      if (typeof im === 'string') { images.push(im); continue; }
+      let file = imageFiles.get(im);
+      if (!file) {
+        file = path.join(dir, 'images', crypto.createHash('sha1').update(im.data).digest('hex').slice(0, 16) + '.' + IMG_EXT[im.mediaType]);
+        try {
+          await fs.promises.mkdir(path.dirname(file), { recursive: true });
+          await fs.promises.writeFile(file, Buffer.from(im.data, 'base64'), { flag: 'wx' }).catch(e => { if (e.code !== 'EEXIST') throw e; });
+          imageFiles.set(im, file);
+        } catch { continue; } // a failed save drops the preview, never the history
+      }
+      images.push(file);
+    }
+    return { ...it, images };
+  }));
+}
+
 const written = new Map(); // dir -> last JSON written, so an unchanged poll writes nothing
 
 // Refresh a thread's folder from the agents' transcripts and return its full history.
@@ -180,7 +221,7 @@ async function syncThread(meta = {}, home = os.homedir(), root = threadsRoot(hom
   for (const s of segs) {
     const f = await readSegment({ ...s, exclude: claimed }, home).catch(() => ({ items: [] }));
     if (f.sessionId && !claimed.includes(f.sessionId)) claimed.push(f.sessionId);
-    fresh.push(f);
+    fresh.push({ ...f, items: await saveImages(dir, f.items) });
   }
   const merged = segs.map((s, i) => {
     const old = saved.find(x => x.since === s.since && x.harness === s.harness);
@@ -232,7 +273,7 @@ async function writeHandoff(meta = {}, home = os.homedir(), root = threadsRoot(h
     for (const it of s.items) {
       out += it.role === 'tool'
         ? `<tool name="${attr(it.name)}"${it.error ? ' failed="true"' : ''}>${xml(it.summary)}</tool>\n`
-        : `<message role="${it.role}">\n${xml(it.text)}\n</message>\n`;
+        : `<message role="${it.role}">\n${xml(it.text)}\n${(it.images || []).map(p => `<image path="${attr(p)}"/>\n`).join('')}</message>\n`;
     }
     out += '</session>\n';
   }

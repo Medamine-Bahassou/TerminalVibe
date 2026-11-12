@@ -1135,7 +1135,7 @@ let defaultShellId = '';
 ipcMain.on('shell:set-default', (_e, id) => { defaultShellId = String(id || ''); });
 ipcMain.handle('shell:list', () => listShells(true).map(({ id, label }) => ({ id, label })));
 
-function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId }) {
+function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId, shell: shellId }) {
   let startup;
   try {
     if (replaceIdle && ptys.has(id) && !canReplaceSession(runningProcessInfo(ptys.get(id).pid), replaceClaude === true)) return false;
@@ -1169,7 +1169,8 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       // which on Windows is inside LocalAppData instead of ~.
       spawnCwd = homeDir;
     }
-    const profile = executable || argv?.length ? null : findShell(defaultShellId);
+    // A tab opened with a specific shell (tab bar menu): only ids of detected shells resolve.
+    const profile = executable || argv?.length ? null : findShell(typeof shellId === 'string' ? shellId : '') || findShell(defaultShellId);
     const shell = profile?.command || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
     const env = terminalEnv();
     startup = executable || argv?.length ? { args: [], env: {}, tmpDir: null } : prepareShellStartup(shell, env);

@@ -41,7 +41,19 @@
           tip.append(row);
         }
       }
-      const workspaceButton = target.closest('.ws-btn');
+      const thread = target.dataset.tipThread ? JSON.parse(target.dataset.tipThread) : null;
+      tip.classList.toggle('thread-tooltip', !!thread);
+      if (thread) {
+        const el = (cls, text) => Object.assign(document.createElement('div'), { className: cls, textContent: text ?? '' });
+        tip.replaceChildren(el('ws-process-tooltip-heading', target.dataset.tip));
+        for (const a of thread.agents) {
+          const row = el('ws-process-tooltip-row thr-tip-agent'); row.innerHTML = procIconHtml(a.bin, 'ph-robot');
+          row.append(Object.assign(document.createElement('span'), { className: 'thr-tip-name', textContent: a.name }));
+          tip.append(row);
+        }
+        if (!thread.agents.length) tip.append(el('thr-tip-foot', 'No agent yet'));
+      }
+      const workspaceButton = target.closest('.ws-btn, .proj-thread');
       const sideTarget = workspaceButton || sessionRow;
       const r = (sideTarget || target).getBoundingClientRect();
       const w = tip.offsetWidth, h = tip.offsetHeight;
@@ -88,7 +100,7 @@
         else for (const node of record.addedNodes) normalize(node);
       }
       if (target && !target.isConnected) release();
-    }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'data-tip', 'data-tip-processes'] });
+    }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'data-tip', 'data-tip-processes', 'data-tip-thread'] });
     const schedule = () => { clearTimeout(timer); timer = setTimeout(show, Date.now() < warmUntil ? SKIP_DELAY : DELAY); };
     const take = el => {
       if (el === target) return false;
@@ -1677,6 +1689,8 @@
   let currentScrollback = 10000;
   let defaultTerminalPath = '';      // default working directory for new terminals
   let defaultShell = '';             // id from electron/shells.js; '' = system default
+  let shellList = [];                // detected shells, for the tab bar's "new tab with shell" menu
+  window.electronAPI?.listShells?.().then(l => { shellList = Array.isArray(l) ? l : []; }, () => {});
   let backgroundMode = 'none';       // 'none' | 'per-tab' | 'per-workspace' | 'global'
   let globalBackgroundImage = '';    // data URL for global bg
   let backgroundOpacity = 0.85;       // 0..1
@@ -2102,7 +2116,7 @@
     };
     if (isDesktop() && window.electronAPI && nativePtyReady) {
       const api = window.electronAPI;
-      if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null, inheritFromId: obj.inheritFromId }).then(typeCmd);
+      if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null, inheritFromId: obj.inheritFromId, shell: entry?.shell || null }).then(typeCmd);
       else if (obj.type === 'resize') api.terminalResize({ id: obj.id, cols: obj.cols, rows: obj.rows });
       else if (obj.type === 'close') api.terminalClose(obj.id);
       return;
@@ -2767,6 +2781,7 @@
           if (t.locked) o.locked = true;
           if (t.pinLabel) o.pinLabel = true;
           if (t.toolProvider) o.toolProvider = t.toolProvider;
+          if (t.shell) o.shell = t.shell;
           if (t.claudeSessionId) o.claudeSessionId = t.claudeSessionId;
           return o;
         })
@@ -2810,6 +2825,7 @@
         if (tData.color) entry.color = tData.color;
         if (tData.cwd) entry.cwd = tData.cwd;
         if (tData.argv) entry.argv = tData.argv;
+        if (typeof tData.shell === 'string') entry.shell = tData.shell;
         if (tData.cmd) entry.runCmd = tData.cmd; // auto-run launch only; never serialized
         if (tData.bgImage) entry.bgImage = tData.bgImage;
         if (tData.dead) entry.dead = true;
@@ -4348,7 +4364,7 @@
       const k = e.key === 'Escape' ? close : !e.ctrlKey && !e.metaKey && !e.altKey && keys?.[e.key];
       if (k) { e.preventDefault(); e.stopPropagation(); k(); }
     };
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); entry.term.focus(); };
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); entry?.term?.focus(); };
     overlay.onclick = close;
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(overlay);
@@ -4620,6 +4636,7 @@
     entry.cwd = cwd;
     if (opts.cmd) entry.runCmd = opts.cmd;
     if (opts.label) entry.pinLabel = true;
+    if (opts.shell) entry.shell = opts.shell;
 
     if (!wsp.layout) {
       wsp.layout = {
@@ -5321,6 +5338,24 @@
 
   const _processCheckPending = new Set(); // termIds with an in-flight running-process check
   const _closeLockConfirmed = new Set();  // locked termIds whose close was already confirmed
+
+  // Close several tabs with one confirmation, only when one of them is busy (running, locked, or a page).
+  async function closeTabs(wsId, ids) {
+    const wsp = findWs(wsId);
+    if (!wsp || !ids.length) return;
+    const entries = getWorkspaceTerminals(wsp).filter(t => ids.includes(t.id));
+    const running = await Promise.all(entries.map(t => isLiveTerminal(t) ? checkTerminalRunning(t.id).catch(() => false) : false));
+    const busy = entries.filter((t, i) => running[i] || t.locked || browserHasContent(t));
+    const go = () => {
+      // A workspace is never left without tabs: closing them all opens a fresh terminal first.
+      if (!wsp.thread && getWorkspaceTerminals(wsp).every(t => ids.includes(t.id))) addTerminal(wsId, findGroupContainingTerm(wsp.layout, ids[0])?.id);
+      for (const id of ids) removeTerminal(wsId, id, false, false, true, true);
+    };
+    if (!busy.length) return go();
+    showDangerConfirm(`Close ${ids.length} tab${ids.length > 1 ? 's' : ''}?`,
+      `${busy.map(t => `<span class="cc-label">${escHtml(t.label || 'Tab')}</span>`).join(', ')} ${busy.length > 1 ? 'are' : 'is'} still running, locked or showing a page.`,
+      'Close Tabs', go);
+  }
 
   function removeTerminal(wsId, termId, skipRender, skipPtyClose, confirmed, checked) {
     const wsp = findWs(wsId);
@@ -6464,6 +6499,12 @@
         if (e.target.closest('.tg-tab')) return;
         addTerminal(wsp.id, node.id);
       });
+      // Right-click the empty tab bar: new tab with a chosen shell.
+      tabsWrap.addEventListener('contextmenu', e => {
+        if (e.target.closest('.tg-tab')) return;
+        e.preventDefault();
+        showCtxMenu(e, 'tabbar', { wsId: wsp.id, groupId: node.id });
+      });
 
       header.appendChild(tabsWrap);
 
@@ -6476,6 +6517,7 @@
       addTabBtn.title = withKey('New terminal in this group', 'newTerminal');
       addTabBtn.innerHTML = '<i class="ph ph-plus"></i>';
       addTabBtn.addEventListener('click', () => addTerminal(wsp.id, node.id));
+      addTabBtn.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'tabbar', { wsId: wsp.id, groupId: node.id }); });
 
       const splitH = document.createElement('div');
       splitH.className = 'tg-btn';
@@ -8445,7 +8487,7 @@
     activateWorkspace(id);
     renderSidebar();
     saveState();
-    if (document.body.classList.contains('sb-right-hidden')) document.getElementById('btn-sidebar-right')?.click();
+    if (rightPanelMode() !== 'history') toggleRightPanel('history');
   }
 
   function removeProject(id) {
@@ -8573,7 +8615,11 @@
           th.dataset.wsid = w.id;
           makeKeyboardButton(th, w.label);
           th.setAttribute('aria-current', String(w.id === activeWsId));
-          th.title = w.label;
+          // Hover details, shown to the right by the app tooltip.
+          th.dataset.tip = w.label;
+          // Each agent the thread used, once, in order of first use.
+          th.dataset.tipThread = JSON.stringify({ agents: [...new Set(threadSegments(w).map(s => s.harness))]
+            .map(id => { const h = harnessOf(id); return { name: h?.name || id, bin: h?.bin || '' }; }) });
           // Every agent this thread has used, in order of first use, as an overlapping logo stack.
           const used = [...new Set(threadSegments(w).map(x => x.harness))].map(harnessOf).filter(Boolean);
           const logos = used.slice(0, 3).map(h => `<span class="proj-agent"${h.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')
@@ -8637,15 +8683,39 @@
 
   // ── Right panel: thread flow + harness / model / effort switches ──
   let _threadPoll = null, _flowSig = '';
+  const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
+  // The right sidebar has two titlebar buttons: tools (clipboard, auto-run, plugin pages) and the
+  // thread history. One shows at a time: opening one swaps the content, clicking the open one closes it.
+  function rightPanelMode() {
+    const body = document.body;
+    return body.classList.contains('sb-right-hidden') ? null : body.classList.contains('sbr-history') ? 'history' : 'tools';
+  }
+  function toggleRightPanel(mode) {
+    const body = document.body, sidebar = document.getElementById('sidebar-right');
+    const cur = rightPanelMode(), next = cur === mode ? null : mode;
+    // Each mode keeps its own dragged width.
+    if (cur) sidebar.dataset['w' + cur] = sidebar.style.width;
+    if (next) sidebar.style.width = sidebar.dataset['w' + next] || '';
+    body.classList.toggle('sb-right-hidden', !next);
+    body.classList.toggle('sbr-history', next === 'history');
+    sidebar.inert = !next;
+    if (next !== 'history') sidebar.querySelectorAll('.sbr-page').forEach(p => { p.style.display = p.id === 'sbr-main' ? 'flex' : 'none'; });
+    document.getElementById('btn-sidebar-right')?.setAttribute('aria-expanded', String(next === 'tools'));
+    document.getElementById('btn-thread-history')?.setAttribute('aria-expanded', String(next === 'history'));
+    syncThreadPanel();
+  }
   function syncThreadPanel(force) {
     const page = document.getElementById('sbr-thread');
     if (!page) return;
     const ws = activeWs();
-    const hidden = document.body.classList.contains('sb-right-hidden');
     clearInterval(_threadPoll); _threadPoll = null;
-    // Nothing in the thread yet: no right sidebar (the picker fills the pane).
+    // Nothing in the thread yet: no history (the picker fills the pane).
     document.body.classList.toggle('thread-empty', !!ws?.thread && !threadSegments(ws).length);
-    if (!ws?.thread) {
+    const histBtn = document.getElementById('btn-thread-history');
+    if (histBtn) histBtn.hidden = !ws?.thread || document.body.classList.contains('thread-empty');
+    // History belongs to a thread: switching to a plain workspace closes it.
+    if (rightPanelMode() === 'history' && !ws?.thread) { toggleRightPanel('history'); return; }
+    if (rightPanelMode() !== 'history') {
       if (page.style.display !== 'none') {
         page.style.display = 'none';
         document.getElementById('sbr-main').style.display = 'flex';
@@ -8655,7 +8725,6 @@
     document.querySelectorAll('#sidebar-right .sbr-page').forEach(el => { el.style.display = el === page ? 'flex' : 'none'; });
     if (page.dataset.wsid !== ws.id || force) { page.dataset.wsid = ws.id; _flowSig = ''; }
     document.getElementById('sbr-thread-title').textContent = ws.label;
-    if (hidden) return;
     refreshThreadFlow(ws);
     _threadPoll = setInterval(() => { if (activeWs() === ws && !document.hidden) refreshThreadFlow(ws); }, 2000);
   }
@@ -8690,7 +8759,7 @@
       if (i === segs.length - 1) t.sessionId = h.sessionId;
       saveState();
     });
-    const firstUser = hist.flatMap(h => h.items).find(m => m.role === 'user');
+    const firstUser = hist.flatMap(h => h.items).find(m => m.role === 'user' && m.text);
     if (ws.label === 'New thread' && firstUser) {
       ws.label = firstUser.text.replace(/\s+/g, ' ').slice(0, 48);
       document.getElementById('sbr-thread-title').textContent = ws.label;
@@ -8737,13 +8806,46 @@
         texts.set(key, m.text);
         // Copy + time under the message, shown on hover.
         const actions = `<div class="thr-actions"><button type="button" class="thr-copy" aria-label="Copy message"><i class="ph ph-copy" aria-hidden="true"></i></button><span class="thr-time">${clockTime(m.ts)}</span></div>`;
+        const imgs = m.images?.length ? `<div class="thr-images">${m.images.map(p => `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(p)}" alt="Pasted image">`
+          + '<div class="thr-img-actions"><button type="button" data-act="open" title="Open" aria-label="Open image"><i class="ph ph-arrows-out" aria-hidden="true"></i></button>'
+          + '<button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></div></div>').join('')}</div>` : '';
         html += m.role === 'user'
-          ? `<div class="${cls}" data-key="${key}"><div class="thr-bubble"><div class="thr-msg-text">${mdLite(m.text)}</div>${more}</div>${actions}</div>`
+          ? `<div class="${cls}" data-key="${key}"><div class="thr-bubble">${imgs}${m.text ? `<div class="thr-msg-text">${mdLite(m.text)}</div>` : ''}${more}</div>${actions}</div>`
           : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${more}${actions}</div>`;
       });
       flushTools(i + ':end');
     });
     flow.innerHTML = html;
+    flow.querySelectorAll('img.thr-img').forEach(async img => {
+      const p = img.dataset.path;
+      let src = _thrImgCache.get(p);
+      if (!src) {
+        const r = await window.electronAPI?.readImageFile?.(p).catch(() => null);
+        if (!r?.data) { img.closest('.thr-img-wrap').remove(); return; }
+        src = `data:${r.mediaType};base64,${r.data}`;
+        _thrImgCache.set(p, src);
+        if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
+      }
+      img.src = src;
+    });
+    // Image actions: open in the full viewer (zoom, pan, rotate, flip) or copy as PNG.
+    flow.querySelectorAll('.thr-img-wrap').forEach(wrap => {
+      const img = wrap.querySelector('img');
+      const open = () => openClaudeRefViewer(null, { kind: 'file', path: img.dataset.path, label: 'Pasted image' }, '');
+      img.addEventListener('click', open);
+      wrap.querySelector('[data-act="open"]').addEventListener('click', open);
+      const copy = wrap.querySelector('[data-act="copy"]');
+      copy.addEventListener('click', async () => {
+        try {
+          const c = Object.assign(document.createElement('canvas'), { width: img.naturalWidth, height: img.naturalHeight });
+          c.getContext('2d').drawImage(img, 0, 0);
+          const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          copy.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+        } catch { copy.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>'; }
+        setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
+      });
+    });
     flow.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', () => {
       const text = texts.get(b.closest('.thr-msg').dataset.key) || '';
       if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {});
@@ -8757,7 +8859,6 @@
     }));
     if (atBottom || !flow.dataset.seen) { flow.scrollTop = flow.scrollHeight; flow.dataset.seen = '1'; }
   }
-  document.getElementById('btn-sidebar-right')?.addEventListener('click', () => setTimeout(() => syncThreadPanel()));
   document.getElementById('sbr-thread-refresh')?.addEventListener('click', () => { loadThreadAgents(true).then(() => syncThreadPanel(true)); });
 
   /* ── Workspace sidebar: live processes per workspace ──
@@ -8941,6 +9042,15 @@
       }
       sep();
       item('<i class="ph ph-x"></i>', 'Close workspace', '', () => removeWorkspace(wsId), true);
+    } else if (type === 'tabbar') {
+      const { wsId, groupId } = data;
+      item('<i class="ph ph-plus"></i>', 'New terminal', 'Ctrl+Shift+T', () => addTerminal(wsId, groupId));
+      if (shellList.length) sep();
+      for (const s of shellList) {
+        // Same logos as Settings → Default shell.
+        item(`<svg class="ctx-shell-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${shellIconPath(s)}"/></svg>`, escHtml(s.label) + (s.id === defaultShell ? ' (default)' : ''), '',
+          () => addTerminal(wsId, groupId, { shell: s.id }));
+      }
     } else if (type === 'browser-more') {
       const { entry, history } = data;
       item('<i class="ph ph-clock-counter-clockwise"></i>', 'History', '', history);
@@ -9059,6 +9169,14 @@
         item('<i class="ph ph-export"></i>', 'Detach to window', '', () => detachTerminal(wsId, termId));
       }
       item('<i class="ph ph-x"></i>', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
+      // Bulk close, scoped to this tab bar.
+      const tabs = (wsp && findGroupContainingTerm(wsp.layout, termId)?.terminals.map(t => t.id)) || [];
+      const at = tabs.indexOf(termId);
+      if (tabs.length > 1) {
+        item('<i class="ph ph-x-square"></i>', 'Close other tabs', '', () => closeTabs(wsId, tabs.filter(id => id !== termId)));
+        if (at < tabs.length - 1) item('<i class="ph ph-arrow-line-right"></i>', 'Close tabs to the right', '', () => closeTabs(wsId, tabs.slice(at + 1)));
+        item('<i class="ph ph-x-circle"></i>', 'Close all tabs', '', () => closeTabs(wsId, tabs));
+      }
     }
 
     if (type === 'project') {
@@ -11424,16 +11542,8 @@
   // is visible and restore them when it closes, including Escape and switching.
   const profilePickerObserver = new MutationObserver(() => syncBrowserSlots());
   profilePickerObserver.observe(document.getElementById('profile-picker'), { attributes: true, attributeFilter: ['style'] });
-  const btnSidebarRight = document.getElementById('btn-sidebar-right');
-  if (btnSidebarRight) btnSidebarRight.addEventListener('click', () => {
-    const hidden = document.body.classList.toggle('sb-right-hidden');
-    const sidebar = document.getElementById('sidebar-right');
-    sidebar.inert = hidden;
-    if (hidden) sidebar.querySelectorAll('.sbr-page').forEach(page => {
-      page.style.display = page.id === 'sbr-main' ? 'flex' : 'none';
-    });
-    btnSidebarRight.setAttribute('aria-expanded', String(!hidden));
-  });
+  document.getElementById('btn-sidebar-right')?.addEventListener('click', () => toggleRightPanel('tools'));
+  document.getElementById('btn-thread-history')?.addEventListener('click', () => toggleRightPanel('history'));
 
   // Right sidebar pages (main / clipboard)
   const sbrOpen = document.getElementById('sbr-open-clipboard');
