@@ -1659,3 +1659,22 @@ body #sidebar.expanded .proj-section.peek :is(.proj-item:not(.current), .proj-li
 
 /* ── Left sidebar keeps its width when the right sidebar opens; #main gives up the space ── */
 body #sidebar.expanded:not(.hover-overlay) { flex-shrink:0; }
+
+/* ── Projects rows: rounded hover fill like workspace rows; the open thread keeps it.
+   The "Projects" header stays a quiet label (text-only hover), like "Workspaces". ── */
+body #sidebar.expanded :is(.proj-item,.proj-thread) { transition:background-color 140ms, color 140ms; }
+body #sidebar.expanded :is(.proj-item,.proj-thread):hover,
+body #sidebar.expanded .proj-thread.active { background:var(--ui-hover); color:var(--fg); }
+body #sidebar.expanded .proj-action:hover { background:color-mix(in srgb,var(--fg) 8%,transparent); }
+
+/* ── Terminal: email addresses blurred until clicked (decoration from blurTermEmails) ── */
+.xterm .xterm-decoration.term-email-blur {
+  pointer-events:auto; cursor:pointer;
+  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
+  background:color-mix(in srgb,var(--fg) 6%,transparent);
+  border-radius:3px !important;
+}
+/* Settings → Hide email addresses off (xterm sets display inline, hence !important). */
+body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !important; }
+/* A revealed address: no blur, and clicks/selection go back to the terminal. */
+.xterm .xterm-decoration.term-email-blur.shown { -webkit-backdrop-filter:none; backdrop-filter:none; background:transparent; pointer-events:none; cursor:auto; }

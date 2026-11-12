@@ -1732,6 +1732,7 @@
   let pinnedCollapsed = false; // "Pinned" section collapsed state
   let sidebarMode = 'normal'; // 'normal' | 'hover' | 'hidden'
   let showWsProcs = true;     // show running processes in workspace buttons
+  let hideEmails = true;      // blur email addresses in terminal output (blurTermEmails)
   let notifyOnCommandFinish = true; // notify when a command / agent response finishes
   let notificationSound = true;     // play sounds/notify.wav with those notifications
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
@@ -3006,6 +3007,7 @@
         pinnedCollapsed,
         sidebarMode,
         showWsProcs,
+        hideEmails,
         notifyOnCommandFinish,
         notificationSound,
         terminalLinkTarget,
@@ -3051,6 +3053,7 @@
       pinnedCollapsed,
       sidebarMode,
       showWsProcs,
+      hideEmails,
       notifyOnCommandFinish,
       notificationSound,
       terminalLinkTarget,
@@ -3132,6 +3135,8 @@
       if (state.pinnedCollapsed !== undefined) pinnedCollapsed = !!state.pinnedCollapsed;
       if (state.sidebarMode) sidebarMode = state.sidebarMode;
       if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
+      if (state.hideEmails !== undefined) hideEmails = !!state.hideEmails;
+      document.body.classList.toggle('show-emails', !hideEmails);
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
       if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
@@ -4629,7 +4634,80 @@
       } catch { }
     };
     term.onWriteParsed(() => { if (!edgeTimer) edgeTimer = setTimeout(syncEdgeBg, 150); });
+    blurTermEmails(term);
     return entry;
+  }
+
+  // Email addresses on screen are blurred (a top-layer decoration) until clicked;
+  // each occurrence is revealed on its own and stays shown while its cells hold it.
+  // ponytail: one row at a time, so an address soft-wrapped across two rows isn't blurred.
+  const EMAIL_RE = /[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+  function blurTermEmails(term) {
+    let decos = [], timer = false;
+    const cellsText = (y, x, w) => {
+      const line = term.buffer.active.getLine(y);
+      if (!line) return '';
+      const r = termRow(line, y);
+      let s = '';
+      for (let k = 0; k < r.text.length; k++) if (r.pos[k].x - 1 >= x && r.pos[k].x - 1 < x + w) s += r.text[k];
+      return s;
+    };
+    const clear = () => { decos.forEach(d => d.marker.dispose()); decos = []; };
+    const scan = () => {
+      timer = false;
+      if (!term.element) return;
+      const buf = term.buffer.active, top = buf.viewportY, bottom = top + term.rows;
+      // Drop blurs that were trimmed, or whose cells now hold other text (redraws, reflow).
+      // A revealed one is kept while stale: TUIs erase and rewrite lines, so the same address
+      // usually comes back at the same cells, or a row or two away.
+      decos = decos.filter(d => {
+        const y = d.marker.line;
+        if (d.marker.isDisposed || y < 0) { d.marker.dispose(); return false; }
+        if (y < top || y >= bottom) return true;
+        d.stale = cellsText(y, d.x, d.w) !== d.text;
+        if (d.stale && !d.shown) { d.marker.dispose(); return false; }
+        return true;
+      });
+      const drop = d => { d.marker.dispose(); decos.splice(decos.indexOf(d), 1); };
+      for (let y = top; y < bottom; y++) {
+        const line = buf.getLine(y);
+        if (!line || !line.translateToString(true).includes('@')) continue;
+        const row = termRow(line, y);
+        for (const m of row.text.matchAll(EMAIL_RE)) {
+          const x = row.pos[m.index].x - 1, w = row.pos[m.index + m[0].length - 1].x - x;
+          const at = decos.find(d => d.marker.line === y && d.x === x);
+          if (at?.text === m[0]) { at.stale = false; continue; }
+          if (at) drop(at);
+          // Redrawn on another row: a revealed copy that lost its cells hands over its state.
+          const moved = decos.find(d => d.shown && d.stale && d.text === m[0]);
+          if (moved) drop(moved);
+          const marker = term.registerMarker(y - (buf.baseY + buf.cursorY));
+          if (!marker) continue;
+          const deco = term.registerDecoration({ marker, x, width: w, layer: 'top' });
+          if (!deco) { marker.dispose(); continue; }
+          const d = { marker, x, w, text: m[0], shown: !!moved, stale: false };
+          deco.onRender(el => {
+            el.classList.toggle('shown', d.shown);
+            if (el._emailBlur) return;
+            el._emailBlur = true;
+            el.classList.add('term-email-blur');
+            if (!d.shown) el.title = 'Click to show';
+            el.addEventListener('mousedown', e => {
+              e.preventDefault(); e.stopPropagation();
+              d.shown = true; el.classList.add('shown'); el.removeAttribute('title');
+            });
+          });
+          decos.push(d);
+        }
+      }
+    };
+    // A microtask, not a timeout: it runs after the write is parsed and before xterm's next
+    // animation-frame render, so an address is never painted unblurred.
+    const soon = () => { if (!timer) { timer = true; queueMicrotask(scan); } };
+    term.onWriteParsed(soon);
+    term.onScroll(soon);
+    term.onResize(soon);
+    term.buffer.onBufferChange(() => { clear(); soon(); }); // markers belong to one buffer
   }
 
   // opts (plugins: api.terminal.open): { cwd, cmd, label } — start directory,
@@ -10724,6 +10802,17 @@
       };
     }
 
+    // Hide email addresses: the blurs stay in place, CSS shows or hides them all at once.
+    const hideEmailsToggle = document.getElementById('set-hide-emails');
+    if (hideEmailsToggle) {
+      hideEmailsToggle.checked = hideEmails;
+      hideEmailsToggle.onchange = e => {
+        hideEmails = e.target.checked;
+        document.body.classList.toggle('show-emails', !hideEmails);
+        saveState();
+      };
+    }
+
     // Font size
     document.getElementById('set-fontsize').value = currentFontSize;
     document.getElementById('set-fontsize-val').textContent = currentFontSize + 'px';
@@ -11144,6 +11233,8 @@
         }
       }
       if (state.showWsProcs !== undefined) showWsProcs = !!state.showWsProcs;
+      if (state.hideEmails !== undefined) hideEmails = !!state.hideEmails;
+      document.body.classList.toggle('show-emails', !hideEmails);
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
       if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
