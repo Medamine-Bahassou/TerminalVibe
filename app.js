@@ -4352,19 +4352,27 @@
     });
     term.registerLinkProvider({
       provideLinks(y, callback) {
-        const line = term.buffer.active.getLine(y - 1);
-        if (!line) return callback(undefined);
-        // Map string offsets to cell columns so wide glyphs before the match don't shift it.
-        let text = ''; const cols = [];
-        for (let x = 0; x < line.length; x++) {
-          const c = line.getCell(x);
-          if (c && c.getWidth() === 0) continue;
-          const ch = c?.getChars() || ' ';
-          text += ch; for (let k = 0; k < ch.length; k++) cols.push(x);
+        const buf = term.buffer.active;
+        if (!buf.getLine(y - 1)) return callback(undefined);
+        // A chip can wrap: soft-wrapped mid-word, or Claude/Codex break it at a space ("[Image" / "#2]").
+        // Claude pads its input box to the edge, so that break can also be a soft wrap full of spaces.
+        // Join nearby rows, any whitespace or hard break as one space, keeping a cell position per char.
+        let text = '', pos = [];
+        for (let r = Math.max(0, y - 3); r < Math.min(buf.length, y + 2); r++) {
+          let row = termRow(buf.getLine(r), r);
+          const keep = text.trimEnd().length, lead = row.text.length - row.text.trimStart().length;
+          if (text && (!row.wrapped || keep < text.length || lead)) {
+            text = text.slice(0, keep) + ' '; pos = pos.slice(0, keep); pos.push(null);
+            row = { text: row.text.slice(lead), pos: row.pos.slice(lead) };
+          }
+          text += row.text; pos.push(...row.pos);
         }
         const links = [];
         let prompt, draft, later = 0, at = -1;
         for (const m of text.matchAll(/\[(?:Image #(\d+)|Pasted text #(\d+)(?: \+(\d+) lines?)?)\]/g)) {
+          // Only this row's cells: a wrapped chip is one link piece per row.
+          const cells = pos.slice(m.index, m.index + m[0].length).filter(c => c?.y === y);
+          if (!cells.length) continue;
           // The sent message is the nearest "❯ " prompt line at or above; it identifies the session.
           // No "❯" line below means this is Claude's input box: an unsent draft.
           if (prompt === undefined) {
@@ -4385,7 +4393,7 @@
             : { kind: 'paste', n: Number(m[2]), lines: Number(m[3] || 0), label: `Pasted text #${m[2]}` };
           links.push({
             text: m[0], decorations: { underline: true, pointerCursor: true },
-            range: { start: { x: cols[m.index] + 1, y }, end: { x: cols[m.index + m[0].length - 1] + 1, y } },
+            range: { start: cells[0], end: cells[cells.length - 1] },
             activate: () => {}, // opened by the mousedown listener above
             hover: e => { if (e.buttons) return; showClaudeRefPop(entry, ref, prompt, e); claudeRefHovered = { el: term.element, term, open: () => openClaudeRefViewer(entry, ref, prompt) }; }, // not mid-selection
             leave: hideClaudeRefPop,
@@ -4401,16 +4409,7 @@
       provideLinks(y, callback) {
         const buf = term.buffer.active, rows = [];
         // A few rows around y: long paths soft-wrap (terminal) or get hard-wrapped by CLIs.
-        for (let r = Math.max(0, y - 9); r < Math.min(buf.length, y + 8); r++) {
-          const line = buf.getLine(r), row = { text: '', pos: [], wrapped: !!line.isWrapped };
-          for (let x = 0; x < line.length; x++) {
-            const c = line.getCell(x);
-            if (c && c.getWidth() === 0) continue;
-            const ch = c?.getChars() || ' ';
-            row.text += ch; for (let k = 0; k < ch.length; k++) row.pos.push({ x: x + 1, y: r + 1 });
-          }
-          rows.push(row);
-        }
+        for (let r = Math.max(0, y - 9); r < Math.min(buf.length, y + 8); r++) rows.push(termRow(buf.getLine(r), r));
         const { text, pos, glues } = joinTermRows(rows);
         const found = [];
         for (const m of text.matchAll(IMAGE_PATH_RE)) {
@@ -4439,6 +4438,17 @@
         return;
       },
     });
+  }
+  // A buffer row's text with a 1-based cell position per char, so wide glyphs don't shift matches.
+  function termRow(line, r) {
+    const row = { text: '', pos: [], wrapped: !!line.isWrapped };
+    for (let x = 0; x < line.length; x++) {
+      const c = line.getCell(x);
+      if (c && c.getWidth() === 0) continue;
+      const ch = c?.getChars() || ' ';
+      row.text += ch; for (let k = 0; k < ch.length; k++) row.pos.push({ x: x + 1, y: r + 1 });
+    }
+    return row;
   }
   // Join terminal rows into one string with a cell position per char. Soft-wrapped rows
   // continue directly. A hard break is glued (indent dropped) only when the row above ends
