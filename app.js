@@ -239,26 +239,13 @@
     return s && s.key ? `${text} (${formatKeyCombo(s)})` : text;
   }
 
-  // Keep tooltips and the empty-state cheat sheet in step with rebinds.
+  // Keep tooltips in step with rebinds.
   function refreshShortcutHints() {
     const tips = { 'btn-sidebar-toggle': ['Toggle sidebar', 'toggleSidebar'], 'btn-profiles': ['Profiles', 'profiles'] };
     for (const [id, [text, action]] of Object.entries(tips)) {
       const el = document.getElementById(id), tip = withKey(text, action);
       if (el && el.dataset.tip !== tip) el.title = tip;
     }
-    const keys = document.getElementById('empty-keys');
-    if (!keys) return;
-    keys.replaceChildren(...['newTerminal', 'browserTab', 'commandPalette', 'tabSearch']
-      .filter(a => customShortcuts[a]?.key)
-      .map(a => {
-        const row = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd');
-        dt.textContent = SHORTCUT_LABELS[a];
-        for (const part of formatKeyCombo(customShortcuts[a]).split('+')) {
-          const kbd = document.createElement('kbd'); kbd.textContent = part; dd.append(kbd);
-        }
-        row.append(dt, dd);
-        return row;
-      }));
   }
 
   function matchShortcutMouse(e, action) {
@@ -1713,6 +1700,8 @@
   let workspaces = [];       // [{id, label, activeTermId, layout: (Node), folderId?}]
   let folders = [];          // [{id, label, color?, collapsed?}]  — workspace folders/groups
   let sideOrder = [];        // top-level sidebar flow: [{type:'ws'|'folder', id}] in visual order
+  let projects = [];         // [{id, label, path, collapsed?}]; threads are workspaces with ws.thread
+  let projectsCollapsed = false;
   let pinnedCollapsed = false; // "Pinned" section collapsed state
   let sidebarMode = 'normal'; // 'normal' | 'hover' | 'hidden'
   let showWsProcs = true;     // show running processes in workspace buttons
@@ -2143,6 +2132,7 @@
   function sendStdin(sid, data) {
     const src = findTermById(sid);
     if (src && src.term.locked) return; // locked terminal: swallow all input
+    if (src?.term._handoff && handoffOnInput(sid, src.term, data)) return;
     // PTY dimensions must be current before Enter launches a full-screen app.
     if (src && (src.term._resizeTimeout || data.includes(13) || data.includes(10))) fitTerm(src.term, true);
     _sendStdinRaw(sid, data);
@@ -2171,6 +2161,7 @@
   // parses on throttled timers, which would slow a background build down to
   // that pace, so there we ack at once (no flow control, as before).
   function writePtyData(result, id, data) {
+    if (result?.term) result.term._lastOut = Date.now(); // lets a thread wait for an agent to settle
     const ack = () => window.electronAPI.terminalAck?.(id, data.length);
     const xterm = result?.term?.type !== 'browser' && result?.term?.term;
     if (xterm && !document.hidden) xterm.write(data, ack);
@@ -2297,6 +2288,9 @@
           }
         }
       }
+      // Never start on an empty workspace: give it its terminal now that the backend is up.
+      if (!regularWorkspaceCount()) { try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); } }
+      else if (!activeWs()?.thread && !getWorkspaceTerminals(activeWs() || {}).length) renderPaneArea();
     } else {
       try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); }
     }
@@ -3051,7 +3045,9 @@
         return o;
       }),
       sideOrder: sideOrder.map(e => ({ t: e.type, id: e.id })),
-      workspaces: workspaces.map(ws => {
+      projects: projects.map(p => ({ id: p.id, label: p.label, path: p.path, collapsed: !!p.collapsed })),
+      projectsCollapsed,
+      workspaces: workspaces.filter(ws => !ws.thread?.draft).map(ws => {
         const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
         if (ws.color) o.color = ws.color;
         if (ws.icon) o.icon = ws.icon;
@@ -3059,6 +3055,7 @@
         if (ws.pinned) o.pinned = true;
         if (ws.bgImage) o.bgImage = ws.bgImage;
         if (ws.bgOpacity != null) o.bgOpacity = ws.bgOpacity;
+        if (ws.thread) { o.thread = ws.thread; o.cwd = ws.cwd; }
         return o;
       }),
     };
@@ -3146,6 +3143,8 @@
         }
       }
 
+      if (Array.isArray(state.projects)) projects = state.projects.filter(p => p && p.id && typeof p.path === 'string');
+      projectsCollapsed = !!state.projectsCollapsed;
       if (state.folders) {
         for (const fData of state.folders) {
           const f = { id: fData.id, label: fData.label || 'Folder', collapsed: !!fData.collapsed };
@@ -3168,6 +3167,7 @@
         if (wsData.pinned) ws.pinned = true;
         if (wsData.bgImage) ws.bgImage = wsData.bgImage;
         if (wsData.bgOpacity != null) ws.bgOpacity = wsData.bgOpacity;
+        if (wsData.thread && typeof wsData.thread === 'object') { ws.thread = wsData.thread; ws.cwd = wsData.cwd; }
 
         ws.layout = deserializeLayout(wsData.layout, ws);
         workspaces.push(ws);
@@ -3182,7 +3182,7 @@
         rebuildSideOrder();
       }
 
-      activeWsId = state.activeWsId || workspaces[0]?.id;
+      activeWsId = findWs(state.activeWsId) ? state.activeWsId : workspaces[0]?.id;
       return true;
     } catch { return false; }
   }
@@ -3516,7 +3516,7 @@
      root workspaces and folders) is kept in `sideOrder`. Folder children remain a
      contiguous run inside `workspaces`, in the order they appear per folder. */
   function getGroupList(folderKey) {
-    return workspaces.filter(w => (w.folderId || null) === (folderKey || null));
+    return workspaces.filter(w => !w.thread && (w.folderId || null) === (folderKey || null));
   }
 
   function normalizeOrder() {
@@ -3545,7 +3545,7 @@
 
   // Validate sideOrder against current workspaces/folders and append anything missing.
   function sanitizeSideOrder() {
-    const validWs = new Set(workspaces.filter(w => !w.folderId).map(w => w.id));
+    const validWs = new Set(workspaces.filter(w => !w.folderId && !w.thread).map(w => w.id));
     const validFolder = new Set(folders.map(f => f.id));
     const seenWs = new Set();
     const seenFolder = new Set();
@@ -3568,7 +3568,7 @@
     }
     const rest = [];
     for (const f of folders) rest.push(...getGroupList(f.id));
-    workspaces = [...root, ...rest];
+    workspaces = [...root, ...rest, ...workspaces.filter(w => w.thread)];
   }
 
   // sideOrder slot for making a ws the `li`-th root item (or appended if out of range)
@@ -3730,7 +3730,8 @@
         renderSidebar();
       } else {
         // Update active class in-place to avoid flicker from full sidebar rebuild
-        document.querySelectorAll('.ws-btn').forEach(btn => {
+        document.querySelectorAll('.proj-item.active').forEach(el => el.classList.remove('active')); // a left draft
+        document.querySelectorAll('.ws-btn, .proj-thread').forEach(btn => {
           btn.classList.toggle('active', btn.dataset.wsid === id);
           btn.setAttribute('aria-current', btn.dataset.wsid === id ? 'true' : 'false');
         });
@@ -3742,17 +3743,29 @@
 
   function switchWorkspacePane() {
     const area = document.getElementById('pane-area');
-    const empty = document.getElementById('empty-state');
     const wsp = activeWs();
 
     // Hide all cached workspace containers
     Object.values(_wsDomCache).forEach(el => { el.style.display = 'none'; });
 
-    if (!wsp || !wsp.layout) {
-      empty.style.display = 'flex';
+    document.getElementById('thread-home')?.remove();
+    workspaces = workspaces.filter(w => !w.thread?.draft || w.id === activeWsId);
+    // Closing the last tab can leave an empty tab group behind: that is "nothing open".
+    if (wsp && wsp.layout && !getWorkspaceTerminals(wsp).length) {
+      wsp.layout = null;
+      wsp.activeTermId = null;
+      _wsDomCache[wsp.id]?.remove();
+      delete _wsDomCache[wsp.id];
+    }
+    syncThreadPanel();
+    if (wsp && wsp.thread && !wsp.layout) {
+      area.appendChild(buildThreadHome(wsp));
       return;
     }
-    empty.style.display = 'none';
+    // A workspace is never left empty: it gets a fresh terminal tab (main window only,
+    // and not while a profile switch is tearing workspaces down).
+    if (wsp && !wsp.layout && !DETACHED_ONLY && !SETTINGS_ONLY && !_profileSwitching && (nativePtyReady || wsReady)) { addTerminal(wsp.id); return; }
+    if (!wsp || !wsp.layout) return;
 
     let container = _wsDomCache[wsp.id];
     if (!container) {
@@ -3887,8 +3900,8 @@
     const ws = findWs(id);
     if (!ws || _closingWs.has(id)) return;
     // Never remove the last workspace — the app must always keep at least one
-    // (otherwise the UI lands in a dead zero-workspace state).
-    if (workspaces.length <= 1) {
+    // (otherwise the UI lands in a dead zero-workspace state). Threads don't count.
+    if (!ws.thread && regularWorkspaceCount() <= 1) {
       if (typeof zoomBadge === 'function') zoomBadge('Cannot remove the last workspace');
       return;
     }
@@ -3902,9 +3915,12 @@
       () => _closingWs.delete(id));
   }
 
+  function regularWorkspaceCount() { return workspaces.filter(w => !w.thread).length; }
+
   function _removeWorkspace(id) {
     const ws = findWs(id);
     if (!ws) return;
+    if (ws.thread && !ws.thread.draft) window.electronAPI?.threadDelete?.(ws.id).catch(() => {});
     const terms = getWorkspaceTerminals(ws);
     terms.forEach(t => { try { removeTerminal(ws.id, t.id, true); } catch (e) { console.error('removeTerminal failed during workspace teardown', e); } });
 
@@ -4596,7 +4612,7 @@
       || [...(targetGroup?._history || [])].reverse().map(id => groupTerms.find(t => t.id === id && t.type !== 'browser')).find(Boolean)
       || groupTerms.find(t => t.type !== 'browser')
       || getWorkspaceTerminals(wsp).find(t => t.type !== 'browser' && t.cwd);
-    const cwd = opts.cwd || previous?.cwd || ((defaultTerminalPath && defaultTerminalPath.trim())
+    const cwd = opts.cwd || wsp.cwd || previous?.cwd || ((defaultTerminalPath && defaultTerminalPath.trim())
       ? defaultTerminalPath.trim().replace(/^["']|["']$/g, '') : null);
     const id = uuid();
     const label = opts.label || (cwd || '').split(/[\\/]/).filter(Boolean).pop() || 'Terminal';
@@ -5209,8 +5225,6 @@
     workspaces.push(wsp);
     sideOrder.push({ type: 'ws', id: wsp.id });
     activeWsId = wsp.id;
-    const empty = document.getElementById('empty-state');
-    if (empty) empty.style.display = 'none';
     return wsp;
   }
 
@@ -5379,7 +5393,8 @@
     if (!skipRender && !skipPtyClose && getWorkspaceTerminals(wsp).length <= 1) {
       // Last tab of the last workspace: close just the tab and keep the
       // (now empty) workspace so the app never reaches zero workspaces.
-      if (workspaces.length <= 1) {
+      // A thread keeps living after its last tab: it goes back to the agent picker.
+      if (wsp.thread || regularWorkspaceCount() <= 1) {
         // Fall through to the normal tab removal below.
       } else {
         if (_closingWs.has(wsId)) return;
@@ -5458,7 +5473,8 @@
 
     const groupCountBefore = countGroups(wsp.layout);
     wsp.layout = removeEmptyGroups(wsp.layout);
-    const structureChanged = countGroups(wsp.layout) !== groupCountBefore;
+    // No tab left: re-render so the empty page (or a thread's agent picker) shows.
+    const structureChanged = countGroups(wsp.layout) !== groupCountBefore || !getWorkspaceTerminals(wsp).length;
 
     // Fallback: if the split was destroyed, pass focus to the next available terminal
     const remainingTerms = getWorkspaceTerminals(wsp);
@@ -5527,7 +5543,7 @@
 
     // If this was the last terminal (detach case), remove the now-empty workspace —
     // unless it is the last workspace, which must always be kept.
-    if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0 && workspaces.length > 1) {
+    if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0 && !wsp.thread && regularWorkspaceCount() > 1) {
       _removeWorkspace(wsId);
     }
     pluginEmit('terminal:remove', { wsId, termId, type: entry?.type });
@@ -5640,8 +5656,8 @@
         window.close();
         return;
       }
-      // Last workspace: close the dead tab but keep the workspace itself.
-      if (workspaces.length <= 1) {
+      // Last workspace (or a thread): close the dead tab but keep the workspace itself.
+      if (ws.thread || regularWorkspaceCount() <= 1) {
         removeTerminal(ws.id, id);
         return;
       }
@@ -5731,7 +5747,7 @@
     const wsp = findWs(wsId);
     if (!wsp || !wsp.layout) return;
 
-    const cwd = _getFocusedCwd() || ((defaultTerminalPath && defaultTerminalPath.trim()) ? defaultTerminalPath.trim().replace(/^["']|["']$/g, '') : null);
+    const cwd = wsp.cwd || _getFocusedCwd() || ((defaultTerminalPath && defaultTerminalPath.trim()) ? defaultTerminalPath.trim().replace(/^["']|["']$/g, '') : null);
 
     // Prevent split if the workspace is maximized
     if (wsp._maximizedGroupId) {
@@ -8195,7 +8211,554 @@
       }
       unpinnedSlot++;
     }
+    renderProjectsSection(sb, actionsEl);
   }
+
+  /* ── Projects & threads ──
+     A project is a folder on disk. A thread is a TerminalVibe workspace with
+     ws.thread + ws.cwd: hidden from the workspace flow, listed under its
+     project, and every tab it opens starts in the project path. An empty
+     thread shows an agent picker; the right panel shows its transcript. */
+  const THREAD_HARNESSES = [
+    // color: the brand color of the logo; none = a black/white logo, drawn in the text color.
+    { id: 'claude', name: 'Claude Code', bin: 'claude', color: '#D97757' },
+    { id: 'codex', name: 'Codex', bin: 'codex' },
+    { id: 'gemini', name: 'Gemini CLI', bin: 'gemini', color: '#8E75B2' },
+    { id: 'opencode', name: 'OpenCode', bin: 'opencode' },
+    { id: 'cursor-agent', name: 'Cursor Agent', bin: 'cursor-agent' },
+    { id: 'copilot', name: 'Copilot CLI', bin: 'copilot' },
+    { id: 'amp', name: 'Amp', bin: 'amp' },
+    { id: 'qwen', name: 'Qwen Code', bin: 'qwen', color: '#6950EF' },
+    { id: 'aider', name: 'Aider', bin: 'aider' },
+  ];
+  let _threadAgents = null; // { found: {bin: path|null} }
+  const harnessOf = id => THREAD_HARNESSES.find(h => h.id === id);
+  const threadProject = ws => projects.find(p => p.id === ws?.thread?.projectId);
+
+  function loadThreadAgents(refresh) {
+    if (_threadAgents && !refresh) return Promise.resolve(_threadAgents);
+    const api = window.electronAPI;
+    // Browser mode can't look at PATH: offer every harness and let the PTY report a missing one.
+    const p = api?.threadAgents ? api.threadAgents(THREAD_HARNESSES.map(h => h.bin))
+      : Promise.resolve({ found: Object.fromEntries(THREAD_HARNESSES.map(h => [h.bin, h.bin])) });
+    return p.then(r => (_threadAgents = r), () => (_threadAgents = { found: {} }));
+  }
+
+  // ── Agents started by hand in a thread's tabs (typing `codex` in its shell) ──
+  // Each one becomes a new session of the thread, and gets the thread's history
+  // typed in as its first message, like an agent picked from the agent picker.
+  const _tabAgent = new Map(); // termId -> harness running there at the last check
+  // Appended to the first message you send to a new agent of the thread (main strips it from the history again).
+  // Background only: the agent should answer the message itself, not report on the note or the file.
+  const _handoffNote = file => ` <terminalvibe_context history="${file}">Read the history only if my message depends on earlier work. Never mention this context or the file and never summarize it; reply only to my message.</terminalvibe_context>`;
+
+  // Called for your keystrokes in a tab waiting for a handoff (entry._handoff = file).
+  // On Enter after real text (not a slash command), the note goes in before the Enter.
+  function handoffOnInput(sid, entry, data) {
+    const text = new TextDecoder().decode(data);
+    if (text === '\r') {
+      const send = entry._handoffTyped > 0 && !entry._handoffSlash;
+      entry._handoffTyped = 0; entry._handoffSlash = false;
+      if (!send) return false;
+      const file = entry._handoff;
+      delete entry._handoff;
+      // Only an agent gets the note: if the agent already exited, this Enter belongs to the shell
+      // (the handoff is stale; an agent started there next is picked up and gets its own).
+      // With the agent's pid, ask the OS (instant); the process name comes from a table up to 3s old.
+      const alive = entry._agentPid && window.electronAPI?.processAlive
+        ? window.electronAPI.processAlive(entry._agentPid).catch(() => false)
+        : checkTerminalRunning(sid).then(name => THREAD_HARNESSES.some(h => h.bin === String(name || '').toLowerCase().replace(/\.(exe|cmd)$/, '')));
+      alive.then(isAgent => {
+        const enter = () => sendStdin(sid, new TextEncoder().encode('\r'));
+        if (!isAgent) { enter(); return; }
+        sendStdin(sid, new TextEncoder().encode(_handoffNote(file)));
+        // Separate Enter: sent together, Codex treats the text as a paste and Enter as a newline.
+        setTimeout(enter, 300);
+      });
+      return true;
+    }
+    if (text === '\x7f' || text === '\b') { entry._handoffTyped = Math.max(0, (entry._handoffTyped || 0) - 1); return false; }
+    if (text === '\x03' || text === '\x15' || text === '\x1b') { entry._handoffTyped = 0; entry._handoffSlash = false; return false; }
+    const printable = text.replace(/\x1b\[[0-9;?]*[A-Za-z~]/g, '').replace(/[\x00-\x1f\x7f]/g, '');
+    if (printable) {
+      if (!entry._handoffTyped) entry._handoffSlash = printable.startsWith('/');
+      entry._handoffTyped = (entry._handoffTyped || 0) + printable.length;
+    }
+    return false;
+  }
+  let _watching = false;
+  async function watchThreadAgents() {
+    if (_watching) return;
+    _watching = true;
+    try {
+      for (const ws of workspaces.filter(w => w.thread && !w.thread.draft)) {
+        for (const t of getWorkspaceTerminals(ws).filter(isLiveTerminal)) {
+          const info = window.electronAPI?.terminalHasRunningProcess
+            ? await window.electronAPI.terminalHasRunningProcess(t.id).catch(() => null)
+            : { name: await checkTerminalRunning(t.id) };
+          // The Windows process table can list an agent for ~3s after it exited: confirm with the OS.
+          const dead = info?.pid && window.electronAPI?.processAlive && !(await window.electronAPI.processAlive(info.pid).catch(() => true));
+          const name = dead ? '' : String(info?.name || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
+          const h = THREAD_HARNESSES.find(x => x.bin === name);
+          const before = _tabAgent.get(t.id);
+          _tabAgent.set(t.id, h?.id || null);
+          if (h && info.pid) t._agentPid = info.pid;
+          if (before && !h) { delete t._handoff; delete t._agentPid; }
+          if (h && before !== h.id) adoptThreadAgent(ws, t, h);
+        }
+      }
+    } finally { _watching = false; }
+  }
+  setInterval(() => { if (!DETACHED_ONLY && !SETTINGS_ONLY && workspaces.some(w => w.thread && !w.thread.draft)) watchThreadAgents(); }, 1500);
+
+  async function adoptThreadAgent(ws, term, h) {
+    const t = ws.thread;
+    const segs = threadSegments(ws);
+    const api = window.electronAPI;
+    // History before this agent: hand it over only if there is some.
+    const hist = segs.length && api?.threadHistory ? await api.threadHistory(threadMeta(ws)).catch(() => []) : [];
+    Object.assign(t, { harness: h.id, sessionId: null, model: 'default', effort: null, agentTermId: term.id });
+    segs.push({ harness: h.id, sessionId: null, cwd: ws.cwd, since: Date.now() - 5000 });
+    term.toolProvider = h.id;
+    saveState();
+    syncThreadPanel(true);
+    renderSidebar();
+    if (!hist.some(s => s.items.length) || !api?.threadHandoff) return;
+    let file;
+    try { file = await api.threadHandoff({ ...threadMeta(ws), segments: threadMeta(ws).segments.slice(0, -1), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); }
+    catch { zoomBadge('Could not write the handoff file'); return; }
+    segs[segs.length - 1].handoff = true;
+    if (_tabAgent.get(term.id) === h.id) term._handoff = file; // goes out with your first message
+    saveState();
+    syncThreadPanel(true);
+  }
+
+  // A thread's history is a list of agent sessions ("segments"), oldest first.
+  function threadSegments(ws) {
+    const t = ws.thread;
+    if (!Array.isArray(t.segments)) t.segments = t.harness ? [{ harness: t.harness, sessionId: t.sessionId, cwd: ws.cwd, since: t.since || t.createdAt, model: t.model, effort: t.effort }] : [];
+    return t.segments;
+  }
+
+  const threadMeta = ws => ({ id: ws.id, title: ws.label, projectId: ws.thread.projectId, cwd: ws.cwd, createdAt: ws.thread.createdAt,
+    segments: threadSegments(ws).map(x => ({ harness: x.harness, sessionId: x.sessionId, cwd: x.cwd || ws.cwd, since: x.since, model: x.model, effort: x.effort, handoff: x.handoff })) });
+
+  function threadArgv(ws, resume) {
+    const t = ws.thread;
+    const h = harnessOf(t.harness);
+    const argv = [_threadAgents?.found?.[h.bin] || h.bin];
+    const model = t.model && t.model !== 'default' ? t.model : null;
+    if (t.harness === 'claude') {
+      if (model) argv.push('--model', model);
+      if (t.effort) argv.push('--effort', t.effort);
+      argv.push(resume ? '--resume' : '--session-id', t.sessionId);
+    } else if (t.harness === 'codex') {
+      if (resume && t.sessionId) argv.push('resume', t.sessionId);
+      if (model) argv.push('-m', model);
+      if (t.effort) argv.push('-c', `model_reasoning_effort="${t.effort}"`);
+    }
+    return argv;
+  }
+
+  // Start the thread's agent, or restart it with new settings. The same agent
+  // with a known session resumes it (it already has the context); any other
+  // start is a new session that gets the whole thread so far as a handoff file.
+  async function launchThreadAgent(ws, changes = {}) {
+    const t = ws.thread;
+    if (!ws.cwd) { zoomBadge('Choose a project first'); return; }
+    const harness = changes.harness || t.harness;
+    if (!harnessOf(harness)) return;
+    delete t.draft; // launching an agent makes the draft a real thread in the sidebar
+    const segs = threadSegments(ws);
+    let cur = segs[segs.length - 1];
+    let resume = !!(cur && cur.harness === harness && t.sessionId);
+    // A session that never saved a transcript (no prompt yet, or saving was off)
+    // can't be resumed: start that session over.
+    if (resume && window.electronAPI?.threadHistory) {
+      const hist = await window.electronAPI.threadHistory(threadMeta(ws)).catch(() => null);
+      if (hist && !hist[hist.length - 1]?.items.length) { resume = false; segs.pop(); cur = segs[segs.length - 1]; }
+    }
+    if (harness !== t.harness) Object.assign(t, { model: 'default', effort: null });
+    Object.assign(t, changes, { harness });
+    const h = harnessOf(harness);
+    let handoff = null;
+    if (resume) Object.assign(cur, { model: t.model, effort: t.effort });
+    else {
+      t.sessionId = harness === 'claude' ? uuid() : null;
+      if (segs.length && window.electronAPI?.threadHandoff) {
+        try { handoff = await window.electronAPI.threadHandoff({ ...threadMeta(ws), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); }
+        catch { zoomBadge('Could not write the handoff file'); }
+      }
+      segs.push({ harness, sessionId: t.sessionId, cwd: ws.cwd, since: Date.now(), model: t.model, effort: t.effort, ...(handoff ? { handoff: true } : {}) });
+    }
+    const old = t.agentTermId && getWorkspaceTerminals(ws).find(x => x.id === t.agentTermId);
+    try {
+      const res = await handleAgentRequest({ method: 'launch', params: {
+        workspaceId: ws.id,
+        placement: ws.layout ? { mode: 'tab' } : { compact: false },
+        layout: { name: h.name, cwd: ws.cwd, argv: threadArgv(ws, resume), returnToShell: true },
+      } });
+      const id = res.launches[0]?.id;
+      const entry = id && findTermById(id)?.term;
+      if (entry) {
+        entry.toolProvider = harness;
+        if (harness === 'claude') entry.claudeSessionId = t.sessionId;
+        t.agentTermId = id;
+        _tabAgent.set(id, harness);
+        if (handoff) entry._handoff = handoff; // goes out with your first message
+      }
+      // Replace the old agent tab, so two processes never share one session.
+      if (old) removeTerminal(ws.id, old.id, false, false, true, true);
+    } catch (err) { zoomBadge(err.message || 'Could not launch agent'); }
+    saveState();
+    syncThreadPanel(true);
+  }
+
+  function addProject(then) {
+    const add = path => {
+      path = String(path || '').trim().replace(/^["']|["']$/g, '');
+      if (!path) return;
+      let p = projects.find(x => x.path === path);
+      if (!p) { p = { id: uuid(), label: path.split(/[\\/]/).filter(Boolean).pop() || path, path }; projects.push(p); }
+      projectsCollapsed = false;
+      renderSidebar(); saveState();
+      then?.(p);
+    };
+    if (window.electronAPI?.selectDirectory) window.electronAPI.selectDirectory(defaultTerminalPath || '').then(add);
+    else showPrompt('Project folder path', '', add);
+  }
+
+  function createThread(projectId) {
+    const p = projects.find(x => x.id === projectId);
+    if (!p) return;
+    p.collapsed = false;
+    let ws = workspaces.find(w => w.thread?.draft && w.thread.projectId === projectId);
+    if (!ws) {
+      ws = { id: uuid(), label: 'New thread', layout: null, activeTermId: null, cwd: p.path,
+        thread: { projectId, draft: true, harness: null, model: 'default', effort: null, sessionId: null, createdAt: Date.now() } };
+      workspaces.push(ws);
+    }
+    openThread(ws.id);
+  }
+
+  function openThread(id) {
+    activateWorkspace(id);
+    renderSidebar();
+    saveState();
+    if (document.body.classList.contains('sb-right-hidden')) document.getElementById('btn-sidebar-right')?.click();
+  }
+
+  function removeProject(id) {
+    const p = projects.find(x => x.id === id);
+    const threads = workspaces.filter(w => w.thread?.projectId === id);
+    showConfirm(`Remove "${p.label}"${threads.length ? ` and its ${threads.length} thread${threads.length > 1 ? 's' : ''}` : ''}? Files on disk are kept.`, () => {
+      // Never strand the app on zero workspaces.
+      if (threads.length && !regularWorkspaceCount()) createWorkspace();
+      threads.forEach(w => _removeWorkspace(w.id));
+      projects = projects.filter(x => x.id !== id);
+      renderSidebar(); saveState();
+    });
+  }
+
+  // Small popover list, shared by the project chooser and the model pickers.
+  let _pickMenu = null;
+  function closePickMenu() { _pickMenu?.remove(); _pickMenu = null; }
+  function openPickMenu(trigger, items, onPick) {
+    const reopen = _pickMenu?._trigger === trigger;
+    closePickMenu();
+    if (reopen) return;
+    const menu = document.createElement('div');
+    menu.className = 'tv-pick-menu';
+    menu.setAttribute('role', 'menu');
+    menu._trigger = trigger;
+    for (const it of items) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tv-pick-item' + (it.selected ? ' selected' : '');
+      b.setAttribute('role', 'menuitem');
+      b.innerHTML = `${it.icon || ''}<span class="tv-pick-label">${escHtml(it.label)}</span>${it.hint ? `<span class="tv-pick-hint">${escHtml(it.hint)}</span>` : ''}`;
+      b.addEventListener('click', () => { closePickMenu(); onPick(it.value); });
+      menu.appendChild(b);
+    }
+    document.body.appendChild(menu);
+    const r = trigger.getBoundingClientRect();
+    const w = menu.offsetWidth;
+    menu.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
+    menu.style.top = (r.bottom + 6 + menu.offsetHeight > innerHeight ? Math.max(8, r.top - 6 - menu.offsetHeight) : r.bottom + 6) + 'px';
+    _pickMenu = menu;
+    (menu.querySelector('.selected') || menu.firstChild)?.focus();
+    menu.addEventListener('keydown', e => {
+      const all = [...menu.children], i = all.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.stopPropagation(); closePickMenu(); trigger.focus(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus(); }
+    });
+  }
+  document.addEventListener('mousedown', e => { if (_pickMenu && !_pickMenu.contains(e.target) && !_pickMenu._trigger.contains(e.target)) closePickMenu(); }, true);
+
+  function chooseThreadProject(ws, trigger) {
+    openPickMenu(trigger, [
+      ...projects.map(p => ({ label: p.label, hint: p.path, value: p.id, selected: p.id === ws.thread.projectId, icon: '<i class="ph ph-folder"></i>' })),
+      { label: 'Add project…', value: '+', icon: '<i class="ph ph-folder-plus"></i>' },
+    ], v => {
+      const set = p => { ws.thread.projectId = p.id; ws.cwd = p.path; p.collapsed = false; renderSidebar(); switchWorkspacePane(); saveState(); };
+      if (v === '+') addProject(set); else set(projects.find(p => p.id === v));
+    });
+  }
+
+  // Open/close a projects dropdown in place (animated by CSS); collapsed content can't take focus.
+  function setFold(trigger, body, open) {
+    trigger.setAttribute('aria-expanded', String(open));
+    body.classList.toggle('collapsed', !open);
+    body.inert = !open;
+  }
+
+  function renderProjectsSection(sb, beforeEl) {
+    sb.querySelector('.proj-section')?.remove();
+    const sec = document.createElement('div');
+    sec.className = 'proj-section' + (projectsCollapsed ? ' collapsed' : '');
+    const head = document.createElement('div');
+    head.className = 'proj-header';
+    makeKeyboardButton(head, 'Projects');
+    head.setAttribute('aria-expanded', String(!projectsCollapsed));
+    head.innerHTML = '<i class="ph ph-caret-down proj-caret" aria-hidden="true"></i><span class="proj-title">Projects</span><button type="button" class="proj-action proj-new" title="New thread" aria-label="New thread"><i class="ph ph-note-pencil"></i></button><button type="button" class="proj-action proj-add" title="Add project" aria-label="Add project"><i class="ph ph-folder-plus"></i></button>';
+    head.addEventListener('click', e => {
+      if (e.target.closest('.proj-add')) { addProject(p => createThread(p.id)); return; }
+      if (e.target.closest('.proj-new')) {
+        // The open thread's project, else the first one with threads; the picker page can switch it.
+        const p = threadProject(activeWs() || {}) || projects.find(x => workspaces.some(w => w.thread?.projectId === x.id && !w.thread.draft)) || projects[0];
+        if (p) createThread(p.id); else addProject(x => createThread(x.id));
+        return;
+      }
+      projectsCollapsed = !projectsCollapsed;
+      sec.classList.toggle('collapsed', projectsCollapsed);
+      setFold(head, body, !projectsCollapsed);
+      saveState();
+    });
+    sec.appendChild(head);
+    const body = document.createElement('div');
+    body.className = 'proj-fold';
+    setFold(head, body, !projectsCollapsed);
+    {
+      const list = document.createElement('div');
+      list.className = 'proj-list';
+      // A project shows up here once it has a thread; until then it's only in the thread page's chooser.
+      if (!projects.some(p => workspaces.some(w => w.thread?.projectId === p.id && !w.thread.draft))) {
+        list.innerHTML = '<button type="button" class="proj-empty">Add a project folder</button>';
+        list.firstChild.addEventListener('click', () => addProject(p => createThread(p.id)));
+      }
+      for (const p of projects) {
+        const threads = workspaces.filter(w => w.thread?.projectId === p.id && !w.thread.draft);
+        if (!threads.length) continue;
+        const row = document.createElement('div');
+        row.className = 'proj-item' + (p.collapsed ? ' collapsed' : '') + (activeWs()?.thread?.draft && activeWs().thread.projectId === p.id ? ' active' : '');
+        makeKeyboardButton(row, p.label);
+        row.title = p.path;
+        row.innerHTML = `<i class="ph ph-caret-down proj-caret" aria-hidden="true"></i><span class="proj-name">${escHtml(p.label)}</span>`;
+        row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'project', p.id); });
+        row.addEventListener('click', () => {
+          p.collapsed = !p.collapsed;
+          row.classList.toggle('collapsed', p.collapsed);
+          setFold(row, fold, !p.collapsed);
+          saveState();
+        });
+        list.appendChild(row);
+        const fold = document.createElement('div');
+        fold.className = 'proj-fold';
+        setFold(row, fold, !p.collapsed);
+        const kids = document.createElement('div');
+        kids.className = 'proj-threads';
+        for (const w of threads) {
+          const th = document.createElement('div');
+          th.className = 'proj-thread' + (w.id === activeWsId ? ' active' : '');
+          th.dataset.wsid = w.id;
+          makeKeyboardButton(th, w.label);
+          th.setAttribute('aria-current', String(w.id === activeWsId));
+          th.title = w.label;
+          // Every agent this thread has used, in order of first use, as an overlapping logo stack.
+          const used = [...new Set(threadSegments(w).map(x => x.harness))].map(harnessOf).filter(Boolean);
+          const logos = used.slice(0, 3).map(h => `<span class="proj-agent"${h.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')
+            + (used.length > 3 ? `<span class="proj-agents-more">+${used.length - 3}</span>` : '');
+          th.innerHTML = `<span class="proj-agents" role="img" aria-label="${escHtml(used.map(h => h.name).join(', ') || 'No agent yet')}">${logos || '<i class="ws-proc-icon ph ph-chat-circle"></i>'}</span><span class="proj-thread-name">${escHtml(w.label)}</span>`;
+          th.addEventListener('click', () => openThread(w.id));
+          th.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'thread', w.id); });
+          kids.appendChild(th);
+        }
+        fold.appendChild(kids);
+        list.appendChild(fold);
+      }
+      body.appendChild(list);
+      sec.appendChild(body);
+    }
+    sb.insertBefore(sec, beforeEl);
+  }
+
+  // The blank page of an empty thread: project chooser + one card per installed agent.
+  function buildThreadHome(ws) {
+    const home = document.createElement('div');
+    home.id = 'thread-home';
+    home.className = 'thread-home';
+    const p = threadProject(ws);
+    home.innerHTML = `<div class="th-inner">
+      <h1 class="th-title">Start a thread</h1>
+      <button type="button" class="th-project" aria-haspopup="menu"><i class="ph ph-folder"></i><span class="th-project-name">${escHtml(p?.label || 'Choose a project')}</span>${p ? `<span class="th-project-path">${escHtml(p.path)}</span>` : ''}<i class="ph ph-caret-down th-caret"></i></button>
+      <div class="th-agents" role="list"><div class="th-status"><i class="ph ph-circle-notch th-spin"></i> Looking for agents…</div></div>
+    </div>`;
+    const projBtn = home.querySelector('.th-project');
+    projBtn.addEventListener('click', () => chooseThreadProject(ws, projBtn));
+    const grid = home.querySelector('.th-agents');
+    loadThreadAgents().then(({ found }) => {
+      if (!home.isConnected) return;
+      const avail = THREAD_HARNESSES.filter(h => found?.[h.bin]);
+      grid.innerHTML = avail.length ? '' : '<div class="th-status"><i class="ph ph-warning-circle"></i> No agent CLI found on PATH (claude, codex, gemini, opencode…)</div>';
+      for (const h of avail) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'th-agent';
+        if (h.color) card.style.setProperty('--agent-color', h.color);
+        card.setAttribute('role', 'listitem');
+        card.innerHTML = `${procIconHtml(h.bin, 'ph-robot')}<span class="th-agent-name">${escHtml(h.name)}</span>`;
+        card.addEventListener('click', () => launchThreadAgent(ws, { harness: h.id }));
+        grid.appendChild(card);
+      }
+      const term = document.createElement('button');
+      term.type = 'button';
+      term.className = 'th-agent';
+      term.setAttribute('role', 'listitem');
+      term.innerHTML = `${procIconHtml('', 'ph-terminal-window')}<span class="th-agent-name">Terminal</span>`;
+      term.addEventListener('click', () => {
+        delete ws.thread.draft; // a draft thread is dropped on switch-away, with its terminal
+        addTerminal(ws.id);
+        renderSidebar(); saveState();
+      });
+      grid.appendChild(term);
+    });
+    return home;
+  }
+
+  // ── Right panel: thread flow + harness / model / effort switches ──
+  let _threadPoll = null, _flowSig = '';
+  function syncThreadPanel(force) {
+    const page = document.getElementById('sbr-thread');
+    if (!page) return;
+    const ws = activeWs();
+    const hidden = document.body.classList.contains('sb-right-hidden');
+    clearInterval(_threadPoll); _threadPoll = null;
+    // Nothing in the thread yet: no right sidebar (the picker fills the pane).
+    document.body.classList.toggle('thread-empty', !!ws?.thread && !threadSegments(ws).length);
+    if (!ws?.thread) {
+      if (page.style.display !== 'none') {
+        page.style.display = 'none';
+        document.getElementById('sbr-main').style.display = 'flex';
+      }
+      return;
+    }
+    document.querySelectorAll('#sidebar-right .sbr-page').forEach(el => { el.style.display = el === page ? 'flex' : 'none'; });
+    if (page.dataset.wsid !== ws.id || force) { page.dataset.wsid = ws.id; _flowSig = ''; }
+    document.getElementById('sbr-thread-title').textContent = ws.label;
+    if (hidden) return;
+    refreshThreadFlow(ws);
+    _threadPoll = setInterval(() => { if (activeWs() === ws && !document.hidden) refreshThreadFlow(ws); }, 2000);
+  }
+
+  // Escape first, then a few markdown bits agents use a lot: fences, `code`, **bold**, headings.
+  function mdLite(text) {
+    return String(text).split(/```[^\n]*\n?/).map((part, i) => i % 2
+      ? `<pre class="thr-code"><code>${escHtml(part.replace(/\n$/, ''))}</code></pre>`
+      : escHtml(part).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/^#{1,6} (.+)$/gm, '<strong>$1</strong>').replace(/^(\s*)[-*] /gm, '$1• ')).join('');
+  }
+  const toolIcon = n => /bash|shell|exec|command|terminal/i.test(n) ? 'ph-terminal' : /read|view|cat/i.test(n) ? 'ph-file-text'
+    : /edit|write|patch|update|create/i.test(n) ? 'ph-pencil-simple' : /grep|glob|search|find|list/i.test(n) ? 'ph-magnifying-glass'
+    : /web|fetch|url|browser/i.test(n) ? 'ph-globe' : /task|agent/i.test(n) ? 'ph-robot' : 'ph-wrench';
+  const clockTime = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+  async function refreshThreadFlow(ws) {
+    const flow = document.getElementById('sbr-thread-flow');
+    const t = ws.thread;
+    const api = window.electronAPI;
+    const segs = threadSegments(ws);
+    let hist = [], note = '';
+    if (segs.length && !api?.threadHistory) note = 'The history preview needs the desktop app.';
+    else if (segs.length) {
+      try { hist = await api.threadHistory(threadMeta(ws)); }
+      catch { note = 'Could not read the history.'; }
+    }
+    if (activeWs() !== ws) return;
+    // Codex ids are only known once its transcript exists.
+    hist.forEach((h, i) => {
+      if (!h.sessionId || segs[i].sessionId) return;
+      segs[i].sessionId = h.sessionId;
+      if (i === segs.length - 1) t.sessionId = h.sessionId;
+      saveState();
+    });
+    const firstUser = hist.flatMap(h => h.items).find(m => m.role === 'user');
+    if (ws.label === 'New thread' && firstUser) {
+      ws.label = firstUser.text.replace(/\s+/g, ' ').slice(0, 48);
+      document.getElementById('sbr-thread-title').textContent = ws.label;
+      renderSidebar(); saveState();
+    }
+    const sig = note + '|' + segs.length + '|' + hist.map(h => { const l = h.items[h.items.length - 1]; return `${h.items.length}:${l?.text?.length || 0}:${l?.error ? 1 : 0}`; }).join(',');
+    if (sig === _flowSig) return;
+    _flowSig = sig;
+    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 32;
+    const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
+    if (!segs.length || note) {
+      flow.innerHTML = `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent to start. Your prompts, its replies and its tool calls show up here.</div>'}</div>`;
+      return;
+    }
+    let html = '';
+    const texts = new Map(); // data-key -> raw message text, for the copy buttons
+    segs.forEach((seg, i) => {
+      const h = harnessOf(seg.harness), name = h?.name || seg.harness, res = hist[i] || { items: [] };
+      const meta = [seg.model && seg.model !== 'default' ? seg.model : '', seg.effort || ''].filter(Boolean).join(' · ');
+      html += `<div class="thr-seg">${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
+      if (seg.handoff) html += `<div class="thr-note"><i class="ph ph-arrows-left-right" aria-hidden="true"></i>Started with the full history of the ${i} earlier session${i > 1 ? 's' : ''}</div>`;
+      if (res.trimmed) html += `<div class="thr-note">${res.trimmed} earlier items not shown</div>`;
+      if (res.unsupported) html += `<div class="thr-note">${escHtml(name)} keeps no history TerminalVibe can read yet.</div>`;
+      else if (!res.items.length) html += '<div class="thr-note">Waiting for the first prompt…</div>';
+      let tools = [];
+      const flushTools = key => {
+        if (!tools.length) return;
+        const failed = tools.filter(x => x.error).length;
+        const last = tools[tools.length - 1];
+        html += `<details class="thr-tools" data-key="${key}"${open.has(key) ? ' open' : ''}><summary><i class="ph ${toolIcon(last.name)}" aria-hidden="true"></i>`
+          + `<span class="thr-tools-text">${escHtml(last.name)} ${escHtml(last.summary)}</span>${tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
+          + `${failed ? `<i class="ph ph-warning-circle thr-tool-err" aria-label="${failed} failed"></i>` : ''}<span class="thr-tools-time">${clockTime(last.ts)}</span><i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
+          + tools.map(x => `<div class="thr-tool"><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum" title="${escHtml(x.summary)}">${escHtml(x.summary)}</span>${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}</div>`).join('')
+          + '</div></details>';
+        tools = [];
+      };
+      res.items.forEach((m, j) => {
+        const key = i + ':' + j;
+        if (m.role === 'tool') { tools.push(m); return; }
+        flushTools(key + 't');
+        const long = m.text.length > 700 || m.text.split('\n').length > 14;
+        const more = long ? `<button type="button" class="thr-more">${open.has(key) ? 'Show less' : 'Show more'}</button>` : '';
+        const cls = `thr-msg ${m.role}${long ? ' long' : ''}${open.has(key) ? ' open' : ''}`;
+        texts.set(key, m.text);
+        // Copy + time under the message, shown on hover.
+        const actions = `<div class="thr-actions"><button type="button" class="thr-copy" aria-label="Copy message"><i class="ph ph-copy" aria-hidden="true"></i></button><span class="thr-time">${clockTime(m.ts)}</span></div>`;
+        html += m.role === 'user'
+          ? `<div class="${cls}" data-key="${key}"><div class="thr-bubble"><div class="thr-msg-text">${mdLite(m.text)}</div>${more}</div>${actions}</div>`
+          : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${more}${actions}</div>`;
+      });
+      flushTools(i + ':end');
+    });
+    flow.innerHTML = html;
+    flow.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', () => {
+      const text = texts.get(b.closest('.thr-msg').dataset.key) || '';
+      if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {});
+      b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+      b.setAttribute('aria-label', 'Copied');
+      setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
+    }));
+    flow.querySelectorAll('.thr-more').forEach(b => b.addEventListener('click', () => {
+      const msg = b.closest('.thr-msg');
+      b.textContent = msg.classList.toggle('open') ? 'Show less' : 'Show more';
+    }));
+    if (atBottom || !flow.dataset.seen) { flow.scrollTop = flow.scrollHeight; flow.dataset.seen = '1'; }
+  }
+  document.getElementById('btn-sidebar-right')?.addEventListener('click', () => setTimeout(() => syncThreadPanel()));
+  document.getElementById('sbr-thread-refresh')?.addEventListener('click', () => { loadThreadAgents(true).then(() => syncThreadPanel(true)); });
 
   /* ── Workspace sidebar: live processes per workspace ──
      Show up to three processes and a count of any remaining processes.
@@ -8496,6 +9059,23 @@
         item('<i class="ph ph-export"></i>', 'Detach to window', '', () => detachTerminal(wsId, termId));
       }
       item('<i class="ph ph-x"></i>', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
+    }
+
+    if (type === 'project') {
+      if (!projects.some(p => p.id === data)) return;
+      item('<i class="ph ph-note-pencil"></i>', 'New thread', '', () => createThread(data));
+      sep();
+      item('<i class="ph ph-trash"></i>', 'Remove project', '', () => removeProject(data), true);
+    }
+    if (type === 'thread') {
+      const w = findWs(data);
+      if (!w) return;
+      item('<i class="ph ph-pencil-simple"></i>', 'Rename thread', '', () => showPrompt('Rename thread', w.label, value => {
+        w.label = value.trim() || w.label;
+        renderSidebar(); syncThreadPanel(); saveState();
+      }));
+      sep();
+      item('<i class="ph ph-trash"></i>', 'Delete thread', '', () => removeWorkspace(w.id), true);
     }
 
     // Plugin-provided context-menu items (appended after built-ins)
@@ -9421,7 +10001,6 @@
   document.querySelectorAll('[data-palette-mode]').forEach(btn => {
     btn.addEventListener('click', () => openPalette(btn.dataset.paletteMode, tsInput.value));
   });
-  document.getElementById('empty-commands').addEventListener('click', () => openPalette('cmds'));
   tabSearchEl.addEventListener('keydown', e => {
     if (e.key === 'Escape' && e.target !== tsInput) { e.stopPropagation(); closeTabSearch(); }
     if (e.key !== 'Tab') return;
@@ -10640,8 +11219,6 @@
     }
 
     // Render the pane area (creates the DOM and opens the xterm)
-    const empty = document.getElementById('empty-state');
-    if (empty) empty.style.display = 'none';
     renderPaneArea();
 
     // The PTY for this terminal is already running in the main process (it
@@ -10841,8 +11418,6 @@
 
   // Open/close
   document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
-  const startSession = () => activeWs() ? addTerminal() : createWorkspace();
-  document.getElementById('empty-new-terminal').addEventListener('click', startSession);
   const btnProfiles = document.getElementById('btn-profiles');
   if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
   // Native browser views sit above DOM overlays; hide them while the picker
@@ -12077,7 +12652,7 @@
     const sash = document.getElementById('sash-right');
     if (!sash) return;
     const panel = document.getElementById('sidebar-right');
-    const MIN = 160, MAX = 260;
+    const MIN = 160;
     sash.addEventListener('mousedown', e => {
       e.preventDefault();
       sash.classList.add('dragging');
@@ -12086,7 +12661,7 @@
       _suppressResize = true;
       startResizing();
       const onMove = ev => {
-        panel.style.width = Math.max(MIN, Math.min(startW + (startX - ev.clientX), MAX)) + 'px';
+        panel.style.width = Math.max(MIN, Math.min(startW + (startX - ev.clientX), 720, window.innerWidth * 0.55)) + 'px';
       };
       const onUp = () => {
         sash.classList.remove('dragging');

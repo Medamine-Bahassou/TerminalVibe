@@ -11,6 +11,11 @@ function terminalEnv(base = process.env) {
     'VSCODE_INJECTION', 'TABBY_CONFIG_DIRECTORY',
     // Let each shell/TUI query its own PTY, not the launcher's stale grid.
     'COLUMNS', 'LINES',
+    // Started from an agent (Claude Code, Codex, T3 Code): agents opened here must run
+    // as their own top-level sessions, or Claude Code turns transcript saving off.
+    'CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+    'CLAUDE_PID', 'CLAUDE_AGENT_SDK_VERSION', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'T3CODE_THREAD_ID',
   ]) delete env[key];
   return { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor',
     TERM_PROGRAM: 'TerminalVibe', TERM_PROGRAM_VERSION: require('../package.json').version };

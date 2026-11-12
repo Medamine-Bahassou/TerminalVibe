@@ -226,7 +226,7 @@ function windowsProcessInfo(pid) {
   // The PTY child itself can be the workload (an agent launched directly,
   // not through a shell), matching the Linux non-shell direct-child rule.
   const ownBase = own.replace(/\.exe$/i, '');
-  if (!WIN_IDLE_RE.test(ownBase.toLowerCase())) return { running: true, name: ownBase };
+  if (!WIN_IDLE_RE.test(ownBase.toLowerCase())) return { running: true, name: ownBase, pid };
   const byParent = table.byParent;
   // BFS through nested shells / console helpers (depth-capped) looking for
   // the first real workload process.
@@ -245,7 +245,7 @@ function windowsProcessInfo(pid) {
           next.push(k.pid); // nested shell / conhost — look inside it
           continue;
         }
-        return { running: true, name: base };
+        return { running: true, name: base, pid: k.pid };
       }
     }
     frontier = next;
