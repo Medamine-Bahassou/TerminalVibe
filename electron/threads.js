@@ -48,6 +48,15 @@ function toolSummary(input) {
   return clip(Array.isArray(v) ? v.join(' ') : v);
 }
 
+// The whole call, for a tool row's expanded view: the command as written, else the arguments as JSON.
+function toolDetail(input) {
+  if (typeof input === 'string') { try { input = JSON.parse(input); } catch { return input.slice(0, 4000); } }
+  if (!input || typeof input !== 'object') return '';
+  const cmd = input.command ?? input.cmd;
+  const text = typeof cmd === 'string' ? cmd : Array.isArray(cmd) ? cmd.join(' ') : JSON.stringify(input, null, 2);
+  return text.length > 4000 ? text.slice(0, 3999) + '…' : text;
+}
+
 // Parsed transcripts, keyed by file and reused until the file changes.
 const parsed = new Map(); // file -> { size, mtimeMs, result }
 const IMG_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
@@ -81,7 +90,7 @@ function parseClaude(list) {
         const text = String(b.text || '').trim();
         if (text && !text.startsWith('<') && !(row.type === 'user' && isOldHandoff(text))) items.push({ role: row.type, text: row.type === 'user' ? stripNote(text) : text, ts: row.timestamp || null });
       } else if (b?.type === 'tool_use') {
-        const item = { role: 'tool', name: String(b.name || 'tool'), summary: toolSummary(b.input), ts: row.timestamp || null };
+        const item = { role: 'tool', name: String(b.name || 'tool'), summary: toolSummary(b.input), detail: toolDetail(b.input), ts: row.timestamp || null };
         tools.set(b.id, item); if (!isHandoffTool(item)) items.push(item);
       } else if (b?.type === 'tool_result' && b.is_error && tools.has(b.tool_use_id)) tools.get(b.tool_use_id).error = true;
     }
@@ -108,7 +117,7 @@ function parseCodex(list) {
         .filter(Boolean).map(m => ({ mediaType: m[1], data: m[2] })));
     } else if (['function_call', 'custom_tool_call', 'local_shell_call'].includes(p.type)) {
       const item = { role: 'tool', name: String(p.name || (p.type === 'local_shell_call' ? 'shell' : 'tool')),
-        summary: toolSummary(p.arguments ?? p.input ?? p.action), ts: r.timestamp || null };
+        summary: toolSummary(p.arguments ?? p.input ?? p.action), detail: toolDetail(p.arguments ?? p.input ?? p.action), ts: r.timestamp || null };
       if (p.call_id) tools.set(p.call_id, item);
       if (!isHandoffTool(item)) items.push(item);
     } else if (['function_call_output', 'custom_tool_call_output'].includes(p.type) && tools.has(p.call_id)) {

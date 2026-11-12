@@ -1605,11 +1605,32 @@ body .titlebar-btn:is(#btn-sidebar-right,#btn-thread-history)[aria-expanded="tru
 body.ui-animations #sidebar-right { max-width:min(720px,55vw); }
 
 /* ── Thread tooltip (sidebar Projects → thread rows), shown to the right ── */
-.ui-tooltip.thread-tooltip { box-sizing:border-box; width:max-content; max-width:min(280px, calc(100vw - 8px)); max-height:calc(100vh - 8px); padding:10px 12px; white-space:normal; }
-.thread-tooltip .thr-tip-agent { gap:8px; }
-.thread-tooltip .thr-tip-name { color:var(--fg); flex-shrink:0; }
+.ui-tooltip.thread-tooltip { box-sizing:border-box; width:max-content; max-width:min(340px, calc(100vw - 8px)); max-height:calc(100vh - 8px); padding:10px 12px; white-space:normal; }
 .thread-tooltip .thr-tip-foot { margin-top:6px; color:var(--dim-text); font-size:11px; }
 
 /* ── Tab bar menu: shell logos (same as Settings → Default shell) ── */
 body .ctx-item .ctx-shell-icon { display:block; width:15px; height:15px; fill:var(--muted-text); }
 body .ctx-item:hover .ctx-shell-icon { fill:var(--fg); }
+.thread-tooltip .thr-tip-project { display:flex; align-items:center; gap:6px; color:var(--muted-text); }
+.thread-tooltip .thr-tip-project i { font-size:13px; flex-shrink:0; }
+.thread-tooltip .thr-tip-path { margin-top:2px; padding-left:19px; font:400 11px/16px var(--mono-font); color:var(--dim-text); overflow-wrap:anywhere; }
+.thread-tooltip .thr-tip-agents { display:flex; align-items:center; gap:8px; margin-top:8px; padding-top:8px; border-top:1px solid var(--ui-line); color:var(--muted-text); }
+.thread-tooltip .thr-tip-agents .ws-proc-icon { width:14px; height:14px; font-size:14px; fill:currentColor; flex-shrink:0; }
+
+/* ── Projects tree: every level indents 18px (caret 12 + gap 6), so a project's caret sits under
+   the "Projects" label and a thread's icon under its project's name. ── */
+body #sidebar.expanded .proj-list { padding-left:20px; }
+body #sidebar.expanded .proj-threads { margin-left:18px; padding-left:0; }
+
+/* ── Projects collapsed while a thread is open: only that project and thread stay visible ── */
+body #sidebar.expanded .proj-section.peek :is(.proj-empty, .proj-item:not(.current), .proj-list > .proj-fold:not(.current), .proj-thread:not(.active)) { display:none; }
+
+/* ── Thread history: each tool call expands to its full command / arguments ── */
+#sidebar-right .thr-tools .thr-tool { display:block; min-height:0; }
+#sidebar-right .thr-tools .thr-tool > summary { display:flex; align-items:center; gap:6px; min-height:24px; font-size:12px; color:var(--muted-text); }
+#sidebar-right .thr-tools .thr-tool > summary > i { font-size:13px; color:var(--dim-text); }
+#sidebar-right .thr-tools .thr-tool > summary:hover :is(.thr-tool-name,.thr-tool-caret) { color:var(--fg); }
+#sidebar-right .thr-tool-caret { margin-left:auto; font-size:11px !important; transition:transform 140ms; }
+#sidebar-right .thr-tool[open] .thr-tool-caret { transform:rotate(90deg); }
+#sidebar-right .thr-tool-detail { margin:2px 0 6px 19px; padding:8px 10px; max-height:240px; overflow:auto; background:var(--bg); border:1px solid var(--ui-line); border-radius:6px !important; font:400 11.5px/1.5 var(--mono-font); color:var(--muted-text); white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
+@media (prefers-reduced-motion: reduce) { #sidebar-right .thr-tool-caret { transition:none; } }

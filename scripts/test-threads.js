@@ -56,10 +56,12 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   assert.deepStrictEqual(claude.items.map(i => i.role), ['user', 'assistant', 'tool']);
   assert.strictEqual(claude.items[0].text, 'Fix the build', 'context note is not shown as part of the message');
   assert.strictEqual(claude.items[2].summary, 'npm test');
+  assert.strictEqual(claude.items[2].detail, 'npm test', 'tool detail keeps the full command');
   assert.strictEqual(claude.items[2].error, true);
   assert.deepStrictEqual(codex.items.map(i => i.role), ['user', 'tool', 'assistant'], 'codex skips <environment_context>');
   assert.strictEqual(codex.items[0].text, 'Now add docs', 'handoff pointer is not shown as part of the message');
   assert.strictEqual(codex.items[1].summary, 'ls -la');
+  assert.strictEqual(codex.items[1].detail, 'ls -la');
   assert.strictEqual(codex.items[1].error, true);
   assert.strictEqual(codex.sessionId, 'codex-1', 'codex id found from cwd + start time');
   assert.strictEqual(opencode.unsupported, true);
