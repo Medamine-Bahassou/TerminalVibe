@@ -228,7 +228,10 @@ async function syncThread(meta = {}, home = os.homedir(), root = threadsRoot(hom
   const fresh = [];
   const claimed = segs.map(s => s.sessionId).filter(Boolean);
   for (const s of segs) {
-    const f = await readSegment({ ...s, exclude: claimed }, home).catch(() => ({ items: [] }));
+    // A forked thread's copied sessions are frozen: their saved items end at the fork point,
+    // and the agent's transcript (which goes on past it) is never read again.
+    const f = s.frozen ? { items: [], ...(s.unsupported ? { unsupported: true } : {}) }
+      : await readSegment({ ...s, exclude: claimed }, home).catch(() => ({ items: [] }));
     if (f.sessionId && !claimed.includes(f.sessionId)) claimed.push(f.sessionId);
     fresh.push({ ...f, items: await saveImages(dir, f.items) });
   }
@@ -237,7 +240,7 @@ async function syncThread(meta = {}, home = os.homedir(), root = threadsRoot(hom
     const f = fresh[i];
     const items = f.items.length || !old ? f.items : old.items;
     return { harness: s.harness, sessionId: f.sessionId || s.sessionId || old?.sessionId || null, since: s.since,
-      model: s.model || null, effort: s.effort || null, handoff: !!s.handoff, ...(f.unsupported ? { unsupported: true } : {}), items };
+      model: s.model || null, effort: s.effort || null, handoff: !!s.handoff, ...(s.frozen ? { frozen: true } : {}), ...(f.unsupported ? { unsupported: true } : {}), items };
   });
   const thread = { id: meta.id, title: String(meta.title || 'New thread'), projectId: meta.projectId || null, cwd: meta.cwd || null,
     createdAt: meta.createdAt || null, segments: merged.map(({ items, unsupported, ...s }) => s) };
@@ -292,6 +295,34 @@ async function writeHandoff(meta = {}, home = os.homedir(), root = threadsRoot(h
   return file;
 }
 
+// Fork: a new thread whose history is the parent's, up to and including one message.
+// Its sessions are frozen copies (see syncThread); pasted images are copied into its own folder,
+// so deleting the parent never breaks the fork. Returns the fork's segments for the renderer.
+async function forkThread({ meta, seg, item, id, title } = {}, home = os.homedir(), root = threadsRoot(home)) {
+  const dir = threadDir(id, root);
+  if (id === meta?.id) throw new Error('Invalid thread id');
+  const merged = await syncThread(meta, home, root);
+  seg = Number(seg); item = Number(item);
+  if (!Number.isInteger(seg) || !Number.isInteger(item) || !merged[seg] || item < 0 || item >= merged[seg].items.length) throw new Error('Invalid fork point');
+  await fs.promises.mkdir(path.join(dir, 'images'), { recursive: true });
+  const copyImages = async it => {
+    if (!it.images?.length) return it;
+    const images = [];
+    for (const src of it.images) {
+      const dst = path.join(dir, 'images', path.basename(src));
+      try { await fs.promises.copyFile(src, dst); images.push(dst); } catch {} // a missing image drops its preview only
+    }
+    return { ...it, images };
+  };
+  const segments = await Promise.all(merged.slice(0, seg + 1).map(async (s, i) =>
+    ({ ...s, frozen: true, items: await Promise.all((i === seg ? s.items.slice(0, item + 1) : s.items).map(copyImages)) })));
+  const thread = { id, title: String(title || 'Fork'), projectId: meta.projectId || null, cwd: meta.cwd || null, createdAt: Date.now(),
+    forkOf: { id: meta.id, seg, item }, segments: segments.map(({ items, unsupported, ...s }) => s) };
+  await fs.promises.writeFile(path.join(dir, 'thread.json'), JSON.stringify(thread, null, 2));
+  await fs.promises.writeFile(path.join(dir, 'history.json'), JSON.stringify({ segments: segments.map(({ unsupported, ...s }) => s) }));
+  return segments.map(({ items, ...s }) => s);
+}
+
 // Deleting a thread deletes its folder; the agents' own transcripts stay.
 async function deleteThread(id, home = os.homedir(), root = threadsRoot(home)) {
   const dir = threadDir(id, root);
@@ -300,4 +331,4 @@ async function deleteThread(id, home = os.homedir(), root = threadsRoot(home)) {
   return true;
 }
 
-module.exports = { detectAgents, syncThread, threadHistory, writeHandoff, deleteThread, toolSummary, parseClaude, parseCodex };
+module.exports = { detectAgents, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, parseClaude, parseCodex };

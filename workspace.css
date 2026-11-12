@@ -1461,12 +1461,6 @@ body #sidebar.expanded .proj-caret { font-size:12px; color:var(--dim-text); flex
 body #sidebar.expanded :is(.proj-section.collapsed > .proj-header, .proj-item.collapsed) .proj-caret { transform:rotate(-90deg); }
 body #sidebar.expanded :is(.proj-title,.proj-name,.proj-thread-name) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 body #sidebar.expanded .proj-thread .ws-proc-icon { width:14px; height:14px; font-size:14px; flex-shrink:0; fill:currentColor; color:var(--dim-text); }
-/* Logos of every agent the thread used, overlapped; each sits on a sidebar-colored disc so the overlap stays readable. */
-body #sidebar.expanded .proj-agents { display:inline-flex; align-items:center; flex-shrink:0; }
-body #sidebar.expanded .proj-agent { display:grid; place-items:center; width:18px; height:18px; border-radius:50% !important; background:var(--ui-sidebar); }
-body #sidebar.expanded .proj-agent + .proj-agent { margin-left:-6px; }
-body #sidebar.expanded .proj-thread .proj-agent .ws-proc-icon { width:13px; height:13px; font-size:13px; color:var(--agent-color, var(--fg)); }
-body #sidebar.expanded .proj-agents-more { margin-left:3px; font-size:10.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
 body #sidebar.expanded .proj-action { display:grid; place-items:center; width:22px; height:22px; padding:0; flex-shrink:0; background:transparent; border:1px solid transparent; border-radius:4px !important; color:var(--dim-text); cursor:pointer; opacity:0; transition:color 140ms; }
 /* Header icons (new thread, add project) appear on hover, or when tabbed to. */
 body #sidebar.expanded .proj-header:is(:hover,:focus-within) .proj-action { opacity:1; }
@@ -1606,7 +1600,7 @@ body.ui-animations #sidebar-right { max-width:min(720px,55vw); }
 
 /* ── Thread tooltip (sidebar Projects → thread rows), shown to the right ── */
 .ui-tooltip.thread-tooltip { box-sizing:border-box; width:max-content; max-width:min(340px, calc(100vw - 8px)); max-height:calc(100vh - 8px); padding:10px 12px; white-space:normal; }
-.thread-tooltip .thr-tip-foot { margin-top:6px; color:var(--dim-text); font-size:11px; }
+.thread-tooltip .thr-tip-foot { display:flex; align-items:center; gap:12px; margin-top:8px; padding-top:8px; border-top:1px solid var(--ui-line); color:var(--dim-text); font-size:11px; }
 
 /* ── Tab bar menu: shell logos (same as Settings → Default shell) ── */
 body .ctx-item .ctx-shell-icon { display:block; width:15px; height:15px; fill:var(--muted-text); }
@@ -1614,7 +1608,7 @@ body .ctx-item:hover .ctx-shell-icon { fill:var(--fg); }
 .thread-tooltip .thr-tip-project { display:flex; align-items:center; gap:6px; color:var(--muted-text); }
 .thread-tooltip .thr-tip-project i { font-size:13px; flex-shrink:0; }
 .thread-tooltip .thr-tip-path { margin-top:2px; padding-left:19px; font:400 11px/16px var(--mono-font); color:var(--dim-text); overflow-wrap:anywhere; }
-.thread-tooltip .thr-tip-agents { display:flex; align-items:center; gap:8px; margin-top:8px; padding-top:8px; border-top:1px solid var(--ui-line); color:var(--muted-text); }
+.thread-tooltip .thr-tip-agents { display:flex; align-items:center; gap:6px; margin-left:auto; flex-shrink:0; color:var(--muted-text); }
 .thread-tooltip .thr-tip-agents .ws-proc-icon { width:14px; height:14px; font-size:14px; fill:currentColor; flex-shrink:0; }
 
 /* ── Projects tree: every level indents 18px (caret 12 + gap 6), so a project's caret sits under
@@ -1648,3 +1642,12 @@ body #sidebar.expanded .proj-section.peek :is(.proj-empty, .proj-item:not(.curre
 ::highlight(thr-find) { background-color:color-mix(in srgb, var(--accent) 32%, transparent); color:var(--fg); }
 ::highlight(thr-find-current) { background-color:var(--accent); color:#0d1017; }
 @media (prefers-reduced-motion: reduce) { #sidebar-right .thr-find { transition:none; } }
+.thread-tooltip .thr-tip-agent { display:grid; place-items:center; color:var(--fg); }
+
+/* ── Thread history: Fork button beside Copy (same quiet icon button) ── */
+#sidebar-right .thr-fork { display:grid; place-items:center; width:24px; height:24px; padding:0; background:transparent; border:1px solid transparent; border-radius:6px !important; color:var(--dim-text); cursor:pointer; transition:border-color 140ms, color 140ms; }
+#sidebar-right .thr-fork:hover { border-color:var(--border); color:var(--fg); }
+#sidebar-right .thr-fork:focus-visible { outline:none; border-color:var(--accent); color:var(--fg); }
+#sidebar-right .thr-fork i { font-size:13px; }
+#sidebar-right .thr-fork-note { margin-bottom:4px; }
+@media (prefers-reduced-motion: reduce) { #sidebar-right .thr-fork { transition:none; } }

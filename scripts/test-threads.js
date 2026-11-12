@@ -7,7 +7,7 @@ const path = require('path');
 
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
-const { syncThread, threadHistory, writeHandoff, deleteThread } = require('../electron/threads');
+const { syncThread, threadHistory, writeHandoff, forkThread, deleteThread } = require('../electron/threads');
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-threads-'));
 const jsonl = rows => rows.map(r => JSON.stringify(r)).join('\n') + '\n';
@@ -86,6 +86,20 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   for (const text of ['<terminalvibe_handoff project=', '<instructions>', '<session agent="Claude Code" model="opus">', `<message role="user">\nFix the build\n<image path="${img}"/>\n</message>`,
     'Docs added.', '<tool name="Bash" failed="true">npm test</tool>', '<session agent="opencode" transcript="unavailable">', '</terminalvibe_handoff>']) assert(md.includes(text), text);
   assert(!md.includes('handoff.xml'), 'the agent reading the handoff file is not part of the history');
+
+  // Fork from the first Codex message: Claude's session whole, Codex's cut after that message.
+  const forkSegs = await forkThread({ meta, seg: 1, item: 0, id: 'fork-1', title: 'Fork: Fix the build' }, home);
+  assert.deepStrictEqual(forkSegs.map(s => [s.harness, s.frozen]), [['claude', true], ['codex', true]]);
+  const forkMeta = { id: 'fork-1', title: 'Fork', cwd, segments: forkSegs };
+  const forked = await threadHistory(forkMeta, home);
+  assert.deepStrictEqual(forked.map(s => s.items.length), [3, 1], 'history ends at the fork point');
+  assert.strictEqual(forked[1].items[0].text, 'Now add docs');
+  const forkImg = forked[0].items[0].images[0];
+  assert(forkImg.startsWith(path.join(home, '.terminalvibe', 'threads', 'fork-1', 'images')) && fs.existsSync(forkImg), 'images copied into the fork');
+  const forkMd = fs.readFileSync(await writeHandoff(forkMeta, home), 'utf8');
+  assert(forkMd.includes('Now add docs') && !forkMd.includes('Docs added.'), 'the handoff stops at the fork point');
+  await assert.rejects(forkThread({ meta, seg: 1, item: 99, id: 'fork-2' }, home), /Invalid fork point/);
+  await deleteThread('fork-1', home);
 
   await assert.rejects(syncThread({ ...meta, id: '../escape' }, home), /Invalid thread id/);
   await assert.rejects(deleteThread('..', home), /Invalid thread id/);
