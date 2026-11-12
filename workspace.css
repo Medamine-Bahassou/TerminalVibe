@@ -1576,12 +1576,40 @@ body #sidebar.expanded .proj-action i { font-size:13px; }
 .thread-home .th-status { justify-content:center; }
 
 /* ── Empty thread: hide the right sidebar until an agent starts ── */
-body.thread-empty #sidebar-right,
-body.thread-empty #sash-right { display:none !important; }
+body.thread-empty.sbr-history #sidebar-right,
+body.thread-empty.sbr-history #sash-right { display:none !important; }
 
 /* ── Empty thread: agent cards without border or fill; hover still highlights ── */
 .thread-home .th-agent { background:transparent; border-color:transparent; }
 .thread-home .th-agent:hover { border-color:transparent; }
 
 /* ── Thread history: wider default right sidebar (a sash drag still overrides it inline) ── */
-#sidebar-right:has(> #sbr-thread[style*="flex"]) { width:min(690px,46vw); }
+body.sbr-history #sidebar-right { width:min(690px,46vw); }
+
+/* ── Thread history: pasted images in user bubbles ── */
+#sidebar-right .thr-images { display:flex; flex-wrap:wrap; gap:6px; }
+#sidebar-right .thr-img { display:block; max-width:100%; max-height:240px; object-fit:contain; border:1px solid var(--ui-line); border-radius:8px !important; background:var(--bg); }
+#sidebar-right .thr-img-wrap { position:relative; max-width:100%; }
+#sidebar-right .thr-img { cursor:zoom-in; }
+#sidebar-right .thr-img-actions { position:absolute; top:6px; right:6px; display:flex; gap:2px; padding:2px; background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; box-shadow:0 4px 12px #0004; opacity:0; transition:opacity 140ms; }
+#sidebar-right .thr-img-wrap:is(:hover,:focus-within) .thr-img-actions { opacity:1; }
+#sidebar-right .thr-img-actions button { display:grid; place-items:center; width:26px; height:26px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font-size:14px; cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sidebar-right .thr-img-actions button:hover { background:var(--ui-hover); color:var(--fg); }
+#sidebar-right .thr-img-actions button:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion:reduce) { #sidebar-right :is(.thr-img-actions,.thr-img-actions button) { transition:none; } }
+
+/* ── Right sidebar: Tools and History titlebar buttons, one panel open at a time ── */
+#btn-thread-history[hidden] { display:none !important; }
+body .titlebar-btn:is(#btn-sidebar-right,#btn-thread-history)[aria-expanded="true"] { background:var(--ui-hover); color:var(--fg); }
+/* The slide-in animation capped the panel at 260px; allow the sash's own limit. */
+body.ui-animations #sidebar-right { max-width:min(720px,55vw); }
+
+/* ── Thread tooltip (sidebar Projects → thread rows), shown to the right ── */
+.ui-tooltip.thread-tooltip { box-sizing:border-box; width:max-content; max-width:min(280px, calc(100vw - 8px)); max-height:calc(100vh - 8px); padding:10px 12px; white-space:normal; }
+.thread-tooltip .thr-tip-agent { gap:8px; }
+.thread-tooltip .thr-tip-name { color:var(--fg); flex-shrink:0; }
+.thread-tooltip .thr-tip-foot { margin-top:6px; color:var(--dim-text); font-size:11px; }
+
+/* ── Tab bar menu: shell logos (same as Settings → Default shell) ── */
+body .ctx-item .ctx-shell-icon { display:block; width:15px; height:15px; fill:var(--muted-text); }
+body .ctx-item:hover .ctx-shell-icon { fill:var(--fg); }
