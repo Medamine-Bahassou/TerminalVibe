@@ -72,9 +72,11 @@ TerminalVibe keeps its own copy of each thread's history, so it survives deleted
 
 - **Claude Code session history**: a drawer in any Claude tab that lists past conversations across projects. Search them, resume one in place, open one in a new tab, or drag one into a chat to attach its context.
 - **Workspace context**: drag a workspace onto a Claude chat to attach a snapshot of all its tabs.
-- **Image previews**: hover an `[Image #N]` chip in Claude Code or Codex, or an image path in any terminal, to preview it. `Ctrl+click` opens the full viewer.
+- **Image previews on hover**: Claude Code and Codex only show a pasted image as an `[Image #N]` chip. Hover the chip to see the image itself, in your draft or in any message you already sent. Long pastes (`[Pasted text #N +M lines]`) and image paths in any terminal preview the same way. `Ctrl+click` opens the full viewer with zoom, pan and rotate.
 - **Agent orchestration skill**: install it for Claude Code or Codex from **Settings → Skills**. Your agent can then open other agents in named splits, arrange panes, read their output, send follow-up input, and drive browser panes through an authenticated local control channel. See [docs/agent-orchestration.md](docs/agent-orchestration.md).
 - **Finished notifications** with an optional chime when a command, Claude Code or Codex finishes in a tab you're not looking at.
+
+<p align="center"><img src="screenshots/image-preview.png" alt="Hovering an [Image #1] chip in a Claude Code prompt shows the pasted image" width="900"></p>
 
 <p align="center">
   <img src="screenshots/claude-history.png" alt="Claude sessions drawer listing past conversations grouped by project" width="445">
