@@ -8851,7 +8851,7 @@
     // Once the thread has started, its folder is fixed: the history and sessions live there.
     const locked = !threadIsDraft(ws);
     home.innerHTML = `<div class="th-inner">
-      <h1 class="th-title">${tab ? 'Choose an agent' : 'Start a thread'}</h1>
+      <h1 class="th-title">${tab || locked ? 'Choose an agent' : 'Start a thread'}</h1>
       <button type="button" class="th-project" ${locked ? 'disabled title="A started thread keeps its project"' : 'aria-haspopup="menu"'}><i class="ph ph-folder"></i><span class="th-project-name">${escHtml(p?.label || 'No project')}</span>${p?.path ? `<span class="th-project-path">${escHtml(p.path)}</span>` : ''}${locked ? '' : '<i class="ph ph-caret-down th-caret"></i>'}</button>
       <div class="th-agents" role="list"><div class="th-status"><i class="ph ph-circle-notch th-spin"></i> Looking for agents…</div></div>
     </div>
@@ -10099,7 +10099,7 @@
     for (const ws of workspaces) {
       for (const t of getWorkspaceTerminals(ws)) {
         items.push({
-          label: t.label, meta: ws.label, icon: t.type === 'browser' ? 'ph-globe-hemisphere-west' : 'ph-terminal-window',
+          label: t.label, meta: ws.label, metaUi: true, icon: t.type === 'browser' ? 'ph-globe-hemisphere-west' : 'ph-terminal-window',
           run: () => { activateTerminal(ws.id, t.id); activateWorkspace(ws.id); },
         });
       }
@@ -10134,10 +10134,13 @@
       ['Open settings', null, 'ph-gear', () => openSettingsGlobal()],
     ].map(([label, sc, icon, run]) => ({ label, meta: sc ? key(sc) : '', icon, run }));
     for (const w of workspaces) {
-      cmds.push({ label: 'Workspace: ' + w.label, meta: '', icon: 'ph-squares-four', run: () => activateWorkspace(w.id) });
+      if (threadIsDraft(w)) continue;
+      cmds.push(w.thread
+        ? { label: 'Thread: ' + w.label, meta: '', icon: 'ph-chats-circle', run: () => openThread(w.id) }
+        : { label: 'Workspace: ' + w.label, meta: '', icon: 'ph-squares-four', run: () => activateWorkspace(w.id) });
     }
     for (const c of _pluginCommands.values()) {
-      cmds.push({ label: c.label, meta: 'plugin', icon: 'ph-puzzle-piece', run: () => { try { c.handler(); } catch (e) { console.error('[plugin] command failed:', c.id, e); } } });
+      cmds.push({ label: c.label, meta: 'plugin', metaUi: true, icon: 'ph-puzzle-piece', run: () => { try { c.handler(); } catch (e) { console.error('[plugin] command failed:', c.id, e); } } });
     }
     return cmds;
   }
@@ -10178,7 +10181,7 @@
       del: () => { list.splice(i, 1); saveBrowserHistory(list); openPalette('history', tsInput.value); },
     }));
     if (list.length) items.push({
-      label: 'Clear browsing history', meta: list.length + ' entries', icon: 'ph-trash', pin: true,
+      label: 'Clear browsing history', meta: list.length + ' entries', metaUi: true, icon: 'ph-trash', pin: true,
       run: () => { saveBrowserHistory([]); },
     });
     return items;
@@ -10340,6 +10343,7 @@
       row.innerHTML = `<i class="ph ${it.icon}"></i><span class="ts-label"></span><span class="ts-ws"></span>`;
       row.querySelector('.ts-label').textContent = it.label;
       row.querySelector('.ts-ws').textContent = it.meta;
+      if (it.metaUi) row.querySelector('.ts-ws').classList.add('ts-ws-ui'); // plain text, not a key/url/command
       if (it.del) {
         const d = document.createElement('i');
         d.className = 'ph ph-trash ts-del';

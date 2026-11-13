@@ -45,15 +45,17 @@ function toolSummary(input) {
   if (!input || typeof input !== 'object') return '';
   const v = input.command ?? input.cmd ?? input.file_path ?? input.path ?? input.pattern ?? input.query ?? input.url ?? input.description ?? input.prompt
     ?? Object.values(input).find(x => typeof x === 'string');
-  return clip(Array.isArray(v) ? v.join(' ') : v);
+  return clip(Array.isArray(v) ? shellArgv(v) : v);
 }
+// Codex runs commands as ["bash", "-lc", "cmd"]: show the command itself.
+const shellArgv = v => (v.length === 3 && /(^|\/)(ba|z)?sh$/.test(v[0]) && /^-l?c$/.test(v[1]) ? v[2] : v.join(' '));
 
 // The whole call, for a tool row's expanded view: the command as written, else the arguments as JSON.
 function toolDetail(input) {
   if (typeof input === 'string') { try { input = JSON.parse(input); } catch { return input.slice(0, 4000); } }
   if (!input || typeof input !== 'object') return '';
   const cmd = input.command ?? input.cmd;
-  const text = typeof cmd === 'string' ? cmd : Array.isArray(cmd) ? cmd.join(' ') : JSON.stringify(input, null, 2);
+  const text = typeof cmd === 'string' ? cmd : Array.isArray(cmd) ? shellArgv(cmd) : JSON.stringify(input, null, 2);
   return text.length > 4000 ? text.slice(0, 3999) + '…' : text;
 }
 
