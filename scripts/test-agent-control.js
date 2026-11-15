@@ -432,10 +432,6 @@ async function main() {
     assert.equal((await fetch(serversUrl, { headers: { Origin: 'https://untrusted.example' } })).status, 403);
     assert.equal((await fetch(serversUrl, { method: 'POST' })).status, 405);
     const browserDescriptor = JSON.parse(fs.readFileSync(path.join(browserDirectory, fs.readdirSync(browserDirectory)[0]), 'utf8'));
-    const historyUrl = `http://127.0.0.1:${appPort}/api/claude-sessions?cwd=${encodeURIComponent(temp)}`;
-    assert.equal((await fetch(historyUrl)).status, 200);
-    assert.equal((await fetch(historyUrl, { headers: { Origin:'https://untrusted.example' } })).status, 403);
-    assert.equal((await fetch(historyUrl, { method:'POST' })).status, 405);
     const browserCall = async (method, params) => {
       const response = await fetch(browserDescriptor.url, { method: 'POST', headers: { Authorization: `Bearer ${browserDescriptor.token}` }, body: JSON.stringify({ method, params }) });
       return { status: response.status, ...await response.json() };

@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // External links
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+  showInFolder: (file) => ipcRenderer.invoke('shell:show-in-folder', file),
+  openInVSCode: (target) => ipcRenderer.invoke('shell:open-in-vscode', target),
+  agentSettings: (id, harness) => ipcRenderer.invoke('terminal:agent-settings', id, harness),
+  chatFiles: (cwd) => ipcRenderer.invoke('chat:files', cwd),
+  chatCommands: (harness, cwd) => ipcRenderer.invoke('chat:commands', harness, cwd),
 
   // Clipboard
   popupContextMenu: (template) => ipcRenderer.invoke('context-menu:popup', template),
@@ -42,7 +47,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalClose: (id) => ipcRenderer.send('terminal:close', id),
   terminalHasRunningProcess: (id) => ipcRenderer.invoke('terminal:hasRunningProcess', id),
   processAlive: (pid) => ipcRenderer.invoke('process:alive', pid),
-  claudeSessions: (cwd) => ipcRenderer.invoke('history:claude-sessions', cwd),
   claudeImage: (query) => ipcRenderer.invoke('history:claude-image', query),
   claudePaste: (query) => ipcRenderer.invoke('history:claude-paste', query),
   readImageFile: (file, opts) => ipcRenderer.invoke('fs:read-image', file, opts),

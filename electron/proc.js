@@ -269,4 +269,13 @@ function processWorkingDirectory(pid) {
   return null;
 }
 
-module.exports = { hasRunningProcess, runningProcessInfo, refreshWindowsProcessTable, processWorkingDirectory };
+// The PTY's foreground job (the agent typed at the shell, or the PTY's own child when it was exec'd), Linux only.
+function foregroundPid(pid) {
+  if (process.platform !== 'linux' || !Number.isInteger(pid) || pid <= 1) return null;
+  const comm = (readProc(`/proc/${pid}/comm`) || '').trim();
+  if (!SHELL_RE.test(comm)) return pid;
+  const tpgid = Number(procStatFields(pid)?.[5]);
+  return tpgid > 1 ? tpgid : null;
+}
+
+module.exports = { hasRunningProcess, runningProcessInfo, refreshWindowsProcessTable, processWorkingDirectory, foregroundPid };

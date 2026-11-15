@@ -167,11 +167,18 @@
       <button type="button" class="sbr-btn" id="sbr-thread-find-next" title="Next match (Enter)" aria-label="Next match"><i class="ph ph-caret-down"></i></button>
       <button type="button" class="sbr-btn" id="sbr-thread-find-close" title="Close (Esc)" aria-label="Close find"><i class="ph ph-x"></i></button>
     </div>
-    <div id="sbr-thread-flow" class="thr-flow" tabindex="-1" aria-live="polite" aria-label="Thread messages"></div>
+    <div id="sbr-thread-flow" class="thr-flow" tabindex="-1" aria-live="polite" aria-label="Thread messages">
+      <div class="thr-queue" id="sbr-thread-queue" aria-label="Queued messages" hidden></div>
+    </div>
     <div class="thr-composer-wrap">
+      <div class="thr-new-head" id="sbr-thread-new-head">What should we work on?</div>
       <form class="thr-composer" id="sbr-thread-composer" autocomplete="off">
+        <div class="thr-complete" id="sbr-thread-complete" role="listbox" aria-label="Suggestions" hidden></div>
         <div class="thr-attachments" id="sbr-thread-attachments" aria-label="Attached files" hidden></div>
-        <textarea id="sbr-thread-input" rows="2" aria-label="Message the agent" placeholder="Ask anything" spellcheck="false"></textarea>
+        <div class="thr-input-wrap">
+          <textarea id="sbr-thread-input" rows="2" aria-hidden="true" tabindex="-1" placeholder="Ask anything" spellcheck="false"></textarea>
+          <div class="thr-input-links" id="sbr-thread-input-links" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Message the agent" spellcheck="false" data-placeholder="Ask anything"></div>
+        </div>
         <div class="thr-composer-bar">
           <button type="button" class="thr-attach" id="sbr-thread-attach" title="Attach files (or drop / paste them)" aria-label="Attach files"><i class="ph ph-paperclip"></i></button>
           <input type="file" id="sbr-thread-file" multiple hidden>
@@ -180,7 +187,7 @@
         </div>
       </form>
       <div class="thr-composer-foot">
-        <span class="thr-foot-item" id="sbr-thread-cwd"></span>
+        <button type="button" class="thr-foot-item thr-cwd" id="sbr-thread-cwd" aria-haspopup="menu"></button>
         <span class="thr-foot-item thr-foot-branch" id="sbr-thread-branch" hidden></span>
       </div>
     </div>
@@ -770,7 +777,6 @@ Examples:
   <script src="vendor/split.min.js"></script>
   <script src="browser-snapshot.js"></script>
   <script src="proc-icons.js"></script>
-  <script src="session-drawer.js"></script>
   <script src="app.js"></script>
   <script>
     // Boot watchdog: if app.js never executed (parse error, missing vendor

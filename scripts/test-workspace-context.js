@@ -15,7 +15,7 @@ app.whenReady().then(async () => {
   const handlers = src.slice(src.indexOf('  function setupGroupDragAndDrop('), src.indexOf('  function handleTerminalDrop('));
   const builder = src.slice(src.indexOf('  async function buildWorkspaceContext('), src.indexOf('  async function attachContextToChat('));
   const traversal = src.slice(src.indexOf('  function getWorkspaceTerminals('), src.indexOf('  function findTermById('));
-  const attachment = src.slice(src.indexOf('  async function attachContextToChat('), src.indexOf('  async function openClaudeHistory('));
+  const attachment = src.slice(src.indexOf('  async function attachContextToChat('), src.indexOf('  function createAgentTerminal('));
   const context = await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     document.body.innerHTML = '<nav id="sidebar"><div id="source"></div></nav><div class="term-group-body" style="position:absolute;left:200px;top:0;width:500px;height:500px"><div id="host" style="height:100%"><textarea></textarea></div><div class="drag-indicator-overlay"></div></div><div id="header"></div>';

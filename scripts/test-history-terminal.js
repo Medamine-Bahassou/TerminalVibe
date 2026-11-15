@@ -68,34 +68,6 @@ function webBackend() {
   };
 }
 
-async function checkHistoryLaunches() {
-  const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
-  const entry = { id: 'history', cwd: temp, term: { options: {}, write() {} } };
-  const session = { id: 'saved-session', cwd: temp };
-  let drawer, created, launched;
-  const context = vm.createContext({
-    window: {
-      openSessionDrawer(options) { drawer = options; },
-      electronAPI: { claudeSessions: async () => ({ executable: '/fixture/claude', cwd: temp, sessions:[] }) },
-    },
-    findTermById: () => ({ term: entry }), checkTerminalRunning: async () => null,
-    getSlotDimensions: () => ({ cols: 100, rows: 30 }),
-    createAgentTerminal: async spec => { created = spec; return true; },
-    handleAgentRequest: async request => { launched = request; return { launches: [{ id: entry.id, started: true }] }; },
-    saveState() {}, renderPaneArea() {},
-  });
-  vm.runInContext(source.slice(source.indexOf('  const claudeHistoryCache ='), source.indexOf('  function addTabSessionHistory(')), context);
-  await context.openClaudeHistory({ id: 'workspace' }, entry);
-  await drawer.load();
-  await drawer.start(session, 'here');
-  assert.equal(created.returnToShell, true);
-  assert.equal(created.replaceClaude, true);
-  assert.equal(created.argv[0], '--resume');
-  await drawer.start(session, 'split');
-  assert.equal(launched.params.layout.returnToShell, true);
-  console.log('PASS: history resumes in place and in splits request a shell after agent exit');
-}
-
 async function checkNativeDirectoryInheritance() {
   if (process.platform !== 'linux') return;
   const directory = path.join(temp,'changed project');fs.mkdirSync(directory);
@@ -140,7 +112,6 @@ async function checkBackend(name, make) {
 
 (async () => {
   if (process.platform === 'win32') return console.log('POSIX PTY signal fixtures skipped on Windows');
-  await checkHistoryLaunches();
   await checkNativeDirectoryInheritance();
   await checkBackend('Electron', desktopBackend);
   await checkBackend('WebSocket', webBackend);

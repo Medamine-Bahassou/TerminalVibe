@@ -19,7 +19,6 @@ node --check app.js      # quick syntax check (no linter/type checker in this re
 |---|---|
 | `index.html` | Static markup: titlebar, sidebar, modals, settings (Tailwind utility classes, prebuilt into `vendor/tailwind.css`) |
 | `app.js` | All renderer logic in one IIFE: state, layout, terminals, browser tabs, settings, menus |
-| `session-drawer.js` | Claude sessions history drawer |
 | `proc-icons.js` | Generated brand logo paths (from `simple-icons`) for running processes |
 | `style.css` | Original base styles (layout, behavior). Edit it rarely. |
 | `workspace.css` | **Design system + redesign overrides. All visual work goes here.** Loaded after `style.css`. |
@@ -95,7 +94,7 @@ body #sidebar.expanded .ws-btn { border-radius:6px !important; }
 
 ### Where to put styles
 
-1. Add a commented block **at the end of `workspace.css`** that is scoped to the component (`#settings-modal …`, `body #sidebar …`, `.session-drawer …`).
+1. Add a commented block **at the end of `workspace.css`** that is scoped to the component (`#settings-modal …`, `body #sidebar …`, `#threads-sidebar …`).
 2. Use `body`/ID prefixes or `!important` only to beat `style.css`, the `roundless` reset, or Tailwind classes in `index.html`. Don't refactor `style.css`.
 3. Prefer CSS over JS. When JS builds markup, give it semantic class names (not Tailwind strings) so `workspace.css` can style it.
 4. Rebuild with `node scripts/build-dist.js`, then check it in the app at narrow and wide window sizes.

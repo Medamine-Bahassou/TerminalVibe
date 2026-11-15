@@ -499,6 +499,18 @@ ipcMain.on('app:close-confirmed', () => {
 ipcMain.handle('shell:open-external', (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
 });
+// Reveal only (never open): a chat link's target could be an executable.
+ipcMain.handle('shell:show-in-folder', (_e, file) => {
+  if (typeof file === 'string' && path.isAbsolute(file)) shell.showItemInFolder(file);
+});
+// "path" or "path:line"; false when the `code` CLI isn't installed.
+ipcMain.handle('shell:open-in-vscode', (_e, target) => new Promise(resolve => {
+  if (typeof target !== 'string' || !path.isAbsolute(target)) return resolve(false);
+  // ponytail: no shell (the path comes from agent text), so Windows' code.cmd isn't found; a vscode:// URL if Windows matters.
+  const child = require('child_process').spawn('code', ['-g', target], { detached: true, stdio: 'ignore' });
+  child.once('error', () => resolve(false));
+  child.once('spawn', () => { child.unref(); resolve(true); });
+}));
 
 // ── IPC: clipboard (terminal text; navigator.clipboard also works) ──
 ipcMain.handle('servers:list', () => listRunningServers(process.pid));
@@ -1105,7 +1117,6 @@ const sendToRenderer = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
 
-ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-sessions').listClaudeSessions(cwd));
 ipcMain.handle('history:claude-image', (_e, query) => require('./claude-sessions').findClaudeImage(query));
 ipcMain.handle('history:claude-paste', (_e, query) => require('./claude-sessions').findClaudePaste(query));
 ipcMain.handle('history:codex-image', (_e, query) => require('./claude-sessions').findCodexImage(query));
@@ -1314,6 +1325,14 @@ ipcMain.on('terminal:close', (_e, id) => {
 });
 // Is this process still alive? Instant, unlike the cached Windows process table.
 ipcMain.handle('process:alive', (_e, pid) => { try { return Number.isInteger(pid) && pid > 1 && process.kill(pid, 0); } catch (err) { return err.code === 'EPERM'; } });
+// Chat input suggestions: the chat folder's files/folders (@) and the agent's slash commands (/).
+ipcMain.handle('chat:files', (_e, cwd) => require('./chat-complete').listFiles(cwd));
+ipcMain.handle('chat:commands', (_e, harness, cwd) => require('./chat-complete').listCommands(harness, cwd));
+// The model/effort of an agent started by hand in a terminal (its flags, else its config).
+ipcMain.handle('terminal:agent-settings', (_e, id, harness) => {
+  const t = ptys.get(id);
+  return t ? require('./agent-settings').ptyAgentSettings(harness, t.pid) : {};
+});
 ipcMain.handle('terminal:hasRunningProcess', (_e, id) => {
   const t = ptys.get(id);
   return t ? runningProcessInfo(t.pid) : { running: false, name: null };

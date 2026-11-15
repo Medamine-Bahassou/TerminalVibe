@@ -223,7 +223,6 @@ and running it inside Linux or WSL needs `wine`.
 |---|---|
 | `index.html` | Static markup: titlebar, sidebar, modals, settings |
 | `app.js` | All renderer logic (one IIFE): state, layout, terminals, browser tabs, chat tabs, settings |
-| `session-drawer.js` | Claude Code session history drawer |
 | `proc-icons.js` | Brand logos for running processes and agents |
 | `workspace.css` | Design system and component styles (`style.css` holds the base layout) |
 | `electron/main.js` · `preload.js` | Main process: PTYs, IPC, native menus, windows, browser views |

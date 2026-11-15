@@ -190,82 +190,11 @@ body .term-group[style*="--group-tab-color"] .term-slot:not(.multi-selected)::af
   border: 0;
 }
 
-/* Tool history stays within the owning terminal slot, below its tab bar. */
-.session-history-trigger[hidden], .tg-dropdown-item[hidden] { display: none !important; }
-.tg-tab .session-history-trigger {
-  display:none; flex-shrink:0; align-items:center; justify-content:center;
-  width:16px; height:18px; padding:0; border:0; border-radius:3px;
-  background:transparent; color:var(--muted-text); font-size:13px; cursor:pointer;
-}
-.focused-group .tg-tab.active .session-history-trigger { display:inline-flex; }
-.tg-tab .session-history-trigger:hover { background:var(--ui-hover); color:var(--fg); }
-.tg-tab .session-history-trigger:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
-
-/* Session drawer: a pane-local sidebar using the same tokens as #sidebar and tab headers. */
-.session-overlay { position:absolute; inset:0 auto 0 0; width:min(240px,100%); z-index:60; display:flex; justify-content:flex-start; overflow:hidden; }
-.session-drawer { box-sizing:border-box; width:min(240px,100%); height:100%; min-width:0; overflow:hidden; display:flex; flex-direction:column; background:var(--ui-surface); color:var(--fg); border-right:1px solid var(--ui-line); box-shadow:8px 0 24px #0004; font:12px/1.45 var(--ui-font); white-space:normal; }
-.session-drawer > * { min-width:0; flex-shrink:0; }
-.session-head { display:flex; align-items:center; gap:6px; min-height:40px; padding:6px 6px 6px 12px; border-bottom:1px solid var(--ui-line); }
-.session-titles { flex:1; min-width:0; }
-.session-head h2 { margin:0; font-size:10px; font-weight:600; letter-spacing:1.3px; text-transform:uppercase; color:var(--dim-text); }
-.session-sub { font-size:11px; color:var(--muted-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.session-drawer button { display:inline-flex; align-items:center; justify-content:center; height:28px; padding:0 10px; color:var(--fg); background:transparent; border:1px solid var(--ui-line); border-radius:4px; font:500 12px/1 var(--ui-font); cursor:pointer; transition:background-color 140ms, border-color 140ms; }
-.session-drawer button:hover:not(:disabled) { background:var(--ui-hover); }
-.session-drawer button:focus-visible, .session-search:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
-.session-drawer button:disabled { opacity:.4; cursor:default; }
-.session-drawer :is(.session-close,.session-refresh) { width:24px; height:24px; padding:0; border:0; font-size:16px; color:var(--muted-text); flex-shrink:0; }
-.session-drawer :is(.session-close,.session-refresh):hover { color:var(--fg); }
-.session-drawer .session-primary { background:var(--accent-dim); border-color:color-mix(in srgb, var(--accent) 35%, transparent); color:var(--accent); }
-.session-drawer .session-primary:hover:not(:disabled) { background:var(--ui-hover); border-color:var(--accent); }
-.session-tools { display:flex; gap:6px; padding:10px 10px 6px; }
-.session-search { flex:1; min-width:0; height:28px; box-sizing:border-box; padding:0 8px; background:var(--bg); border:1px solid var(--ui-line); border-radius:4px; color:var(--fg); font:12px var(--ui-font); }
-.session-search:focus { border-color:var(--accent); }
-.session-status { min-height:16px; padding:0 12px 6px; font-size:10px; color:var(--dim-text); }
-.session-drawer .session-list { flex:1 1 auto; min-height:72px; overflow:auto; border-top:1px solid var(--ui-line); padding:4px 0; }
-.session-drawer .session-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:baseline; gap:2px 6px; width:100%; height:auto; padding:7px 12px; border:0; border-radius:0; text-align:left; font-weight:400; line-height:1.4; }
-.session-row.selected { background:color-mix(in srgb, var(--accent) 9%, transparent); box-shadow:inset 2px 0 var(--accent); }
-.session-row-title { grid-column:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:500; }
-.session-row-meta { grid-column:1 / -1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; color:var(--dim-text); }
-.session-current { grid-column:2; grid-row:1; padding:0 5px; border:1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius:3px; font-size:9px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--accent); }
-.session-detail { flex:0 1 auto; max-height:55%; min-height:0; display:flex; flex-direction:column; gap:8px; padding:10px 12px 12px; border-top:1px solid var(--ui-line); background:var(--bg); }
-.session-detail:empty { display:none; }
-.session-detail > * { flex-shrink:0; }
-.session-detail-head { display:flex; align-items:flex-start; gap:6px; }
-.session-detail h3 { flex:1; min-width:0; margin:0; font-size:12px; font-weight:600; line-height:1.4; overflow-wrap:anywhere; }
-.session-location { color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:10px/1.5 var(--app-font, monospace); }
-.session-detail .session-preview { flex:1 1 auto; min-height:48px; overflow:auto; display:flex; flex-direction:column; gap:8px; }
-.session-message strong { font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:.8px; color:var(--dim-text); }
-.session-message p { margin:2px 0 0; font-size:11.5px; color:var(--muted-text); white-space:pre-wrap; overflow-wrap:anywhere; }
-.session-actions { display:grid; gap:6px; }
-.session-actions button { width:100%; }
-.session-empty { margin:0; padding:16px 12px; color:var(--dim-text); font-size:11px; }
-
-.session-row[draggable="true"] { cursor:pointer; }
-.session-row[draggable="true"]:active { cursor:grabbing; }
-.session-row[aria-disabled="true"] { opacity:.65; }
+.tg-dropdown-item[hidden] { display: none !important; }
 .session-context-drop-effect { position:absolute; inset:0; z-index:55; display:grid; place-items:center; background:color-mix(in srgb,var(--bg) 52%,transparent); backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); pointer-events:none; box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 50%,transparent); }
 .session-context-drop-card { display:flex; flex-direction:column; align-items:center; gap:12px; margin:16px; padding:24px 16px; border:1px dashed var(--accent); border-radius:8px; color:var(--accent); font:500 12px/1.5 var(--ui-font,sans-serif); text-align:center; }
 .session-context-drop-card svg { width:32px; height:32px; }
 .session-drop-feedback { position:absolute; top:8px; right:8px; max-width:min(360px,90%); z-index:70; background:var(--bg); color:var(--fg); border:1px solid var(--accent); border-radius:4px; padding:10px; font:12px/1.5 var(--ui-font, sans-serif); pointer-events:none; }
-.session-group { border-bottom:1px solid color-mix(in srgb, var(--ui-line) 60%, transparent); }
-.session-group-head { display:flex; align-items:center; gap:6px; padding:8px 10px 8px 8px; cursor:pointer; list-style:none; font-size:12px; font-weight:600; color:var(--fg); user-select:none; }
-.session-group-head::-webkit-details-marker { display:none; }
-.session-group-head::before { content:''; width:0; height:0; flex-shrink:0; margin:0 3px; border:4px solid transparent; border-left:5px solid var(--dim-text); border-right:0; transition:transform 120ms; }
-.session-group[open] > .session-group-head::before { transform:rotate(90deg); }
-.session-group-head:hover { background:var(--ui-hover); }
-.session-group-head:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
-.session-group-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.session-group-tag { flex-shrink:0; padding:0 5px; border-radius:3px; background:var(--accent-dim); color:var(--accent); font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:.4px; }
-.session-group-count { flex-shrink:0; min-width:18px; padding:0 5px; border-radius:8px; background:var(--ui-hover); color:var(--dim-text); font-size:10px; font-weight:500; text-align:center; }
-.session-group[open] { padding-bottom:4px; }
-.session-drawer .session-group .session-row { grid-template-columns:minmax(0,1fr) auto auto; align-items:center; padding:5px 10px 5px 26px; }
-.session-group .session-row-title { font-weight:400; color:var(--muted-text); }
-.session-group .session-row:hover .session-row-title, .session-group .session-row[aria-current="true"] .session-row-title { color:var(--fg); }
-.session-row-title.untitled { font-style:italic; color:var(--dim-text) !important; }
-.session-group .session-row-meta { grid-column:2; grid-row:1; font-variant-numeric:tabular-nums; }
-.session-group .session-current { grid-column:3; }
-.session-group .session-row[aria-current="true"] { box-shadow:inset 2px 0 var(--accent); background:color-mix(in srgb, var(--accent) 7%, transparent); }
-.session-drawer .session-more { width:calc(100% - 26px); height:24px; margin:2px 0 0 26px; padding:0; border:0; justify-content:flex-start; color:var(--accent); font-size:11px; font-weight:400; }
 
 /* Hallmark · pre-emit critique: P5 H4 E4 S5 R5 V4
    Premium workspace system. Terminal metrics remain owned by xterm. */
@@ -284,7 +213,7 @@ body .term-group[style*="--group-tab-color"] .term-slot:not(.multi-selected)::af
   --ui-hover:color-mix(in srgb,var(--bg) 90%,var(--fg));
   --ui-line:color-mix(in srgb,var(--border) 65%,transparent);
   --ui-active:color-mix(in srgb,var(--accent) 14%,var(--bg));
-  --ui-success:#4fc6a0; --ui-error:#f07882;
+  --ui-success:#4fc6a0; --ui-error:#f07882; --ui-warning:#e5b54a;
   --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-6:24px;
   --ui-radius:6px;
 }
@@ -315,7 +244,7 @@ body #sidebar .ws-btn .ws-count { border-radius:4px !important; background:trans
 .ws-btn:hover,.ws-folder-header:hover { background:var(--ui-hover); }
 .ws-btn.active { background:var(--ui-active); }
 .ws-btn.active::before { border-radius:2px; }
-.ws-btn .ws-count,.session-group-count { background:var(--ui-hover); color:var(--muted-text); font-size:11px; min-width:20px; height:20px; line-height:20px; }
+.ws-btn .ws-count { background:var(--ui-hover); color:var(--muted-text); font-size:11px; min-width:20px; height:20px; line-height:20px; }
 #sidebar.expanded .ws-folder-header { min-height:30px; padding:0 12px; }
 .sidebar-actions { padding:8px 6px 6px; border-color:var(--ui-line); gap:4px; }
 #sidebar.expanded .sidebar-actions .sa-btn { min-height:34px; border-radius:var(--ui-radius); }
@@ -340,24 +269,6 @@ body #sidebar .sidebar-actions .sa-btn:focus-visible { outline:2px solid var(--a
 .sash,.gutter { background:var(--ui-line); transition:background-color 150ms; }
 .sash:hover,.gutter:hover { background:var(--accent); }
 #statusbar { background:var(--ui-sidebar); color:var(--muted-text); border-top:1px solid var(--ui-line); min-height:26px; }
-.session-overlay,.session-drawer { width:min(240px,100%); }
-.session-drawer { background:var(--ui-sidebar); box-shadow:none; font-size:13px; }
-.session-head { padding:10px 12px; gap:8px; min-height:56px; }
-.session-head h2 { font-size:13px; color:var(--fg); letter-spacing:0; text-transform:none; }
-.session-sub { margin-top:4px; font-size:11px; color:var(--dim-text); }
-.session-tools { flex-direction:column; gap:6px; padding:8px 10px; }
-.session-search-wrap { position:relative; display:flex; align-items:center; min-width:0; }
-.session-search-icon { position:absolute; left:10px; color:var(--muted-text); font-size:20px; pointer-events:none; }
-.session-search { width:100%; height:30px; padding:0 78px 0 30px; font-size:12px; border-radius:var(--ui-radius); }
-.session-search-hint { position:absolute; right:8px; font:10px var(--ui-font); color:var(--dim-text); pointer-events:none; }
-.session-drawer .session-primary { height:30px; border-radius:var(--ui-radius); justify-content:flex-start; padding:0 12px; }
-.session-status { padding:0 12px 8px; font-size:11px; }
-.session-group { border-bottom:0; padding:4px 0; }
-.session-group-head { min-height:30px; padding:5px 10px; gap:8px; font-size:12px; }
-.session-group-tag { text-transform:none; letter-spacing:0; font-size:10px; }
-.session-drawer .session-group .session-row { min-height:30px; padding:5px 10px 5px 26px; font-size:13px; }
-.session-group .session-row[aria-current="true"] { background:var(--ui-active); }
-.session-drawer .session-list { padding:8px 0; }
 #ctx,.ctx-sub,.tg-dropdown,.custom-dropdown-menu { border-radius:var(--ui-radius); }
 .ctx-item,.tg-dropdown-item { font-size:13px; min-height:34px; border-radius:4px; }
 #prompt-modal,#close-confirm-modal,.ts-inner { border-radius:8px; }
@@ -370,7 +281,6 @@ button,.tg-tab,.ctx-item,.custom-dropdown-option { transition:background-color 1
   #sidebar.expanded { min-width:150px; }
   .tg-tab,body:not(.roundless) .tg-tab { min-width:76px; padding:0 8px; }
   .term-group-actions { gap:0; padding:0 2px; }
-  .session-overlay,.session-drawer { width:min(240px,100%); }
 }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { transition:none !important; animation:none !important; } }
 /* Inset the measured wrapper, never xterm's character grid. FitAddon reads
@@ -611,47 +521,6 @@ body #sidebar .ws-btn.active .ws-proc, body #sidebar .ws-btn.active .ws-proc-ico
 #sidebar.expanded .ws-pin-label { padding-right:17px; }
 .ws-pin-count { min-width:20px; text-align:center; font-variant-numeric:tabular-nums; }
 
-/* ── Claude sessions drawer: same tokens as sidebar + settings ── */
-.session-overlay, .session-drawer { width:min(280px,100%); }
-.session-drawer { background:var(--ui-sidebar); border-right:1px solid var(--border); }
-.session-head { min-height:52px; padding:12px 8px 12px 16px; border-bottom:1px solid var(--ui-line); }
-.session-head h2 { font:600 13px/18px var(--ui-font); }
-.session-sub { margin-top:2px; font:400 12px/16px var(--ui-font); color:var(--dim-text); }
-body .session-drawer :is(.session-close,.session-refresh) { width:28px; height:28px; border-radius:6px !important; font-size:14px; }
-body .session-drawer :is(.session-close,.session-refresh):hover { background:var(--ui-hover); }
-.session-tools { gap:8px; padding:12px 12px 8px; }
-.session-search-icon { left:10px; font-size:14px; color:var(--dim-text); }
-body .session-search { height:32px; padding:0 52px 0 32px; font:400 13px/20px var(--ui-font); background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; transition:border-color 150ms, box-shadow 150ms; }
-body .session-search:hover { border-color:var(--muted-text); }
-body .session-search:focus, body .session-search:focus-visible { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
-.session-search::placeholder { color:var(--dim-text); }
-body .session-search-hint { right:6px; padding:2px 5px; font:500 10.5px/1 var(--mono-font); color:var(--dim-text); border:1px solid var(--border); border-radius:4px !important; background:var(--ui-sidebar); }
-body .session-drawer .session-primary { height:32px; gap:8px; padding:0 10px; justify-content:flex-start; background:transparent; border:1px solid var(--border); border-radius:var(--ui-radius) !important; color:var(--fg); font:500 13px/1 var(--ui-font); }
-body .session-drawer .session-primary i { font-size:14px; color:var(--accent); }
-body .session-drawer .session-primary:hover:not(:disabled) { background:var(--ui-hover); border-color:var(--muted-text); }
-.session-status { padding:0 16px 10px; font:400 11.5px/16px var(--ui-font); color:var(--dim-text); }
-.session-drawer .session-list { padding:6px; border-top:1px solid var(--ui-line); }
-.session-group { padding:0; margin-bottom:2px; }
-body .session-group-head { min-height:32px; padding:0 8px 0 6px; gap:6px; border-radius:6px !important; font:500 13px/20px var(--ui-font); }
-.session-group-head::before { content:''; width:6px; height:6px; margin:0 5px 0 4px; border:solid var(--dim-text); border-width:0 1.5px 1.5px 0; transform:rotate(-45deg); transition:transform 150ms; }
-.session-group[open] > .session-group-head::before { transform:rotate(45deg); margin-top:-3px; }
-.session-group-head:hover::before { border-color:var(--fg); }
-body .session-group-tag { padding:1px 6px; border-radius:4px !important; background:var(--accent-dim); color:var(--accent); font:500 11px/16px var(--ui-font); }
-body .session-group-count { min-width:20px; height:20px; padding:0 6px; border-radius:10px !important; background:transparent; color:var(--dim-text); font:500 11.5px/20px var(--ui-font); font-variant-numeric:tabular-nums; }
-.session-group[open] { padding-bottom:4px; }
-body .session-drawer .session-group .session-row { min-height:30px; padding:5px 8px 5px 28px; border-radius:6px !important; font:400 13px/20px var(--ui-font); }
-body .session-drawer .session-row:hover:not(:disabled) { background:var(--ui-hover); }
-.session-group .session-row-title { color:var(--muted-text); }
-.session-group .session-row-meta { font:400 11.5px/20px var(--ui-font); color:var(--dim-text); }
-body .session-group .session-row[aria-current="true"], body .session-row.selected { background:var(--ui-active); box-shadow:none; }
-body .session-current { border-radius:4px !important; }
-body .session-drawer .session-more { width:calc(100% - 28px); height:28px; margin:2px 0 0 28px; padding:0; border:0; border-radius:6px !important; color:var(--accent); font:500 12px/1 var(--ui-font); }
-body .session-drawer .session-more:hover:not(:disabled) { background:transparent; color:color-mix(in srgb,var(--accent) 80%,#fff); }
-body .session-drawer .session-detail button { height:32px; border-radius:var(--ui-radius) !important; border-color:var(--border); font:500 13px/1 var(--ui-font); }
-.session-detail { border-top:1px solid var(--ui-line); }
-.session-message strong { text-transform:none; letter-spacing:0; font:600 11.5px/16px var(--ui-font); }
-.session-message p { font:400 12.5px/1.5 var(--ui-font); }
-.session-location { font:400 11px/1.5 var(--mono-font); }
 
 /* Running servers popover: same popover tokens as menus/dropdowns. */
 body #servers-dropdown { padding:4px; background:var(--bg); border:1px solid var(--border); border-radius:10px !important; box-shadow:0 8px 24px #0005; font:400 13px/20px var(--ui-font); }
@@ -761,10 +630,6 @@ body .pp-add .pp-avatar-ph { background:transparent; border:1px dashed var(--bor
   opacity:0; transition:opacity 120ms;
 }
 .ui-tooltip.show { opacity:1; }
-.ui-tooltip.session-tooltip {
-  max-width:min(420px, calc(100vw - 28px)); white-space:pre-wrap;
-  overflow:visible; overflow-wrap:anywhere; text-overflow:clip;
-}
 
 /* Icon button rows: 28px buttons with an even 4px gap (title bar + tab bar). */
 body .term-group-actions { gap:4px; padding:0 6px; }
@@ -881,7 +746,7 @@ body .ts-footer kbd { min-width:20px; margin-right:6px; padding:1px 5px; text-al
 :root[data-color-scheme="light"] {
   --border:#d9dde6; --muted-text:#505b70; --dim-text:#667085;
   --tab-active-bg:#ffffff; --tab-hover-bg:#e9ecf3;
-  --ui-success:#168060; --ui-error:#b52c42;
+  --ui-success:#168060; --ui-error:#b52c42; --ui-warning:#9a6a00;
 }
 :root[data-color-scheme="light"] #settings-modal .bg-black\/20 { background:var(--bg); }
 :root[data-color-scheme="light"] #settings-modal .bg-white\/10 { background:var(--border); }
@@ -907,7 +772,6 @@ body .ts-footer kbd { min-width:20px; margin-right:6px; padding:1px 5px; text-al
   font:600 14px/20px var(--ui-font); text-transform:none; letter-spacing:normal; color:var(--fg);
 }
 .ws-pin-label { font:500 11px/16px var(--ui-font); text-transform:none; letter-spacing:normal; color:var(--muted-text); }
-.session-current { font:500 11px/16px var(--ui-font); text-transform:none; letter-spacing:normal; }
 
 /* Attachment drag feedback: dashed target and a compact paperclip pill. */
 body .session-context-drop-effect {
@@ -1073,15 +937,6 @@ body #sidebar.expanded .ws-folder-row.drop-below .ws-folder-header { background:
     transition:opacity 120ms ease-out, display 120ms allow-discrete;
   }
   body.ui-animations #ctx.open { opacity:1; }
-  body.ui-animations .session-drawer {
-    transform:translateX(0);
-    opacity:1;
-    transition:transform 180ms cubic-bezier(.2,.8,.2,1), opacity 180ms ease-out;
-  }
-  body.ui-animations .session-overlay.closing .session-drawer {
-    transform:translateX(-100%);
-    opacity:0;
-  }
   @starting-style {
     body.ui-animations :is(#prompt-overlay, #close-confirm-overlay, #settings-overlay).open,
     body.ui-animations :is(#profile-picker, #tab-search) { opacity:0; }
@@ -1091,11 +946,10 @@ body #sidebar.expanded .ws-folder-row.drop-below .ws-folder-header { background:
     body.ui-animations :is(#profile-picker .pp-inner, #tab-search .ts-inner) { transform:scale(.96); }
     body.ui-animations #servers-dropdown:not([hidden]) { opacity:0; }
     body.ui-animations #ctx.open { opacity:0; }
-    body.ui-animations .session-drawer { transform:translateX(-100%); opacity:0; }
   }
 }
 /* Closing visuals must immediately stop intercepting input. */
-#ctx:not(.open), #servers-dropdown[hidden], .session-overlay.closing { pointer-events:none; }
+#ctx:not(.open), #servers-dropdown[hidden] { pointer-events:none; }
 .ctx-item:focus-visible { outline:1px solid var(--accent); outline-offset:-1px; background:var(--ui-hover); }
 .ctx-item.has-sub:focus-within > .ctx-sub { display:block; }
 /* The old settings opacity utility must also obey the toggle and reduced motion. */
@@ -1103,35 +957,10 @@ body #sidebar.expanded .ws-folder-row.drop-below .ws-folder-header { background:
 
 :is(#prompt-overlay, #close-confirm-overlay, #settings-overlay):not(.open) { pointer-events:none; }
 
-/* Conversation actions live outside the clipped drawer and stay pane-owned. */
-.session-context-menu {
-  position:fixed; z-index:10020; box-sizing:border-box; min-width:190px;
-  max-width:calc(100vw - 8px); padding:4px; border:1px solid var(--border);
-  border-radius:8px !important; background:var(--ui-sidebar); color:var(--fg);
-  box-shadow:0 8px 24px #0005; font:400 12px/18px var(--ui-font);
-}
-.session-menu-item {
-  display:flex; align-items:center; gap:8px; width:100%; min-height:30px;
-  padding:5px 8px; border:0; border-radius:4px !important; background:transparent;
-  color:inherit; font:inherit; text-align:left; cursor:pointer;
-}
-.session-menu-item i { flex-shrink:0; font-size:14px; color:var(--muted-text); }
-.session-menu-item:hover:not(:disabled), .session-menu-item:focus-visible { outline:none; background:var(--ui-hover); }
-.session-menu-item:disabled { opacity:.4; cursor:default; }
-.session-menu-separator { height:1px; margin:4px; background:var(--border); }
-@media(prefers-reduced-motion:no-preference) {
-  body.ui-animations .session-context-menu { animation:session-menu-in 120ms ease-out; }
-}
-@keyframes session-menu-in { from { opacity:0; transform:translateY(-3px); } to { opacity:1; transform:translateY(0); } }
 
-/* Saved conversations resume as tabs when dropped on a group's header. */
-.term-group-header.session-tab-drop-target { box-shadow:inset 0 -2px var(--accent); background:var(--ui-hover); }
 
 /* Clipboard keeps chronological history; starred entries have their own view. */
 
-.session-refresh { background:transparent; cursor:pointer; }
-.session-refresh:disabled { opacity:.45; cursor:wait; }
-.session-refresh:focus-visible { outline:1px solid var(--accent); outline-offset:1px; }
 
 /* ── Workspace process chips: count for a process running in several panes ── */
 body #sidebar .ws-btn .ws-proc > .ws-proc-count { flex-shrink:0; overflow:visible; margin-right:-2px; color:var(--dim-text); font-weight:500; font-variant-numeric:tabular-nums; }
@@ -1322,9 +1151,9 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 /* Copy + time under each message: space kept, shown on hover or keyboard focus. */
 #sbr-thread .thr-actions { display:flex; align-items:center; gap:4px; height:24px; opacity:0; transition:opacity 140ms; }
 #sbr-thread .thr-msg:hover .thr-actions, #sbr-thread .thr-msg:focus-within .thr-actions { opacity:1; }
-#sbr-thread .thr-copy { display:grid; place-items:center; width:24px; height:24px; padding:0; background:transparent; border:1px solid transparent; border-radius:6px !important; color:var(--dim-text); cursor:pointer; transition:border-color 140ms, color 140ms; }
-#sbr-thread .thr-copy:hover { border-color:var(--border); color:var(--fg); }
-#sbr-thread .thr-copy:focus-visible { outline:none; border-color:var(--accent); color:var(--fg); }
+#sbr-thread .thr-copy { display:grid; place-items:center; width:24px; height:24px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--dim-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-copy:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-copy:focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); color:var(--fg); }
 #sbr-thread .thr-copy i { font-size:13px; }
 #sbr-thread .thr-copy .ph-check { color:var(--ui-success); }
 #sbr-thread .thr-time { font-size:11px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
@@ -1436,7 +1265,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 
 /* ── Chat composer (T3-style): message box with the model chip + send, a quiet footer row under it ── */
 /* The composer floats over the bottom of the history (which scrolls the full height behind it);
-   a fade keeps text from showing through. It stops short of the scrollbar so that stays usable,
+   its surface keeps the input readable. It stops short of the scrollbar so that stays usable,
    and lets clicks through outside the box. The history's bottom padding follows its height (app.js). */
 #sbr-thread .thr-composer-wrap { position:absolute; left:0; right:14px; bottom:0; z-index:2; padding:28px 16px 10px; pointer-events:none;
   background:linear-gradient(to bottom, transparent, var(--bg) 26px); }
@@ -1491,6 +1320,12 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 .tv-model-picker .mp-hint { margin-left:auto; font-size:11px; color:var(--dim-text); white-space:nowrap; }
 .tv-model-picker .mp-check { margin-left:auto; font-size:13px; color:var(--muted-text); flex-shrink:0; }
 .tv-model-picker .mp-hint + .mp-check { margin-left:6px; }
+.tv-model-picker .mp-fav { display:grid; place-items:center; width:20px; height:20px; margin-left:auto; flex-shrink:0; border-radius:4px !important; color:var(--dim-text); opacity:0; transition:color 140ms, background-color 140ms; }
+.tv-model-picker :is(.mp-hint, .mp-check) + .mp-fav { margin-left:6px; }
+.tv-model-picker .mp-row:is(:hover,:focus-visible) .mp-fav, .tv-model-picker .mp-fav.on { opacity:1; }
+.tv-model-picker .mp-fav:hover { color:var(--fg); background:color-mix(in srgb,var(--fg) 8%,transparent); }
+.tv-model-picker .mp-fav.on { color:var(--accent); }
+.tv-model-picker .mp-fav i { font-size:13px; }
 .tv-model-picker .mp-empty { padding:16px 10px; font-size:12px; color:var(--dim-text); }
 .tv-model-picker .mp-side { display:flex; flex-direction:column; min-width:0; padding:8px; border-left:1px solid var(--ui-line); }
 .tv-model-picker .mp-side-head { display:flex; align-items:center; justify-content:space-between; gap:8px; height:34px; padding:0 10px; margin-bottom:6px; font-size:12px; color:var(--muted-text); }
@@ -1609,7 +1444,7 @@ body.detached #threads-sidebar { display:none; }
 #threads-sidebar .ts-cards { display:flex; flex-direction:column; gap:4px; }
 #threads-sidebar .ts-card { display:flex; flex-direction:column; gap:4px; width:100%; padding:10px 12px; background:transparent; border:1px solid transparent; border-radius:10px !important; color:var(--fg); font:400 13px var(--ui-font); text-align:left; cursor:pointer; transition:background-color 140ms, border-color 140ms; }
 #threads-sidebar .ts-card:hover { background:var(--ui-hover); }
-#threads-sidebar .ts-card.active { background:color-mix(in srgb,var(--fg) 7%,var(--ui-sidebar)); border-color:var(--ui-line); }
+#threads-sidebar .ts-card.active { background:color-mix(in srgb,var(--fg) 7%,var(--ui-sidebar)); }
 #threads-sidebar .ts-card:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #threads-sidebar .ts-row { display:flex; align-items:center; gap:8px; min-width:0; font-size:12px; color:var(--muted-text); }
 #threads-sidebar .ts-folder, #threads-sidebar .ts-branch { display:inline-flex; align-items:center; gap:5px; min-width:0; }
@@ -1735,3 +1570,149 @@ body.ui-animations.resizing #threads-sidebar { transition:none; }
 #sbr-thread .thr-send.stop { background:var(--ui-error); color:#fff; }
 #sbr-thread .thr-send.stop:hover { background:color-mix(in srgb,var(--ui-error) 85%,#000); }
 #sbr-thread .thr-send.stop i { font-size:13px; }
+
+/* Center history and context notices within the chat column. */
+#sbr-thread .thr-note { justify-content:center; text-align:center; }
+
+/* Composer image attachments: preview cards above the input. */
+#sbr-thread .thr-attachments { align-items:flex-start; max-height:184px; padding:4px 0; }
+#sbr-thread .thr-file.image { position:relative; flex-shrink:0; width:96px; max-width:100%; height:80px; padding:0; overflow:hidden; border:1px solid var(--border); border-radius:8px !important; background:var(--bg); }
+#sbr-thread .thr-file-preview { display:block; width:100%; height:100%; object-fit:contain; }
+#sbr-thread .thr-file.image .thr-file-x { position:absolute; top:4px; right:4px; width:22px; height:22px; background:var(--ui-surface); border:1px solid var(--border); border-radius:6px !important; color:var(--fg); }
+#sbr-thread .thr-file.image .thr-file-x:hover { background:var(--ui-hover); }
+#sbr-thread .thr-file-x:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+#sbr-thread .thr-file-open { display:block; width:100%; height:100%; padding:0; border:0; background:transparent; cursor:zoom-in; }
+#sbr-thread .thr-file-open:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+
+/* Translucent composer: blur the scrolling chat behind the input. */
+@supports ((backdrop-filter:blur(16px)) or (-webkit-backdrop-filter:blur(16px))) {
+  #sbr-thread .thr-composer-wrap { background:transparent; }
+  #sbr-thread .thr-composer {
+    background:color-mix(in srgb,var(--ui-surface) 65%,transparent);
+    -webkit-backdrop-filter:blur(16px);
+    backdrop-filter:blur(16px);
+  }
+}
+
+/* Chat tabs retain their chat surface when another pane takes focus. */
+.term-slot.chat-tab:not(.chat-cli) > .term-wrap { visibility:hidden; pointer-events:none; }
+.term-slot.chat-tab > #sbr-thread { position:absolute; inset:0; z-index:2; }
+.term-slot.chat-cli > .thr-snapshot { display:none !important; }
+
+/* Follow-up messages stay above the draft until their turn is ready. */
+#sbr-thread .thr-queue { display:flex; flex-direction:column; gap:4px; max-height:180px; overflow:auto; padding-bottom:8px; border-bottom:1px solid var(--ui-line); }
+#sbr-thread .thr-queue[hidden] { display:none; }
+#sbr-thread .thr-queue-head, #sbr-thread .thr-queue-row { display:flex; align-items:center; gap:8px; min-height:28px; font:400 12px/1.4 var(--ui-font); color:var(--muted-text); }
+#sbr-thread .thr-queue-head > span { flex:1; }
+#sbr-thread .thr-queue-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); }
+#sbr-thread .thr-queue button { display:grid; place-items:center; flex-shrink:0; width:26px; height:26px; padding:0; border:0; border-radius:6px !important; color:var(--muted-text); background:transparent; cursor:pointer; }
+#sbr-thread .thr-queue button:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-queue button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+#sbr-thread .thr-queue-icon { display:flex; flex-shrink:0; color:var(--dim-text); }
+#sbr-thread .thr-queue-icon svg, #sbr-thread .thr-send svg { width:18px; height:18px; }
+#sbr-thread .thr-pending-kind { font:400 11px/1.4 var(--ui-font); color:var(--dim-text); }
+
+/* Citations sit in the input as text links, without an attachment badge. */
+#sbr-thread .thr-file.cite { max-width:100%; min-height:24px; height:auto; padding:0; background:transparent; }
+#sbr-thread .thr-cite-link { min-width:0; padding:0; border:0; background:transparent; color:var(--accent); font:inherit; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent); text-underline-offset:3px; cursor:pointer; }
+#sbr-thread .thr-cite-link:hover { text-decoration-color:var(--accent); }
+#sbr-thread .thr-cite-link:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+/* Keep native text editing, with clickable image mentions at their exact text positions. */
+#sbr-thread .thr-input-wrap { position:relative; min-width:0; }
+#sbr-thread .thr-input-wrap textarea { display:block; color:transparent; caret-color:var(--fg); }
+#sbr-thread .thr-input-links { position:absolute; inset:0; box-sizing:border-box; overflow:hidden; padding:0 6px 0 0; color:var(--fg); font:400 14px/1.55 var(--ui-font); white-space:pre-wrap; overflow-wrap:break-word; pointer-events:none; }
+#sbr-thread .thr-input-wrap textarea { overflow-wrap:break-word; }
+#sbr-thread .thr-image-ref { color:var(--accent); text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent); text-underline-offset:3px; pointer-events:auto; cursor:pointer; }
+#sbr-thread .thr-image-ref:hover { text-decoration-color:var(--accent); }
+#sbr-thread .thr-image-ref:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+#sbr-thread .thr-input-wrap:has(textarea:disabled) .thr-input-links { opacity:.6; }
+
+/* Model picker fades in and out without moving the controls. */
+@keyframes tv-model-picker-in { from { opacity:0; } to { opacity:1; } }
+@keyframes tv-model-picker-out { from { opacity:1; } to { opacity:0; } }
+body.ui-animations .tv-model-picker { animation:tv-model-picker-in 140ms ease-out both; }
+body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120ms ease-in both; pointer-events:none; }
+@media (prefers-reduced-motion:reduce) { body.ui-animations .tv-model-picker { animation:none; } }
+
+/* Rich draft references: inline quote excerpt/edit control and filename/size, like message text. */
+#sbr-thread .thr-input-wrap textarea { display:none; }
+#sbr-thread .thr-input-links { position:relative; inset:auto; min-height:44px; max-height:240px; padding:0 6px 0 0; overflow:auto; outline:none; white-space:pre-wrap; overflow-wrap:break-word; pointer-events:auto; }
+#sbr-thread .thr-input-links[data-empty="true"]::before { content:attr(data-placeholder); color:var(--dim-text); pointer-events:none; }
+#sbr-thread .thr-inline-ref { display:inline-flex; align-items:baseline; vertical-align:baseline; gap:4px; max-width:100%; white-space:nowrap; color:var(--accent); }
+#sbr-thread .thr-inline-ref a { display:inline-flex; align-items:baseline; gap:4px; min-width:0; color:var(--accent); text-decoration:none; cursor:pointer; }
+#sbr-thread .thr-inline-ref a:hover { text-decoration:underline; text-underline-offset:3px; }
+#sbr-thread .thr-cite-ref > span { max-width:min(320px, 44vw); overflow:hidden; text-overflow:ellipsis; vertical-align:bottom; }
+#sbr-thread .thr-cite-ref > i { font-size:13px; }
+#sbr-thread .thr-inline-image-icon { display:inline-flex; align-self:center; width:14px; height:14px; overflow:hidden; background:var(--bg); border-radius:3px !important; }
+#sbr-thread .thr-inline-image-icon img { width:100%; height:100%; object-fit:cover; }
+#sbr-thread .thr-image-ref small { font:400 10px/1.4 var(--ui-font); }
+#sbr-thread .thr-image-ref > span:not(.thr-inline-image-icon) { max-width:min(240px,44vw); overflow:hidden; text-overflow:ellipsis; }
+#sbr-thread .thr-inline-ref :is(a,button):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+#sbr-thread .thr-file.image { width:64px; height:64px; }
+
+/* Queued prompts are quiet outgoing chat messages, above the floating composer. */
+#sbr-thread .thr-flow > .thr-queue { flex-shrink:0; align-self:stretch; max-height:none; overflow:visible; gap:12px; padding:8px 0 0; border:0; }
+#sbr-thread .thr-queued-bubble { display:flex; flex-direction:column; gap:8px; max-width:85%; min-width:0; padding:8px 12px; border:1px dashed var(--border); border-radius:16px !important; background:transparent; color:var(--muted-text); }
+#sbr-thread .thr-queued-text { font:400 13px/1.55 var(--ui-font); white-space:pre-wrap; overflow-wrap:anywhere; }
+#sbr-thread .thr-queued-images { display:flex; flex-wrap:wrap; gap:6px; }
+#sbr-thread .thr-queued-images .thr-queued-preview { width:32px; height:32px; padding:0; overflow:hidden; background:var(--bg); border-radius:6px !important; }
+#sbr-thread .thr-queued-preview img { display:block; width:100%; height:100%; object-fit:cover; }
+#sbr-thread .thr-queued-actions { display:flex; align-items:center; justify-content:flex-end; gap:4px; min-height:24px; color:var(--muted-text); }
+#sbr-thread .thr-queued-actions button { height:24px; }
+#sbr-thread .thr-queued-actions button[data-queue-act="send"] { display:inline-flex; align-items:center; gap:4px; width:auto; padding:0 6px; font:500 12px/1.4 var(--ui-font); }
+#sbr-thread .thr-queued-actions i { font-size:13px; }
+
+/* Citation links reveal and briefly flash the exact source passage. */
+::highlight(tv-citation-source) { background-color:color-mix(in srgb,var(--accent) var(--citation-flash-strength,38%),transparent); color:var(--fg); }
+#sbr-thread .thr-citation-source { background-color:color-mix(in srgb,var(--accent) var(--citation-flash-strength,38%),transparent); }
+
+/* Markdown links in chat messages: accent text, underline on hover, file links lead with their type icon. */
+#sbr-thread .thr-link { display:inline; padding:0; background:none; border:0; font:inherit; text-align:left; color:var(--accent); text-decoration:underline; text-decoration-color:transparent; text-underline-offset:3px; overflow-wrap:anywhere; cursor:pointer; transition:text-decoration-color 140ms; }
+#sbr-thread .thr-link:hover { text-decoration-color:var(--accent); }
+#sbr-thread .thr-link:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+#sbr-thread .thr-link > i { display:inline-block; font-size:14px; margin-right:3px; vertical-align:-2px; color:var(--muted-text); }
+
+/* Threads sidebar: a chat with only unsent text is a draft card, tinted with the warning color. */
+#threads-sidebar .ts-card.draft, #threads-sidebar .ts-card.draft.active { background:color-mix(in srgb,var(--ui-warning) 6%,var(--ui-sidebar)); }
+#threads-sidebar .ts-card.draft:hover { background:color-mix(in srgb,var(--ui-warning) 10%,var(--ui-sidebar)); }
+#threads-sidebar .ts-card.draft .ts-draft-icon { color:var(--ui-warning); }
+#threads-sidebar .ts-card.draft .ts-folder { gap:6px; }
+
+/* New chat (nothing said yet): the composer sits centered under a heading; its folder is a picker. */
+#sbr-thread .thr-new-head { display:none; }
+#sbr-thread.thr-new .thr-new-head { display:block; margin-bottom:14px; text-align:center; font:600 20px/1.3 var(--ui-font); color:var(--fg); }
+#sbr-thread.thr-new .thr-composer-wrap { top:50%; bottom:auto; transform:translateY(-50%); background:transparent; padding-top:0; }
+#sbr-thread.thr-new .thr-flow > .thr-empty { display:none; }
+#sbr-thread .thr-cwd { background:transparent; border:0; border-radius:6px !important; color:inherit; font:inherit; cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-cwd:disabled { cursor:default; }
+#sbr-thread .thr-cwd:not(:disabled):hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-cwd:focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
+
+/* Tab bar: the agent a tab runs, as its logo before the name. */
+.tg-tab .tg-tab-agent { display:inline-grid; place-items:center; flex-shrink:0; width:14px; height:14px; margin-right:6px; color:var(--muted-text); }
+.tg-tab .tg-tab-agent .ws-proc-icon { width:13px; height:13px; font-size:13px; fill:currentColor; }
+
+/* A plain terminal running an agent: the chat button (chat icon) opens it as a Chat tab. */
+.term-group:has(> .term-group-body > .term-slot.agent-tab[style*="display: block"]) .tg-chat-back { display:flex; }
+.term-group:has(> .term-group-body > .term-slot.agent-tab[style*="display: block"]) .tg-chat-back .tg-cli-to-chat { display:inline; }
+.term-group:has(> .term-group-body > .term-slot.agent-tab[style*="display: block"]) .tg-chat-back .tg-chat-to-cli { display:none; }
+
+/* A Chat tab showing its terminal after the agent quit: hide the chat button (reopen it from the threads list). */
+.term-group:has(> .term-group-body > .term-slot.chat-cli.no-agent[style*="display: block"]) .tg-chat-back { display:none; }
+
+/* Threads sidebar: every agent a thread used, side by side. */
+#threads-sidebar .ts-agents { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; }
+
+/* Chat input suggestions: "@" files/folders and "/" commands, a popover above the composer. */
+#sbr-thread .thr-composer { position:relative; }
+#sbr-thread .thr-complete { position:absolute; left:0; right:0; bottom:calc(100% + 6px); z-index:5; max-height:min(300px, 50vh); overflow-y:auto; padding:4px;
+  background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; box-shadow:0 8px 24px #0005; }
+#sbr-thread .thr-complete[hidden] { display:none; }
+#sbr-thread .thr-complete-item { display:flex; align-items:center; gap:8px; min-height:32px; padding:6px 8px; border-radius:6px !important; cursor:pointer; font:400 13px/1.3 var(--ui-font); color:var(--fg); }
+#sbr-thread .thr-complete-item[aria-selected="true"], #sbr-thread .thr-complete-item:hover { background:var(--ui-hover); }
+#sbr-thread .thr-complete-item > i { flex-shrink:0; font-size:15px; color:var(--muted-text); }
+#sbr-thread .thr-complete-name { flex-shrink:0; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+#sbr-thread .thr-complete-meta { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--dim-text); }
+#sbr-thread .thr-at-ref > i { font-size:13px; align-self:center; }
+#sbr-thread .thr-at-ref > span { max-width:min(240px,44vw); overflow:hidden; text-overflow:ellipsis; }

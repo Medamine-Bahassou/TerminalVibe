@@ -7,7 +7,13 @@ const path = require('path');
 
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
-const { syncThread, threadHistory, writeHandoff, forkThread, deleteThread } = require('../electron/threads');
+const { syncThread, threadHistory, writeHandoff, forkThread, deleteThread, parseCodex } = require('../electron/threads');
+
+const task = (type, timestamp) => ({ type: 'event_msg', timestamp, payload: { type } });
+assert.deepStrictEqual(parseCodex([task('task_started', '2026-01-01T10:00:00Z')]).turnState,
+  { status: 'working', at: Date.parse('2026-01-01T10:00:00Z') });
+assert.strictEqual(parseCodex([task('task_complete', '2026-01-01T10:00:01Z'), task('task_started', '2026-01-01T10:00:02Z')]).turnState.status, 'working', 'an old completion cannot release the next turn');
+assert.strictEqual(parseCodex([task('turn_aborted', '2026-01-01T10:00:01Z')]).turnState.status, 'aborted', 'interruptions must not auto-send queued messages');
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-threads-'));
 const jsonl = rows => rows.map(r => JSON.stringify(r)).join('\n') + '\n';
@@ -35,6 +41,7 @@ const codexDir = path.join(home, '.codex', 'sessions', String(now.getFullYear())
 fs.mkdirSync(codexDir, { recursive: true });
 fs.writeFileSync(path.join(codexDir, 'rollout-x-codex-1.jsonl'), jsonl([
   { type: 'session_meta', payload: { id: 'codex-1', cwd } },
+  task('task_started', '2026-01-01T10:00:00Z'),
   { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<environment_context>x</environment_context>' }] } },
   { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Continue this conversation. The full history with the previous agent is in C:/x/handoff.md - read it first.' }] } },
   { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Now add docs [TerminalVibe thread history: C:/x/handoff.md - read it first for context]' },
@@ -42,6 +49,7 @@ fs.writeFileSync(path.join(codexDir, 'rollout-x-codex-1.jsonl'), jsonl([
   { type: 'response_item', payload: { type: 'local_shell_call', call_id: 'c1', action: { command: ['ls', '-la'] } } },
   { type: 'response_item', payload: { type: 'function_call_output', call_id: 'c1', output: JSON.stringify({ metadata: { exit_code: 2 } }) } },
   { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Docs added.' }] } },
+  task('task_complete', '2026-01-01T10:00:10Z'),
 ]));
 
 const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, createdAt: 1, segments: [
@@ -53,6 +61,7 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
 (async () => {
   const dir = path.join(home, '.terminalvibe', 'threads', 'thread-1');
   const [claude, codex, opencode] = await syncThread(meta, home);
+  assert.strictEqual(codex.turnState.status, 'completed', 'completion status reaches the renderer');
   assert.deepStrictEqual(claude.items.map(i => i.role), ['user', 'tool', 'assistant', 'tool'], 'the handoff read shows as a step, like in the CLI');
   assert.strictEqual(claude.items[0].text, 'Fix the build', 'context note is not shown as part of the message');
   assert.strictEqual(claude.items[3].summary, 'npm test');

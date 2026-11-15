@@ -14,7 +14,6 @@ app.whenReady().then(async () => {
   const motion = value => cdp.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value }] });
   await motion('no-preference');
   for (const file of ['style.css', 'workspace.css']) await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'));
-  await win.webContents.executeJavaScript(fs.readFileSync(path.join(__dirname, '..', 'session-drawer.js'), 'utf8'));
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   const apply = source.slice(source.indexOf('  function applyAnimationsSetting()'), source.indexOf('  function applyTheme(name)'));
   console.log(await win.webContents.executeJavaScript(`(async () => {
@@ -47,23 +46,12 @@ app.whenReady().then(async () => {
     check(getComputedStyle(menu).pointerEvents === 'none', 'Closing menu must not intercept clicks');
     await wait(180);
     check(getComputedStyle(menu).display === 'none', 'Menu must hide after its exit fade');
-    const host = document.querySelector('#host');
-    const options = { host, load: async () => ({sessions:[]}), canReplace:async()=>false, start:async()=>{} };
-    await openSessionDrawer(options); await wait(230);
-    document.querySelector('.session-close').click();
-    check(host.querySelector('.session-overlay.closing')?.inert, 'Closing drawer must remain for its slide and be inert');
-    await openSessionDrawer(options); await wait(240);
-    check(host.querySelectorAll('.session-overlay').length === 1, 'Rapid reopening must not remove the new drawer');
-    document.querySelector('.session-close').click();
     animationsEnabled = false; applyAnimationsSetting();
-    check(!host.querySelector('.session-overlay'), 'Disabling animation must finish pending drawer exits');
     check(!document.querySelector('#set-animations').checked, 'Toggle must reflect disabled motion');
     modal.classList.remove('open'); getComputedStyle(modal).display; modal.classList.add('open');
     check(panel.getAnimations().length === 0, 'Disabled modals must appear instantly');
     menu.classList.add('open'); getComputedStyle(menu).display; menu.classList.remove('open');
     check(getComputedStyle(menu).display === 'none', 'Disabled menus must close instantly');
-    await openSessionDrawer(options); document.querySelector('.session-close').click();
-    check(!host.querySelector('.session-overlay'), 'Disabled drawers must close instantly');
     animationsEnabled = true; applyAnimationsSetting();
     // Split.js changes flex-basis; exercise the same geometry with real layout.
     const layout = document.createElement('div');
@@ -107,8 +95,7 @@ app.whenReady().then(async () => {
     check(!left.getAnimations().length, 'Disabling motion must make sidebar toggles immediate');
     animationsEnabled = true; applyAnimationsSetting();
     window.sidebarFixture = left;
-    window.animationOptions = options;
-    return 'PASS: left sidebar expand/collapse, rapid toggles, hidden/hover modes, manual resize, modal/menu/drawer transitions and animation toggle';
+    return 'PASS: left sidebar expand/collapse, rapid toggles, hidden/hover modes, manual resize, modal/menu transitions and animation toggle';
   })()`));
   await motion('reduce');
   console.log(await win.webContents.executeJavaScript(`(async () => {
@@ -116,9 +103,6 @@ app.whenReady().then(async () => {
     getComputedStyle(document.querySelector('#prompt-overlay')).display;
     document.querySelector('#prompt-overlay').classList.add('open');
     if (document.querySelector('#prompt-modal').getAnimations().length) throw new Error('Reduced motion must suppress modal animation');
-    await openSessionDrawer(window.animationOptions);
-    document.querySelector('.session-close').click();
-    if (document.querySelector('.session-overlay')) throw new Error('Reduced motion must close drawers instantly');
     window.sidebarFixture.classList.remove('expanded');
     window.sidebarFixture.style.flexBasis = '0px';
     getComputedStyle(window.sidebarFixture).flexBasis;

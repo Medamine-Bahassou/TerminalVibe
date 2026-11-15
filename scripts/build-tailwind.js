@@ -12,7 +12,7 @@ const root = path.join(__dirname, '..');
 
 execFileSync(process.execPath, [
   require.resolve('tailwindcss/lib/cli.js'),
-  '--content', './index.html,./app.js,./session-drawer.js',
+  '--content', './index.html,./app.js',
   '-o', path.join('vendor', 'tailwind.css'),
   '--minify',
 ], { cwd: root, stdio: 'pipe' });

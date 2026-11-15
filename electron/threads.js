@@ -149,9 +149,12 @@ function parseClaude(list) {
 
 function parseCodex(list) {
   const items = [], tools = new Map();
-  let id = null, cwd = null;
+  let id = null, cwd = null, turnState = null;
   for (const r of list) {
     const p = r.payload;
+    if (r.type === 'event_msg' && ['task_started', 'task_complete', 'turn_aborted'].includes(p?.type)) {
+      turnState = { status: p.type === 'task_started' ? 'working' : p.type === 'task_complete' ? 'completed' : 'aborted', at: Date.parse(r.timestamp) || 0 };
+    }
     if (r.type === 'session_meta') { id = p?.id || null; cwd = p?.cwd || null; continue; }
     if (r.type === 'event_msg' && p?.type === 'item_completed' && p.item) {
       const it = p.item, ts = r.timestamp || null;
@@ -201,7 +204,7 @@ function parseCodex(list) {
       if ((typeof code === 'number' && code !== 0) || out?.success === false) tools.get(p.call_id).error = true;
     }
   }
-  return { id, cwd, items };
+  return { id, cwd, items, ...(turnState ? { turnState } : {}) };
 }
 
 const claudeFiles = new Map(); // sessionId -> transcript path
@@ -248,7 +251,7 @@ async function codexSegment({ sessionId, cwd, since, exclude = [] }, home) {
   for (const { f } of stats.filter(s => s && (sessionId || s.t >= (Number(since) || 0))).sort((a, b) => b.t - a.t)) {
     const res = await parseFile(f, parseCodex).catch(() => null);
     if (!res || (!sessionId && (path.resolve(res.cwd || '') !== path.resolve(cwd || '') || exclude.includes(res.id)))) continue;
-    return { sessionId: res.id || sessionId, items: res.items };
+    return { sessionId: res.id || sessionId, items: res.items, ...(res.turnState ? { turnState: res.turnState } : {}) };
   }
   return { sessionId, items: [] };
 }
@@ -315,7 +318,7 @@ async function syncThread(meta = {}, home = os.homedir(), root = threadsRoot(hom
     const f = fresh[i];
     const items = f.items.length || !old ? f.items : old.items;
     return { harness: s.harness, sessionId: f.sessionId || s.sessionId || old?.sessionId || null, since: s.since,
-      model: s.model || null, effort: s.effort || null, handoff: !!s.handoff, ...(s.frozen ? { frozen: true } : {}), ...(f.unsupported ? { unsupported: true } : {}), items };
+      model: s.model || null, effort: s.effort || null, handoff: !!s.handoff, ...(s.frozen ? { frozen: true } : {}), ...(f.unsupported ? { unsupported: true } : {}), ...(f.turnState ? { turnState: f.turnState } : {}), items };
   });
   const thread = { id: meta.id, title: String(meta.title || 'New thread'), projectId: meta.projectId || null, cwd: meta.cwd || null,
     createdAt: meta.createdAt || null, segments: merged.map(({ items, unsupported, ...s }) => s) };
