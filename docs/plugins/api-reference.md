@@ -210,7 +210,7 @@ api.ui.addWidget({ id: 'clock', position: 'statusbar', el: clock });
 
 | Member | Signature | Description |
 |--------|-----------|-------------|
-| `api.ui.addPanel` | `({ id, label, icon?, el, onShow? }) => void` | Add a button to the right panel's main page that opens `el` as a full page (with a back button). `icon` is a phosphor class (`'ph-chat-circle-text'`); `onShow` runs each time the page opens. Remove with `api.ui.removeWidget(id)`. |
+| `api.ui.addPanel` | — | Removed with the right panel. Still callable (it logs a warning and does nothing) so older plugins keep loading. Use `api.ui.addWidget` for status-bar UI. |
 
 See `examples/claude-chats/` for a complete panel plugin.
 

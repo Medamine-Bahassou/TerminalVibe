@@ -1109,6 +1109,16 @@ ipcMain.handle('history:claude-sessions', (_e, cwd) => require('./claude-session
 ipcMain.handle('history:claude-image', (_e, query) => require('./claude-sessions').findClaudeImage(query));
 ipcMain.handle('history:claude-paste', (_e, query) => require('./claude-sessions').findClaudePaste(query));
 ipcMain.handle('history:codex-image', (_e, query) => require('./claude-sessions').findCodexImage(query));
+// Codex's own model list (what its /model picker shows), for the chat tab's model picker.
+ipcMain.handle('chat:models', () => {
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(require('os').homedir(), '.codex', 'models_cache.json'), 'utf8'));
+    return { codex: (Array.isArray(d.models) ? d.models : []).filter(x => x && x.slug && x.visibility === 'list').map(x => ({
+      id: String(x.slug), name: String(x.display_name || x.slug),
+      efforts: (x.supported_reasoning_levels || []).map(l => String(l.effort)).filter(e => /^[a-z]+$/.test(e)),
+      defaultEffort: String(x.default_reasoning_level || '') })) };
+  } catch { return { codex: [] }; }
+});
 ipcMain.handle('threads:agents', (_e, names) => ({ found: require('./threads').detectAgents(names, terminalEnv()) }));
 ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));

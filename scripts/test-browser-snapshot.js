@@ -19,7 +19,8 @@ app.whenReady().then(async () => {
   win = new BrowserWindow({ show: false, webPreferences: { webviewTag: true, backgroundThrottling: false } });
   await win.loadURL('about:blank');
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
-  const handler = source.slice(source.indexOf('  function createAgentTerminal'), source.indexOf('  const AR_KEY ='));
+  const start = source.indexOf('  function createAgentTerminal');
+  const handler = source.slice(start, source.indexOf("\n  document.getElementById('settings-nav-search')", start));
   const fixture = '<title>Gmail results</title><input aria-label="Search" value="gmail"><input type="password" value="secret-value"><input type="hidden" value="hidden-secret"><div style="display:none">hidden text</div><h1>Gmail - Google</h1><a href="https://mail.google.com/">Gmail</a><p>' + 'result '.repeat(100) + '</p>';
   const result = await win.webContents.executeJavaScript(`(async () => {
     const check = (value, message) => { if (!value) throw new Error(message); };

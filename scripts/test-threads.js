@@ -53,11 +53,11 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
 (async () => {
   const dir = path.join(home, '.terminalvibe', 'threads', 'thread-1');
   const [claude, codex, opencode] = await syncThread(meta, home);
-  assert.deepStrictEqual(claude.items.map(i => i.role), ['user', 'assistant', 'tool']);
+  assert.deepStrictEqual(claude.items.map(i => i.role), ['user', 'tool', 'assistant', 'tool'], 'the handoff read shows as a step, like in the CLI');
   assert.strictEqual(claude.items[0].text, 'Fix the build', 'context note is not shown as part of the message');
-  assert.strictEqual(claude.items[2].summary, 'npm test');
-  assert.strictEqual(claude.items[2].detail, 'npm test', 'tool detail keeps the full command');
-  assert.strictEqual(claude.items[2].error, true);
+  assert.strictEqual(claude.items[3].summary, 'npm test');
+  assert.strictEqual(claude.items[3].detail, 'npm test', 'tool detail keeps the full command');
+  assert.strictEqual(claude.items[3].error, true);
   assert.deepStrictEqual(codex.items.map(i => i.role), ['user', 'tool', 'assistant'], 'codex skips <environment_context>');
   assert.strictEqual(codex.items[0].text, 'Now add docs', 'handoff pointer is not shown as part of the message');
   assert.strictEqual(codex.items[1].summary, 'ls -la');
@@ -74,12 +74,12 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   assert.strictEqual(thread.title, 'Fix the build');
   assert.strictEqual(thread.segments[1].sessionId, 'codex-1');
   assert.strictEqual(thread.segments[1].handoff, true);
-  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'history.json'), 'utf8')).segments[0].items.length, 3);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'history.json'), 'utf8')).segments[0].items.length, 4);
 
   // The agent's transcript is gone: the thread keeps its own copy.
   fs.rmSync(claudeFile);
   const shown = await threadHistory(meta, home);
-  assert.strictEqual(shown[0].items.length, 3);
+  assert.strictEqual(shown[0].items.length, 4);
   assert.deepStrictEqual(shown[0].items[0].images, [img], 'image survives a deleted transcript');
 
   const md = fs.readFileSync(await writeHandoff({ ...meta, names: { claude: 'Claude Code' } }, home), 'utf8');
@@ -92,7 +92,7 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   assert.deepStrictEqual(forkSegs.map(s => [s.harness, s.frozen]), [['claude', true], ['codex', true]]);
   const forkMeta = { id: 'fork-1', title: 'Fork', cwd, segments: forkSegs };
   const forked = await threadHistory(forkMeta, home);
-  assert.deepStrictEqual(forked.map(s => s.items.length), [3, 1], 'history ends at the fork point');
+  assert.deepStrictEqual(forked.map(s => s.items.length), [4, 1], 'history ends at the fork point');
   assert.strictEqual(forked[1].items[0].text, 'Now add docs');
   const forkImg = forked[0].items[0].images[0];
   assert(forkImg.startsWith(path.join(home, '.terminalvibe', 'threads', 'fork-1', 'images')) && fs.existsSync(forkImg), 'images copied into the fork');

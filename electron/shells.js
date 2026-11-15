@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const NOT_INTERACTIVE_SHELLS = new Set(['nologin', 'false', 'git-shell', 'tmux', 'screen', 'rbash']);
+const NOT_INTERACTIVE_SHELLS = new Set(['nologin', 'false', 'git-shell', 'tmux', 'screen', 'rbash', 'systemd-home-fallback-shell']); // the last: systemd-homed's placeholder for a locked home
 
 // wsl.exe prints UTF-16LE. docker-desktop distros are Docker internals, not shells.
 function parseWslList(output) {
