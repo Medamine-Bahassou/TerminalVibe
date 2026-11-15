@@ -26,7 +26,9 @@
     const show = () => {
       if (!target?.isConnected || dismissed || !target.dataset.tip) return;
       const processes = target.dataset.tipProcesses ? JSON.parse(target.dataset.tipProcesses) : null;
-      tip.classList.toggle('ws-process-tooltip', !!processes);
+      // data-tip-rows: a heading (data-tip) over rows [{ icon: 'ph-…' | proc: '<process name>', text }].
+      const rows = target.dataset.tipRows ? JSON.parse(target.dataset.tipRows) : null;
+      tip.classList.toggle('ws-process-tooltip', !!(processes || rows));
       const sessionRow = target.closest('.session-row');
       tip.classList.toggle('session-tooltip', !!sessionRow);
       tip.textContent = target.dataset.tip;
@@ -41,37 +43,39 @@
           tip.append(row);
         }
       }
-      const thread = target.dataset.tipThread ? JSON.parse(target.dataset.tipThread) : null;
-      tip.classList.toggle('thread-tooltip', !!thread);
-      if (thread) {
-        const el = (cls, text) => Object.assign(document.createElement('div'), { className: cls, textContent: text ?? '' });
-        const when = ts => { const d = new Date(ts); return d.toDateString() === new Date().toDateString()
-          ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
-        const project = el('thr-tip-project'); project.innerHTML = '<i class="ph ph-folder" aria-hidden="true"></i>';
-        project.append(Object.assign(document.createElement('span'), { textContent: thread.project || 'No project' }));
-        tip.replaceChildren(el('ws-process-tooltip-heading', target.dataset.tip), project);
-        if (thread.path) tip.append(el('thr-tip-path', thread.path));
-        // Footer: created date and session count, with the agents as logos at the bottom right
-        // (one per agent; names stay readable for screen readers).
-        const n = thread.sessions || 0;
-        const foot = el('thr-tip-foot');
-        foot.append(Object.assign(document.createElement('span'), { textContent:
-          [thread.created ? 'Created ' + when(thread.created) : '', n ? `${n} session${n > 1 ? 's' : ''}` : 'No agent yet'].filter(Boolean).join(' · ') }));
-        if (thread.agents.length) {
-          const logos = el('thr-tip-agents');
-          // Each logo in its agent's brand color (same as the agent picker).
-          logos.innerHTML = thread.agents.map(a => `<span class="thr-tip-agent"${a.color && /^#[0-9a-f]{3,8}$/i.test(a.color) ? ` style="color:${a.color}"` : ''}>${procIconHtml(a.bin, 'ph-robot')}</span>`).join('');
-          logos.setAttribute('aria-label', thread.agents.map(a => a.name).join(', '));
-          foot.append(logos);
+      if (rows) {
+        const heading = document.createElement('div');
+        heading.className = 'ws-process-tooltip-heading'; heading.textContent = target.dataset.tip;
+        tip.replaceChildren(heading);
+        for (const r of rows) {
+          const row = document.createElement('div'); row.className = 'ws-process-tooltip-row';
+          row.innerHTML = r.proc ? procIconHtml(r.proc, 'ph-robot') : `<i class="ph ${/^ph-[\w-]+$/.test(r.icon || '') ? r.icon : 'ph-dot'}" aria-hidden="true"></i>`;
+          const text = document.createElement('span'); text.textContent = r.text; row.append(text);
+          tip.append(row);
         }
-        tip.append(foot);
       }
-      const workspaceButton = target.closest('.ws-btn, .proj-thread');
+      const workspaceButton = target.closest('.ws-btn');
       const sideTarget = workspaceButton || sessionRow;
+      // Threads sidebar cards sit at the right edge: their tooltip opens to the left, top-aligned.
+      const leftTarget = target.closest('#threads-sidebar .ts-card');
+      if (leftTarget) {
+        const lr = leftTarget.getBoundingClientRect(), lw = tip.offsetWidth, lh = tip.offsetHeight;
+        const lx = lr.left - lw - 8 >= 4 ? lr.left - lw - 8 : lr.right + 8;
+        tip.style.transform = `translate(${Math.round(lx)}px, ${Math.round(Math.max(4, Math.min(lr.top, innerHeight - lh - 4)))}px)`;
+        tip.classList.add('show');
+        target.setAttribute('aria-describedby', tip.id);
+        return;
+      }
       const r = (sideTarget || target).getBoundingClientRect();
       const w = tip.offsetWidth, h = tip.offsetHeight;
-      let top = sideTarget ? r.top : r.bottom + 6;
-      if (top + h > innerHeight - 4) top = sideTarget ? innerHeight - h - 4 : r.top - h - 6;
+      // Above the target by default; below only when there is no room above (side tooltips stay beside).
+      let top = sideTarget ? r.top : r.top - h - 6;
+      if (sideTarget && top + h > innerHeight - 4) top = innerHeight - h - 4;
+      else if (!sideTarget) {
+        // Never over the titlebar (window controls) for something below it: then it goes below the target.
+        const floor = target.closest('#titlebar') ? 4 : (document.getElementById('titlebar')?.getBoundingClientRect().bottom || 0) + 4;
+        if (top < floor) top = r.bottom + 6;
+      }
       const preferredLeft = sideTarget ? r.right + 6 : r.left + r.width / 2 - w / 2;
       const left = Math.max(4, Math.min(preferredLeft, innerWidth - w - 4));
       tip.style.transform = `translate(${Math.round(left)}px, ${Math.round(Math.max(4, top))}px)`;
@@ -113,7 +117,7 @@
         else for (const node of record.addedNodes) normalize(node);
       }
       if (target && !target.isConnected) release();
-    }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'data-tip', 'data-tip-processes', 'data-tip-thread'] });
+    }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'data-tip', 'data-tip-processes', 'data-tip-rows'] });
     const schedule = () => { clearTimeout(timer); timer = setTimeout(show, Date.now() < warmUntil ? SKIP_DELAY : DELAY); };
     const take = el => {
       if (el === target) return false;
@@ -550,6 +554,14 @@
     if (entry._claudeImageFiles.length > 20) entry._claudeImageFiles.shift();
   }
 
+  // A dropped, picked or pasted File as a path the terminal's machine can read: its own path
+  // (desktop), else a temp copy (pasted data), or an upload to the backend (browser mode).
+  async function localPathForFile(entry, file) {
+    const api = window.electronAPI;
+    if (api?.getPathForFile) return api.getPathForFile(file) || await api.saveTempFile(file.name, new Uint8Array(await file.arrayBuffer()));
+    return saveBrowserDroppedFile(entry, file);
+  }
+
   async function dropFilesIntoTerminal(entry, files) {
     if (!entry?.term || entry.type === 'browser' || entry.locked || entry.dead || !files.length) return;
     const target=entry.term;
@@ -557,14 +569,10 @@
     const notice=document.createElement('div');notice.className='session-drop-feedback is-pending';
     notice.setAttribute('role','status');notice.textContent='Adding files…';entry.el?.append(notice);
     try {
-      const api=window.electronAPI, paths=[];
+      const paths=[];
       for (const file of files) {
         if (!available()) throw new Error('The target terminal changed while adding files');
-        let path;
-        if (api?.getPathForFile) {
-          path=api.getPathForFile(file);
-          if (!path) path=await api.saveTempFile(file.name,new Uint8Array(await file.arrayBuffer()));
-        } else path=await saveBrowserDroppedFile(entry,file);
+        const path=await localPathForFile(entry,file);
         if (!path) throw new Error('Could not transfer '+file.name);
         paths.push(shellQuote(path));
       }
@@ -992,41 +1000,8 @@
           const i = _pluginWidgets.findIndex(x => x.pluginId === manifest.id && x.id === id);
           if (i !== -1) { const [w] = _pluginWidgets.splice(i, 1); _removeWidgetDom(w); renderPluginWidgets(); }
         },
-        // A page in the right panel, opened by a button on its main page:
-        // { id, label, icon: 'ph-…' (phosphor), el, onShow() }.
-        addPanel: (p) => {
-          const side = document.getElementById('sidebar-right');
-          const home = document.getElementById('sbr-main');
-          const bar = home && home.querySelector('.sbr-body');
-          if (!p || !p.el || !side || !bar) return;
-          const label = p.label || p.id || 'Panel';
-          const page = document.createElement('div');
-          page.className = 'sbr-page';
-          page.style.display = 'none';
-          page.innerHTML = '<div class="sbr-header"><button class="sbr-btn" title="Back"><i class="ph ph-arrow-left"></i></button><span class="sbr-title"></span></div>';
-          page.querySelector('.sbr-title').textContent = label;
-          page.appendChild(p.el);
-          const btn = document.createElement('button');
-          btn.className = 'sbr-big-btn';
-          btn.title = label;
-          const icon = document.createElement('i');
-          icon.className = 'ph ' + (p.icon || 'ph-puzzle-piece');
-          const text = document.createElement('span');
-          text.textContent = label;
-          btn.append(icon, text);
-          btn.addEventListener('click', () => {
-            side.querySelectorAll('.sbr-page').forEach(el => { el.style.display = 'none'; });
-            page.style.display = 'flex';
-            if (typeof p.onShow === 'function') { try { p.onShow(); } catch (e) { console.error('[plugin] panel onShow failed:', e); } }
-          });
-          page.querySelector('.sbr-btn').addEventListener('click', () => {
-            page.style.display = 'none';
-            home.style.display = 'flex';
-          });
-          side.appendChild(page);
-          bar.appendChild(btn);
-          _pluginWidgets.push({ pluginId: manifest.id, id: p.id || ('p' + Math.random().toString(36).slice(2)), position: 'panel', el: page, btn });
-        },
+        // The right panel was removed: plugins that still call this keep working, without a page.
+        addPanel: () => console.warn(`[plugin] ${manifest.id}: ui.addPanel is no longer supported (the right panel was removed)`),
       },
 
       // Plugin-declared settings (manifest.settings). Values are persisted in
@@ -1100,14 +1075,7 @@
     deliverPluginConfig(id, [key]);
   }
 
-  // Panel widgets also own a button on the right panel's main page; if the
-  // panel was open, fall back to the main page.
   function _removeWidgetDom(w) {
-    if (w.btn) {
-      w.btn.remove();
-      const home = document.getElementById('sbr-main');
-      if (home && w.el.style.display !== 'none') home.style.display = 'flex';
-    }
     w.el.remove();
   }
 
@@ -1727,8 +1695,6 @@
   let workspaces = [];       // [{id, label, activeTermId, layout: (Node), folderId?}]
   let folders = [];          // [{id, label, color?, collapsed?}]  — workspace folders/groups
   let sideOrder = [];        // top-level sidebar flow: [{type:'ws'|'folder', id}] in visual order
-  let projects = [];         // [{id, label, path, collapsed?}]; threads are workspaces with ws.thread
-  let projectsCollapsed = false;
   let pinnedCollapsed = false; // "Pinned" section collapsed state
   let sidebarMode = 'normal'; // 'normal' | 'hover' | 'hidden'
   let showWsProcs = true;     // show running processes in workspace buttons
@@ -2032,6 +1998,7 @@
         if (result) {
           const oscCwd = _extractOSC7Cwd(data);
           if (oscCwd) result.term.cwd = oscCwd;
+          result.term._lastOut = Date.now(); // same as writePtyData (Electron)
           result.term.term.write(data);
         }
       } else {
@@ -2160,7 +2127,6 @@
   function sendStdin(sid, data) {
     const src = findTermById(sid);
     if (src && src.term.locked) return; // locked terminal: swallow all input
-    if (src?.term._handoff && handoffOnInput(sid, src.term, data)) return;
     // PTY dimensions must be current before Enter launches a full-screen app.
     if (src && (src.term._resizeTimeout || data.includes(13) || data.includes(10))) fitTerm(src.term, true);
     _sendStdinRaw(sid, data);
@@ -2317,8 +2283,8 @@
         }
       }
       // Never start on an empty workspace: give it its terminal now that the backend is up.
-      if (!regularWorkspaceCount()) { try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); } }
-      else if (!activeWs()?.thread && !getWorkspaceTerminals(activeWs() || {}).length) renderPaneArea();
+      if (!workspaces.length) { try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); } }
+      else if (!getWorkspaceTerminals(activeWs() || {}).length) renderPaneArea();
     } else {
       try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); }
     }
@@ -2476,8 +2442,6 @@
     document.body.classList.toggle('ui-animations', animationsEnabled);
     const toggle = document.getElementById('set-animations');
     if (toggle) toggle.checked = animationsEnabled;
-    const rightSidebar = document.getElementById('sidebar-right');
-    if (rightSidebar) rightSidebar.inert = document.body.classList.contains('sb-right-hidden');
     if (!animationsEnabled) document.querySelectorAll('.session-overlay.closing').forEach(el => el.remove());
   }
 
@@ -2512,6 +2476,8 @@
     try { localStorage.setItem('tv-boot-colors', JSON.stringify({ bg: theme.bg, fg: theme.fg, accent })); } catch { }
     const multiColor = (theme.ui && theme.ui.multiSelect) || theme.palette[3] || '#f9e2af';
     r.setProperty('--multi-select', multiColor);
+    // The terminal theme's bright colors, for syntax highlighting in the chat.
+    ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan'].forEach((c, i) => r.setProperty('--ansi-' + c, theme.palette[9 + i] || theme.palette[1 + i] || theme.fg));
 
     // UI overrides from custom theme
     const uiProps = ['border', 'tabActiveBg', 'tabHoverBg', 'dimText', 'mutedText', 'sidebarBg', 'surfaceBg', 'hoverBg', 'activeBg'];
@@ -2794,6 +2760,8 @@
           if (t.keepOnExit) o.keepOnExit = true;
           if (t.locked) o.locked = true;
           if (t.pinLabel) o.pinLabel = true;
+          if (t.threadHistory) o.threadHistory = true;
+          if (t.chat) o.chat = t.chat;
           if (t.toolProvider) o.toolProvider = t.toolProvider;
           if (t.shell) o.shell = t.shell;
           if (t.claudeSessionId) o.claudeSessionId = t.claudeSessionId;
@@ -2847,6 +2815,8 @@
         if (tData.keepOnExit) entry.keepOnExit = true;
         if (tData.locked) entry.locked = true;
         if (tData.pinLabel) entry.pinLabel = true;
+        if (tData.threadHistory) entry.threadHistory = true;
+        if (tData.chat && typeof tData.chat === 'object') entry.chat = tData.chat;
         if (tData.toolProvider) entry.toolProvider = tData.toolProvider;
         if (tData.claudeSessionId) entry.claudeSessionId = tData.claudeSessionId;
         group.terminals.push(entry);
@@ -3077,9 +3047,7 @@
         return o;
       }),
       sideOrder: sideOrder.map(e => ({ t: e.type, id: e.id })),
-      projects: projects.map(p => ({ id: p.id, label: p.label, path: p.path, collapsed: !!p.collapsed, scratch: !!p.scratch })),
-      projectsCollapsed,
-      workspaces: workspaces.filter(ws => !threadIsDraft(ws)).map(ws => {
+      workspaces: workspaces.map(ws => {
         const o = { id: ws.id, label: ws.label, activeTermId: ws.activeTermId, layout: serializeLayout(ws.layout) };
         if (ws.color) o.color = ws.color;
         if (ws.icon) o.icon = ws.icon;
@@ -3087,7 +3055,8 @@
         if (ws.pinned) o.pinned = true;
         if (ws.bgImage) o.bgImage = ws.bgImage;
         if (ws.bgOpacity != null) o.bgOpacity = ws.bgOpacity;
-        if (ws.thread) { o.thread = ws.thread; o.cwd = ws.cwd; }
+        if (ws.chat) o.chat = ws.chat;
+        if (ws.cwd) o.cwd = ws.cwd;
         return o;
       }),
     };
@@ -3177,8 +3146,6 @@
       }
 
       // Only Scratch has no path (older saves dropped its flag).
-      if (Array.isArray(state.projects)) projects = state.projects.filter(p => p && p.id && typeof p.path === 'string').map(p => ({ ...p, scratch: !!p.scratch || !p.path }));
-      projectsCollapsed = !!state.projectsCollapsed;
       if (state.folders) {
         for (const fData of state.folders) {
           const f = { id: fData.id, label: fData.label || 'Folder', collapsed: !!fData.collapsed };
@@ -3201,9 +3168,19 @@
         if (wsData.pinned) ws.pinned = true;
         if (wsData.bgImage) ws.bgImage = wsData.bgImage;
         if (wsData.bgOpacity != null) ws.bgOpacity = wsData.bgOpacity;
-        if (wsData.thread && typeof wsData.thread === 'object') { ws.thread = wsData.thread; ws.cwd = wsData.cwd; }
+        // Threads were workspaces with ws.thread: they come back as plain workspaces with their chat.
+        const chat = wsData.chat || wsData.thread;
+        if (chat && typeof chat === 'object') ws.chat = chat;
+        if (wsData.cwd) ws.cwd = wsData.cwd;
 
         ws.layout = deserializeLayout(wsData.layout, ws);
+        // Older saves kept one chat per workspace: it becomes its first Chat tab's chat (same history folder).
+        const firstChat = ws.chat && getWorkspaceTerminals(ws).find(t => t.threadHistory && !t.chat);
+        if (firstChat) {
+          firstChat.chat = { ...ws.chat, storeId: ws.chat.storeId || ws.id };
+          if (ws.chat.title) firstChat.label = ws.chat.title.replace(/\s+/g, ' ').slice(0, 28);
+          delete ws.chat;
+        }
         workspaces.push(ws);
         wsCount++;
       }
@@ -3557,7 +3534,7 @@
      root workspaces and folders) is kept in `sideOrder`. Folder children remain a
      contiguous run inside `workspaces`, in the order they appear per folder. */
   function getGroupList(folderKey) {
-    return workspaces.filter(w => !w.thread && (w.folderId || null) === (folderKey || null));
+    return workspaces.filter(w => (w.folderId || null) === (folderKey || null));
   }
 
   function normalizeOrder() {
@@ -3586,7 +3563,7 @@
 
   // Validate sideOrder against current workspaces/folders and append anything missing.
   function sanitizeSideOrder() {
-    const validWs = new Set(workspaces.filter(w => !w.folderId && !w.thread).map(w => w.id));
+    const validWs = new Set(workspaces.filter(w => !w.folderId).map(w => w.id));
     const validFolder = new Set(folders.map(f => f.id));
     const seenWs = new Set();
     const seenFolder = new Set();
@@ -3609,7 +3586,7 @@
     }
     const rest = [];
     for (const f of folders) rest.push(...getGroupList(f.id));
-    workspaces = [...root, ...rest, ...workspaces.filter(w => w.thread)];
+    workspaces = [...root, ...rest];
   }
 
   // sideOrder slot for making a ws the `li`-th root item (or appended if out of range)
@@ -3771,8 +3748,7 @@
         renderSidebar();
       } else {
         // Update active class in-place to avoid flicker from full sidebar rebuild
-        document.querySelectorAll('.proj-item.active').forEach(el => el.classList.remove('active')); // a left draft
-        document.querySelectorAll('.ws-btn, .proj-thread').forEach(btn => {
+        document.querySelectorAll('.ws-btn').forEach(btn => {
           btn.classList.toggle('active', btn.dataset.wsid === id);
           btn.setAttribute('aria-current', btn.dataset.wsid === id ? 'true' : 'false');
         });
@@ -3789,8 +3765,6 @@
     // Hide all cached workspace containers
     Object.values(_wsDomCache).forEach(el => { el.style.display = 'none'; });
 
-    document.getElementById('thread-home')?.remove();
-    workspaces = workspaces.filter(w => !threadIsDraft(w) || w.id === activeWsId);
     // Closing the last tab can leave an empty tab group behind: that is "nothing open".
     if (wsp && wsp.layout && !getWorkspaceTerminals(wsp).length) {
       wsp.layout = null;
@@ -3799,10 +3773,6 @@
       delete _wsDomCache[wsp.id];
     }
     syncThreadPanel();
-    if (wsp && wsp.thread && !wsp.layout) {
-      area.appendChild(buildThreadHome(wsp));
-      return;
-    }
     // A workspace is never left empty: it gets a fresh terminal tab (main window only,
     // and not while a profile switch is tearing workspaces down).
     if (wsp && !wsp.layout && !DETACHED_ONLY && !SETTINGS_ONLY && !_profileSwitching && (nativePtyReady || wsReady)) { addTerminal(wsp.id); return; }
@@ -3941,18 +3911,14 @@
     const ws = findWs(id);
     if (!ws || _closingWs.has(id)) return;
     // Never remove the last workspace — the app must always keep at least one
-    // (otherwise the UI lands in a dead zero-workspace state). Threads don't count.
-    if (!ws.thread && regularWorkspaceCount() <= 1) {
+    // (otherwise the UI lands in a dead zero-workspace state).
+    if (workspaces.length <= 1) {
       if (typeof zoomBadge === 'function') zoomBadge('Cannot remove the last workspace');
       return;
     }
     _closingWs.add(id);
     const termCount = getWorkspaceTerminals(ws).length;
-    // Deleting a thread removes its saved history (and a scratch thread's folder): say so.
-    const scratchDir = ws.thread && !threadProject(ws) ? ws.cwd : null;
-    const msg = ws.thread && !ws.thread.draft
-      ? `Delete "${ws.label}"? Its saved history${scratchDir ? ` and its scratch folder ${scratchDir}` : ''} will be deleted${termCount ? `, and its ${termCount} terminal${termCount > 1 ? 's' : ''} closed` : ''}. The agents' own transcripts are kept.`
-      : termCount > 0
+    const msg = termCount > 0
       ? `Close "${ws.label}" with ${termCount} terminal${termCount > 1 ? 's' : ''}?`
       : `Close "${ws.label}"?`;
     showConfirm(msg,
@@ -3960,15 +3926,13 @@
       () => _closingWs.delete(id));
   }
 
-  function regularWorkspaceCount() { return workspaces.filter(w => !w.thread).length; }
-
   function _removeWorkspace(id) {
     const ws = findWs(id);
     if (!ws) return;
     const terms = getWorkspaceTerminals(ws);
     terms.forEach(t => { try { removeTerminal(ws.id, t.id, true); } catch (e) { console.error('removeTerminal failed during workspace teardown', e); } });
-    // After its terminals close, so nothing still runs in the scratch folder being removed.
-    if (ws.thread && !ws.thread.draft) window.electronAPI?.threadDelete?.(ws.id, threadProject(ws) ? null : ws.cwd).catch(() => {});
+    // Its chat's saved copy goes with it (the agents' own transcripts are kept).
+    if (ws.chat) window.electronAPI?.threadDelete?.(ws.id, null).catch(() => {});
 
     // Clean up cached DOM
     if (_wsDomCache[id]) { _wsDomCache[id].remove(); delete _wsDomCache[id]; }
@@ -4131,9 +4095,11 @@
       entry._atShellPrompt = false;
       if (/claude/i.test(title)) entry._claudeRunning = true;
       // Claude Code titles: "◐◓◑◒ <topic>" while working, "✳ <topic>" when idle.
-      if (/^[\u25D0-\u25D3]/.test(title)) entry._agentWorking = true;
-      else if (/^\u2733/.test(title) && entry._agentWorking) {
+      if (/^[\u25D0-\u25D3]/.test(title)) { if (!entry._agentWorking) entry._workSince = Date.now(); entry._agentWorking = true; }
+      else if (/^\u2733/.test(title)) entry._idleAt = Date.now();
+      if (/^\u2733/.test(title) && entry._agentWorking) {
         entry._agentWorking = false;
+        chatAgentIdle(entry);
         onTerminalFinished({ id: entry.id, kind: 'agent', name: 'claude' });
       }
       setAutomaticTerminalTitle(entry, title);
@@ -4383,7 +4349,11 @@
       keys = { '+': () => zoomAt(v.s * 1.25), '=': () => zoomAt(v.s * 1.25), '-': () => zoomAt(v.s / 1.25), '0': fit,
         r: () => rotate(90), R: () => rotate(-90), f: flip, F: flip };
       apply();
-      overlay.append(img, bar);
+      // The zoomed image stays inside a frame (at most 92vw x 84vh, centered like the overlay, so the
+      // zoom math is unchanged); past it, the image is cropped and panned inside.
+      const stage = document.createElement('div'); stage.className = 'civ-stage';
+      stage.appendChild(img);
+      overlay.append(stage, bar);
     } else {
       const pre = claudeRefPre(found.text);
       pre.onclick = e => e.stopPropagation(); // keep text selectable; the backdrop closes
@@ -4575,12 +4545,12 @@
     // quickly, leaving the newest canvases blank (white page + dead icon).
 
     term.onData(data => {
+      if (entry.threadHistory && !entry._cliView) return; // a Chat tab's terminal is typed into only while it shows
       if (wsReady) sendStdin(id, new TextEncoder().encode(data));
       if (/[\r\x03\x04]/.test(data)) {
         refreshWorkspaceProcsSoon();
         refreshClaudeHistoryAfterInput(entry);
       }
-      if (data.includes('\r')) touchThreadOf(id);
     });
     term.onBinary(data => {
       if (wsReady) {
@@ -4721,8 +4691,6 @@
   function addTerminal(wsId, targetGroupId, opts = {}) {
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
-    // A new tab in a started thread opens on the agent cards (its shell waits underneath).
-    const agentPicker = !!(wsp.thread && wsp.layout && !opts.cmd && !opts.shell);
 
     // Resolve the destination and its previous tab before selecting the new one.
     // The + button may belong to a different split from the focused terminal.
@@ -4743,6 +4711,7 @@
     if (opts.cmd) entry.runCmd = opts.cmd;
     if (opts.label) entry.pinLabel = true;
     if (opts.shell) entry.shell = opts.shell;
+    if (opts.threadHistory) entry.threadHistory = true;
 
     if (!wsp.layout) {
       wsp.layout = {
@@ -4874,7 +4843,7 @@
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
                 fitTerm(entry);
-                if (!entry.el?.querySelector('.thread-home')) entry.term.focus(); // the agent cards keep focus
+                entry.term.focus(); // a Chat tab routes this to its message box
               });
             });
           }
@@ -4899,7 +4868,6 @@
     sendControl({ type: 'create', id, cols: slot.cols, rows: slot.rows, cwd, inheritFromId: previous?.id, argv: entry.argv || [] });
     requestAnimationFrame(() => fitTerm(entry));
 
-    if (agentPicker && entry.el) entry.el.appendChild(buildThreadHome(wsp, entry));
     saveState();
     pluginEmit('terminal:add', { wsId: wsp.id, termId: id, type: 'terminal', label: entry.label });
     return entry;
@@ -5095,6 +5063,8 @@
     if (!wsp) return;
     wsp.activeTermId = termId;
     pluginEmit('terminal:activate', { wsId, termId });
+    const chatEntry = getWorkspaceTerminals(wsp).find(x => x.id === termId && x.threadHistory);
+    if (chatEntry) queueMicrotask(() => { _preferChat = chatEntry; syncThreadPanel(); }); // the chat page moves to it
 
     const group = findGroupContainingTerm(wsp.layout, termId);
     if (group) {
@@ -5455,7 +5425,7 @@
     const busy = entries.filter((t, i) => running[i] || t.locked || browserHasContent(t));
     const go = () => {
       // A workspace is never left without tabs: closing them all opens a fresh terminal first.
-      if (!wsp.thread && getWorkspaceTerminals(wsp).every(t => ids.includes(t.id))) addTerminal(wsId, findGroupContainingTerm(wsp.layout, ids[0])?.id);
+      if (getWorkspaceTerminals(wsp).every(t => ids.includes(t.id))) addTerminal(wsId, findGroupContainingTerm(wsp.layout, ids[0])?.id);
       for (const id of ids) removeTerminal(wsId, id, false, false, true, true);
     };
     if (!busy.length) return go();
@@ -5533,13 +5503,10 @@
     // Last tab in workspace — remove the workspace with confirmation
     // Skip confirmation when detaching (skipPtyClose) — just remove silently
     if (!skipRender && !skipPtyClose && getWorkspaceTerminals(wsp).length <= 1) {
-      // A thread keeps living after its last tab: it goes back to the agent picker.
-      if (wsp.thread) {
-        // Fall through to the normal tab removal below.
-      } else {
+      {
         // Closing the last tab closes the workspace. The app never has zero workspaces,
         // so closing the only one opens a fresh workspace in its place.
-        const closeWs = () => { _removeWorkspace(wsId); if (!regularWorkspaceCount()) createWorkspace(); };
+        const closeWs = () => { _removeWorkspace(wsId); if (!workspaces.length) createWorkspace(); };
         if (_closingWs.has(wsId)) return;
         if (confirmed) { closeWs(); return; }
         _closingWs.add(wsId);
@@ -5686,7 +5653,7 @@
 
     // If this was the last terminal (detach case), remove the now-empty workspace —
     // unless it is the last workspace, which must always be kept.
-    if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0 && !wsp.thread && regularWorkspaceCount() > 1) {
+    if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0 && workspaces.length > 1) {
       _removeWorkspace(wsId);
     }
     pluginEmit('terminal:remove', { wsId, termId, type: entry?.type });
@@ -5799,8 +5766,8 @@
         window.close();
         return;
       }
-      // Last workspace (or a thread): close the dead tab but keep the workspace itself.
-      if (ws.thread || regularWorkspaceCount() <= 1) {
+      // Last workspace: close the dead tab but keep the workspace itself.
+      if (workspaces.length <= 1) {
         removeTerminal(ws.id, id);
         return;
       }
@@ -6666,6 +6633,16 @@
       actions.appendChild(splitH);
       actions.appendChild(splitV);
       actions.appendChild(maxBtn);
+      // Shown (by CSS) while this group's active tab is a Chat tab: switches it between the chat and
+      // the terminal its agent runs in (terminal icon in the chat, chat icon in the terminal).
+      const chatBackBtn = document.createElement('div');
+      chatBackBtn.className = 'tg-btn tg-chat-back';
+      chatBackBtn.title = 'Switch between chat and terminal';
+      chatBackBtn.setAttribute('role', 'button');
+      chatBackBtn.setAttribute('aria-label', 'Switch between chat and terminal');
+      chatBackBtn.innerHTML = '<i class="ph ph-terminal-window tg-chat-to-cli"></i><i class="ph ph-chats-circle tg-cli-to-chat"></i>';
+      chatBackBtn.onclick = () => { const t = node.terminals.find(x => x.id === node.activeTermId); if (t?.threadHistory) setChatView(t, !t._cliView); };
+      actions.appendChild(chatBackBtn);
 
       // Dropdown menu for compact mode
       const dropdownWrap = document.createElement('div');
@@ -6689,6 +6666,7 @@
       dropdown.appendChild(makeDropdownItem('Browser tab', addBrowserBtn.innerHTML, () => addBrowserTab(wsp.id, node.id)));
       const claudeSessionsItem = makeDropdownItem('Claude sessions…', '<i class="ph ph-clock-counter-clockwise"></i>', () => openClaudeHistory(wsp, node.terminals.find(t => t.id === node.activeTermId)));
       dropdown.appendChild(claudeSessionsItem);
+      dropdown.appendChild(makeDropdownItem('New chat', '<i class="ph ph-chats-circle"></i>', () => newChatTab(wsp, node.id)));
       dropdown.appendChild(makeDropdownItem('Split horizontal', splitH.innerHTML, () => splitGroupDirectly(wsp.id, node.id, 'row')));
       dropdown.appendChild(makeDropdownItem('Split vertical', splitV.innerHTML, () => splitGroupDirectly(wsp.id, node.id, 'column')));
       dropdown.appendChild(makeDropdownItem(isMax ? 'Restore' : 'Maximize', maxBtn.innerHTML, () => { if (node.activeTermId) toggleMaximizeTerminal(wsp.id, node.activeTermId); }));
@@ -7284,6 +7262,7 @@
     entry.el = slot;
     entry.term.open(wrap);
     entry.opened = true;
+    if (entry.threadHistory) queueMicrotask(() => syncThreadPanel()); // the history page moves into its tab
     try { _termFitObserver.observe(slot); } catch { }
     // Attach WebGL only if the slot is actually on screen (renderPaneArea opens
     // hidden terminals too; their contexts get attached later on activate).
@@ -7312,11 +7291,12 @@
     }, true);
     slot.addEventListener('mousedown', () => {
       focusSlot(entry);
-      entry.term.focus();
+      entry.term.focus(); // a Chat tab routes this to its message box
     });
 
     // Right-click on terminal body area
     slot.addEventListener('contextmenu', (e) => {
+      if (entry.threadHistory && !entry._cliView) return; // no terminal menu over the chat page
       e.preventDefault();
       e.stopPropagation();
       showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id, _fromBody: true });
@@ -7518,14 +7498,14 @@
     };
     // Capture context drags before the terminal's textarea/default drop handlers.
     bodyEl.addEventListener('dragenter', e => {
-      if(!isAttachmentDrag(e)) return;
+      if(!isAttachmentDrag(e) || e.target.closest?.('#sbr-thread')) return; // the chat page takes its own drops
       probeSessionDropTarget(e);
       e.stopPropagation();
       if(isFileDrag(e) && inSessionDropArea(e)) e.preventDefault();
       if(acceptsSessionDrop(e)) {e.preventDefault();showSessionDropEffect();}else clearSessionDropEffect();
     }, true);
     bodyEl.addEventListener('dragover', e => {
-      if(!isAttachmentDrag(e)) return;
+      if(!isAttachmentDrag(e) || e.target.closest?.('#sbr-thread')) return; // the chat page takes its own drops
       probeSessionDropTarget(e);
       e.stopPropagation();
       const accepted = isFileDrag(e) ? inSessionDropArea(e) : acceptsSessionDrop(e);
@@ -7534,12 +7514,12 @@
       if(acceptsSessionDrop(e)) showSessionDropEffect(); else clearSessionDropEffect();
     }, true);
     bodyEl.addEventListener('dragleave', e => {
-      if(!isAttachmentDrag(e)) return;
+      if(!isAttachmentDrag(e) || e.target.closest?.('#sbr-thread')) return; // the chat page takes its own drops
       e.stopPropagation();
       if(!e.relatedTarget || !bodyEl.contains(e.relatedTarget) || e.relatedTarget.closest?.('.session-overlay')) {lastSessionHover=null;clearSessionDropEffect();}
     }, true);
     bodyEl.addEventListener('drop', e => {
-      if(!isAttachmentDrag(e)) return;
+      if(!isAttachmentDrag(e) || e.target.closest?.('#sbr-thread')) return; // the chat page takes its own drops
       e.preventDefault();e.stopPropagation();
       lastSessionHover=null;
       clearSessionDropEffect();
@@ -8379,14 +8359,12 @@
       }
       unpinnedSlot++;
     }
-    renderProjectsSection(sb, actionsEl);
   }
 
-  /* ── Projects & threads ──
-     A project is a folder on disk. A thread is a TerminalVibe workspace with
-     ws.thread + ws.cwd: hidden from the workspace flow, listed under its
-     project, and every tab it opens starts in the project path. An empty
-     thread shows an agent picker; the right panel shows its transcript. */
+  /* ── Chat tabs ──
+     Each Chat tab is its own thread: its chat (tab.chat: agent sessions, picks, title) and the
+     agent it runs in its own terminal. Its page shows the sessions' transcripts and sends
+     messages to that agent. A workspace can hold any number of Chat tabs. */
   const THREAD_HARNESSES = [
     // color: the brand color of the logo; none = a black/white logo, drawn in the text color.
     { id: 'claude', name: 'Claude Code', bin: 'claude', color: '#D97757' },
@@ -8400,68 +8378,15 @@
     { id: 'qwen', name: 'Qwen Code', bin: 'qwen', color: '#6950EF' },
     { id: 'aider', name: 'Aider', bin: 'aider' },
   ];
-  let _threadAgents = null; // { found: {bin: path|null} }
   const harnessOf = id => THREAD_HARNESSES.find(h => h.id === id);
-  // Scratch isn't a real project: its threads count as having none.
-  const threadProject = ws => projects.find(p => p.id === ws?.thread?.projectId && !p.scratch);
-
-  function loadThreadAgents(refresh) {
-    if (_threadAgents && !refresh) return Promise.resolve(_threadAgents);
-    const api = window.electronAPI;
-    // Browser mode can't look at PATH: offer every harness and let the PTY report a missing one.
-    const p = api?.threadAgents ? api.threadAgents(THREAD_HARNESSES.map(h => h.bin))
-      : Promise.resolve({ found: Object.fromEntries(THREAD_HARNESSES.map(h => [h.bin, h.bin])) });
-    return p.then(r => (_threadAgents = r), () => (_threadAgents = { found: {} }));
-  }
-
-  // ── Agents started by hand in a thread's tabs (typing `codex` in its shell) ──
-  // Each one becomes a new session of the thread, and gets the thread's history
-  // typed in as its first message, like an agent picked from the agent picker.
   const _tabAgent = new Map(); // termId -> harness running there at the last check
-  // Appended to the first message you send to a new agent of the thread (main strips it from the history again).
-  // Background only: the agent should answer the message itself, not report on the note or the file.
-  const _handoffNote = file => ` <terminalvibe_context history="${file}">Read the history only if my message depends on earlier work. Never mention this context or the file and never summarize it; reply only to my message.</terminalvibe_context>`;
 
-  // Called for your keystrokes in a tab waiting for a handoff (entry._handoff = file).
-  // On Enter after real text (not a slash command), the note goes in before the Enter.
-  function handoffOnInput(sid, entry, data) {
-    const text = new TextDecoder().decode(data);
-    if (text === '\r') {
-      const send = entry._handoffTyped > 0 && !entry._handoffSlash;
-      entry._handoffTyped = 0; entry._handoffSlash = false;
-      if (!send) return false;
-      const file = entry._handoff;
-      delete entry._handoff;
-      // Only an agent gets the note: if the agent already exited, this Enter belongs to the shell
-      // (the handoff is stale; an agent started there next is picked up and gets its own).
-      // With the agent's pid, ask the OS (instant); the process name comes from a table up to 3s old.
-      const alive = entry._agentPid && window.electronAPI?.processAlive
-        ? window.electronAPI.processAlive(entry._agentPid).catch(() => false)
-        : checkTerminalRunning(sid).then(name => THREAD_HARNESSES.some(h => h.bin === String(name || '').toLowerCase().replace(/\.(exe|cmd)$/, '')));
-      alive.then(isAgent => {
-        const enter = () => sendStdin(sid, new TextEncoder().encode('\r'));
-        if (!isAgent) { enter(); return; }
-        sendStdin(sid, new TextEncoder().encode(_handoffNote(file)));
-        // Separate Enter: sent together, Codex treats the text as a paste and Enter as a newline.
-        setTimeout(enter, 300);
-      });
-      return true;
-    }
-    if (text === '\x7f' || text === '\b') { entry._handoffTyped = Math.max(0, (entry._handoffTyped || 0) - 1); return false; }
-    if (text === '\x03' || text === '\x15' || text === '\x1b') { entry._handoffTyped = 0; entry._handoffSlash = false; return false; }
-    const printable = text.replace(/\x1b\[[0-9;?]*[A-Za-z~]/g, '').replace(/[\x00-\x1f\x7f]/g, '');
-    if (printable) {
-      if (!entry._handoffTyped) entry._handoffSlash = printable.startsWith('/');
-      entry._handoffTyped = (entry._handoffTyped || 0) + printable.length;
-    }
-    return false;
-  }
   let _watching = false;
   async function watchThreadAgents() {
     if (_watching) return;
     _watching = true;
     try {
-      for (const ws of workspaces.filter(w => w.thread && !w.thread.draft)) {
+      for (const ws of workspaces) {
         for (const t of getWorkspaceTerminals(ws).filter(isLiveTerminal)) {
           const info = window.electronAPI?.terminalHasRunningProcess
             ? await window.electronAPI.terminalHasRunningProcess(t.id).catch(() => null)
@@ -8472,196 +8397,260 @@
           const h = THREAD_HARNESSES.find(x => x.bin === name);
           const before = _tabAgent.get(t.id);
           _tabAgent.set(t.id, h?.id || null);
-          if (h && info.pid) t._agentPid = info.pid;
-          if (before && !h) { delete t._handoff; delete t._agentPid; }
-          if (h && before !== h.id) adoptThreadAgent(ws, t, h);
+          if (h && before !== h.id && t.threadHistory) adoptThreadAgent(t, h); // typed into the Chat tab's own terminal
         }
       }
     } finally { _watching = false; }
   }
-  setInterval(() => { if (!DETACHED_ONLY && !SETTINGS_ONLY && workspaces.some(w => w.thread && !w.thread.draft)) watchThreadAgents(); }, 1500);
+  setInterval(() => { if (!DETACHED_ONLY && !SETTINGS_ONLY) watchThreadAgents(); }, 1500);
 
-  async function adoptThreadAgent(ws, term, h) {
-    const t = ws.thread;
-    const segs = threadSegments(ws);
-    const api = window.electronAPI;
-    // History before this agent: hand it over only if there is some.
-    const hist = segs.length && api?.threadHistory ? await api.threadHistory(threadMeta(ws)).catch(() => []) : [];
-    Object.assign(t, { harness: h.id, sessionId: null, agentTermId: term.id });
-    segs.push({ harness: h.id, sessionId: null, cwd: ws.cwd, since: Date.now() - 5000 });
+  function adoptThreadAgent(term, h) {
+    term.chat ||= { createdAt: Date.now() };
+    // The tab's own folder: Claude/Codex transcripts are looked up by it.
+    term._chatSeg = { harness: h.id, sessionId: null, cwd: term.cwd || wsOf(term)?.cwd, since: Date.now() - 5000 };
+    threadSegments(term).push(term._chatSeg);
     term.toolProvider = h.id;
     saveState();
     syncThreadPanel(true);
-    renderSidebar();
-    if (!hist.some(s => s.items.length) || !api?.threadHandoff) return;
-    let file;
-    try { file = await api.threadHandoff({ ...threadMeta(ws), segments: threadMeta(ws).segments.slice(0, -1), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); }
-    catch { zoomBadge('Could not write the handoff file'); return; }
-    segs[segs.length - 1].handoff = true;
-    if (_tabAgent.get(term.id) === h.id) term._handoff = file; // goes out with your first message
-    saveState();
-    syncThreadPanel(true);
   }
 
-  // A thread's history is a list of agent sessions ("segments"), oldest first.
-  // Not a real thread yet: an unsaved draft, or a thread with no agent session and no open tab.
-  // Drafts stay out of the sidebar and the saved state, and are dropped on switch-away.
-  function threadIsDraft(w) {
-    return !!w?.thread && (!!w.thread.draft || (!threadSegments(w).length && !getWorkspaceTerminals(w).length));
-  }
+  const wsOf = tab => tab && findTermById(tab.id)?.ws;
+  // A chat's history is a list of agent sessions ("segments"), oldest first. `ws` here (and in the
+  // chat functions below) is the Chat tab: it carries the chat, its folder (cwd) and its label.
   function threadSegments(ws) {
-    const t = ws.thread;
+    const t = ws.chat;
+    if (!t) return [];
     if (!Array.isArray(t.segments)) t.segments = t.harness ? [{ harness: t.harness, sessionId: t.sessionId, cwd: ws.cwd, since: t.since || t.createdAt, model: t.model, effort: t.effort }] : [];
     return t.segments;
   }
 
-  const threadMeta = ws => ({ id: ws.id, title: ws.label, projectId: ws.thread.projectId, cwd: ws.cwd, createdAt: ws.thread.createdAt,
+  const threadMeta = ws => ({ id: ws.chat?.storeId || ws.id, title: ws.chat?.title || ws.label, projectId: null, cwd: ws.cwd, createdAt: ws.chat?.createdAt,
     segments: threadSegments(ws).map(x => ({ harness: x.harness, sessionId: x.sessionId, cwd: x.cwd || ws.cwd, since: x.since, model: x.model, effort: x.effort, handoff: x.handoff,
       ...(x.frozen ? { frozen: true } : {}), ...(x.unsupported ? { unsupported: true } : {}) })) });
 
-  // Fork from a message: a new thread in the same project holding the history up to it.
-  // TerminalVibe owns the fork (frozen copies of the sessions + the usual handoff), so any agent can continue it.
-  async function forkThreadAt(ws, seg, item) {
-    const api = window.electronAPI;
-    if (!api?.threadFork || !ws?.thread) return;
-    const id = uuid(), label = ('Fork: ' + ws.label).slice(0, 60);
-    let segments;
-    try { segments = await api.threadFork({ meta: threadMeta(ws), seg, item, id, title: label }); }
-    catch (e) { console.error('[fork]', e); zoomBadge('Could not fork this thread'); return; }
-    workspaces.push({ id, label, layout: null, activeTermId: null, cwd: ws.cwd,
-      thread: { projectId: ws.thread.projectId, harness: null, sessionId: null, createdAt: Date.now(), forkOf: ws.id, segments } });
-    openThread(id); // opens on the agent picker, with the forked history beside it
-  }
-
-  function threadArgv(ws, resume) {
-    const t = ws.thread;
-    const h = harnessOf(t.harness);
-    const argv = [_threadAgents?.found?.[h.bin] || h.bin];
-    if (t.harness === 'claude') argv.push(resume ? '--resume' : '--session-id', t.sessionId);
-    else if (t.harness === 'codex' && resume && t.sessionId) argv.push('resume', t.sessionId);
-    return argv;
-  }
-
-  // Start an agent in the thread, in a new tab. The same agent
-  // with a known session resumes it (it already has the context); any other
-  // start is a new session that gets the whole thread so far as a handoff file.
-  async function launchThreadAgent(ws, harness) {
-    const t = ws.thread;
-    if (!await ensureThreadCwd(ws)) return;
-    if (!harnessOf(harness)) return;
-    delete t.draft; // launching an agent makes the draft a real thread in the sidebar
-    const segs = threadSegments(ws);
-    let cur = segs[segs.length - 1];
-    let resume = !!(cur && cur.harness === harness && t.sessionId);
-    // A session that never saved a transcript (no prompt yet, or saving was off)
-    // can't be resumed: start that session over.
-    if (resume && window.electronAPI?.threadHistory) {
-      const hist = await window.electronAPI.threadHistory(threadMeta(ws)).catch(() => null);
-      if (hist && !hist[hist.length - 1]?.items.length) { resume = false; segs.pop(); cur = segs[segs.length - 1]; }
+  // ── Right panel: thread flow ──
+  let _threadPoll = null, _flowSig = '';
+  // A prompt's image paths (attached or pasted) become link chips "image.png 18 KB" in its text;
+  // the images themselves show above the bubble. Both open the image viewer.
+  const _thrImgSize = new Map(); // path -> bytes, known once the image was read
+  const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+  function userTextHtml(text) {
+    // Leading "> " blocks are citations (quoted from the chat): truncated chips above the prompt.
+    const lines = String(text).split('\n'), quotes = [];
+    while (lines.length && lines[0].startsWith('>')) {
+      const block = [];
+      while (lines.length && lines[0].startsWith('>')) block.push(lines.shift().replace(/^> ?/, ''));
+      quotes.push(block.join('\n'));
+      while (lines.length && !lines[0].trim()) lines.shift();
     }
-    t.harness = harness;
-    const h = harnessOf(harness);
-    let handoff = null;
-    if (!resume) {
-      t.sessionId = harness === 'claude' ? uuid() : null;
-      if (segs.length && window.electronAPI?.threadHandoff) {
-        try { handoff = await window.electronAPI.threadHandoff({ ...threadMeta(ws), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); }
-        catch { zoomBadge('Could not write the handoff file'); }
-      }
-      segs.push({ harness, sessionId: t.sessionId, cwd: ws.cwd, since: Date.now(), ...(handoff ? { handoff: true } : {}) });
-    }
-    const old = t.agentTermId && getWorkspaceTerminals(ws).find(x => x.id === t.agentTermId);
-    let launched = false;
-    try {
-      const res = await handleAgentRequest({ method: 'launch', params: {
-        workspaceId: ws.id,
-        placement: ws.layout ? { mode: 'tab' } : { compact: false },
-        layout: { name: h.name, cwd: ws.cwd, argv: threadArgv(ws, resume), returnToShell: true },
-      } });
-      const id = res.launches[0]?.id;
-      const entry = id && findTermById(id)?.term;
-      if (entry) {
-        entry.toolProvider = harness;
-        if (harness === 'claude') entry.claudeSessionId = t.sessionId;
-        t.agentTermId = id;
-        _tabAgent.set(id, harness);
-        if (handoff) entry._handoff = handoff; // goes out with your first message
-        launched = true;
-      }
-      // Resuming the same session replaces its old tab, so two processes never share one session.
-      if (old && resume) removeTerminal(ws.id, old.id, false, false, true, true);
-    } catch (err) { zoomBadge(err.message || 'Could not launch agent'); }
-    saveState();
-    syncThreadPanel(true);
-    return launched;
-  }
-
-  function addProject(then) {
-    const add = path => {
-      path = String(path || '').trim().replace(/^["']|["']$/g, '');
-      if (!path) return;
-      let p = projects.find(x => x.path === path);
-      if (!p) { p = { id: uuid(), label: path.split(/[\\/]/).filter(Boolean).pop() || path, path }; projects.push(p); }
-      projectsCollapsed = false;
-      renderSidebar(); saveState();
-      then?.(p);
-    };
-    if (window.electronAPI?.selectDirectory) window.electronAPI.selectDirectory(defaultTerminalPath || '').then(add);
-    else showPrompt('Project folder path', '', add);
-  }
-
-  // A thread with no project: "Scratch" groups them, each in its own folder under ~/.terminalvibe/scratch.
-  function scratchProject() {
-    let p = projects.find(x => x.scratch);
-    if (!p) { p = { id: uuid(), label: 'Scratch', path: '', scratch: true }; projects.push(p); }
-    return p;
-  }
-  // Give a project-less thread its scratch folder before anything runs in it.
-  async function ensureThreadCwd(ws) {
-    if (ws.cwd) return true;
-    const dir = await window.electronAPI?.threadScratch?.().catch(() => null);
-    if (!dir) { zoomBadge('Choose a project first'); return false; }
-    ws.cwd = dir;
-    ws.thread.projectId = scratchProject().id;
-    return true;
-  }
-
-  // No projectId (or the Scratch one): the thread starts with no project selected.
-  function createThread(projectId) {
-    let p = projectId ? projects.find(x => x.id === projectId) : null;
-    if (projectId && !p) return;
-    if (p?.scratch) p = null;
-    if (p) p.collapsed = false;
-    projectId = p?.id || null;
-    let ws = workspaces.find(w => w.thread?.draft && (w.thread.projectId || null) === projectId);
-    if (!ws) {
-      ws = { id: uuid(), label: 'New thread', layout: null, activeTermId: null, cwd: p?.path || null,
-        thread: { projectId, draft: true, harness: null, sessionId: null, createdAt: Date.now() } };
-      workspaces.push(ws);
-    }
-    openThread(ws.id);
-  }
-
-  function openThread(id) {
-    activateWorkspace(id);
-    renderSidebar();
-    saveState();
-    if (rightPanelMode() !== 'history') toggleRightPanel('history');
-  }
-
-  function removeProject(id) {
-    const p = projects.find(x => x.id === id);
-    const threads = workspaces.filter(w => w.thread?.projectId === id);
-    showConfirm(`Remove "${p.label}"${threads.length ? ` and its ${threads.length} thread${threads.length > 1 ? 's' : ''}` : ''}? Files on disk are kept.`, () => {
-      // Never strand the app on zero workspaces.
-      if (threads.length && !regularWorkspaceCount()) createWorkspace();
-      threads.forEach(w => _removeWorkspace(w.id));
-      projects = projects.filter(x => x.id !== id);
-      renderSidebar(); saveState();
+    text = lines.join('\n');
+    const cites = quotes.map(q => `<span class="thr-cite" title="${escHtml(q)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(q.replace(/\s+/g, ' '))}</span></span>`).join('');
+    const paths = [];
+    const marked = String(text).replace(new RegExp(IMAGE_PATH_RE.source, 'gi'), (m, q, quoted, bare) => {
+      paths.push(quoted || bare);
+      return `\u0000${paths.length - 1}\u0000`;
     });
+    const html = mdLite(marked).replace(/\u0000(\d+)\u0000/g, (_, n) => {
+      const p = paths[n], size = _thrImgSize.get(p);
+      return `<button type="button" class="thr-img-link" data-path="${escHtml(p)}" title="${escHtml(p)}"><span class="thr-img-link-name">${escHtml(p.split(/[\\/]/).pop())}</span>`
+        + `<span class="thr-img-size" data-size-path="${escHtml(p)}">${size ? fmtBytes(size) : ''}</span></button>`;
+    }).trim();
+    return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
+  }
+  const _pendingMsgs = new Map(); // chat tab id -> { text, at }: sent, not in the transcript yet
+  const _turns = new Map(); // chat tab id -> { since, sawBusy }: a sent message whose answer is still coming
+  const fmtSecs = s => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  // Is the workspace's agent working on a turn? Claude Code says so in its terminal title;
+  // Codex is judged by its output during a turn sent from the chat.
+  function chatWorking(ws) {
+    if (!ws) return null;
+    let turn = _turns.get(ws.id);
+    const starting = _chatStarting.get(ws.id);
+    if (turn && starting) return { label: starting.text, wait: starting.wait, since: turn.since };
+    const t = liveThreadAgent(ws);
+    const busy = !!t && (t._agentWorking || (!!turn && _tabAgent.get(t.id) !== 'claude' && Date.now() - (t._lastOut || 0) < 2000));
+    // A sent turn ends when the agent, seen working, is idle again (or, never seen working,
+    // once the message is in the transcript).
+    if (turn && busy) turn.sawBusy = true;
+    // (A turn too quick for the 1s checks shows as Claude's title going idle after the message was typed in.)
+    if (turn && !busy && (turn.sawBusy || (turn.sentAt && t?._idleAt > turn.sentAt + 300) || (!_pendingMsgs.has(ws.id) && Date.now() - turn.since > 1500))) { _turns.delete(ws.id); turn = null; }
+    if (!busy && !turn) return null;
+    return { label: 'Thinking', since: turn ? turn.since : (t._workSince || Date.now()) };
+  }
+  // A Chat tab shows the chat, or (the footer button) the terminal its agent runs in.
+  // The tab bar's chat button brings the chat back.
+  function setChatView(tab, cli) {
+    if (!tab?.threadHistory) return;
+    tab._cliView = !!cli;
+    tab.el?.classList.toggle('chat-cli', !!cli);
+    if (thrPage.parentElement === tab.el) thrPage.style.display = cli ? 'none' : 'flex';
+    if (cli) requestAnimationFrame(() => { fitTerm(tab); tab.term.focus(); });
+    else { _flowSig = ''; if (curChat() === tab) { refreshThreadFlow(tab); syncThreadComposer(tab); } thrInput.focus(); }
+  }
+  // An agent finished its turn: update the chat now, not on the next poll.
+  function chatAgentIdle(entry) {
+    if (curChat() !== entry || !thrPage.offsetParent) return;
+    _flowSig = '';
+    refreshThreadFlow(entry);
+    syncWorking(entry);
+  }
+  // The "Thinking · 4s" row at the end of the chat (kept out of the history render so it can tick).
+  function syncWorking(ws) {
+    const flow = thrPage.querySelector('#sbr-thread-flow');
+    const w = chatWorking(ws);
+    let el = flow.querySelector('.thr-working');
+    if (!w) { el?.remove(); return; }
+    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 48;
+    if (!el) { el = document.createElement('div'); el.className = 'thr-working'; el.setAttribute('role', 'status'); }
+    if (el !== flow.lastElementChild) flow.appendChild(el);
+    el.classList.toggle('wait', !!w.wait);
+    el.innerHTML = w.wait ? `<i class="ph ph-hand-pointing" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
+      : `<span class="thr-shimmer">${escHtml(w.label)}</span><span class="thr-working-time">${fmtSecs(Math.max(0, Math.round((Date.now() - w.since) / 1000)))}</span>`;
+    if (atBottom) flow.scrollTop = flow.scrollHeight;
+  }
+  const pendingHtml = ws => _pendingMsgs.has(ws.id)
+    ? `<div class="thr-msg user thr-pending"><div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(_pendingMsgs.get(ws.id).text).html}</div></div></div>` : '';
+  const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
+  // A chat is a tab (its history + a message box); a workspace can hold any number of them.
+  // ponytail: it is a terminal tab whose shell sits under the page until the chat starts its agent
+  // there; a real non-terminal tab type if the idle shell ever matters.
+  function newChatTab(ws, groupId, harness) {
+    if (!ws) return;
+    if (activeWsId !== ws.id) activateWorkspace(ws.id);
+    const tab = addTerminal(ws.id, groupId, { label: 'Chat', threadHistory: true });
+    if (!tab) return;
+    tab.chat = { createdAt: Date.now() };
+    if (harness) setChatOpts(tab, { harness });
+    _preferChat = tab;
+    syncThreadPanel(true);
+    thrInput.focus();
+    return tab;
+  }
+  function openChatTab(tab) {
+    const ws = wsOf(tab);
+    if (!ws) return;
+    if (activeWsId !== ws.id) activateWorkspace(ws.id);
+    activateTerminal(ws.id, tab.id);
+    _preferChat = tab;
+    syncThreadPanel();
+  }
+  // The titlebar chat button: the workspace's most recent Chat tab, or a new one.
+  function openThreadHistory(ws, groupId) {
+    if (!ws) return;
+    const tabs = getWorkspaceTerminals(ws).filter(t => t.threadHistory);
+    const tab = tabs.find(t => t === _curChat) || tabs.sort((a, b) => (b.chat?.updatedAt || 0) - (a.chat?.updatedAt || 0))[0];
+    if (tab) openChatTab(tab); else newChatTab(ws, groupId);
+  }
+  // A chat's tab is named after its first prompt.
+  function setChatTabLabel(tab) {
+    const label = (tab.chat?.title || 'Chat').replace(/\s+/g, ' ').slice(0, 28);
+    if (tab.label === label) return;
+    tab.label = label;
+    const el = document.querySelector(`.tg-tab[data-termid="${tab.id}"] .tg-tab-name`);
+    if (el) el.textContent = label;
+    saveState();
+  }
+  // The chat page is a single element: it moves into the Chat tab in view (the focused one, or
+  // the one just opened), and is looked up through thrPage (a restored tab can hold it before the
+  // tab is in the document). Another Chat tab in view at the same time (a split) keeps an inert
+  // snapshot of its chat; focusing it brings the live page over. With no Chat tab in view the page
+  // is parked (hidden) at the end of the body.
+  const thrPage = document.getElementById('sbr-thread');
+  let _curChat = null, _preferChat = null;
+  // Safety net (startup restores and starts tabs in an order that can miss the move): a Chat tab in view
+  // that doesn't hold the page gets it.
+  setInterval(() => {
+    const ws = activeWs();
+    if (!ws?.layout || DETACHED_ONLY || SETTINGS_ONLY) return;
+    const shown = getWorkspaceTerminals(ws).find(t => t.threadHistory && t.el?.offsetParent && findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id);
+    if (shown && thrPage.parentElement !== shown.el && !(_curChat && thrPage.parentElement === _curChat.el && _curChat.el.offsetParent)) { _preferChat = shown; syncThreadPanel(); }
+  }, 500);
+  const curChat = () => _curChat;
+  function syncThreadPanel(force) {
+    const page = thrPage;
+    if (!page) return;
+    const ws = activeWs();
+    clearInterval(_threadPoll); _threadPoll = null;
+    const histBtn = document.getElementById('btn-thread-history');
+    if (histBtn) histBtn.hidden = !ws;
+    const chats = ws ? getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.el) : [];
+    for (const t of chats) {
+      t.el.classList.add('chat-tab');
+      // Every "focus this tab" path (tab clicks, pane clicks, activation) lands on its chat's message
+      // box (bringing the page over), never on the shell underneath; in terminal view, on the terminal.
+      if (t.term._chatFocus) continue;
+      t.term._chatFocus = true;
+      t.term.focus = () => {
+        if (t._cliView) return Object.getPrototypeOf(t.term).focus.call(t.term);
+        if (_curChat !== t) { _preferChat = t; syncThreadPanel(); }
+        if (!page.contains(document.activeElement)) thrInput.focus({ preventScroll: true });
+      };
+    }
+    const shown = chats.filter(t => findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id);
+    const tab = shown.find(t => t === _preferChat) || shown.find(t => t.id === ws.activeTermId) || shown.find(t => t === _curChat) || shown[0];
+    _preferChat = null;
+    const prev = _curChat;
+    if (!tab) {
+      _curChat = null;
+      page.style.display = 'none';
+      if (page.parentElement !== document.body) document.body.append(page); // parked until a Chat tab takes it
+      return;
+    }
+    if (page.parentElement !== tab.el) {
+      // The tab it leaves keeps a still picture of its chat while it stays in view.
+      if (prev && prev !== tab && prev.el?.offsetParent && page.parentElement === prev.el && !prev._cliView) {
+        const snap = page.cloneNode(true);
+        snap.querySelectorAll('[id]').forEach(el => el.removeAttribute('id')); // the root keeps #sbr-thread for its styles
+        snap.classList.add('thr-snapshot');
+        // A picture you can hover and scroll (its own cursors and hover styles), but not type into or tab to;
+        // pressing anywhere on it brings the live chat over.
+        snap.setAttribute('aria-hidden', 'true');
+        snap.querySelectorAll('textarea, input, button, [tabindex]').forEach(el => { el.tabIndex = -1; });
+        const owner = prev;
+        snap.addEventListener('mousedown', e => { e.preventDefault(); owner.term.focus(); }, true);
+        prev.el.querySelectorAll(':scope > .thr-snapshot').forEach(el => el.remove());
+        prev.el.appendChild(snap);
+        snap.querySelector('.thr-flow').scrollTop = page.querySelector('#sbr-thread-flow').scrollTop; // same place as the live chat
+      }
+      tab.el.querySelectorAll(':scope > .thr-snapshot').forEach(el => el.remove());
+      tab.el.appendChild(page);
+    }
+    // Each chat keeps its own unsent draft and attachments.
+    if (prev !== tab) {
+      if (prev) { prev._draft = thrInput.value; prev._files = _chatFiles; }
+      thrInput.value = tab._draft || ''; _chatFiles = tab._files || [];
+      autosizeThreadInput(); renderChatFiles();
+    }
+    _curChat = tab;
+    page.style.display = tab._cliView ? 'none' : 'flex';
+    // A hidden tab loses its scroll position: put it back now, before the frame is painted (no jump).
+    const st = tab._scrollState, f = page.querySelector('#sbr-thread-flow');
+    if (f.offsetParent && f.dataset.seen) {
+      if (!st || st.bottom) f.scrollTop = f.scrollHeight; else if (Math.abs(f.scrollTop - st.top) > 2) f.scrollTop = st.top;
+    }
+    if (page.dataset.chat !== tab.id || force) {
+      page.dataset.chat = tab.id; _flowSig = '';
+      if (prev !== tab) {
+        const flow = page.querySelector('#sbr-thread-flow');
+        if (prev) {
+          // What was unfolded (turns, thoughts, tool calls, diffs, long messages) comes back with it.
+          prev._open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
+          prev._flowHtml = flow.innerHTML;
+        }
+        // Its last view shows at once (no blank frame while its history loads); the refresh then redraws it.
+        flow.innerHTML = tab._flowHtml || '';
+        if (tab._flowHtml) flow.dataset.seen = '1'; else delete flow.dataset.seen;
+      }
+    }
+    refreshThreadFlow(tab);
+    syncThreadComposer(tab);
+    _threadPoll = setInterval(() => {
+      if (!page.isConnected || page.parentElement !== tab.el) { syncThreadPanel(); return; } // tab closed or moved
+      if (_curChat === tab && !document.hidden && page.offsetParent) { refreshThreadFlow(tab); syncThreadComposer(tab); }
+    }, 1000);
   }
 
-  // Small popover list (the thread page's project chooser).
+  // Small popover list (the chat composer's agent / model / effort / access pickers).
   let _pickMenu = null;
   function closePickMenu() { _pickMenu?.remove(); _pickMenu = null; }
   function openPickMenu(trigger, items, onPick) {
@@ -8696,251 +8685,644 @@
   }
   document.addEventListener('mousedown', e => { if (_pickMenu && !_pickMenu.contains(e.target) && !_pickMenu._trigger.contains(e.target)) closePickMenu(); }, true);
 
-  function chooseThreadProject(ws, trigger) {
-    openPickMenu(trigger, [
-      { label: 'No project', hint: 'scratch folder', value: '', selected: !threadProject(ws), icon: '<i class="ph ph-note-blank"></i>' },
-      ...projects.filter(p => !p.scratch).map(p => ({ label: p.label, hint: p.path, value: p.id, selected: p.id === ws.thread.projectId, icon: '<i class="ph ph-folder"></i>' })),
-      { label: 'Add project…', value: '+', icon: '<i class="ph ph-folder-plus"></i>' },
-    ], v => {
-      const set = p => { ws.thread.projectId = p.id; ws.cwd = p.path; p.collapsed = false; renderSidebar(); switchWorkspacePane(); saveState(); };
-      if (v === '+') addProject(set);
-      else if (!v) { ws.thread.projectId = null; ws.cwd = null; renderSidebar(); switchWorkspacePane(); saveState(); }
-      else set(projects.find(p => p.id === v));
-    });
+  // ── Chat tab composer ──
+  // A message goes to the agent running in one of the workspace's tabs, through the same input
+  // path as typing there. The model picker always works: a pick that differs from the running
+  // agent restarts it (same agent: resumes its session with the new flags) or starts the other
+  // agent in a new background tab next to the chat, then types the message in.
+  const EFFORT_NAMES = { default: 'Default', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max', ultra: 'Ultra' };
+  const CHAT_AGENTS = {
+    claude: {
+      // CLI aliases: each always means that family's latest model.
+      models: [{ id: 'opus', name: 'Claude Opus' }, { id: 'sonnet', name: 'Claude Sonnet' }, { id: 'haiku', name: 'Claude Haiku' }, { id: 'fable', name: 'Claude Fable' }]
+        .map(m => ({ ...m, efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'default' })),
+      access: [['default', 'Ask first', 'ph-shield'], ['acceptEdits', 'Accept edits', 'ph-pencil-simple'], ['plan', 'Plan only', 'ph-list-checks'], ['bypassPermissions', 'Full access', 'ph-shield-slash']],
+      argv: (o, sid, resume) => [...(o.model !== 'default' ? ['--model', o.model] : []), ...(o.effort !== 'default' ? ['--effort', o.effort] : []),
+        ...(o.access !== 'default' ? ['--permission-mode', o.access] : []), resume ? '--resume' : '--session-id', sid],
+    },
+    codex: {
+      models: [], // filled from Codex's own model list (~/.codex/models_cache.json) in the desktop app
+      access: [['default', 'Ask first', 'ph-shield'], ['read-only', 'Read only', 'ph-eye'], ['workspace-write', 'Workspace write', 'ph-pencil-simple'], ['full', 'Full access', 'ph-shield-slash']],
+      // No update prompt at startup: the chat's first Enter would answer it ("Update now") instead of sending.
+      argv: (o, sid, resume) => [...(resume && sid ? ['resume', sid] : []), '-c', 'check_for_update_on_startup=false', ...(o.model !== 'default' ? ['-m', o.model] : []),
+        ...(o.effort !== 'default' ? ['-c', `model_reasoning_effort="${o.effort}"`] : []),
+        ...(o.access === 'full' ? ['--dangerously-bypass-approvals-and-sandbox'] : o.access !== 'default' ? ['-s', o.access] : [])],
+    },
+  };
+  // The other agent CLIs TerminalVibe knows start plain (their own default model and permissions);
+  // their transcripts aren't read yet, so their chats show the messages sent, not a history.
+  for (const h of THREAD_HARNESSES) CHAT_AGENTS[h.id] ||= { models: [], efforts: ['default'], access: [['default', 'Default', 'ph-shield']], argv: () => [] };
+  // An agent with no known models still gets one row: its own default.
+  const chatModels = harness => CHAT_AGENTS[harness].models.length ? CHAT_AGENTS[harness].models
+    : [{ id: 'default', name: harnessOf(harness).name, efforts: CHAT_AGENTS[harness].efforts || ['default', 'low', 'medium', 'high'], defaultEffort: 'default' }];
+  // Agents to offer: the installed ones (all of them until the PATH check answers).
+  const chatAgentIds = () => Object.keys(CHAT_AGENTS).filter(id => !_chatAgentsFound || _chatAgentsFound[harnessOf(id).bin]);
+  window.electronAPI?.chatModels?.().then(r => { if (r?.codex?.length) CHAT_AGENTS.codex.models = r.codex; syncThreadComposer(curChat()); }).catch(() => {});
+  let _chatAgents = null; // { found: {bin: path|null} }
+  let _chatAgentsFound = null; // the resolved `found`, for synchronous menus
+  function loadChatAgents() {
+    const api = window.electronAPI;
+    // Browser mode can't look at PATH: offer every agent and let the PTY report a missing one.
+    _chatAgents ||= (api?.threadAgents ? api.threadAgents(THREAD_HARNESSES.map(h => h.bin)) : Promise.resolve({ found: Object.fromEntries(THREAD_HARNESSES.map(h => [h.bin, h.bin])) }))
+      .catch(() => ({ found: {} }));
+    _chatAgents.then(r => { _chatAgentsFound = r?.found || {}; });
+    return _chatAgents;
+  }
+  if (!DETACHED_ONLY && !SETTINGS_ONLY) loadChatAgents();
+  // A workspace keeps its own picks; one that has none starts from the last picks made anywhere.
+  const lastChatOpts = () => { try { return JSON.parse(localStorage.getItem('tv-chat-opts')) || {}; } catch { return {}; } };
+  const chatOpts = ws => {
+    const o = { harness: 'claude', model: 'default', effort: 'default', access: 'default', ...(ws?.chat?.opts || lastChatOpts()) };
+    if (!CHAT_AGENTS[o.harness]) o.harness = 'claude';
+    const models = chatModels(o.harness);
+    // Always a real model when the agent lists some (shown on the chip, ticked in the picker, passed on start):
+    // an unset or unknown pick takes its first one.
+    if (!models.some(x => x.id === o.model)) o.model = models[0].id;
+    const m = models.find(x => x.id === o.model);
+    // A model with a known default effort lists real levels only; an unknown one has a "Default" row.
+    const mm = m || models[0];
+    if (!mm.efforts.includes(o.effort)) o.effort = mm.efforts.includes(mm.defaultEffort) ? mm.defaultEffort : 'default';
+    if (!CHAT_AGENTS[o.harness].access.some(a => a[0] === o.access)) o.access = 'default';
+    return o;
+  };
+  function setChatOpts(ws, changes) {
+    ws.chat ||= { createdAt: Date.now() };
+    ws.chat.opts = { ...chatOpts(ws), ...changes };
+    ws.chat.opts = chatOpts(ws); // drop an effort/access the new model doesn't have
+    try { localStorage.setItem('tv-chat-opts', JSON.stringify(ws.chat.opts)); } catch {}
+    saveState();
+    syncThreadComposer(ws);
+  }
+  // A chat's agent runs in its own tab.
+  const liveThreadAgent = ws => ws && _tabAgent.get(ws.id) && isLiveTerminal(ws) ? ws : null;
+  // Display names: "Opus" for the chip, "Claude Opus" in the list.
+  const modelName = (o, short) => {
+    const m = chatModels(o.harness).find(x => x.id === o.model);
+    const name = m && o.model !== 'default' ? m.name : harnessOf(o.harness).name;
+    return short && o.harness === 'claude' && o.model !== 'default' ? name.replace(/^Claude /, '') : name;
+  };
+  // The floating composer covers the bottom of the history: pad the history by its height so
+  // the last message can always scroll clear of it (it grows with the text and attachments).
+  {
+    const wrap = thrPage.querySelector('.thr-composer-wrap'), flow = thrPage.querySelector('#sbr-thread-flow');
+    new ResizeObserver(() => {
+      const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 48;
+      flow.style.paddingBottom = wrap.offsetHeight + 12 + 'px';
+      if (atBottom) flow.scrollTop = flow.scrollHeight;
+    }).observe(wrap);
+  }
+  thrPage.querySelector('#sbr-thread-flow').addEventListener('click', e => {
+    const b = e.target.closest('.thr-img-link');
+    if (b) openClaudeRefViewer(null, { kind: 'file', path: b.dataset.path, label: b.dataset.path.split(/[\\/]/).pop() }, '');
+  });
+  const thrInput = thrPage.querySelector('#sbr-thread-input');
+  const thrSend = thrPage.querySelector('#sbr-thread-send');
+  const thrChip = id => thrPage.querySelector('#sbr-thread-' + id);
+  const _chatStarting = new Map(); // chat tab id -> { text, wait } while its agent boots (shown in the working row)
+  const _gitBranch = new Map(); // cwd -> branch | null
+  const chatCwd = tab => tab?.cwd || wsOf(tab)?.cwd || getWorkspaceTerminals(wsOf(tab) || {}).find(t => t.cwd)?.cwd || '';
+  function syncThreadComposer(ws) {
+    if (!ws) return;
+    const t = liveThreadAgent(ws), h = t && harnessOf(_tabAgent.get(t.id));
+    const o = chatOpts(ws), ho = harnessOf(o.harness);
+    const effort = o.effort !== 'default' ? EFFORT_NAMES[o.effort] || o.effort : '';
+    const sig = [o.harness, o.model, o.effort].join('|');
+    const chip = thrChip('model');
+    if (chip.dataset.sig !== sig) {
+      chip.dataset.sig = sig;
+      chip.innerHTML = `<span class="thr-chip-logo"${ho.color ? ` style="color:${ho.color}"` : ''}>${procIconHtml(ho.bin, 'ph-robot')}</span><span>${escHtml(modelName(o, true))}</span>${effort ? `<span class="thr-chip-sub">${escHtml(effort)}</span>` : ''}`;
+    }
+    // Footer: folder, the agent's tab (its permission prompts show there), branch, permissions.
+    const cwd = chatCwd(ws);
+    const cwdEl = thrChip('cwd');
+    cwdEl.innerHTML = `<i class="ph ph-folder" aria-hidden="true"></i><span>${escHtml(cwd.split(/[\\/]/).filter(Boolean).pop() || cwd || 'No folder')}</span>`;
+    cwdEl.title = cwd;
+    const branch = thrChip('branch');
+    if (cwd && window.electronAPI?.gitBranch && !_gitBranch.has(cwd)) {
+      _gitBranch.set(cwd, null);
+      window.electronAPI.gitBranch(cwd).then(b => { _gitBranch.set(cwd, b || null); syncThreadComposer(curChat()); }, () => {});
+    }
+    const b = _gitBranch.get(cwd);
+    branch.hidden = !b;
+    if (b) branch.innerHTML = `<i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(b)}</span>`;
+    thrInput.placeholder = h && h.id === o.harness ? `Message ${h.name}` : 'Ask anything';
+    syncWorking(ws);
+    syncSendBtn();
   }
 
-  // Open/close a projects dropdown in place (animated by CSS); collapsed content can't take focus.
-  function setFold(trigger, body, open) {
-    trigger.setAttribute('aria-expanded', String(open));
-    body.classList.toggle('collapsed', !open);
-    body.inert = !open;
+  // ── Model picker: agents at left, their models in the middle, reasoning effort at right ──
+  let _modelPicker = null;
+  function closeModelPicker(refocus) {
+    if (!_modelPicker) return;
+    _modelPicker.remove(); _modelPicker = null;
+    thrChip('model').setAttribute('aria-expanded', 'false');
+    if (refocus) thrInput.focus();
   }
-
-  // ── Thread row details: updated time and git branch ──
-  const threadAgo = t => { const m = (Date.now() - t) / 6e4;
-    if (m < 1) return 'now'; if (m < 60) return `${m | 0}m`; if (m < 1440) return `${m / 60 | 0}h`; if (m < 10080) return `${m / 1440 | 0}d`;
-    return new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' }); };
-  function refreshThreadTimes() {
-    document.querySelectorAll('.proj-thread').forEach(th => {
-      const w = findWs(th.dataset.wsid), el = th.querySelector('.proj-thread-time');
-      const ts = w?.thread && (w.thread.updatedAt || w.thread.createdAt);
-      if (el && ts) el.textContent = threadAgo(ts);
-    });
-  }
-  setInterval(refreshThreadTimes, 60e3);
-  // Enter in one of a thread's tabs counts as activity.
-  function touchThreadOf(termId) {
-    const w = workspaces.find(x => x.thread && getWorkspaceTerminals(x).some(t => t.id === termId));
-    if (!w) return;
-    w.thread.updatedAt = Date.now();
-    refreshThreadTimes();
-    loadThreadBranch(w.cwd, true); // a command may have switched branches
-  }
-  const _branches = new Map(); // cwd -> branch name | null
-  // Unknown (not read yet, or browser mode): nothing. Read and not a repo: a dashed folder.
-  const threadBranchHtml = cwd => _branches.get(cwd) ? `<i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(_branches.get(cwd))}</span>`
-    : _branches.has(cwd) ? '<i class="ph ph-folder-simple-dashed" role="img" aria-label="No git repository"></i>' : '';
-  function loadThreadBranch(cwd, refresh) {
-    if (!cwd || !window.electronAPI?.gitBranch || (_branches.has(cwd) && !refresh)) return;
-    window.electronAPI.gitBranch(cwd).then(b => {
-      if (_branches.get(cwd) === b) return;
-      _branches.set(cwd, b);
-      document.querySelectorAll('.proj-thread-branch').forEach(el => { if (el.dataset.cwd === cwd) el.innerHTML = threadBranchHtml(cwd); });
-    }, () => {});
-  }
-
-  function renderProjectsSection(sb, beforeEl) {
-    sb.querySelector('.proj-section')?.remove();
-    const sec = document.createElement('div');
-    // Collapsed with a thread open: its project and thread stay visible ("peek"), the rest hides.
-    const cur = activeWs(), peekWs = cur?.thread && !threadIsDraft(cur) ? cur : null, peek = projectsCollapsed && !!peekWs;
-    sec.className = 'proj-section' + (projectsCollapsed ? ' collapsed' : '') + (peek ? ' peek' : '');
-    const head = document.createElement('div');
-    head.className = 'proj-header';
-    makeKeyboardButton(head, 'Threads');
-    head.setAttribute('aria-expanded', String(!projectsCollapsed));
-    head.innerHTML = '<i class="ph ph-caret-down proj-caret" aria-hidden="true"></i><span class="proj-title">Threads</span><button type="button" class="proj-action proj-new" title="New thread" aria-label="New thread"><i class="ph ph-plus"></i></button><button type="button" class="proj-action proj-add" title="Add project" aria-label="Add project"><i class="ph ph-folder-plus"></i></button>';
-    head.addEventListener('click', e => {
-      if (e.target.closest('.proj-add')) { addProject(p => createThread(p.id)); return; }
-      if (e.target.closest('.proj-new')) { createThread(null); return; } // the picker page chooses the project
-      projectsCollapsed = !projectsCollapsed;
-      sec.classList.toggle('collapsed', projectsCollapsed);
-      head.setAttribute('aria-expanded', String(!projectsCollapsed));
-      if (peekWs) {
-        // The body stays open; CSS folds every row but the open thread and its project.
-        sec.classList.toggle('peek', projectsCollapsed);
-        if (curP?.collapsed) { curRow.classList.toggle('collapsed', !projectsCollapsed); setFold(curRow, curFold, projectsCollapsed); }
-      } else setFold(head, body, !projectsCollapsed);
-      saveState();
-    });
-    sec.appendChild(head);
-    const body = document.createElement('div');
-    body.className = 'proj-fold';
-    setFold(head, body, !projectsCollapsed || peek);
-    head.setAttribute('aria-expanded', String(!projectsCollapsed));
-    const list = document.createElement('div');
-    list.className = 'proj-list';
-    let curP = null, curRow = null, curFold = null; // the open thread's project, for the header toggle
-    const threadRow = (w, p) => {
-      const th = document.createElement('div');
-      th.className = 'proj-thread' + (w.id === activeWsId ? ' active' : '');
-      th.dataset.wsid = w.id;
-      makeKeyboardButton(th, w.label);
-      th.setAttribute('aria-current', String(w.id === activeWsId));
-      // Hover details, shown to the right by the app tooltip.
-      th.dataset.tip = w.label;
-      // Each agent the thread used, once, in order of first use.
-      const segs = threadSegments(w);
-      th.dataset.tipThread = JSON.stringify({ project: p?.label || 'No project', path: p?.path || w.cwd || '', created: w.thread.createdAt || null, sessions: segs.length,
-        agents: [...new Set(segs.map(s => s.harness))].map(id => { const h = harnessOf(id); return { name: h?.name || id, bin: h?.bin || '', color: h?.color || '' }; }) });
-      // Title + updated time, then the git branch + a logo per agent used.
-      const ts = w.thread.updatedAt || w.thread.createdAt || 0;
-      const agents = [...new Set(segs.map(s => s.harness))].map(id => procIconHtml(harnessOf(id)?.bin || id, 'ph-robot')).join('');
-      th.innerHTML = `<span class="proj-thread-top"><span class="proj-thread-name">${escHtml(w.label)}</span><span class="proj-thread-time" data-ts="${ts}">${ts ? threadAgo(ts) : ''}</span></span>`
-        + `<span class="proj-thread-meta"><span class="proj-thread-branch" data-cwd="${escHtml(w.cwd || '')}">${threadBranchHtml(w.cwd)}</span><span class="proj-thread-agents">${agents}</span></span>`;
-      loadThreadBranch(w.cwd);
-      th.addEventListener('click', () => openThread(w.id));
-      th.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'thread', w.id); });
-      return th;
+  async function openModelPicker() {
+    if (_modelPicker) { closeModelPicker(true); return; }
+    const ws = curChat(), trigger = thrChip('model');
+    const { found = {} } = await loadChatAgents();
+    let filter = null, query = '';
+    const pop = document.createElement('div');
+    pop.className = 'tv-model-picker';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', 'Choose a model');
+    pop.innerHTML = `<div class="mp-rail" role="tablist" aria-label="Agents"></div>
+      <div class="mp-main"><label class="mp-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search models…" aria-label="Search models" spellcheck="false" autocomplete="off"></label><div class="mp-list" role="listbox" aria-label="Models"></div></div>
+      <div class="mp-side"><div class="mp-side-head"><span>Reasoning</span><span class="mp-side-model"></span></div><div class="mp-efforts" role="listbox" aria-label="Reasoning effort"></div>
+        <button type="button" class="mp-access" aria-haspopup="menu" title="Permissions for the next agent the chat starts"></button></div>`;
+    const rail = pop.querySelector('.mp-rail'), list = pop.querySelector('.mp-list'), side = pop.querySelector('.mp-efforts'), search = pop.querySelector('input');
+    const render = () => {
+      const o = chatOpts(ws);
+      rail.innerHTML = [['', '<i class="ph ph-squares-four" aria-hidden="true"></i>', 'All agents'],
+        ...chatAgentIds().map(id => { const h = harnessOf(id); return [id, `<span${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`, h.name]; })]
+        .map(([id, icon, label]) => `<button type="button" role="tab" class="mp-rail-btn${(filter || '') === id ? ' active' : ''}" data-f="${id}" title="${escHtml(label)}" aria-label="${escHtml(label)}" aria-selected="${(filter || '') === id}">${icon}</button>`).join('');
+      const q = query.toLowerCase();
+      const rows = chatAgentIds().filter(id => !filter || id === filter).flatMap(id => chatModels(id).map(m => ({ h: harnessOf(id), m })))
+        .filter(({ h, m }) => !q || `${m.name} ${h.name} ${m.id}`.toLowerCase().includes(q));
+      list.innerHTML = rows.map(({ h, m }) => {
+        const sel = o.harness === h.id && (o.model === m.id || (m.id === 'default' && o.model === 'default'));
+        return `<button type="button" role="option" class="mp-row${sel ? ' selected' : ''}" data-h="${h.id}" data-m="${escHtml(m.id)}" aria-selected="${sel}">`
+          + `<span class="mp-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span><span class="mp-name">${escHtml(m.name)}</span>`
+          + (found[h.bin] ? '' : '<span class="mp-hint">not installed</span>') + (sel ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + '</button>';
+      }).join('') || '<div class="mp-empty">No models match</div>';
+      const cur = chatModels(o.harness).find(x => x.id === o.model) || chatModels(o.harness)[0];
+      pop.querySelector('.mp-side-model').textContent = modelName(o, true);
+      side.innerHTML = cur.efforts.map(e => `<button type="button" role="option" class="mp-row mp-effort${o.effort === e ? ' selected' : ''}" data-e="${e}" aria-selected="${o.effort === e}">`
+        + `<span class="mp-name">${escHtml(EFFORT_NAMES[e] || e)}</span>${e !== 'default' && e === cur.defaultEffort ? '<span class="mp-hint">Default</span>' : ''}`
+        + (o.effort === e ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + '</button>').join('');
+      const [, aLabel, aIcon] = CHAT_AGENTS[o.harness].access.find(a => a[0] === o.access);
+      const acc = pop.querySelector('.mp-access');
+      acc.classList.toggle('danger', /full|bypass/i.test(o.access));
+      acc.innerHTML = `<i class="ph ${aIcon}" aria-hidden="true"></i><span>${escHtml(aLabel)}</span><i class="ph ph-caret-up mp-caret" aria-hidden="true"></i>`;
     };
-    // Most recently updated first.
-    const threadsOf = pred => workspaces.filter(w => w.thread && !threadIsDraft(w) && pred(w)).sort((a, b) => (b.thread.updatedAt || b.thread.createdAt || 0) - (a.thread.updatedAt || a.thread.createdAt || 0));
-    // Loose threads (no project, or the hidden Scratch one) sit flat at the top.
-    for (const w of threadsOf(w => !threadProject(w))) list.appendChild(threadRow(w, null));
-    // A project shows up here once it has a thread; until then it's only in the thread page's chooser.
-    for (const p of projects) {
-      if (p.scratch) continue;
-      const threads = threadsOf(w => w.thread.projectId === p.id);
-      if (!threads.length) continue;
-      const row = document.createElement('div');
-      const current = peekWs?.thread.projectId === p.id;
-      row.className = 'proj-item' + (current ? ' current' : '') + (p.collapsed && !(peek && current) ? ' collapsed' : '') +(threadIsDraft(activeWs()) && activeWs().thread.projectId === p.id ? ' active' : '');
-      makeKeyboardButton(row, p.label);
-      row.title = p.path;
-      row.innerHTML = `<i class="ph ph-caret-down proj-caret" aria-hidden="true"></i><span class="proj-name">${escHtml(p.label)}</span>`;
-      row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'project', p.id); });
-      row.addEventListener('click', () => {
-        p.collapsed = !p.collapsed;
-        row.classList.toggle('collapsed', p.collapsed);
-        setFold(row, fold, !p.collapsed);
-        saveState();
-      });
-      list.appendChild(row);
-      const fold = document.createElement('div');
-      fold.className = 'proj-fold' + (current ? ' current' : '');
-      setFold(row, fold, !p.collapsed || (peek && current));
-      if (current) { curP = p; curRow = row; curFold = fold; }
-      const kids = document.createElement('div');
-      kids.className = 'proj-threads';
-      for (const w of threads) kids.appendChild(threadRow(w, p));
-      fold.appendChild(kids);
-      list.appendChild(fold);
-    }
-    body.appendChild(list);
-    sec.appendChild(body);
-    sb.insertBefore(sec, beforeEl);
-  }
-
-  // The blank page of an empty thread: project chooser + one card per installed agent.
-  // With tab (a new tab of a started thread): the same cards over that tab's shell.
-  function buildThreadHome(ws, tab) {
-    const home = document.createElement('div');
-    if (!tab) home.id = 'thread-home';
-    home.className = 'thread-home';
-    const p = threadProject(ws);
-    // Once the thread has started, its folder is fixed: the history and sessions live there.
-    const locked = !threadIsDraft(ws);
-    home.innerHTML = `<div class="th-inner">
-      <h1 class="th-title">${tab || locked ? 'Choose an agent' : 'Start a thread'}</h1>
-      <button type="button" class="th-project" ${locked ? 'disabled title="A started thread keeps its project"' : 'aria-haspopup="menu"'}><i class="ph ph-folder"></i><span class="th-project-name">${escHtml(p?.label || 'No project')}</span>${p?.path ? `<span class="th-project-path">${escHtml(p.path)}</span>` : ''}${locked ? '' : '<i class="ph ph-caret-down th-caret"></i>'}</button>
-      <div class="th-agents" role="list"><div class="th-status"><i class="ph ph-circle-notch th-spin"></i> Looking for agents…</div></div>
-    </div>
-    <button type="button" class="th-terminal-link"><i class="ph ph-terminal-window"></i><span>${tab ? 'Use as a plain terminal' : 'Open a plain terminal'}</span></button>`;
-    const useShell = () => { home.remove(); tab.term?.focus(); };
-    if (tab) home.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); useShell(); } });
-    home.querySelector('.th-terminal-link').addEventListener('click', async () => {
-      if (tab) { useShell(); return; }
-      if (!await ensureThreadCwd(ws)) return;
-      delete ws.thread.draft; // a draft thread is dropped on switch-away, with its terminal
-      addTerminal(ws.id);
-      renderSidebar(); saveState();
+    pop.querySelector('.mp-access').addEventListener('click', e => {
+      const o = chatOpts(ws);
+      openPickMenu(e.currentTarget, CHAT_AGENTS[o.harness].access.map(([v, label, icon]) => ({ value: v, label, selected: v === o.access, icon: `<i class="ph ${icon}"></i>` })),
+        v => { setChatOpts(ws, { access: v }); render(); pop.querySelector('.mp-access').focus(); });
     });
-    const projBtn = home.querySelector('.th-project');
-    if (!locked) projBtn.addEventListener('click', () => chooseThreadProject(ws, projBtn));
-    const grid = home.querySelector('.th-agents');
-    loadThreadAgents().then(({ found }) => {
-      if (!home.isConnected) return;
-      const avail = THREAD_HARNESSES.filter(h => found?.[h.bin]);
-      grid.innerHTML = avail.length ? '' : '<div class="th-status"><i class="ph ph-warning-circle"></i> No agent CLI found on PATH (claude, codex, gemini, agy, opencode…)</div>';
-      for (const h of avail) {
-        const card = document.createElement('button');
-        card.type = 'button';
-        card.className = 'th-agent';
-        if (h.color) card.style.setProperty('--agent-color', h.color);
-        card.setAttribute('role', 'listitem');
-        card.innerHTML = `${procIconHtml(h.bin, 'ph-robot')}<span class="th-agent-name">${escHtml(h.name)}</span>`;
-        // From a tab: the agent opens in a new tab, and this placeholder tab closes.
-        card.addEventListener('click', () => launchThreadAgent(ws, h.id).then(ok => { if (ok && tab) removeTerminal(ws.id, tab.id, false, false, true, true); }));
-        grid.appendChild(card);
-      }
-      if (tab) grid.querySelector('.th-agent')?.focus();
+    rail.addEventListener('click', e => { const b = e.target.closest('.mp-rail-btn'); if (b) { filter = b.dataset.f || null; render(); search.focus(); } });
+    list.addEventListener('click', e => {
+      const r = e.target.closest('.mp-row'); if (!r) return;
+      setChatOpts(ws, { harness: r.dataset.h, model: r.dataset.m });
+      render(); // stays open: pick the effort next, or click away
     });
-    return home;
+    side.addEventListener('click', e => { const r = e.target.closest('.mp-row'); if (r) { setChatOpts(ws, { effort: r.dataset.e }); closeModelPicker(true); } });
+    search.addEventListener('input', () => { query = search.value; render(); });
+    pop.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeModelPicker(true); return; }
+      const rows = [...pop.querySelectorAll('.mp-list .mp-row')], i = rows.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); (rows[i < 0 ? 0 : (i + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length])?.focus(); }
+      else if (e.key === 'Enter' && e.target === search) { e.preventDefault(); rows[0]?.click(); }
+    });
+    render();
+    document.body.appendChild(pop);
+    // Above the chip, right edges aligned (the composer sits at the bottom of the pane).
+    const r = trigger.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8)) + 'px';
+    pop.style.top = Math.max(8, r.top - 8 - pop.offsetHeight) + 'px';
+    _modelPicker = pop;
+    trigger.setAttribute('aria-expanded', 'true');
+    search.focus();
   }
+  thrChip('model')?.addEventListener('click', openModelPicker);
+  document.addEventListener('mousedown', e => { if (_modelPicker && !_modelPicker.contains(e.target) && !thrChip('model').contains(e.target) && !e.target.closest?.('.tv-pick-menu')) closeModelPicker(false); }, true);
 
-  // ── Right panel: thread flow ──
-  let _threadPoll = null, _flowSig = '';
-  const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
-  // The right sidebar has two titlebar buttons: tools (clipboard, auto-run, plugin pages) and the
-  // thread history. One shows at a time: opening one swaps the content, clicking the open one closes it.
-  function rightPanelMode() {
-    const body = document.body;
-    return body.classList.contains('sb-right-hidden') ? null : body.classList.contains('sbr-history') ? 'history' : 'tools';
+  // Paste-style write, then Enter on its own: sent together, Codex treats the text as a paste and Enter as a newline.
+  function sendToAgent(t, text) {
+    const enc = str => new TextEncoder().encode(str), body = text.replace(/\r?\n/g, '\r');
+    sendStdin(t.id, enc(t.term.modes?.bracketedPasteMode ? `\x1b[200~${body}\x1b[201~` : body));
+    setTimeout(() => sendStdin(t.id, enc('\r')), _tabAgent.get(t.id) === 'codex' ? 300 : 50);
+    t._chatSent = true;
+    if (t._chatSeg) t._chatSeg.used = true;
+    const turn = _turns.get(t.id);
+    if (turn) turn.sentAt = Date.now();
   }
-  function toggleRightPanel(mode) {
-    const body = document.body, sidebar = document.getElementById('sidebar-right');
-    const cur = rightPanelMode(), next = cur === mode ? null : mode;
-    // Each mode keeps its own dragged width.
-    if (cur) sidebar.dataset['w' + cur] = sidebar.style.width;
-    if (next) sidebar.style.width = sidebar.dataset['w' + next] || '';
-    body.classList.toggle('sb-right-hidden', !next);
-    body.classList.toggle('sbr-history', next === 'history');
-    sidebar.inert = !next;
-    if (next !== 'history') sidebar.querySelectorAll('.sbr-page').forEach(p => { p.style.display = p.id === 'sbr-main' ? 'flex' : 'none'; });
-    document.getElementById('btn-sidebar-right')?.setAttribute('aria-expanded', String(next === 'tools'));
-    document.getElementById('btn-thread-history')?.setAttribute('aria-expanded', String(next === 'history'));
-    syncThreadPanel();
+  // What the agent shows right now: the visible screen only, not the scrollback
+  // (a background tab's buffer fills without a renderer).
+  function screenText(entry) {
+    const b = entry.term.buffer.active, out = [];
+    for (let i = b.baseY; i < b.baseY + entry.term.rows; i++) out.push(b.getLine(i)?.translateToString(true) || '');
+    return out.join('\n');
   }
-  function syncThreadPanel(force) {
-    const page = document.getElementById('sbr-thread');
-    if (!page) return;
-    const ws = activeWs();
-    clearInterval(_threadPoll); _threadPoll = null;
-    // Nothing in the thread yet: no history (the picker fills the pane).
-    document.body.classList.toggle('thread-empty', !!ws?.thread && !threadSegments(ws).length);
-    const histBtn = document.getElementById('btn-thread-history');
-    if (histBtn) histBtn.hidden = !ws?.thread || document.body.classList.contains('thread-empty');
-    // History belongs to a thread: switching to a plain workspace closes it.
-    if (rightPanelMode() === 'history' && !ws?.thread) { toggleRightPanel('history'); return; }
-    if (rightPanelMode() !== 'history') {
-      if (page.style.display !== 'none') {
-        page.style.display = 'none';
-        document.getElementById('sbr-main').style.display = 'flex';
-      }
-      return;
+  // A question the agent asks before it takes prompts (trust this folder? update now?). Only the user answers
+  // it: the chat shows the agent's terminal and sends once it is gone.
+  const TRUST_RE = /trust this folder|trust the (files|contents) in this|Do you trust|Update available|Update now|new version (is )?available/i;
+  // The process really running in the tab right now (the watcher's view can be 1.5s old).
+  async function agentRunning(entry, h) {
+    const name = String(await checkTerminalRunning(entry.id) || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
+    return name === h.bin || name === 'unknown';
+  }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // A fresh agent is ready once its screen has drawn and stopped changing (TUIs repaint
+  // constantly, so output silence never comes). A trust question returns at once.
+  async function waitAgentReady(entry, maxMs = 20000) {
+    const t0 = Date.now();
+    let last = '', since = t0;
+    while (Date.now() - t0 < maxMs && isLiveTerminal(entry)) {
+      await sleep(120);
+      const txt = screenText(entry);
+      if (TRUST_RE.test(txt)) return 'trust';
+      if (txt !== last) { last = txt; since = Date.now(); }
+      else if (txt.trim() && Date.now() - since > 500) return 'ready';
     }
-    document.querySelectorAll('#sidebar-right .sbr-page').forEach(el => { el.style.display = el === page ? 'flex' : 'none'; });
-    if (page.dataset.wsid !== ws.id || force) { page.dataset.wsid = ws.id; _flowSig = ''; }
-    document.getElementById('sbr-thread-title').textContent = ws.label;
-    refreshThreadFlow(ws);
-    _threadPoll = setInterval(() => { if (activeWs() === ws && !document.hidden) refreshThreadFlow(ws); }, 2000);
+    return 'timeout';
   }
+  // Quit the agent running in a tab (Ctrl+C until it is back at its shell). Anything that is not
+  // an agent is left alone.
+  async function stopTabAgent(entry) {
+    const norm = n => String(n || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
+    let name = await checkTerminalRunning(entry.id);
+    if (name === null) return true;
+    if (!THREAD_HARNESSES.some(x => x.bin === norm(name))) return false;
+    for (let i = 0; i < 12 && name !== null; i++) {
+      if (i % 3 === 0) sendStdin(entry.id, new TextEncoder().encode('\x03'));
+      await sleep(150);
+      name = await checkTerminalRunning(entry.id);
+    }
+    _tabAgent.set(entry.id, null);
+    return name === null;
+  }
+  // Appended to the first message a new agent gets when the chat already has history
+  // (the transcript reader strips it from the history again).
+  const _handoffNote = file => ` <terminalvibe_context history="${file}">Read the history only if my message depends on earlier work. Never mention this context or the file and never summarize it; reply only to my message.</terminalvibe_context>`;
+  // Start the picked agent and type the message in. `replace`: the chat's running agent of the
+  // same kind, started with other flags.
+  // Context is never dropped:
+  //  - the same agent continues its session (resumed with the new flags, context kept): the one
+  //    being replaced, or with nothing running, the chat's latest conversation if it was this agent's;
+  //  - otherwise a new session starts and gets the whole chat so far as a handoff file.
+  async function startChatAgent(ws, chatTab, text, replace) {
+    const o = chatOpts(ws), h = harnessOf(o.harness);
+    const { found = {} } = await loadChatAgents();
+    if (!found[h.bin]) { zoomBadge(`${h.name} was not found on PATH`); return false; }
+    const segs = threadSegments(ws);
+    const oldSeg = replace?._chatSeg;
+    const lastUsed = [...segs].reverse().find(x => x.used);
+    const resumeSeg = replace ? ((replace._chatSent || oldSeg?.used) ? oldSeg : null)
+      : lastUsed?.harness === o.harness && !lastUsed.frozen ? lastUsed : null;
+    const resumeSid = resumeSeg?.sessionId || null;
+    const sid = resumeSid || (o.harness === 'claude' ? uuid() : null);
+    // A new session after earlier ones: hand it everything said so far.
+    let handoff = null;
+    if (!resumeSid && lastUsed && window.electronAPI?.threadHandoff) {
+      try { handoff = await window.electronAPI.threadHandoff({ ...threadMeta(ws), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); }
+      catch { zoomBadge('Could not write the history for the new agent'); }
+    }
+    // Any other tab still running the session being resumed goes too: one process per session.
+    const holders = resumeSeg ? getWorkspaceTerminals(wsOf(ws) || {}).filter(x => x !== replace && x._chatSeg === resumeSeg) : [];
+    // Transcripts are found by folder: always launch in a known one.
+    // (and a resumed session in its own folder: Claude keeps sessions per project folder).
+    const cwd = resumeSeg?.cwd || replace?.cwd || chatCwd(ws) || undefined;
+    _chatStarting.set(ws.id, { text: `${resumeSid ? 'Resuming' : 'Starting'} ${modelName(o, false)}` }); syncThreadComposer(ws);
+    try {
+      // The agent runs in the Chat tab's own terminal (the chat page sits over it; the footer
+      // button shows it). Whatever agent runs there now quits first: one agent per Chat tab.
+      const entry = chatTab;
+      if (!await stopTabAgent(entry)) { zoomBadge('The agent in this tab did not quit; stop it in its terminal first'); return false; }
+      entry.term.reset(); // the agent draws on a clean screen (and readiness never reads the old one)
+      const started = await createAgentTerminal({ id: entry.id, ...getSlotDimensions(entry), cwd, executable: found[h.bin],
+        argv: CHAT_AGENTS[o.harness].argv(o, sid, !!resumeSid), returnToShell: true, replaceIdle: true });
+      if (!started) { zoomBadge(`Could not start ${h.name}`); return false; }
+      entry.dead = false;
+      if (cwd) entry.cwd = cwd;
+      entry.toolProvider = h.id;
+      if (o.harness === 'claude') entry.claudeSessionId = sid;
+      entry._chatCfg = { harness: o.harness, model: o.model, effort: o.effort, access: o.access };
+      _tabAgent.set(entry.id, h.id); // the process watcher won't adopt it a second time
+      ws.chat ||= { createdAt: Date.now() };
+      ws.chat.agentTermId = entry.id;
+      if (resumeSid) { entry._chatSeg = resumeSeg; Object.assign(resumeSeg, { model: o.model, effort: o.effort }); entry._chatSent = true; }
+      else {
+        // A replaced agent that never got a message leaves nothing in the history.
+        if (oldSeg && !replace._chatSent && !oldSeg.used) segs.splice(segs.indexOf(oldSeg) >>> 0, 1);
+        // A Codex session that never wrote a transcript (no id found for it) goes: Codex sessions are matched
+        // by folder and start time, so it would otherwise claim the new session's transcript.
+        while (window.electronAPI?.threadHistory && segs.length && segs[segs.length - 1].harness === 'codex' && !segs[segs.length - 1].sessionId) segs.pop();
+        entry._chatSent = false;
+        entry._chatSeg = { harness: h.id, sessionId: sid, cwd: entry.cwd, since: Date.now() - 5000, model: o.model, effort: o.effort, ...(handoff ? { handoff: true } : {}) };
+        segs.push(entry._chatSeg);
+      }
+      // One process per session: another tab still on the replaced/resumed session closes.
+      for (const old of [replace, ...holders].filter(x => x && x !== entry)) { _tabAgent.set(old.id, null); removeTerminal(ws.id, old.id, false, false, true, true); }
+      saveState();
+      if (await waitAgentReady(entry) === 'trust') {
+        // Show the question in the agent's terminal; send once it is answered (or the agent quits, or 5 minutes pass).
+        _chatStarting.set(ws.id, { text: `Answer ${h.name}'s question in its terminal`, wait: true }); syncThreadComposer(ws);
+        setChatView(entry, true);
+        const t0 = Date.now();
+        while (isLiveTerminal(entry) && TRUST_RE.test(screenText(entry)) && Date.now() - t0 < 300000) {
+          await sleep(500);
+          if (!await agentRunning(entry, h)) break;
+        }
+        if (await agentRunning(entry, h)) await waitAgentReady(entry, 10000);
+        setChatView(entry, false);
+      }
+      // Never type the message into the shell left behind by an agent that quit.
+      if (!isLiveTerminal(entry) || !await agentRunning(entry, h)) { zoomBadge(`${h.name} exited before the message was sent`); return false; }
+      sendToAgent(entry, handoff ? text + _handoffNote(handoff) : text);
+      return true;
+    } catch (err) { zoomBadge(err.message || `Could not start ${h.name}`); return false; }
+    finally { _chatStarting.delete(ws.id); if (curChat() === ws) syncThreadPanel(true); }
+  }
+  // ── Attachments: picked (paperclip), dropped on the box or pasted. Each becomes a path in the
+  // message, the way a file dropped on the agent's terminal does (Claude Code turns image paths
+  // into images). ──
+  let _chatFiles = []; // [{ name, path, image }]
+  const thrFiles = thrPage.querySelector('#sbr-thread-attachments');
+  function renderChatFiles() {
+    thrFiles.hidden = !_chatFiles.length;
+    thrFiles.innerHTML = _chatFiles.map((f, i) => `<span class="thr-file${f.cite ? ' cite' : ''}" title="${escHtml(f.cite || f.path)}"><i class="ph ${f.cite ? 'ph-quotes' : f.image ? 'ph-image' : 'ph-file'}" aria-hidden="true"></i>`
+      + `<span class="thr-file-name">${escHtml(f.cite ? f.cite.replace(/\s+/g, ' ') : f.name)}</span><button type="button" class="thr-file-x" data-i="${i}" aria-label="Remove ${escHtml(f.cite ? 'citation' : f.name)}"><i class="ph ph-x"></i></button></span>`).join('');
+    syncSendBtn();
+  }
+  async function addChatFiles(files) {
+    const tab = curChat();
+    for (const file of files) {
+      try {
+        const path = await localPathForFile(tab, file);
+        if (!path) throw new Error('Could not read ' + file.name);
+        _chatFiles.push({ name: file.name || path.split(/[\\/]/).pop(), path, image: /^image\//.test(file.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(path) });
+      } catch (err) { zoomBadge(err.message || 'Could not attach ' + file.name); }
+    }
+    renderChatFiles();
+    thrInput.focus();
+  }
+  thrFiles?.addEventListener('click', e => { const b = e.target.closest('.thr-file-x'); if (b) { _chatFiles.splice(+b.dataset.i, 1); renderChatFiles(); thrInput.focus(); } });
+  const thrFileInput = thrPage.querySelector('#sbr-thread-file');
+  thrPage.querySelector('#sbr-thread-attach')?.addEventListener('click', () => thrFileInput.click());
+  thrFileInput?.addEventListener('change', () => { addChatFiles([...thrFileInput.files]); thrFileInput.value = ''; });
+  thrInput?.addEventListener('paste', e => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (files.length) { e.preventDefault(); addChatFiles(files); }
+  });
+  const thrComposer = thrPage.querySelector('#sbr-thread-composer');
+  thrComposer?.addEventListener('dragover', e => { if (isFileDrag(e)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; thrComposer.classList.add('drop'); } });
+  thrComposer?.addEventListener('dragleave', e => { if (!thrComposer.contains(e.relatedTarget)) thrComposer.classList.remove('drop'); });
+  thrComposer?.addEventListener('drop', e => {
+    thrComposer.classList.remove('drop');
+    if (!isFileDrag(e)) return;
+    e.preventDefault(); e.stopPropagation();
+    addChatFiles([...e.dataTransfer.files]);
+  });
+  // ── Cite: select text in the chat, a "Cite" button appears; it adds the passage to the next message ──
+  const citeBtn = document.createElement('button');
+  citeBtn.type = 'button'; citeBtn.className = 'thr-cite-btn'; citeBtn.hidden = true;
+  citeBtn.innerHTML = '<i class="ph ph-quotes" aria-hidden="true"></i><span>Cite</span>';
+  document.body.appendChild(citeBtn);
+  const hideCite = () => { citeBtn.hidden = true; };
+  const flowEl = thrPage.querySelector('#sbr-thread-flow');
+  flowEl.addEventListener('mouseup', () => setTimeout(() => {
+    const sel = window.getSelection(), text = sel?.toString().trim();
+    if (!text || !sel.rangeCount || !flowEl.contains(sel.anchorNode) || !flowEl.contains(sel.focusNode)) return hideCite();
+    const rects = sel.getRangeAt(0).getClientRects(), r = rects[rects.length - 1] || sel.getRangeAt(0).getBoundingClientRect();
+    citeBtn.hidden = false;
+    citeBtn.style.left = Math.max(8, Math.min(r.right - citeBtn.offsetWidth / 2, innerWidth - citeBtn.offsetWidth - 8)) + 'px';
+    citeBtn.style.top = Math.max(8, r.top - citeBtn.offsetHeight - 6) + 'px';
+  }));
+  citeBtn.addEventListener('mousedown', e => e.preventDefault()); // keep the selection
+  citeBtn.addEventListener('click', () => {
+    const text = window.getSelection()?.toString().trim();
+    hideCite();
+    if (!text) return;
+    _chatFiles.push({ cite: text.slice(0, 4000) });
+    window.getSelection().removeAllRanges();
+    renderChatFiles();
+    thrInput.focus();
+  });
+  document.addEventListener('mousedown', e => { if (!citeBtn.hidden && e.target !== citeBtn && !citeBtn.contains(e.target)) hideCite(); }, true);
+  flowEl.addEventListener('scroll', hideCite);
+  // Each chat remembers where it was scrolled (restored after a tab or chat switch).
+  flowEl.addEventListener('scroll', () => {
+    if (!_curChat || !thrPage.offsetParent || !flowEl.dataset.seen) return;
+    _curChat._scrollState = { top: flowEl.scrollTop, bottom: flowEl.scrollHeight - flowEl.scrollTop - flowEl.clientHeight < 32 };
+  }, { passive: true });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCite(); });
+  // Send, or (the agent working, nothing typed) a red stop button that interrupts it: Esc for the
+  // agent's turn; an agent still starting quits.
+  function syncSendBtn() {
+    const c = curChat(), typed = !!(thrInput.value.trim() || _chatFiles.length);
+    const stop = !!c && !typed && !!chatWorking(c);
+    thrSend.classList.toggle('stop', stop);
+    thrSend.disabled = !stop && (!typed || _chatStarting.has(c?.id));
+    const label = stop ? 'Stop' : 'Send';
+    if (thrSend.dataset.mode !== label) {
+      thrSend.dataset.mode = label;
+      thrSend.innerHTML = `<i class="ph ${stop ? 'ph-stop' : 'ph-arrow-up'}"></i>`;
+      thrSend.setAttribute('aria-label', label);
+      thrSend.dataset.tip = stop ? 'Stop (Esc in the agent)' : 'Send (Enter)';
+    }
+  }
+  function stopChatTurn(c) {
+    const t = liveThreadAgent(c);
+    if (_chatStarting.has(c.id)) stopTabAgent(c);
+    else if (t) sendStdin(t.id, new TextEncoder().encode('\x1b'));
+    _turns.delete(c.id); _pendingMsgs.delete(c.id);
+    _flowSig = '';
+    refreshThreadFlow(c); syncThreadComposer(c);
+  }
+  function autosizeThreadInput() {
+    thrInput.style.height = 'auto';
+    thrInput.style.height = Math.min(thrInput.scrollHeight, 240) + 'px';
+  }
+  thrInput?.addEventListener('input', () => { autosizeThreadInput(); syncSendBtn(); });
+  thrInput?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); e.stopPropagation(); thrInput.form.requestSubmit(); }
+  });
+  thrPage.querySelector('#sbr-thread-composer')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (e.submitter === thrSend && thrSend.classList.contains('stop')) { if (curChat()) stopChatTurn(curChat()); return; }
+    const ws = curChat(), chatTab = ws, typed = thrInput.value.trim(), files = _chatFiles;
+    const quoted = files.filter(f => f.cite).map(f => f.cite.split('\n').map(l => '> ' + l).join('\n')).join('\n\n');
+    const text = [quoted, [typed, files.filter(f => f.path).map(f => shellQuote(f.path)).join(' ')].filter(Boolean).join(' ')].filter(Boolean).join('\n\n');
+    if (!chatTab || !text || _chatStarting.has(ws.id)) return;
+    _chatFiles = []; renderChatFiles();
+    // The chat's title is its first prompt (its tab and the threads sidebar show it).
+    ws.chat ||= { createdAt: Date.now() };
+    if (!ws.chat.title && typed) { ws.chat.title = typed.split('\n')[0].slice(0, 80); setChatTabLabel(ws); }
+    ws.chat.updatedAt = Date.now();
+    const flow = thrPage.querySelector('#sbr-thread-flow');
+    // Shown at once; the next history render (the transcript now holding it) replaces it.
+    _pendingMsgs.set(ws.id, { text, at: Date.now() });
+    _turns.set(ws.id, { since: Date.now() });
+    flow.querySelector('.thr-empty')?.remove();
+    flow.querySelector('.thr-pending')?.remove();
+    flow.insertAdjacentHTML('beforeend', pendingHtml(ws));
+    flow.scrollTop = flow.scrollHeight;
+    _flowSig = ''; // the next refresh repaints with it
+    thrInput.value = ''; autosizeThreadInput();
+    syncWorking(ws);
+    let t = liveThreadAgent(ws);
+    if (t && !await agentRunning(t, harnessOf(_tabAgent.get(t.id)))) { _tabAgent.set(t.id, null); t = liveThreadAgent(ws); }
+    const o = chatOpts(ws);
+    // Does the running agent match the picks? An agent started by hand counts by its kind only.
+    const cfg = t?._chatCfg;
+    const same = t && _tabAgent.get(t.id) === o.harness && (!cfg || ['model', 'effort', 'access'].every(k => cfg[k] === o[k]));
+    if (same) sendToAgent(t, text);
+    else if (!await startChatAgent(ws, chatTab, text, cfg && cfg.harness === o.harness ? t : null)) {
+      _pendingMsgs.delete(ws.id); _turns.delete(ws.id);
+      if (curChat() === ws) flow.querySelector('.thr-pending')?.remove();
+      if (!thrInput.value) { thrInput.value = typed; autosizeThreadInput(); }
+      if (!_chatFiles.length) { _chatFiles = files; renderChatFiles(); }
+      _flowSig = '';
+      refreshThreadFlow(ws);
+    }
+    syncThreadComposer(ws);
+    for (const ms of [400, 1200]) setTimeout(() => { if (curChat() === ws) refreshThreadFlow(ws); }, ms);
+    thrInput.focus();
+  });
 
-  // Escape first, then a few markdown bits agents use a lot: fences, `code`, **bold**, headings.
+  // ── Threads sidebar (right, T3-style): one card per Chat tab, across workspaces ──
+  // Working threads first (agent busy: spinner + elapsed), then Settled, newest activity first.
+  // A card: folder · time · status / title (first prompt) / branch · agent. Click opens its chat.
+  const tsAside = document.getElementById('threads-sidebar');
+  const tsList = document.getElementById('ts-list');
+  const tsSearch = document.getElementById('ts-search');
+  const tsCollapsed = new Set(); // section ids folded by the user
+  const ago = t => { const m = (Date.now() - t) / 6e4;
+    return !t ? '' : m < 1 ? 'now' : m < 60 ? `${m | 0}m` : m < 1440 ? `${m / 60 | 0}h` : m < 10080 ? `${m / 1440 | 0}d` : new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+  const chatThreads = () => workspaces.flatMap(ws => getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.chat && threadSegments(t).length));
+  // `w` is a Chat tab.
+  function threadInfo(w) {
+    const segs = threadSegments(w), last = segs[segs.length - 1], h = harnessOf(last?.harness);
+    const cwd = chatCwd(w);
+    if (cwd && window.electronAPI?.gitBranch && !_gitBranch.has(cwd)) {
+      _gitBranch.set(cwd, null);
+      window.electronAPI.gitBranch(cwd).then(b => { _gitBranch.set(cwd, b || null); renderThreadsSidebar(); }, () => {});
+    }
+    const model = last?.model && last.model !== 'default' ? modelName({ harness: last.harness, model: last.model }, false) : h?.name || '';
+    return { w, ws: wsOf(w), h, cwd, folder: cwd.split(/[\\/]/).filter(Boolean).pop() || 'No folder', branch: _gitBranch.get(cwd) || '',
+      title: w.chat.title || w.label, updated: w.chat.updatedAt || last?.since || w.chat.createdAt || 0, work: chatWorking(w),
+      model: [model, last?.effort && last.effort !== 'default' ? EFFORT_NAMES[last.effort] || last.effort : ''].filter(Boolean).join(' · ') };
+  }
+  function renderThreadsSidebar() {
+    if (!tsOpen) return;
+    const q = tsSearch.value.trim().toLowerCase();
+    const all = chatThreads().map(threadInfo)
+      .filter(x => !q || `${x.title} ${x.folder} ${x.branch} ${x.ws?.label || ''}`.toLowerCase().includes(q))
+      .sort((a, b) => b.updated - a.updated);
+    const card = x => {
+      const status = x.work
+        ? `<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>${x.work.wait ? 'Waiting' : `Working ${fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))}`}</span>`
+        : '<span class="ts-status"><i class="ph ph-check" aria-hidden="true"></i>Settled</span>';
+      const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No folder' }, { icon: 'ph-squares-four', text: x.ws?.label || '' },
+        ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...(x.h ? [{ proc: x.h.bin, text: x.model }] : [])];
+      return `<button type="button" role="listitem" class="ts-card${x.w === curChat() ? ' active' : ''}" data-tab="${x.w.id}" data-tip="${escHtml(x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
+        + `<span class="ts-row"><span class="ts-folder"><i class="ph ph-folder" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span>`
+        + `<span class="ts-time">${ago(x.updated)}</span>${status}</span>`
+        + `<span class="ts-title">${escHtml(x.title)}</span>`
+        + `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
+        + (x.h ? `<span class="ts-agent"${x.h.color ? ` style="color:${x.h.color}"` : ''}>${procIconHtml(x.h.bin, 'ph-robot')}</span>` : '') + '</span></button>';
+    };
+    const section = (id, label, list) => !list.length ? '' : `<div class="ts-section${tsCollapsed.has(id) ? ' collapsed' : ''}" data-sec="${id}">`
+      + `<button type="button" class="ts-section-head" aria-expanded="${!tsCollapsed.has(id)}"><span>${label}</span><span class="ts-count">${list.length}</span><i class="ph ph-caret-down ts-caret" aria-hidden="true"></i></button>`
+      + `<div class="ts-cards">${tsCollapsed.has(id) ? '' : list.map(card).join('')}</div></div>`;
+    const html = all.length
+      ? section('working', 'Working', all.filter(x => x.work)) + section('settled', 'Settled', all.filter(x => !x.work))
+      : `<div class="ts-empty">${q ? 'No threads match' : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
+    if (tsList._html !== html) { tsList._html = html; tsList.innerHTML = html; } // rebuild only on change (keeps hover and focus)
+  }
+  tsList.addEventListener('click', e => {
+    const head = e.target.closest('.ts-section-head');
+    if (head) { const id = head.parentElement.dataset.sec; tsCollapsed.has(id) ? tsCollapsed.delete(id) : tsCollapsed.add(id); renderThreadsSidebar(); return; }
+    const c = e.target.closest('.ts-card'), tab = c && findTermById(c.dataset.tab)?.term;
+    if (tab) openChatTab(tab);
+  });
+  tsList.addEventListener('contextmenu', e => {
+    const c = e.target.closest('.ts-card');
+    if (!c) return;
+    e.preventDefault();
+    showCtxMenu(e, 'chat-thread', c.dataset.tab);
+  });
+  tsSearch.addEventListener('input', renderThreadsSidebar);
+  document.getElementById('ts-new').addEventListener('click', () => newChatTab(activeWs()));
+  // Open/closed animates its width (like the left sidebar); the terminals refit once it settles.
+  let tsOpen = false;
+  const tsSettle = () => { const w = activeWs(); if (w) getWorkspaceTerminals(w).forEach(t => fitTerm(t)); syncBrowserSlots(); };
+  function setThreadsSidebar(open) {
+    tsOpen = !!open;
+    tsAside.classList.toggle('collapsed', !tsOpen);
+    tsAside.inert = !tsOpen;
+    document.getElementById('btn-threads')?.setAttribute('aria-expanded', String(tsOpen));
+    try { localStorage.setItem('tv-threads-sidebar', tsOpen ? '1' : ''); } catch {}
+    if (tsOpen) renderThreadsSidebar();
+    if (!document.body.classList.contains('ui-animations')) tsSettle();
+  }
+  tsAside.addEventListener('transitionend', e => { if (e.target === tsAside && e.propertyName === 'width') tsSettle(); });
+  // Resize: drag its left edge (220-520px, remembered).
+  const TS_MIN = 220, TS_MAX = 520;
+  try { const w = +localStorage.getItem('tv-threads-w'); if (w) tsAside.style.setProperty('--ts-w', Math.max(TS_MIN, Math.min(TS_MAX, w)) + 'px'); } catch {}
+  tsAside.querySelector('.ts-sash')?.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const sash = e.currentTarget, startX = e.clientX, startW = tsAside.offsetWidth;
+    sash.setPointerCapture(e.pointerId); sash.classList.add('dragging');
+    _suppressResize = true; startResizing();
+    const move = ev => tsAside.style.setProperty('--ts-w', Math.max(TS_MIN, Math.min(TS_MAX, startW + startX - ev.clientX)) + 'px');
+    const up = () => {
+      sash.removeEventListener('pointermove', move); sash.removeEventListener('pointerup', up); sash.classList.remove('dragging');
+      _suppressResize = false; stopResizing(); tsSettle();
+      try { localStorage.setItem('tv-threads-w', String(tsAside.offsetWidth)); } catch {}
+    };
+    sash.addEventListener('pointermove', move); sash.addEventListener('pointerup', up);
+  });
+  document.getElementById('btn-threads')?.addEventListener('click', () => setThreadsSidebar(!tsOpen));
+  try { if (!DETACHED_ONLY && !SETTINGS_ONLY && localStorage.getItem('tv-threads-sidebar')) setThreadsSidebar(true); } catch {}
+  setInterval(renderThreadsSidebar, 1000); // working timers, statuses and the active card
+
+  // ── Syntax highlighting (shell, JSON) for tool calls and code blocks: escaped spans, colors from the terminal theme ──
+  const tk = (cls, t) => `<span class="tk-${cls}">${escHtml(t)}</span>`;
+  const codeLang = tag => /^(sh|bash|zsh|shell|console|shellscript)$/i.test(tag) ? 'sh' : /^(json|jsonc|json5)$/i.test(tag) ? 'json' : '';
+  function hlJson(text) {
+    const re = /("(?:\\.|[^"\\\n])*")(\s*:)?|\b(true|false|null)\b|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g;
+    let out = '', last = 0;
+    for (const m of text.matchAll(re)) {
+      out += escHtml(text.slice(last, m.index));
+      out += m[1] ? tk(m[2] ? 'k' : 's', m[1]) + (m[2] ? escHtml(m[2]) : '') : m[3] ? tk('b', m[3]) : tk('n', m[4]);
+      last = m.index + m[0].length;
+    }
+    return out + escHtml(text.slice(last));
+  }
+  function hlShell(text) {
+    // strings | heredoc | comment | variable | operator | flag | word
+    const re = /('[^']*'?|"(?:\\.|[^"\\])*"?)|(<<-?\s*(['"]?)([A-Za-z_]\w*)\3)|((?:^|(?<=\s))#[^\n]*)|(\$\{[^}]*\}|\$[A-Za-z_]\w*|\$[0-9@#?$!*-])|(&&|\|\||;;|\$\(|\d*>>?&\d+|\d*>>?|<&?\d*|[|;&()])|((?<=^|\s)--?[A-Za-z0-9][\w-]*=?)|([^\s'"|;&<>()$]+)/gm;
+    let out = '', last = 0, cmd = true;
+    for (let m; (m = re.exec(text));) {
+      const gap = text.slice(last, m.index);
+      if (gap.includes('\n')) cmd = true;
+      out += escHtml(gap);
+      if (m[1]) out += tk('s', m[1]);
+      else if (m[2]) {
+        // A heredoc: its body (up to the delimiter line) is data, not shell.
+        out += tk('o', m[2]);
+        const nl = text.indexOf('\n', re.lastIndex), end = nl < 0 ? -1 : text.indexOf('\n' + m[4], nl);
+        if (nl >= 0) {
+          const stop = end < 0 ? text.length : end + 1;
+          out += escHtml(text.slice(re.lastIndex, nl + 1)) + tk('h', text.slice(nl + 1, stop)) + (end < 0 ? '' : tk('o', m[4]));
+          re.lastIndex = end < 0 ? text.length : end + 1 + m[4].length;
+        }
+        cmd = false;
+      }
+      else if (m[5]) out += tk('cm', m[5]);
+      else if (m[6]) out += tk('v', m[6]);
+      else if (m[7]) { out += tk('o', m[7]); if (/^(&&|\|\||;;?|\||&|\$\(|\()$/.test(m[7])) cmd = true; } // a redirect doesn't start a command
+      else if (m[8]) out += tk('f', m[8]);
+      else { out += cmd && !/^\w+=/.test(m[9]) ? tk('c', m[9]) : escHtml(m[9]); if (!/^\w+=/.test(m[9])) cmd = false; }
+      last = re.lastIndex;
+    }
+    return out + escHtml(text.slice(last));
+  }
+  const hlCode = (text, lang) => lang === 'sh' ? hlShell(text) : lang === 'json' ? hlJson(text) : escHtml(text);
+  // Escape first, then a few markdown bits agents use a lot: fences (highlighted by their language tag), `code`, **bold**, headings.
   function mdLite(text) {
-    return String(text).split(/```[^\n]*\n?/).map((part, i) => i % 2
-      ? `<pre class="thr-code"><code>${escHtml(part.replace(/\n$/, ''))}</code></pre>`
-      : escHtml(part).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/^#{1,6} (.+)$/gm, '<strong>$1</strong>').replace(/^(\s*)[-*] /gm, '$1• ')).join('');
+    text = String(text);
+    const inline = t => escHtml(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/^#{1,6} (.+)$/gm, '<strong>$1</strong>').replace(/^(\s*)[-*] /gm, '$1• ');
+    let out = '', last = 0;
+    for (const m of text.matchAll(/```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g)) {
+      out += inline(text.slice(last, m.index)) + `<pre class="thr-code"><code>${hlCode(m[2].replace(/\n$/, ''), codeLang(m[1].trim()))}</code></pre>`;
+      last = m.index + m[0].length;
+    }
+    return out + inline(text.slice(last));
   }
   const toolIcon = n => /bash|shell|exec|command|terminal/i.test(n) ? 'ph-terminal' : /read|view|cat/i.test(n) ? 'ph-file-text'
     : /edit|write|patch|update|create/i.test(n) ? 'ph-pencil-simple' : /grep|glob|search|find|list/i.test(n) ? 'ph-magnifying-glass'
@@ -8948,8 +9330,8 @@
   const clockTime = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 
   async function refreshThreadFlow(ws) {
-    const flow = document.getElementById('sbr-thread-flow');
-    const t = ws.thread;
+    const flow = thrPage.querySelector('#sbr-thread-flow');
+    const t = ws.chat;
     const api = window.electronAPI;
     const segs = threadSegments(ws);
     let hist = [], note = '';
@@ -8958,9 +9340,20 @@
       try { hist = await api.threadHistory(threadMeta(ws)); }
       catch { note = 'Could not read the history.'; }
     }
-    if (activeWs() !== ws) return;
-    const lastTs = Math.max(0, ...hist.flatMap(h => h.items).map(m => Date.parse(m.ts) || 0));
-    if (lastTs > (t.updatedAt || 0)) { t.updatedAt = lastTs; refreshThreadTimes(); saveState(); }
+    if (curChat() !== ws) return;
+    // The chat's title (first prompt) and last activity, for its tab and the threads sidebar.
+    if (t) {
+      const all = hist.flatMap(h => h.items);
+      const first = all.find(m => m.role === 'user' && m.text);
+      const lastTs = Math.max(0, ...all.map(m => Date.parse(m.ts) || 0));
+      if ((!t.title && first) || lastTs > (t.updatedAt || 0)) {
+        if (!t.title && first) { t.title = first.text.split('\n')[0].slice(0, 80); setChatTabLabel(ws); }
+        if (lastTs > (t.updatedAt || 0)) t.updatedAt = lastTs;
+        saveState();
+      }
+    }
+    // A session with messages can be resumed later (or handed off to another agent).
+    hist.forEach((h, i) => { if (h.items.length && segs[i] && !segs[i].used) { segs[i].used = true; saveState(); } });
     // Codex ids are only known once its transcript exists.
     hist.forEach((h, i) => {
       if (!h.sessionId || segs[i].sessionId) return;
@@ -8968,74 +9361,141 @@
       if (i === segs.length - 1) t.sessionId = h.sessionId;
       saveState();
     });
-    const firstUser = hist.flatMap(h => h.items).find(m => m.role === 'user' && m.text);
-    if (ws.label === 'New thread' && firstUser) {
-      ws.label = firstUser.text.replace(/\s+/g, ' ').slice(0, 48);
-      document.getElementById('sbr-thread-title').textContent = ws.label;
-      renderSidebar(); saveState();
-    }
     const sig = note + '|' + segs.length + '|' + hist.map(h => { const l = h.items[h.items.length - 1]; return `${h.items.length}:${l?.text?.length || 0}:${l?.error ? 1 : 0}`; }).join(',');
-    if (sig === _flowSig) return;
-    _flowSig = sig;
+    // The sent message shows until the transcript has it (or 60s pass).
+    const pend = _pendingMsgs.get(ws.id);
+    if (pend) {
+      const head = pend.text.replace(/\s+/g, ' ').slice(0, 60);
+      if (Date.now() - pend.at > 60000 || hist.some(h => h.items.some(m => m.role === 'user' && (Date.parse(m.ts) || Infinity) >= pend.at - 5000
+        && String(m.text || '').replace(/\s+/g, ' ').includes(head)))) _pendingMsgs.delete(ws.id);
+    }
+    const working = !!chatWorking(ws);
+    const sigP = sig + (_pendingMsgs.has(ws.id) ? '|p' : '') + (working ? '|w' : '');
+    if (sigP === _flowSig) return;
+    _flowSig = sigP;
     const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 32;
     const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
+    if (ws._open) { ws._open.forEach(k => open.add(k)); ws._open = null; } // its state from before a chat switch
     if (!segs.length || note) {
-      flow.innerHTML = `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent to start. Your prompts, its replies and its tool calls show up here.</div>'}</div>`;
+      flow.innerHTML = pendingHtml(ws) || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
+      syncWorking(ws);
       return;
     }
     // An agent is running but nothing was said yet: the same empty state, not a lone session header.
-    if (!t.forkOf && !segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
-      flow.innerHTML = '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
+    if (!segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
+      flow.innerHTML = pendingHtml(ws) || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
+      syncWorking(ws);
       return;
     }
     let html = '';
-    if (t.forkOf) html += `<div class="thr-note thr-fork-note"><i class="ph ph-git-fork" aria-hidden="true"></i>Forked from ${escHtml(findWs(t.forkOf)?.label || 'a deleted thread')}</div>`;
     const texts = new Map(); // data-key -> raw message text, for the copy buttons
+    let lastHead = '';
     segs.forEach((seg, i) => {
       const h = harnessOf(seg.harness), name = h?.name || seg.harness, res = hist[i] || { items: [] };
-      const meta = [seg.model && seg.model !== 'default' ? seg.model : '', seg.effort || ''].filter(Boolean).join(' · ');
-      html += `<div class="thr-seg"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
+      if (!res.items.length && !res.unsupported) return; // a session with nothing said shows nothing
+      const meta = [seg.model && seg.model !== 'default' ? seg.model : '', seg.effort && seg.effort !== 'default' ? seg.effort : ''].filter(Boolean).join(' · ');
+      // The agent header shows only where the agent or its model changes, not at every session.
+      const head = name + '|' + meta;
+      if (head !== lastHead) html += `<div class="thr-seg"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
+      lastHead = head;
       if (seg.handoff) html += `<div class="thr-note"><i class="ph ph-arrows-left-right" aria-hidden="true"></i>Started with the full history of the ${i} earlier session${i > 1 ? 's' : ''}</div>`;
       if (res.trimmed) html += `<div class="thr-note">${res.trimmed} earlier items not shown</div>`;
       if (res.unsupported) html += `<div class="thr-note">${escHtml(name)} keeps no history TerminalVibe can read yet.</div>`;
-      else if (!res.items.length) html += '<div class="thr-note">Waiting for the first prompt…</div>';
-      let tools = [];
-      const flushTools = key => {
-        if (!tools.length) return;
+      // A run of tool calls: one row (the last call) that opens to every call and its full command.
+      const toolsHtml = (tools, key) => {
         const failed = tools.filter(x => x.error).length;
         const last = tools[tools.length - 1];
-        html += `<details class="thr-tools" data-key="${key}"${open.has(key) ? ' open' : ''}><summary><i class="ph ${toolIcon(last.name)}" aria-hidden="true"></i>`
+        return `<details class="thr-tools" data-key="${key}"${open.has(key) ? ' open' : ''}><summary><i class="ph ${toolIcon(last.name)}" aria-hidden="true"></i>`
           + `<span class="thr-tools-text">${escHtml(last.name)} ${escHtml(last.summary)}</span>${tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
           + `${failed ? `<i class="ph ph-warning-circle thr-tool-err" aria-label="${failed} failed"></i>` : ''}<span class="thr-tools-time">${clockTime(last.ts)}</span><i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
           // Each call expands to its full command or arguments (older saved history has only the summary).
           + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
-            + `<pre class="thr-tool-detail">${escHtml(x.detail || x.summary || '')}</pre></details>`).join('')
+            + `<pre class="thr-tool-detail">${hlCode(x.detail || x.summary || '', /^(bash|shell|local_shell|exec_command|run_terminal_cmd|terminal)$/i.test(x.name) ? 'sh' : /^\s*[{[]/.test(x.detail || '') ? 'json' : '')}</pre></details>`).join('')
           + '</div></details>';
-        tools = [];
       };
-      res.items.forEach((m, j) => {
-        const key = i + ':' + j;
-        if (m.role === 'tool') { tools.push(m); return; }
-        flushTools(key + 't');
+      const msgHtml = (m, key) => {
         const long = m.text.length > 700 || m.text.split('\n').length > 14;
         const more = long ? `<button type="button" class="thr-more">${open.has(key) ? 'Show less' : 'Show more'}</button>` : '';
         const cls = `thr-msg ${m.role}${long ? ' long' : ''}${open.has(key) ? ' open' : ''}`;
         texts.set(key, m.text);
         // Copy + time under the message, shown on hover.
-        // Fork points at the full (untrimmed) item index, which is what the main process slices.
         const actions = `<div class="thr-actions"><button type="button" class="thr-copy" aria-label="Copy message"><i class="ph ph-copy" aria-hidden="true"></i></button>`
-          + `<button type="button" class="thr-fork" title="Fork from here" aria-label="Fork the thread from this message" data-seg="${i}" data-item="${j + (res.trimmed || 0)}"><i class="ph ph-git-fork" aria-hidden="true"></i></button>`
           + `<span class="thr-time">${clockTime(m.ts)}</span></div>`;
-        const imgs = m.images?.length ? `<div class="thr-images">${m.images.map(p => `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(p)}" alt="Pasted image">`
-          + '<div class="thr-img-actions"><button type="button" data-act="open" title="Open" aria-label="Open image"><i class="ph ph-arrows-out" aria-hidden="true"></i></button>'
+        const user = m.role === 'user' ? userTextHtml(m.text) : null;
+        const shown = user ? [...new Set([...(m.images || []), ...user.paths])] : m.images || [];
+        const imgs = shown.length ? `<div class="thr-images">${shown.map(p => `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(p)}" alt="Pasted image">`
+          + '<div class="thr-img-actions">'
           + '<button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></div></div>').join('')}</div>` : '';
-        html += m.role === 'user'
-          ? `<div class="${cls}" data-key="${key}"><div class="thr-bubble">${imgs}${m.text ? `<div class="thr-msg-text">${mdLite(m.text)}</div>` : ''}${more}</div>${actions}</div>`
+        return m.role === 'user'
+          ? `<div class="${cls}" data-key="${key}">${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div>${more}</div>` : ''}${actions}</div>`
           : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${more}${actions}</div>`;
-      });
-      flushTools(i + ':end');
+      };
+      // The agent's thinking: "Thought" with a one-line peek, opening to the whole text.
+      const thoughtHtml = (m, key) => `<details class="thr-thought" data-key="${key}"${open.has(key) ? ' open' : ''}><summary><i class="ph ph-brain" aria-hidden="true"></i>`
+        + `<span class="thr-thought-label">Thought</span><span class="thr-thought-peek">${escHtml(m.text.replace(/\s+/g, ' ').slice(0, 140))}</span><i class="ph ph-caret-down thr-thought-caret" aria-hidden="true"></i></summary>`
+        + `<div class="thr-thought-text">${mdLite(m.text)}</div></details>`;
+      // A turn's steps in order: thoughts, interim replies, runs of tool calls.
+      const stepsHtml = (list, base) => {
+        let out = '', run = [];
+        const flush = key => { if (run.length) out += toolsHtml(run, key); run = []; };
+        for (const { m, j } of list) {
+          if (m.role === 'tool') { run.push(m); continue; }
+          flush(base + ':' + j + 't');
+          out += m.role === 'thinking' ? thoughtHtml(m, i + ':' + j) : msgHtml(m, i + ':' + j);
+        }
+        flush(base + ':end');
+        return out;
+      };
+      // The files a turn changed (from its edit tools' diffs): a card with +/- counts; each file,
+      // or "Open diff" for all of them, opens to its diff.
+      const changesHtml = (list, key) => {
+        const files = new Map();
+        for (const { m } of list) for (const f of m.files || []) {
+          const cur = files.get(f.path) || { path: f.path, add: 0, del: 0, patches: [] };
+          cur.add += f.add; cur.del += f.del; cur.patches.push(f.patch); files.set(f.path, cur);
+        }
+        if (!files.size) return '';
+        const all = [...files.values()];
+        const rel = p => seg.cwd && p.startsWith(seg.cwd.replace(/[\\/]$/, '') + '/') ? p.slice(seg.cwd.replace(/[\\/]$/, '').length + 1) : p;
+        const line = l => `<span class="dl${l[0] === '+' ? ' add' : l[0] === '-' ? ' del' : l.startsWith('@@') ? ' hunk' : ''}">${escHtml(l) || ' '}</span>`;
+        const sum = k => all.reduce((s, f) => s + f[k], 0);
+        return `<div class="thr-changes"><div class="thr-changes-head"><span class="thr-changes-count">${all.length} changed file${all.length > 1 ? 's' : ''}</span>`
+          + `<span class="thr-add">+${sum('add')}</span><span class="thr-del">-${sum('del')}</span>`
+          + `<button type="button" class="thr-diff-btn"><i class="ph ph-file-text" aria-hidden="true"></i>Open diff</button></div>`
+          + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ph-file-code" aria-hidden="true"></i>`
+            + `<span class="thr-change-path" title="${escHtml(f.path)}">${escHtml(rel(f.path))}</span><span class="thr-add">+${f.add}</span><span class="thr-del">-${f.del}</span></summary>`
+            + `<pre class="thr-diff">${f.patches.map(p => p.split('\n').map(line).join('')).join('<span class="dl sep"></span>')}</pre></details>`).join('')
+          + '</div>';
+      };
+      // T3-style turns: the prompt; for a finished turn a collapsible "Worked for 16s" holding its
+      // steps, then the final reply and the files it changed. The turn in progress shows its steps live.
+      const list = res.items.map((m, j) => ({ m, j }));
+      const firstPrompt = list.findIndex(x => x.m.role === 'user');
+      if (firstPrompt !== 0) html += stepsHtml(firstPrompt < 0 ? list : list.slice(0, firstPrompt), i + ':pre'); // a resumed session's start
+      for (let u = firstPrompt; u >= 0 && u < list.length;) {
+        let e = u + 1;
+        while (e < list.length && list[e].m.role !== 'user') e++;
+        const prompt = list[u], rest = list.slice(u + 1, e);
+        const live = working && i === segs.length - 1 && e === list.length;
+        html += msgHtml(prompt.m, i + ':' + prompt.j);
+        let fin = -1;
+        if (!live) for (let x = rest.length - 1; x >= 0; x--) if (rest[x].m.role === 'assistant') { fin = x; break; }
+        const steps = rest.filter((_, x) => x !== fin);
+        const secs = Math.round((Date.parse(rest[rest.length - 1]?.m.ts) - Date.parse(prompt.m.ts)) / 1000);
+        const took = rest.length && secs >= 0 ? `Worked for ${fmtSecs(secs)}` : '';
+        if (live) html += stepsHtml(steps, i + ':' + prompt.j);
+        else if (steps.length) {
+          const tk = 'turn:' + i + ':' + prompt.j;
+          html += `<details class="thr-turn" data-key="${tk}"${open.has(tk) ? ' open' : ''}><summary><span>${took || 'Steps'}</span><i class="ph ph-caret-right thr-turn-caret" aria-hidden="true"></i></summary>`
+            + `<div class="thr-turn-steps">${stepsHtml(steps, i + ':' + prompt.j)}</div></details>`;
+        } else if (took) html += `<div class="thr-worked">${took}</div>`;
+        if (fin >= 0) html += msgHtml(rest[fin].m, i + ':' + rest[fin].j);
+        if (!live) html += changesHtml(rest, 'chg:' + i + ':' + prompt.j);
+        u = e;
+      }
     });
-    flow.innerHTML = html;
+    flow.innerHTML = html + pendingHtml(ws);
+    syncWorking(ws);
     if (thrFind.q) thrFindRun(true); // the re-render dropped the old match ranges
     flow.querySelectorAll('img.thr-img').forEach(async img => {
       const p = img.dataset.path;
@@ -9044,17 +9504,19 @@
         const r = await window.electronAPI?.readImageFile?.(p).catch(() => null);
         if (!r?.data) { img.closest('.thr-img-wrap').remove(); return; }
         src = `data:${r.mediaType};base64,${r.data}`;
+        _thrImgSize.set(p, Math.floor(r.data.length * 3 / 4) - (r.data.endsWith('==') ? 2 : r.data.endsWith('=') ? 1 : 0));
         _thrImgCache.set(p, src);
         if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
       }
       img.src = src;
+      const size = _thrImgSize.get(p);
+      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size); });
     });
     // Image actions: open in the full viewer (zoom, pan, rotate, flip) or copy as PNG.
     flow.querySelectorAll('.thr-img-wrap').forEach(wrap => {
       const img = wrap.querySelector('img');
-      const open = () => openClaudeRefViewer(null, { kind: 'file', path: img.dataset.path, label: 'Pasted image' }, '');
+      const open = () => openClaudeRefViewer(null, { kind: 'file', path: img.dataset.path, label: img.dataset.path.split(/[\\/]/).pop() }, '');
       img.addEventListener('click', open);
-      wrap.querySelector('[data-act="open"]').addEventListener('click', open);
       const copy = wrap.querySelector('[data-act="copy"]');
       copy.addEventListener('click', async () => {
         try {
@@ -9067,7 +9529,6 @@
         setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
       });
     });
-    flow.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkThreadAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     flow.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', () => {
       const text = texts.get(b.closest('.thr-msg').dataset.key) || '';
       if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {});
@@ -9075,19 +9536,25 @@
       b.setAttribute('aria-label', 'Copied');
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
     }));
+    flow.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
+      const files = [...b.closest('.thr-changes').querySelectorAll('details.thr-change')];
+      const openAll = files.some(d => !d.open);
+      files.forEach(d => { d.open = openAll; });
+    }));
     flow.querySelectorAll('.thr-more').forEach(b => b.addEventListener('click', () => {
       const msg = b.closest('.thr-msg');
       b.textContent = msg.classList.toggle('open') ? 'Show less' : 'Show more';
     }));
-    if (atBottom || !flow.dataset.seen) { flow.scrollTop = flow.scrollHeight; flow.dataset.seen = '1'; }
+    if (!flow.dataset.seen && ws._scrollState && !ws._scrollState.bottom) { flow.scrollTop = ws._scrollState.top; flow.dataset.seen = '1'; } // back where it was
+    else if (atBottom || !flow.dataset.seen) { flow.scrollTop = flow.scrollHeight; flow.dataset.seen = '1'; }
   }
   // ── Find in the thread history: Ctrl+F while the panel has focus, or the header button ──
   // Matches are painted with the CSS Highlight API, so the message markup is never touched.
   // shortcut: a match must sit inside one text node (not across `code` / **bold** boundaries).
   const thrFind = { q: '', ranges: [], i: -1 };
-  const thrFindEl = id => document.getElementById('sbr-thread-find' + id);
+  const thrFindEl = id => thrPage.querySelector('#sbr-thread-find' + id);
   function thrFindRun(keepIndex) {
-    const flow = document.getElementById('sbr-thread-flow'), q = thrFind.q.toLowerCase(), ranges = [];
+    const flow = thrPage.querySelector('#sbr-thread-flow'), q = thrFind.q.toLowerCase(), ranges = [];
     if (q && flow) {
       const walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT, { acceptNode: n =>
         n.parentElement?.closest('.thr-actions, .thr-more, .thr-tools-time, .thr-seg-time, .thr-img-actions') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
@@ -9114,7 +9581,7 @@
     for (let d = cur.startContainer.parentElement?.closest('details:not([open])'); d; d = d.parentElement?.closest('details:not([open])')) d.open = true;
     const long = cur.startContainer.parentElement?.closest('.thr-msg.long:not(.open)');
     if (long) { long.classList.add('open'); const more = long.querySelector('.thr-more'); if (more) more.textContent = 'Show less'; }
-    const flow = document.getElementById('sbr-thread-flow'), fr = flow.getBoundingClientRect(), rr = cur.getBoundingClientRect();
+    const flow = thrPage.querySelector('#sbr-thread-flow'), fr = flow.getBoundingClientRect(), rr = cur.getBoundingClientRect();
     flow.scrollTop += rr.top - fr.top - fr.height / 2;
   }
   function thrFindStep(d) {
@@ -9126,17 +9593,16 @@
     const bar = thrFindEl(''), input = thrFindEl('-input');
     // A selection in the history seeds the search, like a browser's find.
     const sel = String(window.getSelection() || '').trim();
-    if (sel && !sel.includes('\n') && document.getElementById('sbr-thread-flow').contains(window.getSelection().anchorNode)) input.value = sel;
+    if (sel && !sel.includes('\n') && thrPage.querySelector('#sbr-thread-flow').contains(window.getSelection().anchorNode)) input.value = sel;
     bar.hidden = false; input.focus(); input.select();
     thrFind.q = input.value; thrFindRun(false);
   }
   function closeThreadFind() {
     thrFindEl('').hidden = true; thrFind.q = ''; thrFindRun(false);
-    document.getElementById('sbr-thread-flow')?.focus();
+    thrPage.querySelector('#sbr-thread-flow')?.focus();
   }
-  thrFindEl('-btn')?.addEventListener('click', () => thrFindEl('').hidden ? openThreadFind() : closeThreadFind());
   // Plain Ctrl+F in the history panel (the app-wide Ctrl+Shift+F leaves Ctrl+F to terminal programs).
-  document.getElementById('sbr-thread')?.addEventListener('keydown', e => {
+  thrPage?.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); e.stopPropagation(); openThreadFind(); }
   });
   thrFindEl('-input')?.addEventListener('input', e => { thrFind.q = e.target.value; thrFindRun(false); });
@@ -9148,7 +9614,6 @@
   thrFindEl('-next')?.addEventListener('click', () => thrFindStep(1));
   thrFindEl('-close')?.addEventListener('click', closeThreadFind);
 
-  document.getElementById('sbr-thread-refresh')?.addEventListener('click', () => { loadThreadAgents(true).then(() => syncThreadPanel(true)); });
 
   /* ── Workspace sidebar: live processes per workspace ──
      Show up to three processes and a count of any remaining processes.
@@ -9336,12 +9801,55 @@
     } else if (type === 'tabbar') {
       const { wsId, groupId } = data;
       item('<i class="ph ph-plus"></i>', 'New terminal', 'Ctrl+Shift+T', () => addTerminal(wsId, groupId));
+      // Chat › one entry per installed agent: opens the Chat tab with that agent picked.
+      {
+        const sub = document.createElement('div');
+        sub.className = 'ctx-sub';
+        const agents = Object.keys(CHAT_AGENTS).map(harnessOf).filter(h => !_chatAgentsFound || _chatAgentsFound[h.bin]);
+        for (const h of agents) {
+          const el = document.createElement('div');
+          el.className = 'ctx-item';
+          el.innerHTML = `<span class="ctx-agent-icon"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span><span>${escHtml(h.name)}</span>`;
+          el.addEventListener('click', () => { hideCtxMenu(); newChatTab(findWs(wsId), groupId, h.id); });
+          sub.appendChild(el);
+        }
+        if (!agents.length) sub.innerHTML = '<div class="ctx-item disabled"><span><i class="ph ph-info"></i></span><span>No agent CLI found on PATH</span></div>';
+        const trigger = document.createElement('div');
+        trigger.className = 'ctx-item has-sub';
+        trigger.innerHTML = `<span><i class="ph ph-chats-circle"></i></span><span>Chat</span><span class="ci-sub-caret"><i class="ph ph-caret-right"></i></span>`;
+        trigger.appendChild(sub);
+        ctxEl.appendChild(trigger);
+      }
       if (shellList.length) sep();
       for (const s of shellList) {
         // Same logos as Settings → Default shell.
         item(`<svg class="ctx-shell-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${shellIconPath(s)}"/></svg>`, escHtml(s.label) + (s.id === defaultShell ? ' (default)' : ''), '',
           () => addTerminal(wsId, groupId, { shell: s.id }));
       }
+    } else if (type === 'chat-thread') {
+      // A card in the threads sidebar (its Chat tab).
+      const tab = findTermById(data)?.term, w = tab && wsOf(tab);
+      if (!tab || !w) return;
+      const agent = liveThreadAgent(tab), h = agent && harnessOf(_tabAgent.get(tab.id));
+      item('<i class="ph ph-chats-circle"></i>', 'Open', '', () => openChatTab(tab));
+      item('<i class="ph ph-pencil-simple"></i>', 'Rename…', '', () => showPrompt('Rename thread', tab.chat?.title || tab.label, value => {
+        if (!value.trim()) return;
+        tab.chat ||= { createdAt: Date.now() };
+        tab.chat.title = value.trim().slice(0, 80);
+        setChatTabLabel(tab); saveState(); renderThreadsSidebar();
+      }));
+      if (h) {
+        sep();
+        item('<i class="ph ph-terminal-window"></i>', `Show ${escHtml(h.name)} terminal`, '', () => { openChatTab(tab); setChatView(tab, true); });
+        item('<i class="ph ph-stop-circle"></i>', `Stop ${escHtml(h.name)}`, '', () => stopTabAgent(tab).then(ok => { if (!ok) zoomBadge(`${h.name} did not stop`); syncThreadPanel(); renderThreadsSidebar(); }));
+      }
+      const cwd = chatCwd(tab);
+      if (cwd) {
+        sep();
+        item('<i class="ph ph-copy"></i>', 'Copy folder path', '', () => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(cwd); else navigator.clipboard?.writeText(cwd).catch(() => {}); });
+      }
+      sep();
+      item('<i class="ph ph-x"></i>', 'Close thread', '', () => removeTerminal(w.id, tab.id), true);
     } else if (type === 'browser-more') {
       const { entry, history } = data;
       item('<i class="ph ph-clock-counter-clockwise"></i>', 'History', '', history);
@@ -9468,23 +9976,6 @@
         item('<i class="ph ph-x-circle"></i>', 'Close all tabs', '', () => closeTabs(wsId, tabs));
       }
       item('<i class="ph ph-x"></i>', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
-    }
-
-    if (type === 'project') {
-      if (!projects.some(p => p.id === data)) return;
-      item('<i class="ph ph-note-pencil"></i>', 'New thread', '', () => createThread(data));
-      sep();
-      item('<i class="ph ph-trash"></i>', 'Remove project', '', () => removeProject(data), true);
-    }
-    if (type === 'thread') {
-      const w = findWs(data);
-      if (!w) return;
-      item('<i class="ph ph-pencil-simple"></i>', 'Rename thread', '', () => showPrompt('Rename thread', w.label, value => {
-        w.label = value.trim() || w.label;
-        renderSidebar(); syncThreadPanel(); saveState();
-      }));
-      sep();
-      item('<i class="ph ph-trash"></i>', 'Delete thread', '', () => removeWorkspace(w.id), true);
     }
 
     // Plugin-provided context-menu items (appended after built-ins)
@@ -10133,12 +10624,7 @@
       ['New workspace', null, 'ph-folder-plus', () => createWorkspace()],
       ['Open settings', null, 'ph-gear', () => openSettingsGlobal()],
     ].map(([label, sc, icon, run]) => ({ label, meta: sc ? key(sc) : '', icon, run }));
-    for (const w of workspaces) {
-      if (threadIsDraft(w)) continue;
-      cmds.push(w.thread
-        ? { label: 'Thread: ' + w.label, meta: '', icon: 'ph-chats-circle', run: () => openThread(w.id) }
-        : { label: 'Workspace: ' + w.label, meta: '', icon: 'ph-squares-four', run: () => activateWorkspace(w.id) });
-    }
+    for (const w of workspaces) cmds.push({ label: 'Workspace: ' + w.label, meta: '', icon: 'ph-squares-four', run: () => activateWorkspace(w.id) });
     for (const c of _pluginCommands.values()) {
       cmds.push({ label: c.label, meta: 'plugin', metaUi: true, icon: 'ph-puzzle-piece', run: () => { try { c.handler(); } catch (e) { console.error('[plugin] command failed:', c.id, e); } } });
     }
@@ -11438,7 +11924,7 @@
     if (matchShortcut(e, 'search')) {
       e.preventDefault();
       // Focus in the open thread history: search the history instead of the terminal.
-      if (document.activeElement?.closest?.('#sbr-thread') && rightPanelMode() === 'history') openThreadFind(); else openSearch();
+      if (document.activeElement?.closest?.('#sbr-thread')) openThreadFind(); else openSearch();
       return;
     }
     if (matchShortcut(e, 'tabSearch')) { e.preventDefault(); e.stopPropagation(); openTabSearch(); return; }
@@ -11855,167 +12341,8 @@
   // is visible and restore them when it closes, including Escape and switching.
   const profilePickerObserver = new MutationObserver(() => syncBrowserSlots());
   profilePickerObserver.observe(document.getElementById('profile-picker'), { attributes: true, attributeFilter: ['style'] });
-  document.getElementById('btn-sidebar-right')?.addEventListener('click', () => toggleRightPanel('tools'));
-  document.getElementById('btn-thread-history')?.addEventListener('click', () => toggleRightPanel('history'));
+  document.getElementById('btn-thread-history')?.addEventListener('click', () => openThreadHistory(activeWs()));
 
-  // Right sidebar pages (main / clipboard)
-  const sbrOpen = document.getElementById('sbr-open-clipboard');
-  const sbrBack = document.getElementById('sbr-clipboard-back');
-  const sbrMain = document.getElementById('sbr-main');
-  const sbrClip = document.getElementById('sbr-clipboard');
-  const sbrClipContent = document.getElementById('sbr-clipboard-content');
-  if (sbrOpen && sbrBack && sbrMain && sbrClip) {
-    let clipboardView = 'clipboard';
-    const clipboardTabs = [...sbrClip.querySelectorAll('[data-clipboard-view]')];
-    const CLIP_KEY = 'terminalvibe.clipboardHistory';
-    const CLIP_MAX = 200;
-    const CLIP_FAVORITES_KEY = CLIP_KEY + '.favorites';
-    const CLIP_LAST_KEY = CLIP_KEY + '.lastSeen';
-    let favorites = new Set(), lastCapturedText = null, editingText = null, editDraft = '';
-    let clipHistory = [];
-    try { clipHistory = JSON.parse(localStorage.getItem(CLIP_KEY) || '[]'); } catch { clipHistory = []; }
-    if (!Array.isArray(clipHistory)) clipHistory = [];
-    clipHistory = [...new Set(clipHistory.filter(text => typeof text === 'string' && text.trim()))];
-    try {
-      const saved = JSON.parse(localStorage.getItem(CLIP_FAVORITES_KEY) || '[]');
-      if (Array.isArray(saved)) favorites = new Set(saved.filter(text => clipHistory.includes(text)));
-      lastCapturedText = localStorage.getItem(CLIP_LAST_KEY);
-    } catch {}
-    const saveClipHistory = () => {
-      localStorage.setItem(CLIP_KEY, JSON.stringify(clipHistory));
-      localStorage.setItem(CLIP_FAVORITES_KEY, JSON.stringify([...favorites]));
-    };
-    const readClip = async () => (isDesktop() && window.electronAPI?.clipboardRead)
-      ? window.electronAPI.clipboardRead()
-      : navigator.clipboard.readText();
-    const renderClipHistory = () => {
-      sbrClipContent.textContent = '';
-      clipboardTabs.forEach(tab => {
-        const selected = tab.dataset.clipboardView === clipboardView;
-        tab.setAttribute('aria-selected', String(selected));tab.tabIndex = selected ? 0 : -1;
-        if (selected) sbrClipContent.setAttribute('aria-labelledby', tab.id);
-      });
-      if (clipboardView === 'favorites' && !clipHistory.some(text => favorites.has(text))) {
-        sbrClipContent.innerHTML = '<div class="clipboard-empty"><h3>No favorites yet</h3><p>Star a clipboard entry to find it here.</p></div>';
-        return;
-      }
-      if (!clipHistory.length) {
-        sbrClipContent.innerHTML = '<div class="clipboard-empty"><span class="clipboard-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1.5"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M8 12h8M8 16h5"/></svg></span><h3>Nothing copied yet</h3><p>Copy some text to see it here.</p><p class="clipboard-empty-hint">Select an item to paste it into the active terminal.</p></div>';
-        return;
-      }
-      const ordered = clipboardView === 'favorites' ? clipHistory.filter(text => favorites.has(text)) : clipHistory;
-      ordered.forEach(text => {
-        const el = document.createElement('div');el.className = 'sbr-clip-item';
-        el.classList.toggle('is-favorite', favorites.has(text));
-        const editing = editingText === text;
-        const preview = document.createElement(editing ? 'textarea' : 'div');
-        preview.className = editing ? 'sbr-clip-editor' : 'sbr-clip-text';
-        if (editing) {
-          preview.value = editDraft;preview.setAttribute('aria-label', 'Edit clipboard entry');
-          preview.addEventListener('input', () => { editDraft = preview.value; });
-          preview.addEventListener('click', e => e.stopPropagation());
-          preview.addEventListener('keydown', e => {
-            e.stopPropagation();
-            if (e.key === 'Escape') { e.preventDefault();editingText = null;renderClipHistory(); }
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault();saveEdit(); }
-          });
-        } else {
-          preview.textContent = text;preview.tabIndex = 0;preview.setAttribute('role', 'button');
-          preview.setAttribute('aria-label', 'Paste clipboard entry');preview.title = 'Click to paste';
-          preview.addEventListener('keydown', e => {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault();e.stopPropagation();preview.click(); }
-          });
-        }
-        const saveEdit = () => {
-          if (!editDraft.trim()) return;
-          const wasFavorite = favorites.delete(text);
-          clipHistory = clipHistory.filter(item => item !== editDraft || item === text).map(item => item === text ? editDraft : item);
-          if (wasFavorite) favorites.add(editDraft);
-          editingText = null;saveClipHistory();renderClipHistory();
-        };
-        const actions = document.createElement('div');actions.className = 'sbr-clip-actions';
-        actions.addEventListener('click', e => e.stopPropagation());
-        const action = (name, title, icon, callback) => {
-          const button = document.createElement('button');button.type = 'button';button.className = 'sbr-clip-action';
-          button.dataset.action = name;button.title = title;button.setAttribute('aria-label', title);
-          button.innerHTML = '<i class="ph ' + icon + '" aria-hidden="true"></i>';
-          button.addEventListener('click', callback);actions.append(button);return button;
-        };
-        action('edit', editing ? 'Save changes (Ctrl+Enter; Escape to cancel)' : 'Edit entry', editing ? 'ph-check' : 'ph-pencil-simple', () => {
-          if (editing) saveEdit();
-          else { editingText = text;editDraft = text;renderClipHistory();sbrClipContent.querySelector('textarea')?.focus(); }
-        });
-        action('delete', 'Delete entry', 'ph-trash', () => {
-          clipHistory = clipHistory.filter(item => item !== text);favorites.delete(text);
-          if (editingText === text) editingText = null;
-          saveClipHistory();renderClipHistory();
-        });
-        const favorite = action('favorite', favorites.has(text) ? 'Remove favorite' : 'Favorite entry', 'ph-star', () => {
-          if (favorites.has(text)) favorites.delete(text);else favorites.add(text);
-          saveClipHistory();renderClipHistory();
-        });
-        favorite.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="' + (favorites.has(text) ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3L12 17.4l-5.6 3 1.1-6.3L3 9.6l6.2-.9Z"/></svg>';
-        favorite.setAttribute('aria-pressed', String(favorites.has(text)));
-        el.append(preview, actions);
-        el.addEventListener('click', () => {
-          if (editing) return;
-          if (isDesktop() && window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text);
-          else navigator.clipboard.writeText(text).catch(() => {});
-          const t = activeTerminal();
-          if (t?.term && t.type !== 'browser' && !t.locked && !t.dead) { t.term.paste(text);t.term.focus?.(); }
-        });
-        sbrClipContent.appendChild(el);
-      });
-    };
-    const selectClipboardView = view => {
-      clipboardView = view;renderClipHistory();sbrClipContent.scrollTop = 0;
-    };
-    clipboardTabs.forEach((tab, index) => {
-      tab.addEventListener('click', () => selectClipboardView(tab.dataset.clipboardView));
-      tab.addEventListener('keydown', e => {
-        if (!['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) return;
-        e.preventDefault();e.stopPropagation();
-        const next = e.key === 'Home' ? 0 : e.key === 'End' ? clipboardTabs.length - 1
-          : (index + (e.key === 'ArrowRight' ? 1 : -1) + clipboardTabs.length) % clipboardTabs.length;
-        clipboardTabs[next].click();clipboardTabs[next].focus();
-      });
-    });
-    const captureClip = async () => {
-      try {
-        const text = await readClip();
-        if (!text || !text.trim() || lastCapturedText === text) return;
-        lastCapturedText = text;localStorage.setItem(CLIP_LAST_KEY, text);
-        if (clipHistory[0] === text) return;
-        clipHistory = [text, ...clipHistory.filter(t => t !== text)];
-        while (clipHistory.length > CLIP_MAX) {
-          let index = clipHistory.length - 1;
-          while (index > 0 && favorites.has(clipHistory[index])) index--;
-          clipHistory.splice(index, 1);
-        }
-        saveClipHistory();
-        if (sbrClip.style.display !== 'none' && editingText === null) renderClipHistory();
-      } catch { }
-    };
-    captureClip();
-    // Capture on focus / every 3s while visible instead of every second forever.
-    window.addEventListener('focus', captureClip);
-    setInterval(() => { if (!document.hidden) captureClip(); }, 3000);
-    const showClipboardPage = async () => {
-      clipboardView = 'clipboard';
-      sbrMain.style.display = 'none';
-      sbrClip.style.display = 'flex';
-      await captureClip();
-      renderClipHistory();
-    };
-    sbrOpen.addEventListener('click', showClipboardPage);
-    sbrBack.addEventListener('click', () => {
-      sbrClip.style.display = 'none';
-      sbrMain.style.display = 'flex';
-    });
-  }
-
-  // ── Auto-run workspaces: a saved workspace layout whose tabs each start a
-  // command (or open a URL) when launched from the right panel.
   // Live agent orchestration. Launch arguments are passed directly to the PTY,
   // never typed into an interactive shell. Running entries survive rearrangement.
   // Capture every tab, including hidden splits and both xterm buffers. Keep
@@ -12545,145 +12872,6 @@
     throw new Error('Unknown method');
   }
 
-  const AR_KEY = 'terminalvibe.autorunWorkspaces';
-  const loadAutoRuns = () => { try { const a = JSON.parse(localStorage.getItem(AR_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
-  const saveAutoRuns = list => { try { localStorage.setItem(AR_KEY, JSON.stringify(list)); } catch { } };
-
-  function autoRunFromWorkspace(wsp) {
-    const strip = node => node.type === 'split'
-      ? { type: 'split', direction: node.direction, sizes: node.sizes, children: node.children.map(strip) }
-      : { type: 'group', terminals: node.terminals.map(t => t.type === 'browser'
-          ? { label: t.label, type: 'browser', url: t.url }
-          : { label: t.label, cwd: t.cwd || '', cmd: '' }) };
-    return { id: uuid(), name: wsp.label, layout: strip(serializeLayout(wsp.layout)) };
-  }
-
-  function launchAutoRun(tpl) {
-    const withIds = node => {
-      if (node.type === 'split') return { ...node, id: 'split-' + uuid(), children: node.children.map(withIds) };
-      const terminals = node.terminals.map(t => ({ ...t, id: uuid(), pinLabel: true }));
-      return { type: 'group', id: 'group-' + uuid(), activeTermId: terminals[0] && terminals[0].id, terminals };
-    };
-    const wsp = { id: uuid(), label: tpl.name, layout: null, activeTermId: null };
-    wsp.layout = deserializeLayout(withIds(tpl.layout), wsp);
-    const terms = getWorkspaceTerminals(wsp);
-    if (!terms.length) return;
-    wsp.activeTermId = terms[0].id;
-    workspaces.push(wsp);
-    sideOrder.push({ type: 'ws', id: wsp.id });
-    renderSidebar();
-    activateWorkspace(wsp.id);
-    for (const t of terms) {
-      if (!t.pending) continue;
-      const slot = getSlotDimensions(t);
-      sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null });
-      t.pending = false;
-    }
-  }
-
-  const arPage = document.getElementById('sbr-autorun');
-  const arList = document.getElementById('sbr-autorun-list');
-  if (arPage && arList && sbrMain) {
-    let arOpenId = null; // template whose editor is expanded
-    const arField = (placeholder, value, onChange, cls) => {
-      const i = document.createElement('input');
-      i.className = 'ar-input' + (cls ? ' ' + cls : '');
-      i.placeholder = placeholder;
-      i.value = value || '';
-      i.spellcheck = false;
-      i.autocomplete = 'off';
-      i.addEventListener('change', () => onChange(i.value.trim()));
-      return i;
-    };
-    const renderAutoRuns = () => {
-      const list = loadAutoRuns();
-      const save = () => saveAutoRuns(list);
-      arList.textContent = '';
-      if (!list.length) {
-        const canSave = !!activeWs()?.layout;
-        arList.innerHTML = '<div class="sbr-empty ar-empty"><h3>No saved workspaces</h3><p>Save your tabs and splits, then choose a startup command for each terminal.</p><button type="button" class="ar-empty-save">Save current workspace</button></div>';
-        const saveButton = arList.querySelector('.ar-empty-save');
-        saveButton.disabled = !canSave;
-        saveButton.addEventListener('click', () => document.getElementById('sbr-autorun-add').click());
-        if (!canSave) {
-          const hint = document.createElement('p');
-          hint.className = 'ar-empty-hint';
-          hint.textContent = 'Open a workspace to save its layout.';
-          arList.firstElementChild.appendChild(hint);
-        }
-        return;
-      }
-      for (const tpl of list) {
-        const card = document.createElement('div');
-        card.className = 'ar-card' + (tpl.id === arOpenId ? ' open' : '');
-        const head = document.createElement('div');
-        head.className = 'ar-head';
-        head.innerHTML = '<i class="ph ph-caret-right ar-caret"></i><span class="ar-name"></span>'
-          + '<button class="sbr-btn" data-act="run" title="Launch"><i class="ph ph-play"></i></button>'
-          + '<button class="sbr-btn" data-act="del" title="Delete"><i class="ph ph-trash"></i></button>';
-        const nameEl = head.querySelector('.ar-name');
-        nameEl.textContent = nameEl.title = tpl.name;
-        head.addEventListener('click', e => {
-          const act = e.target.closest('[data-act]')?.dataset.act;
-          if (act === 'run') launchAutoRun(tpl);
-          else if (act === 'del') showConfirm(`Delete auto-run workspace "${tpl.name}"?`, () => {
-            list.splice(list.indexOf(tpl), 1); save(); renderAutoRuns();
-          });
-          else { arOpenId = arOpenId === tpl.id ? null : tpl.id; renderAutoRuns(); }
-        });
-
-        const editor = document.createElement('div');
-        editor.className = 'ar-editor';
-        editor.appendChild(arField('Workspace name', tpl.name, v => {
-          tpl.name = v || tpl.name; save(); nameEl.textContent = nameEl.title = tpl.name;
-        }));
-        let pane = 0;
-        const walk = node => {
-          if (node.type === 'split') { node.children.forEach(walk); return; }
-          pane++;
-          for (const t of node.terminals) {
-            const box = document.createElement('div');
-            box.className = 'ar-tab';
-            const title = document.createElement('div');
-            title.className = 'ar-tab-title';
-            title.innerHTML = `<i class="ph ${t.type === 'browser' ? 'ph-globe-hemisphere-west' : 'ph-terminal-window'}"></i>Split ${pane}`;
-            box.appendChild(title);
-            box.appendChild(arField('Tab name', t.label, v => { t.label = v || t.label; save(); }));
-            if (t.type === 'browser') {
-              box.appendChild(arField('URL', t.url === 'about:blank' ? '' : t.url, v => { t.url = v || 'about:blank'; save(); }));
-            } else {
-              box.appendChild(arField('Directory (default: home)', t.cwd, v => { t.cwd = v; save(); }));
-              box.appendChild(arField('Command to run, e.g. npm run dev', t.cmd, v => { t.cmd = v; save(); }, 'ar-cmd'));
-            }
-            editor.appendChild(box);
-          }
-        };
-        walk(tpl.layout);
-        card.appendChild(head);
-        card.appendChild(editor);
-        arList.appendChild(card);
-      }
-    };
-    document.getElementById('sbr-open-autorun').addEventListener('click', () => {
-      sbrMain.style.display = 'none';
-      arPage.style.display = 'flex';
-      renderAutoRuns();
-    });
-    document.getElementById('sbr-autorun-back').addEventListener('click', () => {
-      arPage.style.display = 'none';
-      sbrMain.style.display = 'flex';
-    });
-    document.getElementById('sbr-autorun-add').addEventListener('click', () => {
-      const wsp = activeWs();
-      if (!wsp || !wsp.layout) return;
-      const list = loadAutoRuns();
-      const tpl = autoRunFromWorkspace(wsp);
-      list.push(tpl);
-      saveAutoRuns(list);
-      arOpenId = tpl.id;
-      renderAutoRuns();
-    });
-  }
   document.getElementById('settings-nav-search').addEventListener('input', e => {
     const query = e.target.value.trim().toLowerCase();
     document.querySelectorAll('.settings-cat-btn').forEach(btn => { btn.hidden = !btn.textContent.toLowerCase().includes(query); });
@@ -13011,11 +13199,9 @@
   let savedSidebarWidth = null;
   const SB_EXPANDED_MIN = 200;
   const SB_MAX = 400;
-  // Width shared by the left sidebar and #main. The right sidebar sits in #app too, so Split's
-  // sizes (percent of this pair) are set in px: a CSS % of #app overshoots while it's open.
+  // Width shared by the left sidebar and #main (Split's sizes are percents of it).
   function sbPairWidth() {
-    const gone = ['sidebar-right', 'sash-right'].reduce((w, id) => w + (document.getElementById(id)?.offsetWidth || 0), 0);
-    return document.getElementById('app').offsetWidth - gone;
+    return document.getElementById('app').offsetWidth;
   }
   const SB_SPLIT_OPTS = {
     gutterSize: 4,
@@ -13079,37 +13265,6 @@
   }
 
   initSidebarSplit();
-
-  // ── Right sidebar resize (custom sash, like terminal splits) ──
-  (function initRightSidebarResize() {
-    const sash = document.getElementById('sash-right');
-    if (!sash) return;
-    const panel = document.getElementById('sidebar-right');
-    const MIN = 160;
-    sash.addEventListener('mousedown', e => {
-      e.preventDefault();
-      sash.classList.add('dragging');
-      const startX = e.clientX;
-      const startW = panel.offsetWidth;
-      _suppressResize = true;
-      startResizing();
-      const onMove = ev => {
-        panel.style.width = Math.max(MIN, Math.min(startW + (startX - ev.clientX), 720, window.innerWidth * 0.55)) + 'px';
-      };
-      const onUp = () => {
-        sash.classList.remove('dragging');
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        _suppressResize = false;
-        const wsp = activeWs();
-        if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
-        saveState();
-        stopResizing();
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
-  })();
 
   // ── Sidebar display modes: 'normal' | 'hover' | 'hidden' ──
   let hoverPinned = false;   // expanded via toggle button while in hover mode

@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readImageFile: (file, opts) => ipcRenderer.invoke('fs:read-image', file, opts),
   codexImage: (query) => ipcRenderer.invoke('history:codex-image', query),
   threadAgents: (names) => ipcRenderer.invoke('threads:agents', names),
+  chatModels: () => ipcRenderer.invoke('chat:models'),
   threadHistory: (query) => ipcRenderer.invoke('threads:history', query),
   threadHandoff: (query) => ipcRenderer.invoke('threads:handoff', query),
   threadFork: (query) => ipcRenderer.invoke('threads:fork', query),

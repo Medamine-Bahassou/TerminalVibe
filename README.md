@@ -6,7 +6,7 @@
 
 <p align="center">
   A terminal multiplexer for the AI-agent era.<br>
-  Workspaces, split panes, agent threads and real browser tabs in one quiet, keyboard-first desktop app.
+  Workspaces, split panes, agent chat tabs and real browser tabs in one quiet, keyboard-first desktop app.
 </p>
 
 <p align="center">
@@ -25,19 +25,18 @@
 
 Your editor, dev server, logs, coding agents and the page you're building all live
 in one window. Each project gets its own **workspace** with its own split layout, and
-each piece of agent work gets its own **thread** with its full history. The sidebar
+a **Chat** tab shows the agents' conversation in it. The sidebar
 shows what is running everywhere, so you can see which workspaces are busy without
 opening them.
 
 ## Features
 
 - [Workspaces and layout](#workspaces-and-layout)
-- [Threads: agent work per project](#threads-agent-work-per-project)
+- [Chat tabs](#chat-tabs)
 - [Built for coding agents](#built-for-coding-agents)
 - [Built-in browser](#built-in-browser)
 - [Terminal](#terminal)
 - [Command palette, tab search and snippets](#command-palette-tab-search-and-snippets)
-- [Clipboard history and auto-run](#clipboard-history-and-auto-run)
 - [Look and feel](#look-and-feel)
 - [Profiles](#profiles)
 - [Extensible](#extensible)
@@ -53,20 +52,14 @@ opening them.
 
 <p align="center"><img src="screenshots/monitoring.png" alt="A workspace with btop, an API server and a git log with blurred author emails" width="900"></p>
 
-### Threads: agent work per project
+### Chat tabs
 
-A **thread** is one piece of agent work in a project folder. Threads are listed under their project in the sidebar, newest first, with the last activity time, the git branch and a logo for each agent used.
+Every workspace can open a **Chat** tab (titlebar button, or **Chat** in a tab bar menu). Agents you start in its terminals (`claude`, `codex`, …) are picked up automatically.
 
-- **Pick an agent to start**: a new thread opens on cards for every agent CLI found on your `PATH` (Claude Code, Codex, Gemini CLI, Antigravity, OpenCode, Cursor Agent, Copilot CLI, Amp, Qwen Code, Aider), or a plain terminal.
-- **New tab = new agent**: in a running thread, a new tab opens on the same cards, so you can bring in another agent next to the first.
-- **Hand off between agents**: when a new agent joins, it gets the whole conversation so far as a handoff file, so Codex can pick up where Claude Code stopped.
-- **History panel**: your prompts, the replies, tool calls (expand one to see the full command) and pasted images, read from Claude Code and Codex transcripts. Find in the history with `Ctrl+F` and copy any message.
-- **Fork** a thread from any message into a new thread that any agent can continue.
-- **No project? No problem**: a thread without a project gets its own scratch folder under `~/.terminalvibe/scratch/`.
+- **History**: your prompts, the replies, tool calls (expand one to see the full command) and pasted images, read from Claude Code and Codex transcripts. Find with `Ctrl+F` and copy any message.
+- **Message box**: type and press Enter to send to the agent running in the workspace.
 
-TerminalVibe keeps its own copy of each thread's history, so it survives deleted transcripts. See [docs/projects.md](docs/projects.md).
-
-<p align="center"><img src="screenshots/threads.png" alt="A thread with agent cards in a new tab and the history panel showing a Claude Code session handed off to Codex" width="900"></p>
+TerminalVibe keeps its own copy of each chat, so it survives deleted transcripts. See [docs/chat.md](docs/chat.md).
 
 ### Built for coding agents
 
@@ -111,7 +104,7 @@ TerminalVibe keeps its own copy of each thread's history, so it survives deleted
 
 ### Command palette, tab search and snippets
 
-- **Command palette** (`Ctrl+Shift+K`): every action, workspace and thread in one searchable list, with shortcuts shown.
+- **Command palette** (`Ctrl+Shift+K`): every action and workspace in one searchable list, with shortcuts shown.
 - **Tab search** (`Ctrl+Shift+O`): jump to any tab in any workspace.
 - **Snippets** (`Ctrl+Shift+Y`) and **browser history** in the same palette.
 - Tooltips show the keyboard shortcut for each button.
@@ -120,15 +113,6 @@ TerminalVibe keeps its own copy of each thread's history, so it survives deleted
   <img src="screenshots/command-palette.png" alt="Command palette" width="445">
   <img src="screenshots/tab-search.png" alt="Tab search across workspaces" width="445">
 </p>
-
-### Clipboard history and auto-run
-
-The right panel (titlebar button) holds two tools:
-
-- **Clipboard history**: everything you copy, with favorites, edit and delete. Click an entry to paste it.
-- **Auto-run workspaces**: save a layout once, then launch it again with every tab running its command or opening its URL.
-
-<p align="center"><img src="screenshots/clipboard.png" alt="Clipboard history in the right panel" width="900"></p>
 
 ### Look and feel
 
@@ -145,7 +129,7 @@ The right panel (titlebar button) holds two tools:
 
 ### Profiles
 
-Fully isolated sets of workspaces, threads and settings, with a launch picker and a default profile (`Ctrl+Shift+P`).
+Fully isolated sets of workspaces, chats and settings, with a launch picker and a default profile (`Ctrl+Shift+P`).
 
 <p align="center"><img src="screenshots/profiles.png" alt="Profile picker" width="600"></p>
 
@@ -166,7 +150,7 @@ These are the defaults. Rebind any of them in **Settings → Shortcuts**.
 | Command palette | `Ctrl+Shift+K` |
 | Search tabs | `Ctrl+Shift+O` |
 | Snippets | `Ctrl+Shift+Y` |
-| Search in terminal (or in the thread history) | `Ctrl+Shift+F` (`Ctrl+F` in the history panel) |
+| Search in terminal (or in the chat history) | `Ctrl+Shift+F` (`Ctrl+F` in a Chat tab) |
 | Copy / paste | `Ctrl+Shift+C` / `Ctrl+Shift+V` |
 | Next / previous tab | `Ctrl+PageDown` / `Ctrl+PageUp` |
 | Next / previous workspace | `Ctrl+Shift+PageDown` / `Ctrl+Shift+PageUp` |
@@ -213,7 +197,7 @@ node scripts/build-dist.js
 ### Tests
 
 ```bash
-npm test                 # CLI, skills, agent control, servers, shell startup, sessions, threads
+npm test                 # CLI, skills, agent control, servers, shell startup, sessions, chat history
 npm run test:browser     # browser-pane resize + snapshot
 npm run test:sessions    # Claude session history drawer
 npm run test:images      # SIXEL / iTerm2 image rendering
@@ -238,17 +222,17 @@ and running it inside Linux or WSL needs `wine`.
 | Path | Role |
 |---|---|
 | `index.html` | Static markup: titlebar, sidebar, modals, settings |
-| `app.js` | All renderer logic (one IIFE): state, layout, terminals, browser tabs, threads, settings |
+| `app.js` | All renderer logic (one IIFE): state, layout, terminals, browser tabs, chat tabs, settings |
 | `session-drawer.js` | Claude Code session history drawer |
 | `proc-icons.js` | Brand logos for running processes and agents |
 | `workspace.css` | Design system and component styles (`style.css` holds the base layout) |
 | `electron/main.js` · `preload.js` | Main process: PTYs, IPC, native menus, windows, browser views |
-| `electron/threads.js` | Thread history: reads agent transcripts, writes handoff files, forks |
+| `electron/threads.js` | Chat history: reads agent transcripts and keeps a copy |
 | `electron/agent-control.js` | Authenticated local control channel used by the orchestration skill |
 | `server.js` | Browser-mode backend (WebSocket PTY server, proxy) |
 | `skills/terminalvibe-orchestration/` | Agent skill and the `tv.js` client |
 | `examples/` | Example plugins |
-| `docs/` | Threads, CLI, plugins, agent orchestration, feature recipes |
+| `docs/` | Chat tabs, CLI, plugins, agent orchestration, feature recipes |
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture and
 [docs/adding-a-feature.md](docs/adding-a-feature.md) for recipes.

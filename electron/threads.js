@@ -34,8 +34,6 @@ const rows = raw => raw.split('\n').map(l => { try { return JSON.parse(l); } cat
 // TerminalVibe's handoff context rides on the user's first message (XML tag; older builds used brackets).
 const stripNote = text => text.replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '')
   .replace(/\s*\[TerminalVibe (?:context|thread history): [^\]]*\]\s*$/, '').trim();
-// An agent reading the handoff file is TerminalVibe plumbing, not part of the conversation.
-const isHandoffTool = item => /[\\/]\.terminalvibe[\\/](?:threads[\\/][^\\/]+[\\/]handoff\.(?:xml|md)|handoffs[\\/])/i.test(item.summary || '');
 // The handoff message an older TerminalVibe typed in as its own prompt: not something the user said.
 const isOldHandoff = text => text.startsWith('Continue this conversation. The full history with the previous agent is in ');
 const clip = (s, n = 160) => { s = String(s ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
@@ -57,6 +55,43 @@ function toolDetail(input) {
   const cmd = input.command ?? input.cmd;
   const text = typeof cmd === 'string' ? cmd : Array.isArray(cmd) ? shellArgv(cmd) : JSON.stringify(input, null, 2);
   return text.length > 4000 ? text.slice(0, 3999) + '…' : text;
+}
+
+// ── File changes a tool call made, for the chat's "changed files" card and its diff ──
+// [{ path, add, del, patch }]: patch is unified-diff-like lines (capped, it is saved with the history).
+const PATCH_MAX_LINES = 400;
+function fileChange(file, lines) {
+  let add = 0, del = 0;
+  for (const l of lines) { if (l[0] === '+') add++; else if (l[0] === '-') del++; }
+  const patch = lines.length > PATCH_MAX_LINES ? [...lines.slice(0, PATCH_MAX_LINES), `… ${lines.length - PATCH_MAX_LINES} more lines`] : lines;
+  return { path: String(file), add, del, patch: patch.join('\n') };
+}
+// Claude Code's Edit / MultiEdit / Write result: a structured patch, or a new file's content.
+function claudeChanges(r) {
+  if (!r || typeof r !== 'object' || typeof r.filePath !== 'string') return null;
+  if (Array.isArray(r.structuredPatch) && r.structuredPatch.length) {
+    const lines = [];
+    for (const h of r.structuredPatch) {
+      lines.push(`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`);
+      for (const l of h.lines || []) lines.push(String(l));
+    }
+    return [fileChange(r.filePath, lines)];
+  }
+  if (r.type === 'create' && typeof r.content === 'string') return [fileChange(r.filePath, r.content.split('\n').map(l => '+' + l))];
+  return null;
+}
+// Codex's apply_patch input: "*** Update File: path" / "*** Add File: path" sections.
+function patchChanges(text) {
+  if (typeof text !== 'string' || !text.includes('*** ')) return null;
+  const out = [];
+  let cur = null;
+  for (const line of text.split('\n')) {
+    const m = /^\*\*\* (Update|Add|Delete) File: (.+)$/.exec(line);
+    if (m) { cur = { path: m[2].trim(), lines: m[1] === 'Delete' ? ['-(file deleted)'] : [] }; out.push(cur); continue; }
+    if (!cur || line.startsWith('*** ')) continue;
+    cur.lines.push(line);
+  }
+  return out.length ? out.map(f => fileChange(f.path, f.lines)) : null;
 }
 
 // Parsed transcripts, keyed by file and reused until the file changes.
@@ -91,10 +126,19 @@ function parseClaude(list) {
       if (b?.type === 'text') {
         const text = String(b.text || '').trim();
         if (text && !text.startsWith('<') && !(row.type === 'user' && isOldHandoff(text))) items.push({ role: row.type, text: row.type === 'user' ? stripNote(text) : text, ts: row.timestamp || null });
+      } else if (b?.type === 'thinking' && row.type === 'assistant') {
+        const text = String(b.thinking || '').trim();
+        if (text) items.push({ role: 'thinking', text, ts: row.timestamp || null });
       } else if (b?.type === 'tool_use') {
         const item = { role: 'tool', name: String(b.name || 'tool'), summary: toolSummary(b.input), detail: toolDetail(b.input), ts: row.timestamp || null };
-        tools.set(b.id, item); if (!isHandoffTool(item)) items.push(item);
-      } else if (b?.type === 'tool_result' && b.is_error && tools.has(b.tool_use_id)) tools.get(b.tool_use_id).error = true;
+        tools.set(b.id, item); items.push(item);
+      } else if (b?.type === 'tool_result' && tools.has(b.tool_use_id)) {
+        const item = tools.get(b.tool_use_id);
+        if (b.is_error) item.error = true;
+        // The edit's diff rides on the row that carries its result.
+        const files = !b.is_error && claudeChanges(row.toolUseResult);
+        if (files) item.files = files;
+      }
     }
     if (row.type === 'user') addImages(items, start, row.timestamp || null, blocks
       .filter(b => b?.type === 'image' && b.source?.type === 'base64' && IMG_EXT[b.source.media_type] && typeof b.source.data === 'string')
@@ -109,6 +153,25 @@ function parseCodex(list) {
   for (const r of list) {
     const p = r.payload;
     if (r.type === 'session_meta') { id = p?.id || null; cwd = p?.cwd || null; continue; }
+    if (r.type === 'event_msg' && p?.type === 'item_completed' && p.item) {
+      const it = p.item, ts = r.timestamp || null;
+      if (it.type === 'CommandExecution') {
+        const cmd = Array.isArray(it.command) ? shellArgv(it.command) : String(it.command || '');
+        items.push({ role: 'tool', name: 'shell', summary: clip(cmd), detail: cmd.length > 4000 ? cmd.slice(0, 3999) + '…' : cmd, ts,
+          ...(typeof it.exit_code === 'number' && it.exit_code !== 0 ? { error: true } : {}) });
+      } else if (it.type === 'FileChange' && it.changes && typeof it.changes === 'object') {
+        const files = Object.entries(it.changes).map(([file, ch]) => fileChange(file, ch?.type === 'add' ? String(ch.content || '').split('\n').map(l => '+' + l)
+          : ch?.type === 'delete' ? ['-(file deleted)'] : String(ch?.unified_diff || '').split('\n').filter(Boolean)));
+        items.push({ role: 'tool', name: 'apply_patch', summary: clip(files.map(f => f.path).join(', ')), detail: files.map(f => f.path).join('\n'), ts, files });
+      } else if (it.type === 'McpToolCall') {
+        items.push({ role: 'tool', name: `${it.server || 'mcp'}.${it.tool || 'tool'}`, summary: toolSummary(it.arguments), detail: toolDetail(it.arguments), ts,
+          ...(it.status === 'failed' || it.error ? { error: true } : {}) });
+      } else if (it.type === 'ImageView' && it.path) {
+        const file = String(it.path).replace(/^file:\/\//, '');
+        items.push({ role: 'tool', name: 'view_image', summary: clip(file), detail: file, ts });
+      }
+      continue;
+    }
     if (r.type !== 'response_item' || !p) continue;
     if (p.type === 'message' && ['user', 'assistant'].includes(p.role)) {
       const text = (p.content || []).map(c => typeof c?.text === 'string' ? c.text : '').filter(t => t && !t.startsWith('<')).join('\n').trim();
@@ -117,11 +180,21 @@ function parseCodex(list) {
       if (p.role === 'user') addImages(items, start, r.timestamp || null, (p.content || [])
         .map(c => c?.type === 'input_image' && typeof c.image_url === 'string' && /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/.exec(c.image_url))
         .filter(Boolean).map(m => ({ mediaType: m[1], data: m[2] })));
+    } else if (p.type === 'reasoning') {
+      // Only the readable summary (the reasoning itself is encrypted).
+      const text = (Array.isArray(p.summary) ? p.summary : []).map(x => typeof x?.text === 'string' ? x.text : '').filter(Boolean).join('\n\n').trim();
+      if (text) items.push({ role: 'thinking', text, ts: r.timestamp || null });
     } else if (['function_call', 'custom_tool_call', 'local_shell_call'].includes(p.type)) {
       const item = { role: 'tool', name: String(p.name || (p.type === 'local_shell_call' ? 'shell' : 'tool')),
         summary: toolSummary(p.arguments ?? p.input ?? p.action), detail: toolDetail(p.arguments ?? p.input ?? p.action), ts: r.timestamp || null };
+      if (item.name === 'apply_patch') {
+        let input = p.input ?? p.arguments; try { input = JSON.parse(input); } catch {}
+        const files = patchChanges(typeof input === 'string' ? input : input?.input ?? input?.patch);
+        if (files) item.files = files;
+      }
       if (p.call_id) tools.set(p.call_id, item);
-      if (!isHandoffTool(item)) items.push(item);
+      // Newer Codex wraps its tools in an "exec" script; the steps it ran come as item_completed events below.
+      if (item.name !== 'exec') items.push(item);
     } else if (['function_call_output', 'custom_tool_call_output'].includes(p.type) && tools.has(p.call_id)) {
       let out = p.output; try { out = JSON.parse(out); } catch {}
       const code = out?.metadata?.exit_code;
@@ -285,6 +358,9 @@ async function writeHandoff(meta = {}, home = os.homedir(), root = threadsRoot(h
   for (const s of merged) {
     out += `<session agent="${attr(names[s.harness] || s.harness)}"${s.model && s.model !== 'default' ? ` model="${attr(s.model)}"` : ''}${s.unsupported && !s.items.length ? ' transcript="unavailable"' : ''}>\n`;
     for (const it of s.items) {
+      if (it.role === 'thinking') continue; // the previous agent's private reasoning stays out of the handoff
+      // So does an agent reading an earlier handoff file (plumbing; the chat itself shows that step).
+      if (it.role === 'tool' && /[\\/]\.terminalvibe[\\/](?:threads[\\/][^\\/]+[\\/]handoff\.(?:xml|md)|handoffs[\\/])/i.test(it.summary || '')) continue;
       out += it.role === 'tool'
         ? `<tool name="${attr(it.name)}"${it.error ? ' failed="true"' : ''}>${xml(it.summary)}</tool>\n`
         : `<message role="${it.role}">\n${xml(it.text)}\n${(it.images || []).map(p => `<image path="${attr(p)}"/>\n`).join('')}</message>\n`;
