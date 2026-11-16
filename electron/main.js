@@ -1158,6 +1158,18 @@ ipcMain.handle('threads:scratch', async () => {
   await fs.promises.mkdir(dir, { recursive: true });
   return dir;
 });
+// A site's /favicon.ico as a data URL (so the chat can read its pixels and tint single-color icons); null if none.
+ipcMain.handle('favicon:get', async (_e, origin) => {
+  try {
+    const url = new URL('/favicon.ico', origin);
+    if (!/^https?:$/.test(url.protocol)) return null;
+    const res = await require('electron').net.fetch(url.href, { credentials: 'omit', signal: AbortSignal.timeout(5000) });
+    const type = (res.headers.get('content-type') || 'image/x-icon').split(';')[0];
+    if (!res.ok || /^text\//.test(type)) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length && buf.length < 256 * 1024 ? `data:${/^image\//.test(type) ? type : 'image/x-icon'};base64,${buf.toString('base64')}` : null;
+  } catch { return null; }
+});
 // Current git branch of a folder (or the short commit when detached), read from .git/HEAD; null outside a repo.
 ipcMain.handle('git:branch', async (_e, cwd) => {
   if (!cwd || typeof cwd !== 'string') return null;

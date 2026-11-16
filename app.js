@@ -1724,7 +1724,7 @@
   let notificationSound = true;     // play sounds/notify.wav with those notifications
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
-  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent' };
+  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', markdown: 'on' };
   const loadThreadSettings = s => { if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s }; };
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
@@ -8454,6 +8454,12 @@
     if (_usageModal) renderUsageModal();
     const left = document.getElementById('ts-usage');
     if (!left) return limits;
+    const ids = Object.entries(limits || {}).filter(([id, u]) => harnessOf(id) && u.windows?.length).map(([id]) => id);
+    if (limits) try { localStorage.setItem('tv-usage-agents', JSON.stringify(ids)); } catch {}
+    // The first reading after the startup placeholders fades in (rings sweep from empty); later refreshes don't.
+    const reveal = left.classList.contains('loading');
+    left.classList.remove('loading');
+    left.classList.toggle('reveal', reveal);
     const items = Object.entries(limits || {}).map(([id, u]) => {
       const h = harnessOf(id);
       if (!h || !u.windows?.length) return '';
@@ -8484,13 +8490,14 @@
         const pace = w.resetsAt && w.mins ? Math.max(0, Math.min(100, (w.resetsAt - Date.now()) / (w.mins * 60000) * 100)) : null;
         const [trend, trendTip] = pace == null ? ['ph-gauge', ''] : left < pace - 5 ? ['ph-trend-down', 'Using it faster than it resets'] : left > pace + 5 ? ['ph-trend-up', 'Under pace: it lasts until the reset'] : ['ph-gauge', 'On pace'];
         return `<div class="um-card"><div class="um-stat"><div class="um-label">${escHtml(w.label)}</div>`
-          + `<div class="um-big"><span class="um-num">${left}%</span><span class="um-left">left</span><i class="ph ${trend} um-trend" aria-hidden="true"${trendTip ? ` title="${trendTip}"` : ''}></i></div></div>`
+          + `<div class="um-big"><span class="um-num">${left}%</span><span class="um-left">left<i class="ph ${trend} um-trend" aria-hidden="true"${trendTip ? ` title="${trendTip}"` : ''}></i></span></div></div>`
           + `<div class="um-bar" role="img" aria-label="${left}% left${w.resetsAt ? `, resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}"><div class="um-fill" style="width:${left}%"></div>`
           + (pace != null ? `<div class="um-pace" style="left:${pace}%" title="Even pace: ${Math.round(pace)}% would be left now"></div>` : '')
           + (w.resetsAt ? `<span class="um-reset"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>${fmtLeft(w.resetsAt - Date.now())}</span>` : '') + '</div></div>';
       }).join('');
       const plan = u.plan ? `<span class="um-plan">${escHtml(u.plan[0].toUpperCase() + u.plan.slice(1))}</span>` : '';
-      return `<section class="um-agent" style="--um-agent:${h.color || 'var(--fg)'}"><div class="um-agent-head"><span class="um-logo">${procIconHtml(h.bin, 'ph-robot')}</span><span>${escHtml(h.name)}</span>${plan}</div>${cards}</section>`;
+      // Antigravity has no brand color of its own (its logo is an image): a lavender whose bar fill is #39334f.
+      return `<section class="um-agent" style="--um-agent:${h.color || (id === 'antigravity' ? '#9784db' : 'var(--fg)')}"><div class="um-agent-head"><span class="um-logo">${procIconHtml(h.bin, 'ph-robot')}</span><span>${escHtml(h.name)}</span>${plan}</div>${cards}</section>`;
     }).join('');
     body.innerHTML = sections || (_usageLoading
       ? '<div class="um-empty"><i class="ph ph-circle-notch um-spin" aria-hidden="true"></i>Reading usage…</div>'
@@ -8503,7 +8510,9 @@
   }
   function closeUsageModal() {
     if (!_usageModal) return;
-    _usageModal.remove(); _usageModal = null;
+    const el = _usageModal; _usageModal = null;
+    el.classList.add('closing'); // fades out when UI animations are on; 0s otherwise
+    setTimeout(() => el.remove(), parseFloat(getComputedStyle(el).transitionDuration) * 1000 || 0);
     _usageReturnFocus?.focus?.(); _usageReturnFocus = null;
   }
   function openUsageModal() {
@@ -8530,6 +8539,20 @@
     void loadUsageModal(false); // the last reading (≤ 1 min old) at once, else a new one
   }
   document.getElementById('ts-usage')?.addEventListener('click', openUsageModal);
+  // From startup: the agents seen last time, as logos in empty rings, until the first reading arrives.
+  if (!DETACHED_ONLY && !SETTINGS_ONLY && window.electronAPI?.usageLimits) {
+    const left = document.getElementById('ts-usage');
+    let ids = null;
+    try { ids = JSON.parse(localStorage.getItem('tv-usage-agents')); } catch {}
+    const known = (Array.isArray(ids) ? ids : ['claude', 'codex', 'antigravity']).map(harnessOf).filter(Boolean);
+    if (left && known.length) {
+      left.innerHTML = known.map(h => `<span class="sb-usage-item" style="--p:0" data-tip="${escHtml(h.name)}: loading usage…">`
+        + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
+        + '<span class="sb-usage-pct">&nbsp;</span></span>').join('') + '<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>';
+      left.classList.add('loading');
+      left.hidden = false;
+    }
+  }
   if (!DETACHED_ONLY && !SETTINGS_ONLY) { setTimeout(() => refreshUsageLimits(true), 3000); setInterval(() => refreshUsageLimits(true), 5 * 60000); }
 
   // A terminal running an agent becomes a Chat tab over that agent (the chat button in its tab bar).
@@ -9397,7 +9420,8 @@
         : !sides.length ? ''
         : collapsed ? `<button type="button" class="thr-sides-toggle thr-sides-bubble" aria-expanded="false" aria-label="Show ${what}" data-tip="Side chats">`
           + `<i class="ph ph-chat-circle-dots" aria-hidden="true"></i><span class="thr-sides-count">${sides.length}</span><i class="ph ph-caret-up" aria-hidden="true"></i></button>`
-        : `<span class="thr-sides-label">Side chats</span>${sides.map((x, i) => chip(x, 'ph-chat-circle-dots', i)).join('')}`
+        : `<span class="thr-sides-label">Side chats</span>${sides.map((x, i) => `<div class="thr-side-row" style="--i:${i}">${chip(x, 'ph-chat-circle-dots', i)}`
+          + `<button type="button" class="thr-side-del" data-del-side="${escHtml(x.id)}" aria-label="Delete side chat “${escHtml(x.chat?.title || x.label || 'Side chat')}”" data-tip="Delete side chat"><i class="ph ph-trash" aria-hidden="true"></i></button></div>`).join('')}`
           + `<button type="button" class="thr-sides-toggle" aria-expanded="true" aria-label="Hide ${what}"><i class="ph ph-caret-down" aria-hidden="true"></i></button>`;
       sidesEl.hidden = !html;
       sidesEl.classList.toggle('collapsed', collapsed);
@@ -9428,7 +9452,8 @@
   // Pick a new chat's working folder: the workspaces' folders, or any folder.
   thrChip('bringback')?.addEventListener('click', () => { const c = curChat(); if (c) void bringBackSideChat(c); });
   thrChip('sides')?.addEventListener('click', e => {
-    if (e.target.closest('.thr-sides-toggle')) {
+    // The caret, or anywhere on the open tray's "Side chats" header row.
+    if (e.target.closest('.thr-sides-toggle, .thr-sides:not(.collapsed):has(> .thr-sides-toggle) > .thr-sides-label')) {
       const el = e.currentTarget;
       if (el.classList.contains('leaving')) return;
       let done = false;
@@ -9447,18 +9472,27 @@
       else flip();
       return;
     }
+    const del = e.target.closest('.thr-side-del');
+    if (del) { const t = findChatThread(del.dataset.delSide); if (t) confirmDeleteThread(t, undefined, 'side chat'); return; }
     const t = findChatThread(e.target.closest('.thr-side-chip')?.dataset.side); if (t) openChatTab(t);
   });
   thrChip('cwd')?.addEventListener('click', e => {
     e.stopPropagation(); // the document click handler would close the menu right away
-    const r = e.currentTarget.getBoundingClientRect();
+    const chip = e.currentTarget;
+    if (ctxEl.classList.contains('open') && ctxEl._owner === chip) { hideCtxMenu(); return; } // a toggle
+    const r = chip.getBoundingClientRect();
     showCtxMenu({ pageX: r.left, pageY: r.top - 6, above: true }, 'chat-cwd', curChat());
+    ctxEl._owner = chip;
   });
   thrChip('branch')?.addEventListener('click', async e => {
     e.stopPropagation();
-    const tab = curChat(), cwd = chatCwd(tab), r = e.currentTarget.getBoundingClientRect();
+    const chip = e.currentTarget;
+    if (ctxEl.classList.contains('open') && ctxEl._owner === chip) { hideCtxMenu(); return; } // a toggle
+    const tab = curChat(), cwd = chatCwd(tab), r = chip.getBoundingClientRect();
     const branches = await window.electronAPI?.gitBranches?.(cwd) || [];
-    showCtxMenu({ pageX: r.left, pageY: r.top - 6, above: true }, 'chat-branch', { tab, cwd, branches });
+    // The chip sits at the composer's right end: the menu grows leftward from it (right edges aligned).
+    showCtxMenu({ pageX: r.right, pageY: r.top - 6, above: true, alignRight: true }, 'chat-branch', { tab, cwd, branches });
+    ctxEl._owner = chip;
   });
   async function setChatBranch(tab, cwd, branch) {
     const r = await window.electronAPI.gitCheckout(cwd, branch);
@@ -10005,21 +10039,74 @@
     input.setSelectionRange(start, chatEditorText(prefix.cloneContents()).length);
   }
   function restoreChatEditorSelection(editor, input = thrInput) {
-    const point = offset => {
+    const point = (offset, parent = editor) => {
       let index = 0;
-      for (const child of editor.childNodes) {
+      for (const child of parent.childNodes) {
         const length = chatEditorText(child).length;
         if (offset <= length) {
           if (child.nodeType === Node.TEXT_NODE) return [child, Math.min(offset, child.data.length)];
-          return [editor, index + (offset > 0 ? 1 : 0)];
+          // Markdown styling spans hold plain text: step inside them; references stay atomic.
+          if (child.nodeType === Node.ELEMENT_NODE && !child.dataset.mention && child.firstChild) return point(offset, child);
+          return [parent, index + (offset > 0 ? 1 : 0)];
         }
         offset -= length; index++;
       }
-      return [editor, editor.childNodes.length];
+      return [parent, parent.childNodes.length];
     };
     const range = document.createRange();
     range.setStart(...point(input.selectionStart)); range.setEnd(...point(input.selectionEnd));
     const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+  }
+  // Live markdown in the composer: styles the text but keeps every character (markers dimmed),
+  // so the draft, caret offsets and what is sent stay exactly as typed.
+  function mdInputHtml(s, lineStart = true) {
+    const mark = t => `<span class="md-mark">${escHtml(t)}</span>`;
+    const inline = t => {
+      const re = /(`+)([^`\n]+?)\1|(\*\*|__)(?=\S)([^\n]*?\S)\3|~~(?=\S)([^\n]*?\S)~~|(?<![\w*])(\*|_)(?=[^\s*_])([^\n*_]*?[^\s*_])\6(?![\w*])|\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+      let out = '', last = 0;
+      for (const x of t.matchAll(re)) {
+        out += escHtml(t.slice(last, x.index)); last = x.index + x[0].length;
+        if (x[1]) out += `<span class="md-code">${mark(x[1])}${escHtml(x[2])}${mark(x[1])}</span>`;
+        else if (x[3]) out += `<span class="md-strong">${mark(x[3])}${inline(x[4])}${mark(x[3])}</span>`;
+        else if (x[5]) out += `<span class="md-del">${mark('~~')}${inline(x[5])}${mark('~~')}</span>`;
+        else if (x[6]) out += `<span class="md-em">${mark(x[6])}${inline(x[7])}${mark(x[6])}</span>`;
+        else out += `<span class="md-link">${mark('[')}${escHtml(x[8])}${mark('](')}<span class="md-url">${escHtml(x[9])}</span>${mark(')')}</span>`;
+      }
+      return out + escHtml(t.slice(last));
+    };
+    let fence = false;
+    return s.split('\n').map((line, i) => {
+      const start = i > 0 || lineStart;
+      if (start && /^\s*```/.test(line)) { fence = !fence; return `<span class="md-code-block">${mark(line)}</span>`; }
+      if (fence) return `<span class="md-code-block">${escHtml(line)}</span>`;
+      if (!start) return inline(line);
+      let m = line.match(/^(#{1,6} )(.*)$/);
+      if (m) return `<span class="md-h md-h${m[1].length - 1}">${mark(m[1])}${inline(m[2])}</span>`;
+      if ((m = line.match(/^(\s*>\s?)(.*)$/))) return `<span class="md-quote">${mark(m[1])}${inline(m[2])}</span>`;
+      // List items: indent (widened when rendered) + marker; a bullet's dash is drawn as • / ◦ by depth.
+      if ((m = line.match(/^(\s*)([-*+]|\d+[.)])(\s)(.*)$/))) {
+        const bullet = /^[-*+]$/.test(m[2]), sub = Math.floor(m[1].replace(/\t/g, '  ').length / 2) % 2;
+        return (m[1] ? `<span class="md-indent">${escHtml(m[1])}</span>` : '')
+          + `<span class="md-mark md-list${bullet ? ' md-bullet' + (sub ? ' md-bullet-sub' : '') : ''}">${escHtml(m[2] + m[3])}</span>` + inline(m[4]);
+      }
+      return inline(line);
+    }).join('\n');
+  }
+  // Rendered mode hides the markers; the token(s) at the caret show theirs (class md-open), so editing them is predictable.
+  function openMdTokens(editor) {
+    editor.querySelectorAll('.md-open').forEach(x => x.classList.remove('md-open'));
+    const sel = window.getSelection();
+    if (!editor.classList.contains('md-render') || !sel?.rangeCount) return;
+    const r = sel.getRangeAt(0);
+    if (!editor.contains(r.startContainer)) return;
+    const open = n => { for (let x = n; x && x !== editor; x = x.parentNode) if (x.nodeType === Node.ELEMENT_NODE && /\bmd-(?!mark|url)/.test(x.className)) x.classList.add('md-open'); };
+    for (const [c, o] of [[r.startContainer, r.startOffset], [r.endContainer, r.endOffset]]) {
+      open(c);
+      // At a token's edge (caret just before or after it): open that neighbour too.
+      const text = c.nodeType === Node.TEXT_NODE;
+      open(text ? (o === 0 ? c.previousSibling : null) : c.childNodes[o - 1]);
+      open(text ? (o === c.data.length ? c.nextSibling : null) : c.childNodes[o]);
+    }
   }
   function syncChatInputLinks(surface = thrPage, files = _chatFiles) {
     const input = threadPart(surface, 'input'), editor = threadPart(surface, 'input-links');
@@ -10030,12 +10117,16 @@
     editor.dataset.placeholder = input.placeholder || 'Ask anything';
     editor.dataset.empty = String(!input.value);
     editor.setAttribute('aria-disabled', String(input.disabled));
-    if (editor._draftValue === input.value && editor._draftReferences === signature) return;
+    const md = threadSettings.markdown !== 'off';
+    editor.classList.toggle('md-render', threadSettings.markdown === 'on');
+    if (editor._draftValue === input.value && editor._draftReferences === signature && editor._draftMd === md) return;
     const tabIndex = surface === thrPage ? 0 : -1;
     const tokens = [...references.keys()].sort((a, b) => b.length - a.length).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    let at = 0;
     editor.innerHTML = (tokens.length ? input.value.split(new RegExp(`(${tokens.join('|')})`, 'g')) : [input.value]).map(part => {
-      const file = references.get(part);
-      if (!file) return escHtml(part);
+      const file = references.get(part), lineStart = !at || input.value[at - 1] === '\n';
+      at += part.length;
+      if (!file) return md ? mdInputHtml(part, lineStart) : escHtml(part);
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
         + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
@@ -10047,8 +10138,9 @@
         : `<a href="#" class="thr-image-ref" tabindex="${tabIndex}" title="${escHtml(file.name)}"><span class="thr-inline-image-icon">${file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span>${escHtml(label)}</span>${file.size ? `<small>${escHtml(fmtBytes(file.size).replace(' ', ''))}</small>` : ''}</a>`;
       return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}">${link}</span>`;
     }).join('');
-    editor._draftValue = input.value; editor._draftReferences = signature;
+    editor._draftValue = input.value; editor._draftReferences = signature; editor._draftMd = md;
     if (surface === thrPage && document.activeElement === editor) restoreChatEditorSelection(editor, input);
+    openMdTokens(editor); // now, not on the async selectionchange: no frame with the caret's markers hidden
   }
   function insertChatMention(file, input = thrInput, files = _chatFiles) {
     const kind = file.cite ? 'Citation' : file.thread ? 'Thread' : 'Image';
@@ -10182,19 +10274,82 @@
       thrInput.focus = options => {
         syncChatInputLinks(); editor.focus(options); restoreChatEditorSelection(editor);
       };
-      document.addEventListener('selectionchange', () => rememberChatEditorSelection(editor));
-      editor.addEventListener('input', () => {
+      document.addEventListener('selectionchange', () => { rememberChatEditorSelection(editor); openMdTokens(editor); });
+      // Live markdown re-renders the editor, which drops the browser's undo: keep our own (typing bursts).
+      const hist = { undo: [], redo: [], at: 0, chat: null };
+      const snap = () => ({ v: thrInput.value, s: thrInput.selectionStart, e: thrInput.selectionEnd });
+      const restore = (from, to) => {
+        const state = from.pop();
+        if (!state) return;
+        to.push(snap());
+        thrInput.value = state.v; thrInput.setSelectionRange(state.s, state.e);
+        editor._draftValue = null; syncChatInputLinks();
+        thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      // Like VS Code's auto-surround: a quote / bracket / markdown marker typed over a selection wraps it.
+      const SURROUND = { '"': '"', "'": "'", '`': '`', '(': ')', '[': ']', '{': '}', '*': '*', '_': '_', '~': '~' };
+      editor.addEventListener('beforeinput', e => {
+        if (e.inputType !== 'insertText' || e.isComposing || !SURROUND[e.data]) return;
+        rememberChatEditorSelection(editor);
+        const v = thrInput.value, s = thrInput.selectionStart, end = thrInput.selectionEnd;
+        if (s === end) return;
+        e.preventDefault(); e.stopImmediatePropagation();
+        applyDraft(v.slice(0, s) + e.data + v.slice(s, end) + SURROUND[e.data] + v.slice(end), s + 1, end + 1); // the text stays selected
+      });
+      editor.addEventListener('beforeinput', e => { // (all modes: paste replaces the DOM too, so native undo can't follow)
+        if (hist.chat !== curChat()) Object.assign(hist, { undo: [], redo: [], chat: curChat() });
+        if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
+          e.preventDefault();
+          if (e.inputType === 'historyUndo') restore(hist.undo, hist.redo); else restore(hist.redo, hist.undo);
+          return;
+        }
+        rememberChatEditorSelection(editor);
+        if (Date.now() - hist.at > 400) { hist.undo.push(snap()); if (hist.undo.length > 200) hist.undo.shift(); }
+        hist.at = Date.now(); hist.redo.length = 0;
+      });
+      editor.addEventListener('input', e => {
         thrInput.value = chatEditorText(editor);
         rememberChatEditorSelection(editor);
         const count = _chatFiles.length;
         _chatFiles = _chatFiles.filter(file => !(file.cite || file.at || file.thread) || !file.mention || thrInput.value.includes(file.mention));
         editor._draftValue = thrInput.value;
+        if (threadSettings.markdown !== 'off' && !e.isComposing) { editor._draftValue = null; syncChatInputLinks(); }
         if (!thrInput.value) { editor.replaceChildren(); restoreChatEditorSelection(editor); }
         if (_chatFiles.length !== count) renderChatFiles();
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
       });
+      // A programmatic edit of the draft (list keys below), undoable like typing.
+      const applyDraft = (value, caret, caretEnd = caret) => {
+        hist.undo.push(snap()); hist.redo.length = 0; hist.at = 0;
+        thrInput.value = value; thrInput.setSelectionRange(caret, caretEnd);
+        editor._draftValue = null; syncChatInputLinks();
+        thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+      };
       editor.addEventListener('keydown', e => {
         rememberChatEditorSelection(editor);
+        // Lists, like GitHub's editor (Enter sends here, so Shift+Enter is the new line): Shift+Enter continues the
+        // item (next number), on an empty item ends the list; Tab / Shift+Tab indent / outdent the item.
+        if (threadSettings.markdown !== 'off' && !e.isComposing && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'Tab' || (e.key === 'Enter' && e.shiftKey))) {
+          const v = thrInput.value, s = thrInput.selectionStart, end = thrInput.selectionEnd;
+          const ls = v.lastIndexOf('\n', s - 1) + 1, nl = v.indexOf('\n', s), le = nl < 0 ? v.length : nl;
+          const line = v.slice(ls, le), m = line.match(/^(\s*)([-*+]|(\d+)[.)])(\s+)(.*)$/);
+          if (m) {
+            e.preventDefault(); e.stopPropagation();
+            if (e.key === 'Tab') {
+              // At most one level deeper than the list item above (none above: can't nest).
+              const prevLine = ls ? v.slice(v.lastIndexOf('\n', ls - 2) + 1, ls - 1) : '';
+              const above = prevLine.match(/^(\s*)(?:[-*+]|\d+[.)])\s/);
+              const maxIndent = above ? above[1].length + 2 : 0;
+              const cut = e.shiftKey ? Math.min(2, m[1].length) : m[1].length + 2 <= maxIndent ? -2 : 0;
+              if (cut) applyDraft(v.slice(0, ls) + (cut < 0 ? '  ' + line : line.slice(cut)) + v.slice(le), Math.max(ls, s - cut));
+            } else if (!m[5].trim()) applyDraft(v.slice(0, ls) + v.slice(le), ls); // empty item: end the list
+            else {
+              const ins = '\n' + m[1] + (m[3] ? `${+m[3] + 1}${m[2].slice(-1)}` : m[2]) + m[4];
+              applyDraft(v.slice(0, s) + ins + v.slice(end), s + ins.length);
+            }
+            return;
+          }
+        }
         if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
         const forwarded = new KeyboardEvent('keydown', { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, cancelable: true });
         thrInput.dispatchEvent(forwarded);
@@ -10204,7 +10359,16 @@
         e.preventDefault();
         const files = [...(e.clipboardData?.files || [])];
         if (files.length) { rememberChatEditorSelection(editor); addChatFiles(files); }
-        else document.execCommand('insertText', false, e.clipboardData?.getData('text/plain') || '');
+        else {
+          // Into the draft text itself: execCommand('insertText') splits lines into <div>s and blank lines
+          // (paragraph breaks) got lost reading them back.
+          rememberChatEditorSelection(editor);
+          const text = (e.clipboardData?.getData('text/plain') || '').replace(/\r\n?/g, '\n');
+          if (!text) return;
+          const v = thrInput.value, s = thrInput.selectionStart, end = thrInput.selectionEnd;
+          applyDraft(v.slice(0, s) + text + v.slice(end), s + text.length);
+          updateChatComplete();
+        }
       });
     }
   }
@@ -10503,9 +10667,19 @@
   });
   document.addEventListener('mousedown', e => { if (!citeBtn.hidden && e.target !== citeBtn && !citeBtn.contains(e.target)) hideCite(); }, true);
   flowEl.addEventListener('scroll', hideCite);
+  // "Scroll to end": a pill over the composer while the chat is scrolled up from its latest message.
+  const scrollEndBtn = threadPart(thrPage, 'scroll-end');
+  function syncScrollEnd() {
+    if (scrollEndBtn) scrollEndBtn.hidden = flowEl.scrollHeight - flowEl.scrollTop - flowEl.clientHeight < 160;
+  }
+  scrollEndBtn?.addEventListener('click', () => {
+    const smooth = document.body.classList.contains('ui-animations') && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    flowEl.scrollTo({ top: flowEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+  });
   // Each chat remembers where it was scrolled (restored after a tab or chat switch).
   flowEl.addEventListener('scroll', () => {
     rememberThreadScroll(_curChat);
+    syncScrollEnd();
   }, { passive: true });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCite(); });
   let _chatCtrl = false;
@@ -10811,7 +10985,32 @@
   const tsAside = document.getElementById('threads-sidebar');
   const tsList = document.getElementById('ts-list');
   const tsSearch = document.getElementById('ts-search');
-  const tsCollapsed = new Set(); // section ids folded by the user
+  const tsCollapsed = new Set(['settled']); // section ids folded by the user (the Settled shelf starts folded, as in T3 Code)
+  let tsSettledShown = 10; // Settled shelf: 10 rows, then 25 more per "Show more"
+  // A thread's T3-style states: pinned (top shelf), settled (the user's "done"; new activity un-settles).
+  function setThreadFlag(tab, key, on) {
+    tab.chat ||= { createdAt: Date.now() };
+    if (on) tab.chat[key] = key === 'settledAt' ? Date.now() : true; else delete tab.chat[key];
+    saveState(); renderThreadsSidebar();
+  }
+  // Inline rename (double-click / F2): Enter or leaving saves, Escape cancels.
+  function startThreadRename(card) {
+    const tab = findChatThread(card?.dataset.tab), title = card?.querySelector('.ts-title');
+    if (!tab || !title || card.querySelector('.ts-rename')) return;
+    const input = document.createElement('input');
+    input.className = 'ts-rename'; input.value = tab.chat?.title || tab.label || ''; input.setAttribute('aria-label', 'Thread title'); input.spellcheck = false;
+    title.replaceWith(input); input.focus(); input.select();
+    let done = false;
+    const finish = save => {
+      if (done) return; done = true;
+      const v = input.value.trim();
+      if (save && v && v !== tab.chat?.title) { tab.chat ||= { createdAt: Date.now() }; tab.chat.title = v.slice(0, 80); setChatTabLabel(tab); saveState(); }
+      input.remove(); tsList._html = null; renderThreadsSidebar();
+    };
+    input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); finish(false); } });
+    input.addEventListener('blur', () => finish(true));
+    for (const ev of ['click', 'dblclick', 'mousedown']) input.addEventListener(ev, e => e.stopPropagation());
+  }
   const ago = t => { const m = (Date.now() - t) / 6e4;
     return !t ? '' : m < 1 ? 'now' : m < 60 ? `${m | 0}m` : m < 1440 ? `${m / 60 | 0}h` : m < 10080 ? `${m / 1440 | 0}d` : new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' }); };
   // A thread shows once it has messages (or one is on its way); before that only as a draft, if text is typed.
@@ -10851,36 +11050,75 @@
     const all = chatThreads().map(threadInfo)
       .filter(x => !q || `${x.title} ${x.folder} ${x.branch} ${x.openIn?.label || ''}`.toLowerCase().includes(q))
       .sort((a, b) => b.updated - a.updated);
-    const card = x => {
-      if (x.draft) return `<button type="button" role="listitem" class="ts-card draft" data-tab="${x.w.id}" data-tip="Draft · ${escHtml(x.cwd || 'No project')}">`
-        + `<span class="ts-row"><span class="ts-folder"><i class="ph ph-note-pencil ts-draft-icon" aria-hidden="true"></i><i class="ph ${x.folder === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span></span>`
-        + `<span class="ts-title">${escHtml(x.title)}</span></button>`;
-      const status = x.work
-        ? `<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>${x.work.wait ? 'Waiting' : `Working ${fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))}`}</span>`
-        : '<span class="ts-status"><i class="ph ph-check" aria-hidden="true"></i>Settled</span>';
+    // T3 Code's sidebar logic: one-line rows ([agent] title [pin] · time, the time giving way to a Settle /
+    // Un-settle action on hover); shelves Pinned · Working · the active list · Settled (10, then 25 more per click).
+    // Settling is the user's "done": new activity after it brings the thread back to the active list.
+    const settled = x => !x.work && x.w.chat.settledAt && x.w.chat.settledAt >= x.updated;
+    const row = (x, shelf) => {
       const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No project' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
         ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...x.models.map(m => ({ proc: m.h.bin, text: m.text }))];
-      return `<button type="button" role="listitem" class="ts-card" draggable="true" data-tab="${x.w.id}" data-tip="${escHtml(x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
-        + `<span class="ts-row"><span class="ts-folder"><i class="ph ${x.folder === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span>`
-        + `<span class="ts-time">${ago(x.updated)}</span>${status}</span>`
-        + `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`
-        + `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
-        + (x.hs.length ? `<span class="ts-agents">${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span></button>';
+      const lead = x.work ? '<i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>'
+        : x.h ? `<span class="ts-agent"${x.h.color ? ` style="color:${x.h.color}"` : ''}>${procIconHtml(x.h.bin, 'ph-robot')}</span>` : '<i class="ph ph-chats-circle" aria-hidden="true"></i>';
+      const end = x.work ? (x.work.wait ? 'Waiting' : fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))) : ago(x.updated);
+      const action = x.draft || x.work ? ''
+        : shelf === 'settled' ? '<button type="button" class="ts-act" data-act="unsettle"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>Un-settle</button>'
+        : '<button type="button" class="ts-act" data-act="settle"><i class="ph ph-check" aria-hidden="true"></i>Settle</button>';
+      const pin = x.w.chat.pinned ? '<button type="button" class="ts-pin" data-act="unpin" aria-label="Unpin thread" data-tip="Unpin thread"><i class="ph ph-push-pin" aria-hidden="true"></i></button>' : '';
+      const title = `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`;
+      const folder = `<span class="ts-folder">${x.draft ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : ''}<i class="ph ${x.folder === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span>`;
+      // Pinned / Working / Threads keep the full card (folder · time · status, title, branch · agents); Settled is slim.
+      if (shelf !== 'settled') {
+        const status = x.work ? `<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>${x.work.wait ? end : `Working ${end}`}</span>` : '';
+        return `<div role="button" tabindex="0" class="ts-card${x.draft ? ' draft' : ''}${x.work ? ' working' : ''}" draggable="${!x.draft}" data-tab="${x.w.id}"`
+          + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
+          + `<span class="ts-row">${folder}${pin}<span class="ts-end">${x.draft || x.work ? '' : `<span class="ts-time">${ago(x.updated)}</span>`}${action}</span>${status}</span>`
+          + title
+          + (x.draft ? '' : `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
+            + (x.hs.length ? `<span class="ts-agents">${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span>')
+          + '</div>';
+      }
+      return `<div role="button" tabindex="0" class="ts-card slim" draggable="true" data-tab="${x.w.id}"`
+        + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
+        + `<span class="ts-lead">${lead}</span>${title}${pin}`
+        + `<span class="ts-end"><span class="ts-time">${ago(x.updated)}</span>${action}</span></div>`;
     };
-    const section = (id, label, list) => !list.length ? '' : `<div class="ts-section${tsCollapsed.has(id) ? ' collapsed' : ''}" data-sec="${id}">`
+    const section = (id, label, list, more = 0) => !list.length ? '' : `<div class="ts-section${tsCollapsed.has(id) ? ' collapsed' : ''}" data-sec="${id}">`
       + `<button type="button" class="ts-section-head" aria-expanded="${!tsCollapsed.has(id)}"><span>${label}</span><span class="ts-count">${list.length}</span><i class="ph ph-caret-down ts-caret" aria-hidden="true"></i></button>`
-      + `<div class="ts-cards">${tsCollapsed.has(id) ? '' : list.map(card).join('')}</div></div>`;
+      + `<div class="ts-cards">${tsCollapsed.has(id) ? '' : list.slice(0, more || undefined).map(x => row(x, id)).join('')
+        + (more && list.length > more ? `<button type="button" class="ts-more">Show more <span class="ts-count">${list.length - more}</span></button>` : '')}</div></div>`;
+    const pinned = all.filter(x => x.w.chat.pinned);
+    const rest = all.filter(x => !x.w.chat.pinned);
     const html = all.length
-      ? section('working', 'Working', all.filter(x => x.work)) + section('settled', 'Settled', all.filter(x => !x.work))
+      ? section('pinned', 'Pinned', pinned) + section('working', 'Working', rest.filter(x => x.work))
+        + section('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
+        + section('settled', 'Settled', rest.filter(settled).sort((a, b) => b.w.chat.settledAt - a.w.chat.settledAt), tsSettledShown)
       : `<div class="ts-empty">${q ? 'No threads match' : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
+    if (tsList.querySelector('.ts-rename')) return; // an inline rename is open: don't rebuild under it
     if (tsList._html !== html) { tsList._html = html; tsList.innerHTML = html; } // rebuild only on change (keeps hover and focus)
     syncThreadSelection();
   }
   tsList.addEventListener('click', e => {
     const head = e.target.closest('.ts-section-head');
     if (head) { const id = head.parentElement.dataset.sec; tsCollapsed.has(id) ? tsCollapsed.delete(id) : tsCollapsed.add(id); renderThreadsSidebar(); return; }
+    if (e.target.closest('.ts-more')) { tsSettledShown += 25; renderThreadsSidebar(); return; }
     const c = e.target.closest('.ts-card'), tab = c && findChatThread(c.dataset.tab);
-    if (tab) openChatTab(tab);
+    if (!tab || e.target.closest('.ts-rename')) return;
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'settle' || act === 'unsettle') { setThreadFlag(tab, 'settledAt', act === 'settle'); return; }
+    if (act === 'unpin') { setThreadFlag(tab, 'pinned', false); return; }
+    openChatTab(tab);
+  });
+  tsList.addEventListener('dblclick', e => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.target.closest('button, input')) return;
+    const c = e.target.closest('.ts-card:not(.draft)');
+    if (c) { e.preventDefault(); startThreadRename(c); }
+  });
+  // Rows are role="button" divs (they hold an inline rename input and action buttons): Enter / Space open, F2 renames.
+  tsList.addEventListener('keydown', e => {
+    const c = e.target.classList?.contains('ts-card') ? e.target : null;
+    if (!c) return;
+    if (e.key === 'F2' && !c.classList.contains('draft')) { e.preventDefault(); startThreadRename(c); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const tab = findChatThread(c.dataset.tab); if (tab) openChatTab(tab); }
   });
   // Drag a thread into a chat's composer: it goes in as a link, its history the message's context.
   tsList.addEventListener('dragstart', e => {
@@ -10987,22 +11225,170 @@
   const FILE_ICONS = { js: 'js', mjs: 'js', cjs: 'js', jsx: 'jsx', ts: 'ts', mts: 'ts', cts: 'ts', tsx: 'tsx', html: 'html', htm: 'html', css: 'css', scss: 'css',
     py: 'py', rs: 'rs', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp', md: 'md', csv: 'csv', sql: 'sql', svg: 'svg', vue: 'vue', pdf: 'pdf', txt: 'txt',
     ini: 'ini', toml: 'ini', yml: 'ini', yaml: 'ini', png: 'png', jpg: 'jpg', jpeg: 'jpg', gif: 'image', webp: 'image', bmp: 'image', zip: 'archive', gz: 'archive', tar: 'archive' };
+  // Its color group (an ft-* class, colored in workspace.css); any other file gets ft-other.
+  const FILE_COLORS = Object.fromEntries(Object.entries({
+    js: 'js mjs cjs', ts: 'ts mts cts tsx jsx', html: 'html htm xml', css: 'css scss sass less', py: 'py', rs: 'rs',
+    c: 'c h cpp cc hpp cs', go: 'go', jvm: 'java kt kts scala', rb: 'rb', php: 'php', shell: 'sh bash zsh fish ps1 bat cmd',
+    json: 'json jsonc json5', config: 'yml yaml toml ini env conf lock cfg', md: 'md mdx txt rst', data: 'csv tsv sql db',
+    vue: 'vue', svelte: 'svelte', pdf: 'pdf', image: 'png jpg jpeg gif webp bmp svg ico', archive: 'zip gz tar rar 7z',
+  }).flatMap(([group, exts]) => exts.split(' ').map(ext => [ext, group])));
   const linkFileIcon = href => {
     const path = href.replace(/#.*$/, '').replace(/:\d+(:\d+)?$/, '');
-    if (/[\\/]$/.test(path)) return 'ph-folder';
+    if (/[\\/]$/.test(path)) return 'ph-folder ft-folder';
     const ext = (path.match(/\.(\w+)$/) || [])[1]?.toLowerCase();
-    return FILE_ICONS[ext] ? 'ph-file-' + FILE_ICONS[ext] : ext ? 'ph-file-code' : 'ph-file';
+    const icon = /^json[c5]?$/.test(ext) ? 'ph-brackets-curly' : FILE_ICONS[ext] ? 'ph-file-' + FILE_ICONS[ext] : ext ? 'ph-file-code' : 'ph-file';
+    return `${icon} ft-${FILE_COLORS[ext] || 'other'}`;
   };
-  // Escape first, then a few markdown bits agents use a lot: fences (highlighted by their language tag), `code`, **bold**, headings.
+  // A link's icon: web links show the site's /favicon.ico (the globe when it has none), paths their file type.
+  const _faviconMissing = new Set(); // hosts whose favicon failed: straight to the globe on re-render
+  // Desktop: the icon comes through the main process as a data URL, so its pixels can be read: a single-color
+  // icon on a transparent background (GitHub's black octocat) is drawn as a mask in the link color instead.
+  const _favicons = new Map(); // host -> Promise<{ src, mono } | null>
+  const faviconHtml = f => f.mono ? `<span class="thr-favicon mono" style="--icon:url('${f.src}')" aria-hidden="true"></span>` : `<img class="thr-favicon" src="${f.src}" alt="">`;
+  const faviconMono = src => new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'); c.width = c.height = 32;
+      const g = c.getContext('2d'); g.drawImage(img, 0, 0, 32, 32);
+      const d = g.getImageData(0, 0, 32, 32).data;
+      let clear = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 40) { clear++; continue; }
+        if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 28) return resolve(false); // has color
+      }
+      resolve(clear > 32 * 32 * 0.1); // gray and partly transparent: a glyph, not a gray tile
+    };
+    img.onerror = () => resolve(false);
+    img.src = src;
+  });
+  const loadFavicon = (host, origin) => {
+    if (!_favicons.has(host)) _favicons.set(host, window.electronAPI.faviconGet(origin)
+      .then(async src => src ? { src, mono: await faviconMono(src) } : null).catch(() => null)
+      .then(f => { _favicons.get(host).value = f; return f; }));
+    return _favicons.get(host);
+  };
+  const linkIconHtml = href => {
+    const host = (href.match(/^https?:\/\/([^/?#\s]+)/i) || [])[1];
+    const globe = '<i class="ph ph-globe" aria-hidden="true"></i>';
+    if (!host) return /^https?:/i.test(href) ? globe : `<i class="ph ${linkFileIcon(href)}" aria-hidden="true"></i>`;
+    const origin = href.slice(0, href.indexOf(host) + host.length);
+    if (window.electronAPI?.faviconGet) {
+      const p = _favicons.get(host);
+      if (p && 'value' in p) return p.value ? faviconHtml(p.value) : globe; // known: no flash on re-render
+      return `<i class="ph ph-globe" data-favicon="${host}" data-origin="${origin}" aria-hidden="true"></i>`;
+    }
+    if (_faviconMissing.has(host)) return globe;
+    return `<img class="thr-favicon" src="${origin}/favicon.ico" data-host="${host}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
+  };
+  // mdLite's output (or a copied slice of it) back to markdown source, for copying a selection.
+  function mdFromDom(node) {
+    const kids = n => [...n.childNodes].map(mdFromDom).join('');
+    const block = s => `\n\n${s}\n\n`;
+    if (node.nodeType === Node.TEXT_NODE) return node.data;
+    if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) return kids(node);
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const el = node, tag = el.nodeName;
+    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, button[data-act]')) return ''; // icons, chrome
+    if (tag === 'STRONG') return `**${kids(el)}**`;
+    if (tag === 'EM') return `*${kids(el)}*`;
+    if (tag === 'DEL') return `~~${kids(el)}~~`;
+    if (tag === 'CODE' && el.parentNode?.nodeName !== 'PRE') return '`' + el.textContent + '`';
+    if (tag === 'PRE' && el.matches('.thr-code')) return block('```' + (el.dataset.lang || '') + '\n' + el.textContent.replace(/\n$/, '') + '\n```');
+    if (el.matches('.thr-link')) return `[${kids(el)}](${el.dataset.href})`;
+    if (el.matches('.thr-h')) return block('#'.repeat(+el.getAttribute('aria-level') || 1) + ' ' + kids(el));
+    if (tag === 'HR') return block('---');
+    if (tag === 'BLOCKQUOTE') return block(kids(el).trim().split('\n').map(l => '> ' + l).join('\n'));
+    if (tag === 'UL' || tag === 'OL') {
+      const list = (l, depth) => [...l.children].filter(li => li.nodeName === 'LI').map((li, i) => {
+        const own = [...li.childNodes].filter(c => !['UL', 'OL'].includes(c.nodeName)).map(mdFromDom).join('').trim();
+        const sub = [...li.children].filter(c => ['UL', 'OL'].includes(c.nodeName)).map(s => '\n' + list(s, depth + 1)).join('');
+        return '  '.repeat(depth) + (l.nodeName === 'OL' ? `${(+l.getAttribute('start') || 1) + i}. ` : '- ') + own + sub;
+      }).join('\n');
+      return block(list(el, 0));
+    }
+    if (tag === 'TABLE') {
+      const rows = [...el.querySelectorAll('tr')].map(tr => '| ' + [...tr.children].map(c => mdFromDom(c).trim()).join(' | ') + ' |');
+      if (el.querySelector('thead tr') && rows.length) rows.splice(1, 0, '|' + [...el.querySelector('thead tr').children].map(() => '---').join('|') + '|');
+      return block(rows.join('\n'));
+    }
+    return kids(el);
+  }
+  // Escape first, then the markdown agents use: fences (highlighted by their language tag), `code`, **bold**,
+  // *italic*, ~~strike~~, links, headings, lists, > quotes, tables and --- rules.
   function mdLite(text) {
     text = String(text);
-    const inline = t => escHtml(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/^#{1,6} (.+)$/gm, '<strong>$1</strong>').replace(/^(\s*)[-*] /gm, '$1• ')
+    // `code` spans are cut out first so their contents never turn into emphasis.
+    const inlineMd = t => t.split(/(`[^`\n]+`)/).map((p, i) => i % 2 ? `<code>${escHtml(p.slice(1, -1))}</code>` : escHtml(p)
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1<em>$2</em>')
+      .replace(/(^|\W)_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1<em>$2</em>')
+      .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
       // [label](target): web links open in the browser, images in the viewer, other paths in the file manager.
       .replace(/\[([^\]\n]+)\]\(([^()\s]+)\)/g, (_, label, href) => `<button type="button" class="thr-link" data-href="${href}" title="${href}">`
-        + `${/^https?:/i.test(href) ? '' : `<i class="ph ${linkFileIcon(href)}" aria-hidden="true"></i>`}${label}</button>`);
+        + `${linkIconHtml(href)}${label}</button>`)).join('');
+    const LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+    // Consecutive list items (blank lines between them allowed) as nested <ul>/<ol> by indent.
+    const listHtml = items => {
+      let html = '';
+      const stack = [];
+      for (const it of items) {
+        while (stack.length && it.ind < stack.at(-1).ind) html += `</li></${stack.pop().tag}>`;
+        if (!stack.length || it.ind > stack.at(-1).ind) {
+          const tag = it.num ? 'ol' : 'ul';
+          html += `<${tag} class="thr-list"${it.num > 1 ? ` start="${it.num}"` : ''}>`;
+          stack.push({ ind: it.ind, tag });
+        } else html += '</li>';
+        html += `<li>${inlineMd(it.text)}`;
+      }
+      while (stack.length) html += `</li></${stack.pop().tag}>`;
+      return html;
+    };
+    // Lines in; headings, lists, tables, quotes and rules come out as blocks (which take the line breaks around them).
+    const inline = t => {
+      const lines = t.split('\n'), segs = [];
+      const isRow = l => /^\s*\|.*\|\s*$/.test(l);
+      const cells = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      for (let i = 0; i < lines.length; i++) {
+        const l = lines[i];
+        let m;
+        if (isRow(l) && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1] || '')) {
+          const start = i, align = cells(lines[i + 1]).map(c => c.endsWith(':') ? (c.startsWith(':') ? 'center' : 'right') : '');
+          const cell = (tag, c, k) => `<${tag}${align[k] ? ` style="text-align:${align[k]}"` : ''}>${inlineMd(c)}</${tag}>`;
+          let html = `<table class="thr-table"><thead><tr>${cells(l).map((c, k) => cell('th', c, k)).join('')}</tr></thead><tbody>`;
+          for (i += 2; i < lines.length && isRow(lines[i]); i++) html += `<tr>${cells(lines[i]).map((c, k) => cell('td', c, k)).join('')}</tr>`;
+          html = `<div class="thr-table-wrap"><div class="thr-table-scroll">${html}</tbody></table></div>`
+            + `<button type="button" class="thr-table-copy" data-md="${escHtml(lines.slice(start, i).join('\n'))}" aria-label="Copy table as markdown"><i class="ph ph-copy" aria-hidden="true"></i></button></div>`;
+          i--; segs.push({ html, block: true });
+        } else if ((m = l.match(/^(#{1,6}) (.+)$/))) {
+          segs.push({ html: `<div class="thr-h thr-h${Math.min(m[1].length, 3)}" role="heading" aria-level="${m[1].length}">${inlineMd(m[2])}</div>`, block: true });
+        } else if (LIST.test(l)) {
+          const items = [];
+          for (; i < lines.length; i++) {
+            const x = lines[i].match(LIST);
+            if (x) items.push({ ind: x[1].replace(/\t/g, '    ').length, num: /\d/.test(x[2]) ? parseInt(x[2]) : 0, text: x[3] });
+            else if (!(lines[i].trim() === '' && LIST.test(lines[i + 1] || ''))) break;
+          }
+          i--; segs.push({ html: listHtml(items), block: true });
+        } else if (/^\s*>/.test(l)) {
+          const q = [];
+          for (; i < lines.length && /^\s*>/.test(lines[i]); i++) q.push(lines[i].replace(/^\s*>\s?/, ''));
+          i--; segs.push({ html: `<blockquote class="thr-quote">${q.map(inlineMd).join('\n')}</blockquote>`, block: true });
+        } else if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(l)) segs.push({ html: '<hr class="thr-hr">', block: true });
+        else segs.push({ html: inlineMd(l) });
+      }
+      // Blank lines next to a block (or at a chunk's edges) would show as empty lines in pre-wrap text.
+      const kept = [];
+      for (const s of segs) {
+        if (!s.block && !s.html && (!kept.length || kept.at(-1).block)) continue;
+        if (s.block) while (kept.length && !kept.at(-1).block && !kept.at(-1).html) kept.pop();
+        kept.push(s);
+      }
+      while (kept.length && !kept.at(-1).block && !kept.at(-1).html) kept.pop();
+      return kept.reduce((out, s, k) => out + (k && !s.block && !kept[k - 1].block ? '\n' : '') + s.html, '');
+    };
     let out = '', last = 0;
     for (const m of text.matchAll(/```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g)) {
-      out += inline(text.slice(last, m.index)) + `<pre class="thr-code"><code>${hlCode(m[2].replace(/\n$/, ''), codeLang(m[1].trim()))}</code></pre>`;
+      out += inline(text.slice(last, m.index)) + `<pre class="thr-code" data-lang="${escHtml(m[1].trim())}"><code>${hlCode(m[2].replace(/\n$/, ''), codeLang(m[1].trim()))}</code></pre>`;
       last = m.index + m[0].length;
     }
     return out + inline(text.slice(last));
@@ -11064,7 +11450,14 @@
         let i = segs.findLastIndex(sg => (sg.since || 0) <= x.at);
         if (i < 0 || !hist[i]) i = hist.length - 1;
         const items = hist[i].items, j = items.findIndex(m => (Date.parse(m.ts) || 0) > x.at);
-        items.splice(j < 0 ? items.length : j, 0, { role: 'user', text: x.text, ts: new Date(x.at).toISOString(), stopped: true });
+        const k = j < 0 ? items.length : j, item = { role: 'user', text: x.text, ts: new Date(x.at).toISOString(), stopped: true };
+        items.splice(k, 0, item);
+        // The interrupt that stopped it was flagged on the step before (the transcript never got this prompt):
+        // when it came after this prompt was sent, it's this prompt's, so the "Interrupted" line follows it.
+        const prev = items[k - 1];
+        if (prev?.interrupted && (Date.parse(prev.interruptedAt) || Infinity) >= x.at - 1000) {
+          item.interrupted = prev.interrupted; delete prev.interrupted;
+        }
       }
     }
     const sig = note + '|' + segs.length + '|' + hist.map(h => { const l = h.items[h.items.length - 1]; return `${h.items.length}:${l?.text?.length || 0}:${l?.error ? 1 : 0}`; }).join(',');
@@ -11225,13 +11618,30 @@
         const changes = !live && !running ? changesHtml(rest, 'chg:' + i + ':' + prompt.j, prompt.m.ts, list[e]?.m.ts) : '';
         html += fin >= 0 ? msgHtml(rest[fin].m, i + ':' + rest[fin].j, true, changes) : changes;
         // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
-        const stopped = !live && rest.find(x => x.m.interrupted)?.m.interrupted;
+        const stopped = !live && (prompt.m.interrupted || rest.find(x => x.m.interrupted)?.m.interrupted);
         if (stopped) html += `<div class="thr-status-line" role="status"><i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span>`
           + `<span class="thr-status-detail">· ${stopped === 'tool' ? 'Stopped by you during a tool call' : 'Stopped by you'}</span></div>`;
         u = e;
       }
     });
     flow.innerHTML = html + pendingHtml(ws);
+    flow._texts = texts;
+    // A selection across messages copies them as a transcript of their original markdown.
+    if (!flow._copyBound) {
+      flow._copyBound = true;
+      flow.addEventListener('copy', e => {
+        const sel = getSelection();
+        if (!sel.rangeCount || sel.isCollapsed) return;
+        const r = sel.getRangeAt(0);
+        const msgs = [...flow.querySelectorAll('.thr-msg[data-key]')].filter(m => r.intersectsNode(m));
+        if (!msgs.length) return; // tool output etc.: the browser's own copy
+        // Inside one message: the selected part as markdown source.
+        const text = msgs.length === 1 ? mdFromDom(r.cloneContents()).replace(/\n{3,}/g, '\n\n').trim()
+          : msgs.map(m => `${m.classList.contains('user') ? 'User' : 'AI'}: ${flow._texts.get(m.dataset.key) || ''}`).join('\n\n');
+        e.clipboardData.setData('text/plain', text);
+        e.preventDefault();
+      });
+    }
     syncWorking(ws, surface);
     if (surface === thrPage && thrFind.q) thrFindRun(true); // the re-render dropped the old match ranges
     flow.querySelectorAll('img.thr-img').forEach(async img => {
@@ -11273,6 +11683,16 @@
       b.setAttribute('aria-label', 'Copied');
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
     }));
+    flow.querySelectorAll('i[data-favicon]').forEach(i => loadFavicon(i.dataset.favicon, i.dataset.origin).then(f => { if (f && i.isConnected) i.outerHTML = faviconHtml(f); }));
+    flow.querySelectorAll('img.thr-favicon[data-host]').forEach(img => {
+      const fail = () => { _faviconMissing.add(img.dataset.host); img.outerHTML = '<i class="ph ph-globe" aria-hidden="true"></i>'; };
+      if (img.complete && !img.naturalWidth) fail(); else img.addEventListener('error', fail, { once: true });
+    });
+    flow.querySelectorAll('.thr-table-copy').forEach(b => b.addEventListener('click', () => {
+      if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(b.dataset.md); else navigator.clipboard?.writeText(b.dataset.md).catch(() => {});
+      b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+      setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
+    }));
     flow.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     flow.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
       const files = [...b.closest('.thr-changes').querySelectorAll('details.thr-change')];
@@ -11281,6 +11701,7 @@
     }));
     if (!flow.dataset.seen && ws._scrollState && !ws._scrollState.bottom) { flow.scrollTop = ws._scrollState.top; flow.dataset.seen = '1'; } // back where it was
     else { flow.scrollTop = atBottom || !flow.dataset.seen ? flow.scrollHeight : scrollTop; flow.dataset.seen = '1'; }
+    if (surface === thrPage) syncScrollEnd();
   }
   // ── Find in the thread history: Ctrl+F while the panel has focus, or the header button ──
   // Matches are painted with the CSS Highlight API, so the message markup is never touched.
@@ -11363,6 +11784,17 @@
   };
 
   // Brand logo for a known process (proc-icons.js), else a generic terminal glyph.
+  // Delete a thread (or side chat) after a confirm: close its tab, forget it, remove its saved history.
+  function confirmDeleteThread(tab, w = wsOf(tab) || activeWs(), what = 'thread') {
+    showConfirm(`Delete ${what} "${tab.chat?.title || tab.label}"? Its saved history is removed.`, () => {
+      const storeId = tab.chat?.storeId || tab.id;
+      if (!tab._closed) removeTerminal(w.id, tab.id, false, false, true, true); // already confirmed: close now, no second prompt
+      closedThreads = closedThreads.filter(t => (t.chat.storeId || t.id) !== storeId);
+      window.electronAPI?.threadDelete?.(storeId, tab.chat?.scratch ? tab.chat.cwd : null); // only its own scratch folder
+      saveState(); renderThreadsSidebar();
+      const cur = curChat(); if (cur) syncThreadComposer(cur); // its row leaves the side chats tray
+    });
+  }
   function procIconHtml(name, fallback = 'ph-terminal-window') {
     const key = String(name).toLowerCase().replace(/[\d.]+$/, '');
     if (key === 'codex') return '<i class="ws-proc-icon ph ph-open-ai-logo"></i>';
@@ -11610,13 +12042,16 @@
       if (!tab || !w) return;
       const agent = liveThreadAgent(tab), h = agent && harnessOf(_tabAgent.get(tab.id));
       item('<i class="ph ph-chats-circle"></i>', 'Open', '', () => openChatTab(tab));
-      item('<i class="ph ph-pencil-simple"></i>', 'Rename…', '', () => showPrompt('Rename thread', tab.chat?.title || tab.label, value => {
+      item('<i class="ph ph-pencil-simple"></i>', 'Rename', '', () => { const card = tsOpen && [...tsList.querySelectorAll('.ts-card')].find(c => c.dataset.tab === tab.id); if (card) return startThreadRename(card); showPrompt('Rename thread', tab.chat?.title || tab.label, value => {
         if (!value.trim()) return;
         tab.chat ||= { createdAt: Date.now() };
         tab.chat.title = value.trim().slice(0, 80);
         setChatTabLabel(tab); saveState(); renderThreadsSidebar();
-      }));
+      }); });
       if (window.electronAPI?.chatTitle) item('<i class="ph ph-sparkle"></i>', 'Regenerate title', '', () => regenerateChatTitle(tab));
+      item(`<i class="ph ${tab.chat?.pinned ? 'ph-push-pin-slash' : 'ph-push-pin'}"></i>`, tab.chat?.pinned ? 'Unpin' : 'Pin', '', () => setThreadFlag(tab, 'pinned', !tab.chat?.pinned));
+      const isSettled = tab.chat?.settledAt && tab.chat.settledAt >= (tab.chat.updatedAt || 0);
+      item(`<i class="ph ${isSettled ? 'ph-arrow-counter-clockwise' : 'ph-check'}"></i>`, isSettled ? 'Un-settle' : 'Settle', '', () => setThreadFlag(tab, 'settledAt', !isSettled));
       if (h) {
         sep();
         item('<i class="ph ph-terminal-window"></i>', `Show ${escHtml(h.name)} terminal`, '', () => { if (viewSwitchBlocked(tab)) return; openChatTab(tab); setChatView(tab, true); });
@@ -11628,13 +12063,7 @@
         item('<i class="ph ph-copy"></i>', 'Copy folder path', '', () => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(cwd); else navigator.clipboard?.writeText(cwd).catch(() => {}); });
       }
       sep();
-      item('<i class="ph ph-trash"></i>', 'Delete thread', '', () => showConfirm(`Delete "${tab.chat?.title || tab.label}"? Its saved history is removed.`, () => {
-        const storeId = tab.chat?.storeId || tab.id;
-        if (!tab._closed) removeTerminal(w.id, tab.id, false, false, true, true); // already confirmed: close now, no second prompt
-        closedThreads = closedThreads.filter(t => (t.chat.storeId || t.id) !== storeId);
-        window.electronAPI?.threadDelete?.(storeId, tab.chat?.scratch ? tab.chat.cwd : null); // only its own scratch folder
-        saveState(); renderThreadsSidebar();
-      }), true);
+      item('<i class="ph ph-trash"></i>', 'Delete thread', '', () => confirmDeleteThread(tab, w), true);
     } else if (type === 'browser-more') {
       const { entry, history } = data;
       item('<i class="ph ph-clock-counter-clockwise"></i>', 'History', '', history);
@@ -13193,7 +13622,7 @@
     // Threads
     const thHarness = document.getElementById('set-thread-harness');
     if (thHarness.options.length < 2) for (const h of THREAD_HARNESSES) if (CHAT_AGENTS[h.id]) thHarness.add(new Option(h.name, h.id));
-    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles']]) {
+    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-markdown', 'markdown']]) {
       document.getElementById(id).value = threadSettings[key];
       const dd = document.querySelector(`.custom-dropdown[data-for="${id}"]`);
       if (dd) initCustomDropdown(dd);
@@ -14631,8 +15060,11 @@
     terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';
     saveState();
   });
-  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles']])
-    document.getElementById(id).addEventListener('change', e => { threadSettings = { ...threadSettings, [key]: e.target.value }; saveState(); });
+  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-markdown', 'markdown']])
+    document.getElementById(id).addEventListener('change', e => {
+      threadSettings = { ...threadSettings, [key]: e.target.value }; saveState();
+      if (key === 'markdown') syncChatInputLinks();
+    });
 
   // Search engine
   document.getElementById('set-search-engine').addEventListener('change', e => {
