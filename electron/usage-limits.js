@@ -1,8 +1,8 @@
 'use strict';
 // Plan usage limits of the agent CLIs, asked through each CLI with its own login (as T3 Code does):
-// Claude Code's get_usage control request, Codex app-server's account/rateLimits/read.
+// Claude Code's get_usage control request, Codex app-server's account/rateLimits/read, Antigravity's `agy -p /usage`.
 // Each window: { label, used (0-100), resetsAt (ms), mins (window length) }.
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 // One JSON-lines exchange with a CLI: write `lines`, resolve with the first reply `pick` accepts (null on
 // timeout, exit or error). `onLine` may answer along the way.
@@ -64,18 +64,65 @@ async function codexUsage(bin, env) {
   return windows.length ? { plan: rl.planType || null, windows } : null;
 }
 
+// Antigravity's per-model quotas from `agy -p /usage --output-format json` (answered without starting an agent).
+// shortcut: the payload is read loosely (any object with a remaining fraction/percentage under a model name);
+// pin it to agy's schema once a signed-in sample is checked.
+function parseAgyUsage(res) {
+  const windows = new Map();
+  const pick = (o, ...ks) => ks.map(k => o[k]).find(v => v != null);
+  (function walk(o, name, key) {
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) { o.forEach(x => walk(x, name, key)); return; }
+    const own = pick(o, 'display_name', 'displayName', 'label', 'model_name', 'modelName', 'model', 'name');
+    if (typeof own === 'string') name = own;
+    const frac = pick(o, 'remaining_fraction', 'remainingFraction'), left = pick(o, 'remaining_percentage', 'remainingPercentage');
+    const reset = pick(o, 'reset_time', 'resetTime', 'resets_at', 'resetsAt'), secs = pick(o, 'reset_in_seconds', 'resetInSeconds');
+    // Protobuf JSON drops a zero fraction: a quota object with only its reset is used up.
+    const used = frac != null ? 100 - frac * 100 : left != null ? 100 - left : pick(o, 'used_percentage', 'usedPercentage')
+      ?? (/quota/i.test(key || '') && (reset || secs != null) ? 100 : null);
+    if (used != null && name && !windows.has(name))
+      windows.set(name, { label: name, used: pct(used), resetsAt: Date.parse(reset) || (secs != null ? Date.now() + secs * 1000 : null), mins: null });
+    for (const [k, v] of Object.entries(o)) walk(v, name, k);
+  })(res);
+  return windows.size ? { plan: null, windows: [...windows.values()] } : null;
+}
+async function agyUsage(bin, env) {
+  const out = await new Promise(resolve => {
+    const p = execFile(bin, ['-p', '/usage', '--output-format', 'json'], { env, timeout: 20000, windowsHide: true, maxBuffer: 4 << 20,
+      shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin) }, (err, stdout) => resolve(err ? '' : stdout));
+    p.stdin?.end(); // signed out, it waits for a login code: answer nothing
+  });
+  let res;
+  try { res = JSON.parse(out); } catch { res = out.split('\n').map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
+  return parseAgyUsage(res);
+}
+
 // { claude?: {plan, windows}, codex?: … } for the installed agents that report limits.
 // ponytail: cached for a minute; every refresh spawns each CLI briefly (~1-2s, no model call).
 let cache = null;
 async function usageLimits(found, env, fresh = false) {
   if (!fresh && cache && Date.now() - cache.at < 60000) return cache.value;
-  const [claude, codex] = await Promise.all([
+  const [claude, codex, antigravity] = await Promise.all([
     found.claude ? claudeUsage(found.claude, env).catch(() => null) : null,
     found.codex ? codexUsage(found.codex, env).catch(() => null) : null,
+    found.agy ? agyUsage(found.agy, env).catch(() => null) : null,
   ]);
-  const value = { ...(claude ? { claude } : {}), ...(codex ? { codex } : {}) };
+  const value = { ...(claude ? { claude } : {}), ...(codex ? { codex } : {}), ...(antigravity ? { antigravity } : {}) };
   cache = { at: Date.now(), value };
   return value;
 }
 
 module.exports = { usageLimits };
+
+if (require.main === module) {
+  const assert = require('assert');
+  const u = parseAgyUsage({ models: [
+    { label: 'Gemini 3 Pro', quotaInfo: { remainingFraction: 0.25, resetTime: '2030-01-01T00:00:00Z' } },
+    { label: 'Claude Sonnet', quotaInfo: { resetTime: '2030-01-01T00:00:00Z' } }, // used up: no fraction
+    { label: 'No quota' }] });
+  assert.deepStrictEqual(u.windows.map(w => [w.label, w.used]), [['Gemini 3 Pro', 75], ['Claude Sonnet', 100]]);
+  assert.strictEqual(u.windows[0].resetsAt, Date.parse('2030-01-01T00:00:00Z'));
+  assert.strictEqual(parseAgyUsage([{ display_name: 'x', remaining_percentage: 40 }]).windows[0].used, 60);
+  assert.strictEqual(parseAgyUsage({}), null);
+  console.log('usage-limits ok');
+}

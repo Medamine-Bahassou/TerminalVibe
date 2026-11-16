@@ -1141,7 +1141,7 @@ ipcMain.handle('threads:agents', (_e, names) => {
 // The agents' plan usage (status bar): asked through each installed CLI with its own login.
 ipcMain.handle('usage:limits', (_e, fresh) => {
   const env = terminalEnv();
-  return require('./usage-limits').usageLimits(require('./threads').detectAgents(['claude', 'codex'], env), env, fresh === true);
+  return require('./usage-limits').usageLimits(require('./threads').detectAgents(['claude', 'codex', 'agy'], env), env, fresh === true);
 });
 ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
