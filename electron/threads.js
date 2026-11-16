@@ -294,10 +294,17 @@ async function codexSegment({ sessionId, cwd, since, exclude = [] }, home) {
 // ~/.terminalvibe/acp/<session id>.jsonl, one chat item per line.
 const acpFile = (sessionId, home) => path.join(home, '.terminalvibe', 'acp', sessionId + '.jsonl');
 function parseAcp(list) {
-  return list.filter(r => ['user', 'assistant', 'thinking', 'tool'].includes(r.role)).map(r => r.role === 'user'
+  // An "interrupt" record (the agent exited mid-turn) flags the step before it, like Claude Code's interrupt marker.
+  const items = [];
+  for (const r of list) {
+    if (r.role === 'interrupt') { if (items.length) Object.assign(items[items.length - 1], { interrupted: r.reason || 'reply', interruptedAt: r.ts || null }); continue; }
+    items.push(r);
+  }
+  return items.filter(r => ['user', 'assistant', 'thinking', 'tool'].includes(r.role)).map(r => ({ ...(r.role === 'user'
     ? { role: 'user', text: stripNote(String(r.text || '')), ...threadRefs(String(r.text || '')), ts: r.ts || null }
     : r.role === 'tool' ? { role: 'tool', name: String(r.name || 'tool'), summary: String(r.summary || ''), detail: String(r.detail || ''), ts: r.ts || null, ...(r.error ? { error: true } : {}) }
-    : { role: r.role, text: String(r.text || ''), ts: r.ts || null }).filter(r => r.role === 'tool' || r.text);
+    : { role: r.role, text: String(r.text || ''), ts: r.ts || null }), ...(r.interrupted ? { interrupted: r.interrupted, interruptedAt: r.interruptedAt } : {}) }))
+    .filter(r => r.role === 'tool' || r.text || r.interrupted);
 }
 async function acpSegment({ sessionId }, home) {
   // A session run in the terminal (no id recorded) has no history TerminalVibe can read.
