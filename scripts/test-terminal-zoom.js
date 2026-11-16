@@ -15,6 +15,7 @@ app.whenReady().then(async()=>{
   const source=fs.readFileSync(path.join(root,'app.js'),'utf8');
   const zoom=source.slice(source.indexOf('  const FONT_MIN ='),source.indexOf("  const searchbar ="));
   const sizing=source.slice(source.indexOf('  function syncTerminalSize('),source.indexOf('  // Auto-fit each terminal'));
+  const writes=source.slice(source.indexOf('  // A TUI redraw (clear'),source.indexOf('  function connectNativePTY'));
   console.log(await win.webContents.executeJavaScript(`(async()=>{
     const check=(ok,message)=>{if(!ok)throw Error(message);};
     const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -33,8 +34,21 @@ app.whenReady().then(async()=>{
     };
     const shell=make('shell'),claude=make('claude');
     const activeTerminal=()=>shell; // The pointer must override keyboard focus.
+    const acks=[];window.electronAPI={terminalAck:(id,n)=>acks.push(n)};
+    ${writes}
     ${sizing}
     ${zoom}
+    // Synchronized output (DEC 2026) and post-resize redraws reach xterm as one chunk.
+    const parsed=[];const sync=make('sync');sync.term.onWriteParsed(()=>parsed.push(sync.term.buffer.active.getLine(0).translateToString(true)));
+    writePtyData({term:sync},'sync','\x1b[?2026h\x1b[2J\x1b[HAB');await wait(40);
+    check(parsed.length===0,'Output inside a synchronized update must be held');
+    writePtyData({term:sync},'sync','CD\x1b[?2026l');await wait(40);
+    check(parsed.join()==='ABCD' && acks.reduce((a,b)=>a+b,0)===27,'A synchronized update must paint once, whole, and be acked in full: '+JSON.stringify([parsed,acks]));
+    syncTerminalSize(sync);parsed.length=0;
+    writePtyData({term:sync},'sync','\x1b[2J\x1b[HEF');writePtyData({term:sync},'sync','GH');await wait(10);
+    check(parsed.length===0,'A redraw right after a resize must be held');
+    await wait(60);check(parsed.join()==='EFGH','A post-resize redraw must paint once it goes quiet');
+    sync.term.dispose();resizes.length=0;
     const write=text=>new Promise(resolve=>claude.term.write(text,resolve));
     await write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006hClaude fixture');
     const wheel=(entry,ctrl,delta)=>{

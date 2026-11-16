@@ -1160,12 +1160,9 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 /* Agent reply: plain text on the panel. */
 #sbr-thread .thr-msg-text { font-size:13px; line-height:1.6; color:var(--fg); white-space:pre-wrap; overflow-wrap:anywhere; }
 #sbr-thread .thr-msg-text strong { font-weight:600; }
-#sbr-thread .thr-msg.long:not(.open) .thr-msg-text { max-height:18em; overflow:hidden; -webkit-mask-image:linear-gradient(#000 70%, transparent); mask-image:linear-gradient(#000 70%, transparent); }
 #sbr-thread .thr-msg-text code { font:12px var(--mono-font); padding:1px 5px; background:color-mix(in srgb,var(--fg) 9%,transparent); border-radius:4px !important; }
 #sbr-thread .thr-code { margin:6px 0; padding:10px 12px; overflow:auto; white-space:pre; background:color-mix(in srgb,var(--fg) 5%,var(--bg)); border:1px solid var(--ui-line); border-radius:8px !important; }
 #sbr-thread .thr-code code { padding:0; background:none; font-size:12px; line-height:1.5; }
-#sbr-thread .thr-more { align-self:flex-start; height:24px; padding:0 6px; margin-left:-6px; background:transparent; border:1px solid transparent; border-radius:6px !important; color:var(--muted-text); font:500 12px var(--ui-font); cursor:pointer; transition:border-color 140ms, color 140ms; }
-#sbr-thread .thr-more:hover { border-color:var(--border); color:var(--fg); }
 /* Tool calls: one muted line (icon, what ran, time, caret); expands to every call. */
 #sbr-thread .thr-tools { min-width:0; }
 #sbr-thread .thr-tools summary { display:flex; align-items:center; gap:8px; min-height:30px; list-style:none; border-radius:6px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:color 140ms; }
@@ -1186,7 +1183,7 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 #sbr-thread .thr-tool-name { font-weight:500; flex-shrink:0; }
 #sbr-thread .thr-tool-sum { min-width:0; font:11.5px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #sbr-thread .thr-tool-err { color:var(--ui-error) !important; }
-@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-tools *, #sbr-thread .thr-more, #sbr-thread .thr-actions, #sbr-thread .thr-copy { transition:none !important; } }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-tools *, #sbr-thread .thr-actions, #sbr-thread .thr-copy { transition:none !important; } }
 /* ── Thread history: pasted images in user bubbles ── */
 #sbr-thread .thr-images { display:flex; flex-wrap:wrap; gap:6px; }
 #sbr-thread .thr-img { display:block; max-width:100%; max-height:240px; object-fit:contain; border:1px solid var(--ui-line); border-radius:8px !important; background:var(--bg); }
@@ -1299,7 +1296,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 @media (prefers-reduced-motion: reduce) { #sbr-thread :is(.thr-composer,.thr-send,.thr-model-chip,.thr-foot-btn) { transition:none; } }
 
 /* ── Model picker: agent rail | search + models | reasoning effort ── */
-.tv-model-picker { position:fixed; z-index:10000; display:grid; grid-template-columns:48px minmax(0,1fr) 200px; width:min(600px, calc(100vw - 16px)); height:min(340px, calc(100vh - 16px)); background:var(--bg); border:1px solid var(--border); border-radius:12px !important; box-shadow:0 12px 32px #0006; font-family:var(--ui-font); overflow:hidden; }
+.tv-model-picker { position:fixed; z-index:10000; display:grid; grid-template-columns:48px minmax(0,1fr) 180px; width:min(500px, calc(100vw - 16px)); height:min(340px, calc(100vh - 16px)); background:var(--bg); border:1px solid var(--border); border-radius:12px !important; box-shadow:0 12px 32px #0006; font-family:var(--ui-font); overflow:hidden; }
 .tv-model-picker .mp-rail { display:flex; flex-direction:column; align-items:center; gap:4px; padding:8px 0; border-right:1px solid var(--ui-line); }
 .tv-model-picker .mp-rail-btn { position:relative; display:grid; place-items:center; width:32px; height:32px; padding:0; background:transparent; border:0; border-radius:8px !important; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
 .tv-model-picker .mp-rail-btn:hover { background:var(--ui-hover); color:var(--fg); }
@@ -1716,3 +1713,177 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread .thr-complete-meta { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--dim-text); }
 #sbr-thread .thr-at-ref > i { font-size:13px; align-self:center; }
 #sbr-thread .thr-at-ref > span { max-width:min(240px,44vw); overflow:hidden; text-overflow:ellipsis; }
+
+/* Chat: the agent's conversation is locked by another process (Codex "open in another app"). */
+#sbr-thread .thr-working.lock { flex-wrap:wrap; gap:8px 10px; padding:10px 12px; background:var(--ui-sidebar); border:1px solid var(--ui-line); border-radius:10px !important; color:var(--fg); }
+#sbr-thread .thr-working.lock > i { font-size:16px; color:var(--muted-text); }
+#sbr-thread .thr-working.lock > span:not(.thr-lock-actions) { flex:1; min-width:180px; }
+#sbr-thread .thr-lock-actions { display:flex; gap:6px; }
+#sbr-thread .thr-lock-btn { height:28px; padding:0 10px; background:transparent; border:1px solid var(--border); border-radius:6px !important; color:var(--fg); font:500 12.5px var(--ui-font); cursor:pointer; transition:background-color 140ms, border-color 140ms, box-shadow 140ms; }
+#sbr-thread .thr-lock-btn:hover { background:var(--ui-hover); }
+#sbr-thread .thr-lock-btn.primary { background:var(--accent); border-color:var(--accent); color:#0d1017; }
+#sbr-thread .thr-lock-btn.primary:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
+#sbr-thread .thr-lock-btn:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-lock-btn { transition:none; } }
+
+/* Chat side chat: "Bring back" in the composer footer (right-aligned, after the branch). */
+#sbr-thread .thr-bring-back { margin-left:auto; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:inherit; cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-foot-branch:not([hidden]) ~ .thr-bring-back { margin-left:4px; }
+#sbr-thread .thr-bring-back:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-bring-back:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-bring-back { transition:none; } }
+
+/* Chat: a thread's side chats (or a side chat's thread), a tray attached to the composer's top edge. */
+#sbr-thread .thr-sides { display:flex; align-items:center; gap:2px; min-height:32px; width:calc(100% - 36px); max-width:752px; margin:0 auto; padding:3px 6px 3px 12px; overflow-x:auto; scrollbar-width:none;
+  background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--border); border-bottom:0; border-radius:16px 16px 0 0 !important; font:400 12px var(--ui-font); color:var(--dim-text); }
+#sbr-thread .thr-sides[hidden] { display:none !important; }
+#sbr-thread .thr-sides-label { flex-shrink:0; margin-right:6px; }
+#sbr-thread .thr-side-chip { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; max-width:220px; height:24px; padding:0 8px; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:500 12px var(--ui-font); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-side-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sbr-thread .thr-side-chip > i { font-size:13px; flex-shrink:0; }
+#sbr-thread .thr-side-chip:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-side-chip:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-side-spin { margin-left:auto; animation:thr-side-spin 1s linear infinite; color:var(--muted-text); }
+#sbr-thread .thr-sides-count { font-variant-numeric:tabular-nums; }
+/* Collapsed: no tray, just a bubble attached to the composer's top-right edge. */
+#sbr-thread .thr-sides.collapsed { justify-content:flex-end; min-height:0; padding:0 0 0 0; background:transparent; border:0; overflow:visible; }
+#sbr-thread .thr-sides .thr-sides-bubble { display:inline-flex; gap:5px; width:auto; height:26px; margin:0; padding:0 8px 0 10px;
+  background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--border); border-bottom:0; border-radius:12px 12px 0 0 !important; font:500 12px var(--ui-font); }
+#sbr-thread .thr-sides .thr-sides-bubble:hover { background:color-mix(in srgb,var(--fg) 8%,var(--bg)); }
+#sbr-thread .thr-sides .thr-sides-bubble i:last-child { font-size:11px; color:var(--dim-text); }
+#sbr-thread .thr-sides-toggle { display:grid; place-items:center; flex-shrink:0; width:24px; height:24px; margin-left:auto; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-sides-toggle:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-sides-toggle:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-sides-toggle i { font-size:13px; transition:transform 140ms; }
+/* Expanded: a header row (label + caret), then one full-width row per side chat. */
+#sbr-thread .thr-sides:not(.collapsed) { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; row-gap:2px; padding:4px 6px 6px; max-height:180px; overflow-x:hidden; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+#sbr-thread .thr-sides:not(.collapsed) .thr-sides-label { grid-row:1; grid-column:1; display:flex; align-items:center; min-height:24px; padding-left:6px; }
+#sbr-thread .thr-sides:not(.collapsed) .thr-sides-toggle { grid-row:1; grid-column:2; }
+#sbr-thread .thr-sides:not(.collapsed) .thr-side-chip { grid-column:1 / -1; width:100%; max-width:none; height:30px; justify-content:flex-start; padding:0 8px; text-align:left; }
+/* Tray motion (only with UI animations on): it rises from behind the composer, chips follow one by one;
+   collapsing sinks it back and the bubble rises in its place. The composer (position:relative) paints over it. */
+body.ui-animations #sbr-thread .thr-sides { transform-origin:50% 100%; }
+body.ui-animations #sbr-thread .thr-sides.anim:not(.collapsed) { animation:thr-tray-in 240ms cubic-bezier(.2,.8,.2,1) both; }
+body.ui-animations #sbr-thread .thr-sides.anim:not(.collapsed) .thr-side-chip { animation:thr-chip-in 220ms cubic-bezier(.2,.8,.2,1) both; animation-delay:calc(70ms + var(--i, 0) * 35ms); }
+body.ui-animations #sbr-thread .thr-sides.leaving { animation:thr-tray-out 170ms cubic-bezier(.4,0,1,1) both; pointer-events:none; }
+body.ui-animations #sbr-thread .thr-sides.anim.collapsed .thr-sides-bubble { transform-origin:50% 100%; animation:thr-bubble-in 260ms cubic-bezier(.34,1.4,.64,1) both; }
+@keyframes thr-tray-in { from { opacity:0; transform:translateY(80%) scaleY(.7); } to { opacity:1; transform:none; } }
+@keyframes thr-tray-out { to { opacity:0; transform:translateY(80%) scaleY(.7); } }
+@keyframes thr-chip-in { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+@keyframes thr-bubble-in { from { opacity:0; transform:translateY(100%) scale(.85); } to { opacity:1; transform:none; } }
+@media (prefers-reduced-motion: reduce) { body.ui-animations #sbr-thread :is(.thr-sides, .thr-side-chip, .thr-sides-bubble) { animation:none !important; } }
+@keyframes thr-side-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #sbr-thread :is(.thr-side-chip, .thr-sides-toggle, .thr-sides-toggle i) { transition:none; } #sbr-thread .thr-side-spin { animation:none; } }
+
+/* Chat: a thread dropped in as context, shown in the sent message like the composer's link. */
+#sbr-thread .thr-thread-mention { display:inline-flex; align-items:baseline; gap:4px; max-width:100%; color:var(--accent); text-decoration:none; cursor:pointer; white-space:nowrap; }
+#sbr-thread .thr-thread-mention > i { font-size:13px; align-self:center; }
+#sbr-thread .thr-thread-mention > span { overflow:hidden; text-overflow:ellipsis; }
+#sbr-thread .thr-thread-mention:hover { text-decoration:underline; text-underline-offset:3px; }
+
+/* Threads sidebar: the drag preview of a thread (rendered off-screen for the snapshot). The transparent
+   padding puts the chip up and to the right of the pointer. */
+.ts-drag-ghost { position:fixed; top:-200px; left:-1000px; padding:0 0 6px 8px; background:transparent; pointer-events:none; }
+.ts-drag-chip { display:inline-flex; align-items:center; gap:6px; max-width:260px; height:28px; padding:0 10px;
+  background:var(--bg); border:1px solid var(--border); border-radius:6px !important; color:var(--accent); font:500 12.5px var(--ui-font); white-space:nowrap; }
+.ts-drag-chip i { font-size:14px; flex-shrink:0; }
+.ts-drag-chip > span { overflow:hidden; text-overflow:ellipsis; }
+
+/* ── Model picker (T3 Code style): rail | models | reasoning over a full-width footer (speed,
+   Ultracode, permissions). The check follows the name; favorites have an amber star and Ctrl+N. ── */
+.tv-model-picker { grid-template-columns:52px minmax(0,1fr) 190px; grid-template-rows:minmax(0,1fr) auto; width:min(560px, calc(100vw - 16px)); height:min(400px, calc(100vh - 16px)); }
+.tv-model-picker .mp-rail-btn.active::after { right:-10px; }
+.tv-model-picker .mp-star-fill { display:block; width:16px; height:16px; }
+.tv-model-picker .mp-list .mp-check { margin-left:0; }
+.tv-model-picker .mp-list .mp-check + .mp-fav { margin-left:auto; }
+.tv-model-picker .mp-fav.on { color:var(--ui-warning); }
+.tv-model-picker .mp-fav .mp-star-fill { width:13px; height:13px; }
+.tv-model-picker .mp-kbd { flex-shrink:0; padding:1px 6px; background:var(--ui-hover); border:1px solid var(--border); border-radius:4px !important; color:var(--dim-text); font:400 10.5px var(--mono-font); font-variant-numeric:tabular-nums; }
+.tv-model-picker .mp-foot { grid-column:1 / -1; display:flex; align-items:center; gap:8px; min-width:0; padding:8px 10px; border-top:1px solid var(--ui-line); }
+.tv-model-picker :is(.mp-speed, .mp-ultra)[hidden] { display:none; }
+.tv-model-picker .mp-speed { display:inline-flex; gap:2px; padding:2px; background:color-mix(in srgb,var(--fg) 6%,var(--bg)); border-radius:8px !important; }
+.tv-model-picker .mp-speed button { display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 10px; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:500 12.5px var(--ui-font); cursor:pointer; transition:background-color 140ms, color 140ms, box-shadow 140ms; }
+.tv-model-picker .mp-speed button:hover { color:var(--fg); }
+.tv-model-picker .mp-speed button.on { background:var(--ui-hover); color:var(--fg); box-shadow:0 1px 2px #0004; }
+.tv-model-picker .mp-speed button i { font-size:13px; }
+.tv-model-picker .mp-ultra { display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 10px; background:color-mix(in srgb,var(--fg) 6%,var(--bg)); border:0; border-radius:8px !important; color:var(--muted-text); font:500 12.5px var(--ui-font); cursor:pointer; transition:background-color 140ms, color 140ms; }
+.tv-model-picker .mp-ultra:hover { color:var(--fg); }
+.tv-model-picker .mp-ultra.on { background:color-mix(in srgb,var(--accent) 16%,var(--bg)); color:var(--accent); }
+.tv-model-picker .mp-ultra i { font-size:14px; }
+.tv-model-picker .mp-foot .mp-access { width:auto; height:30px; margin:0 0 0 auto; padding:0 8px; border-top:0; border-radius:6px !important; transition:background-color 140ms, color 140ms; }
+.tv-model-picker .mp-foot .mp-access:hover { background:var(--ui-hover); }
+.tv-model-picker .mp-foot .mp-access .mp-caret { margin-left:2px; }
+.tv-model-picker :is(.mp-speed button, .mp-ultra, .mp-foot .mp-access):focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (max-width:560px) { .tv-model-picker { grid-template-columns:44px minmax(0,1fr); } }
+@media (prefers-reduced-motion: reduce) { .tv-model-picker :is(.mp-speed button, .mp-ultra, .mp-foot .mp-access) { transition:none; } }
+
+/* Composer model chip: Fast / Ultracode marks after the model. */
+#sbr-thread .thr-chip-mode { font-size:13px; color:var(--muted-text); }
+
+/* Threads sidebar footer: the agents' plan usage (logo, % of the most-used window, time to its reset);
+   the whole row opens the usage modal. */
+#threads-sidebar .ts-usage { display:flex; align-items:center; gap:4px; width:var(--ts-w, 284px); min-height:34px; padding:4px 10px; flex-shrink:0; background:transparent; border:0; border-top:1px solid var(--ui-line); border-radius:0 !important; color:var(--muted-text); font:400 11.5px var(--ui-font); text-align:left; cursor:pointer; overflow:hidden; white-space:nowrap; transition:background-color 140ms; }
+#threads-sidebar .ts-usage[hidden] { display:none; }
+#threads-sidebar .ts-usage:hover { background:var(--ui-hover); }
+#threads-sidebar .ts-usage:focus-visible { outline:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
+#threads-sidebar .sb-usage-label { margin-right:2px; color:var(--dim-text); }
+#threads-sidebar .sb-usage-item { display:inline-flex; align-items:center; gap:5px; height:22px; padding:0 5px; color:var(--muted-text); font-variant-numeric:tabular-nums; }
+#threads-sidebar .sb-usage-logo { display:inline-grid; place-items:center; }
+#threads-sidebar .sb-usage-logo .ws-proc-icon { width:12px; height:12px; font-size:12px; fill:currentColor; }
+#threads-sidebar .sb-usage-pct { color:var(--fg); font-weight:500; }
+#threads-sidebar .sb-usage-reset { color:var(--dim-text); }
+#threads-sidebar .sb-usage-item.high .sb-usage-pct { color:var(--ui-warning); }
+#threads-sidebar .sb-usage-item.full .sb-usage-pct { color:var(--ui-error); }
+#threads-sidebar .sb-usage-open { margin-left:auto; font-size:14px; color:var(--dim-text); }
+#threads-sidebar .ts-usage:hover .sb-usage-open { color:var(--fg); }
+@media (prefers-reduced-motion: reduce) { #threads-sidebar .ts-usage { transition:none; } }
+
+/* ── Usage modal (sidebar chart button / threads footer): limit windows per agent ── */
+#usage-overlay { position:fixed; inset:0; z-index:10003; display:flex; align-items:center; justify-content:center; padding:32px; background:rgba(0,0,0,.5); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+#usage-modal { display:flex; flex-direction:column; width:min(980px, 100%); max-height:min(720px, 100%); background:var(--bg); border:1px solid var(--border); border-radius:12px !important; box-shadow:0 24px 64px #0008; font-family:var(--ui-font); color:var(--fg); overflow:hidden; }
+#usage-modal .um-head { display:flex; align-items:center; gap:8px; height:48px; padding:0 10px 0 20px; border-bottom:1px solid var(--ui-line); flex-shrink:0; font-size:13px; }
+#usage-modal .um-crumb { color:var(--muted-text); }
+#usage-modal .um-crumb.current { color:var(--fg); font-weight:500; }
+#usage-modal .um-sep { color:var(--dim-text); }
+#usage-modal .um-icon { display:grid; place-items:center; width:30px; height:30px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#usage-modal .um-icon[data-act="refresh"] { margin-left:auto; }
+#usage-modal .um-icon:hover { background:var(--ui-hover); color:var(--fg); }
+#usage-modal .um-icon:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#usage-modal .um-icon i { font-size:16px; }
+#usage-modal .um-icon.busy i { animation:um-spin 900ms linear infinite; }
+#usage-modal .um-body { flex:1; min-height:0; overflow-y:auto; padding:20px; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+#usage-modal .um-agent { max-width:780px; margin:0 auto 20px; }
+#usage-modal .um-agent:last-child { margin-bottom:0; }
+#usage-modal .um-agent-head { display:flex; align-items:center; gap:8px; margin:0 0 10px; font-weight:500; font-size:14px; }
+#usage-modal .um-logo { display:inline-grid; place-items:center; color:var(--um-agent); }
+#usage-modal .um-logo .ws-proc-icon { width:16px; height:16px; font-size:16px; fill:currentColor; }
+#usage-modal .um-plan { padding:1px 6px; background:var(--ui-hover); border-radius:4px !important; color:var(--dim-text); font-size:11px; font-weight:500; }
+#usage-modal .um-card { display:grid; grid-template-columns:180px minmax(0,1fr); align-items:center; gap:16px; margin-bottom:10px; padding:14px 16px; border:1px solid var(--ui-line); border-radius:10px !important; background:color-mix(in srgb,var(--fg) 2%,var(--bg)); }
+#usage-modal .um-label { font-size:13px; color:var(--muted-text); }
+#usage-modal .um-big { display:flex; align-items:baseline; gap:6px; margin-top:2px; }
+#usage-modal .um-num { font-size:28px; font-weight:600; line-height:1.15; font-variant-numeric:tabular-nums; }
+#usage-modal .um-left { font-size:12.5px; color:var(--muted-text); }
+#usage-modal .um-trend { align-self:center; font-size:14px; color:var(--muted-text); }
+/* The bar: left = solid agent tint, used = stripes; the pace marker is where an even burn would be now. */
+#usage-modal .um-bar { position:relative; height:32px; border-radius:6px !important; overflow:hidden;
+  background:repeating-linear-gradient(135deg, color-mix(in srgb,var(--um-agent) 14%,var(--bg)) 0 3px, color-mix(in srgb,var(--um-agent) 6%,var(--bg)) 3px 7px); }
+#usage-modal .um-fill { position:absolute; inset:0 auto 0 0; background:color-mix(in srgb,var(--um-agent) 32%,var(--bg)); border-radius:6px !important; }
+#usage-modal .um-pace { position:absolute; top:4px; bottom:4px; width:2px; margin-left:-1px; background:var(--fg); border-radius:1px !important; }
+#usage-modal .um-reset { position:absolute; right:6px; top:50%; transform:translateY(-50%); display:inline-flex; align-items:center; gap:4px; height:20px; padding:0 6px; background:color-mix(in srgb,var(--bg) 80%,transparent); border-radius:4px !important; color:var(--fg); font:500 11px var(--ui-font); font-variant-numeric:tabular-nums; }
+#usage-modal .um-reset i { font-size:11px; color:var(--muted-text); }
+#usage-modal .um-empty { display:flex; align-items:center; justify-content:center; gap:8px; min-height:160px; color:var(--muted-text); font-size:13px; text-align:center; }
+#usage-modal .um-empty i { font-size:16px; }
+#usage-modal .um-spin { animation:um-spin 900ms linear infinite; }
+@keyframes um-spin { to { transform:rotate(360deg); } }
+@media (max-width:640px) { #usage-modal .um-card { grid-template-columns:1fr; gap:10px; } #usage-overlay { padding:12px; } }
+@media (prefers-reduced-motion: reduce) { #usage-modal :is(.um-icon, .um-icon.busy i, .um-spin) { transition:none; animation:none; } }
+
+/* Left sidebar: the usage button beside settings. */
+#sidebar.expanded .sidebar-actions #btn-usage { width:34px; height:34px; padding:0; justify-content:center; }
+.sidebar-actions #btn-usage i { font-size:16px; pointer-events:none; }
+#btn-usage { background:transparent; border:0; }
+#btn-usage:hover { background:var(--ui-hover); color:var(--fg); }
+#sidebar:not(.expanded) .sidebar-actions { flex-direction:column; gap:2px; }
+
+/* Chat zoom (Ctrl+wheel over a chat): messages and composer scale together. */
+:is(#sbr-thread, .thr-snapshot) :is(.thr-flow > *, .thr-composer-wrap > *) { zoom:var(--thr-zoom, 1); }

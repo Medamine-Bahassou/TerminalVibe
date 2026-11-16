@@ -2175,10 +2175,33 @@
   // we cannot show must be acked too or its PTY would stall. A hidden window
   // parses on throttled timers, which would slow a background build down to
   // that pace, so there we ack at once (no flow control, as before).
-  function writePtyData(result, id, data) {
-    if (result?.term) result.term._lastOut = Date.now(); // lets a thread wait for an agent to settle
+  // A TUI redraw (clear, then the whole screen) reaches us split across PTY reads, and xterm
+  // paints between the pieces: a blank or half-drawn frame on every redraw, which is the
+  // flicker when zooming or resizing a pane. Output inside a synchronized update (DEC mode
+  // 2026: Codex, and Claude in terminals it knows) or right after a PTY resize is held and
+  // written as one chunk, which xterm parses and paints at once.
+  const SYNC_MAX_MS = 150, REDRAW_QUIET_MS = 24;
+  function writePtyData(result, id, data, flush) {
+    const entry = result?.term;
+    if (entry) entry._lastOut = Date.now(); // lets a thread wait for an agent to settle
+    const xterm = entry?.type !== 'browser' && entry?.term;
+    if (xterm) {
+      data = (entry._held || '') + data;
+      entry._held = '';
+      clearTimeout(entry._heldTimer);
+      const now = Date.now();
+      const inSync = data.lastIndexOf('\x1b[?2026h') > data.lastIndexOf('\x1b[?2026l');
+      entry._syncSince = inSync ? (entry._syncSince ?? now) : null;
+      const until = (inSync ? entry._syncSince : (entry._resizedAt ?? -Infinity)) + SYNC_MAX_MS;
+      if (!flush && now < until) {
+        entry._held = data;
+        const wait = inSync ? until - now : Math.min(REDRAW_QUIET_MS, until - now);
+        entry._heldTimer = setTimeout(() => writePtyData(result, id, '', true), wait);
+        return;
+      }
+      if (!data) return;
+    }
     const ack = () => window.electronAPI.terminalAck?.(id, data.length);
-    const xterm = result?.term?.type !== 'browser' && result?.term?.term;
     if (xterm && !document.hidden) xterm.write(data, ack);
     else { xterm?.write(data); ack(); }
   }
@@ -5775,7 +5798,10 @@
     entry._resizeTimeout = null;
     if (entry.dead || findTermById(entry.id)?.term !== entry) return;
     const { cols, rows } = entry.term;
-    if (cols > 0 && rows > 0) sendControl({ type: 'resize', id: entry.id, cols, rows });
+    if (cols > 0 && rows > 0) {
+      entry._resizedAt = Date.now(); // writePtyData holds the redraw that follows
+      sendControl({ type: 'resize', id: entry.id, cols, rows });
+    }
   }
 
   function fitTerm(entry, immediate = false) {
@@ -8362,24 +8388,121 @@
     if (_watching) return;
     _watching = true;
     try {
-      for (const ws of workspaces) {
-        for (const t of getWorkspaceTerminals(ws).filter(isLiveTerminal)) {
-          const info = window.electronAPI?.terminalHasRunningProcess
-            ? await window.electronAPI.terminalHasRunningProcess(t.id).catch(() => null)
-            : { name: await checkTerminalRunning(t.id) };
-          // The Windows process table can list an agent for ~3s after it exited: confirm with the OS.
-          const dead = info?.pid && window.electronAPI?.processAlive && !(await window.electronAPI.processAlive(info.pid).catch(() => true));
-          const name = dead ? '' : String(info?.name || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
-          const h = THREAD_HARNESSES.find(x => x.bin === name);
-          const before = _tabAgent.get(t.id);
-          _tabAgent.set(t.id, h?.id || null);
-          syncTabAgentIcon(t); // also catches agents the chat started itself
-          if (h && before !== h.id && t.threadHistory) await adoptThreadAgent(t, h, ws); // typed into the Chat tab's own terminal
-        }
+      // Every terminal is asked at once (one at a time, a tab's logo lagged behind the others).
+      const tabs = workspaces.flatMap(ws => getWorkspaceTerminals(ws).filter(isLiveTerminal).map(t => ({ ws, t })));
+      const names = await Promise.all(tabs.map(async ({ t }) => {
+        const info = window.electronAPI?.terminalHasRunningProcess
+          ? await window.electronAPI.terminalHasRunningProcess(t.id).catch(() => null)
+          : { name: await checkTerminalRunning(t.id) };
+        // The Windows process table can list an agent for ~3s after it exited: confirm with the OS.
+        const dead = info?.pid && window.electronAPI?.processAlive && !(await window.electronAPI.processAlive(info.pid).catch(() => true));
+        return dead ? '' : String(info?.name || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
+      }));
+      for (const [i, { ws, t }] of tabs.entries()) {
+        if (!isLiveTerminal(t)) continue;
+        const h = THREAD_HARNESSES.find(x => x.bin === names[i]);
+        // An agent the chat just launched may not be the terminal's foreground process yet: keep its logo.
+        if (!h && t._agentSince && Date.now() - t._agentSince < 8000) continue;
+        const before = _tabAgent.get(t.id);
+        _tabAgent.set(t.id, h?.id || null);
+        syncTabAgentIcon(t); // also catches agents the chat started itself
+        if (h && before !== h.id && t.threadHistory) await adoptThreadAgent(t, h, ws); // typed into the Chat tab's own terminal
       }
     } finally { _watching = false; }
   }
   setInterval(() => { if (!DETACHED_ONLY && !SETTINGS_ONLY) watchThreadAgents(); }, 1500);
+
+  // ── Threads sidebar footer: each agent's plan usage — its most-used window and the time left to its reset;
+  // the tooltip lists every window. Read through the agents' own CLIs (main process, cached 1 min). ──
+  const fmtLeft = ms => { const m = Math.max(0, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`; };
+  let _usageAt = 0, _usageLimits = null;
+  async function refreshUsageLimits(force = false, fresh = false) {
+    const api = window.electronAPI;
+    if (!api?.usageLimits || DETACHED_ONLY || SETTINGS_ONLY || (!force && Date.now() - _usageAt < 60000)) return _usageLimits;
+    _usageAt = Date.now();
+    const limits = await api.usageLimits(fresh).catch(() => null);
+    _usageLimits = limits;
+    if (_usageModal) renderUsageModal();
+    const left = document.getElementById('ts-usage');
+    if (!left) return limits;
+    const items = Object.entries(limits || {}).map(([id, u]) => {
+      const h = harnessOf(id);
+      if (!h || !u.windows?.length) return '';
+      const top = u.windows.reduce((a, b) => b.used > a.used ? b : a);
+      const rows = u.windows.map(w => ({ icon: 'ph-clock', text: `${w.label}: ${w.used}% used${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
+      const plan = u.plan ? ' · ' + u.plan[0].toUpperCase() + u.plan.slice(1) : '';
+      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" data-tip="${escHtml(h.name + plan)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
+        + `<span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`
+        + `<span class="sb-usage-pct">${top.used}%</span>${top.resetsAt ? `<span class="sb-usage-reset">${fmtLeft(top.resetsAt - Date.now())}</span>` : ''}</span>`;
+    }).join('');
+    left.innerHTML = items ? `<span class="sb-usage-label">Used</span>${items}<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>` : '';
+    left.hidden = !items;
+    return limits;
+  }
+  // ── Usage modal (sidebar's chart button): every limit window of every agent, T3 Code style —
+  // the % left, a bar (left solid, used striped) with the pace marker (where an even burn would be
+  // now) and the time to the reset, and a trend icon comparing the two. ──
+  let _usageModal = null, _usageReturnFocus = null, _usageLoading = false;
+  function renderUsageModal() {
+    const body = _usageModal?.querySelector('.um-body');
+    if (!body) return;
+    const sections = Object.entries(_usageLimits || {}).map(([id, u]) => {
+      const h = harnessOf(id);
+      if (!h || !u.windows?.length) return '';
+      const cards = u.windows.map(w => {
+        const left = 100 - w.used;
+        const pace = w.resetsAt && w.mins ? Math.max(0, Math.min(100, (w.resetsAt - Date.now()) / (w.mins * 60000) * 100)) : null;
+        const [trend, trendTip] = pace == null ? ['ph-gauge', ''] : left < pace - 5 ? ['ph-trend-down', 'Using it faster than it resets'] : left > pace + 5 ? ['ph-trend-up', 'Under pace: it lasts until the reset'] : ['ph-gauge', 'On pace'];
+        return `<div class="um-card"><div class="um-stat"><div class="um-label">${escHtml(w.label)}</div>`
+          + `<div class="um-big"><span class="um-num">${left}%</span><span class="um-left">left</span><i class="ph ${trend} um-trend" aria-hidden="true"${trendTip ? ` title="${trendTip}"` : ''}></i></div></div>`
+          + `<div class="um-bar" role="img" aria-label="${left}% left${w.resetsAt ? `, resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}"><div class="um-fill" style="width:${left}%"></div>`
+          + (pace != null ? `<div class="um-pace" style="left:${pace}%" title="Even pace: ${Math.round(pace)}% would be left now"></div>` : '')
+          + (w.resetsAt ? `<span class="um-reset"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>${fmtLeft(w.resetsAt - Date.now())}</span>` : '') + '</div></div>';
+      }).join('');
+      const plan = u.plan ? `<span class="um-plan">${escHtml(u.plan[0].toUpperCase() + u.plan.slice(1))}</span>` : '';
+      return `<section class="um-agent" style="--um-agent:${h.color || 'var(--fg)'}"><div class="um-agent-head"><span class="um-logo">${procIconHtml(h.bin, 'ph-robot')}</span><span>${escHtml(h.name)}</span>${plan}</div>${cards}</section>`;
+    }).join('');
+    body.innerHTML = sections || (_usageLoading
+      ? '<div class="um-empty"><i class="ph ph-circle-notch um-spin" aria-hidden="true"></i>Reading usage…</div>'
+      : '<div class="um-empty"><i class="ph ph-chart-bar" aria-hidden="true"></i>No usage limits to show. Claude Code and Codex report them when signed in with a plan.</div>');
+    _usageModal.querySelector('[data-act="refresh"]')?.classList.toggle('busy', _usageLoading);
+  }
+  async function loadUsageModal(fresh) {
+    _usageLoading = true; renderUsageModal();
+    try { await refreshUsageLimits(true, fresh); } finally { _usageLoading = false; renderUsageModal(); }
+  }
+  function closeUsageModal() {
+    if (!_usageModal) return;
+    _usageModal.remove(); _usageModal = null;
+    _usageReturnFocus?.focus?.(); _usageReturnFocus = null;
+  }
+  function openUsageModal() {
+    if (_usageModal) { closeUsageModal(); return; }
+    if (!window.electronAPI?.usageLimits) { zoomBadge('Usage limits need the desktop app'); return; }
+    _usageReturnFocus = document.activeElement;
+    const overlay = document.createElement('div');
+    overlay.id = 'usage-overlay';
+    overlay.innerHTML = `<div id="usage-modal" role="dialog" aria-modal="true" aria-labelledby="usage-title">
+      <div class="um-head"><span class="um-crumb" id="usage-title">Usage</span><span class="um-sep" aria-hidden="true">/</span><span class="um-crumb current">Limits</span>
+        <button type="button" class="um-icon" data-act="refresh" title="Refresh" aria-label="Refresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
+        <button type="button" class="um-icon" data-act="close" title="Close (Esc)" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></div>
+      <div class="um-body"></div></div>`;
+    overlay.addEventListener('mousedown', e => { if (e.target === overlay) closeUsageModal(); });
+    overlay.addEventListener('click', e => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'close') closeUsageModal();
+      else if (act === 'refresh' && !_usageLoading) void loadUsageModal(true);
+    });
+    overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeUsageModal(); } });
+    document.body.appendChild(overlay);
+    _usageModal = overlay;
+    overlay.querySelector('[data-act="close"]').focus();
+    void loadUsageModal(false); // the last reading (≤ 1 min old) at once, else a new one
+  }
+  document.getElementById('btn-usage')?.addEventListener('click', openUsageModal);
+  document.getElementById('ts-usage')?.addEventListener('click', openUsageModal);
+  if (!window.electronAPI?.usageLimits) document.getElementById('btn-usage')?.remove();
+  if (!DETACHED_ONLY && !SETTINGS_ONLY) { setTimeout(() => refreshUsageLimits(true), 3000); setInterval(() => refreshUsageLimits(true), 5 * 60000); }
 
   // A terminal running an agent becomes a Chat tab over that agent (the chat button in its tab bar).
   function openTerminalAsChat(t) {
@@ -8436,7 +8559,10 @@
   // the images themselves show above the bubble. Both open the image viewer.
   const _thrImgSize = new Map(); // path -> bytes, known once the image was read
   const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
-  function userTextHtml(text) {
+  function userTextHtml(text, threads = []) {
+    // Threads dropped in as context: from the transcript (threads) or a pending message's own notes.
+    const refs = [...threads, ...[...String(text).matchAll(/<terminalvibe_context thread="([^"]*)">“([^”]*)”/g)].map(m => ({ path: m[1], title: m[2] }))];
+    text = String(text).replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '');
     // Leading "> " blocks are citations (quoted from the chat): truncated chips above the prompt.
     const lines = String(text).split('\n'), quotes = [];
     while (lines.length && lines[0].startsWith('>')) {
@@ -8452,7 +8578,12 @@
       paths.push(quoted || bare);
       return `\u0000${paths.length - 1}\u0000`;
     });
-    const html = mdLite(marked).replace(/\u0000(\d+)\u0000/g, (_, n) => {
+    // Each “title” of a dropped thread shows as a link to it (its history file sits in the thread's folder).
+    const markedRefs = refs.reduce((out, r, n) => out.split(`“${r.title}”`).join(`\u0000T${n}\u0000`), marked);
+    const html = mdLite(markedRefs).replace(/\u0000T(\d+)\u0000/g, (_, n) => {
+      const r = refs[n], key = r.path.split(/[\\/]/).slice(-2, -1)[0] || '';
+      return `<a href="#" class="thr-thread-mention" data-thread-key="${escHtml(key)}" title="Thread: ${escHtml(r.title)}"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(r.title)}</span></a>`;
+    }).replace(/\u0000(\d+)\u0000/g, (_, n) => {
       const p = paths[n], size = _thrImgSize.get(p);
       return `<button type="button" class="thr-img-link" data-path="${escHtml(p)}" title="${escHtml(p)}"><span class="thr-img-link-name">${escHtml(p.split(/[\\/]/).pop())}</span>`
         + `<span class="thr-img-size" data-size-path="${escHtml(p)}">${size ? fmtBytes(size) : ''}</span></button>`;
@@ -8469,6 +8600,8 @@
   function chatWorking(ws) {
     if (!ws || ws._closed) return null;
     let turn = _turns.get(ws.id);
+    const lockedBy = liveThreadAgent(ws) || ws;
+    if (agentLocked(lockedBy)) return { label: `${harnessOf(_tabAgent.get(lockedBy.id))?.name || 'The agent'} has this conversation open in another app`, wait: true, lock: true, since: turn?.since || Date.now() };
     const starting = _chatStarting.get(ws.id);
     if (turn && starting) return { label: starting.text, wait: starting.wait, since: turn.since };
     const t = liveThreadAgent(ws);
@@ -8500,6 +8633,7 @@
   }
   // An agent finished its turn: update the chat now, not on the next poll.
   function chatAgentIdle(entry) {
+    void refreshUsageLimits();
     if (curChat() !== entry || !thrPage.offsetParent) return;
     _flowSig = '';
     refreshThreadFlow(entry);
@@ -8517,8 +8651,13 @@
     if (queue) { if (el.nextElementSibling !== queue) flow.insertBefore(el, queue); }
     else if (el !== flow.lastElementChild) flow.appendChild(el);
     el.classList.toggle('wait', !!w.wait);
-    el.innerHTML = w.wait ? `<i class="ph ph-hand-pointing" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
+    el.classList.toggle('lock', !!w.lock);
+    const html = w.lock ? `<i class="ph ph-lock-simple" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
+        + `<span class="thr-lock-actions">${window.electronAPI?.releaseAgentSession ? '<button type="button" class="thr-lock-btn primary" data-lock-act="take">Take over</button>' : ''}`
+        + `<button type="button" class="thr-lock-btn" data-lock-act="retry">Retry</button></span>`
+      : w.wait ? `<i class="ph ph-hand-pointing" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
       : `<span class="thr-shimmer">${escHtml(w.label)}</span><span class="thr-working-time">${fmtSecs(Math.max(0, Math.round((Date.now() - w.since) / 1000)))}</span>`;
+    if (el._html !== html) { el._html = html; el.innerHTML = html; }
     if (atBottom) flow.scrollTop = flow.scrollHeight;
     renderChatQueue(ws, surface);
   }
@@ -8540,9 +8679,10 @@
     thrInput.focus();
     return tab;
   }
+  // A thread belongs to no workspace: it opens in the current one (an open tab moves here, agent and all).
   function openChatTab(tab) {
     if (tab?._closed) {
-      const ws = findWs(tab.workspaceId) || workspaces.find(w => w.cwd && w.cwd === tab.cwd) || activeWs();
+      const ws = activeWs() || findWs(tab.workspaceId) || workspaces.find(w => w.cwd && w.cwd === tab.cwd);
       if (!ws) return;
       if (activeWsId !== ws.id) activateWorkspace(ws.id);
       const reopened = addTerminal(ws.id, null, { label: tab.label || 'Chat', cwd: tab.cwd, threadHistory: true });
@@ -8558,8 +8698,10 @@
       renderThreadsSidebar();
       return;
     }
-    const ws = wsOf(tab);
+    let ws = wsOf(tab);
     if (!ws) return;
+    const here = activeWs();
+    if (here && here.id !== ws.id && moveTabToWorkspace(tab.id, here.id)) ws = here;
     if (activeWsId !== ws.id) activateWorkspace(ws.id);
     activateTerminal(ws.id, tab.id);
     if (tab._cliView) setChatView(tab, false); // opened from the threads list: show the chat, not its shell
@@ -8595,6 +8737,37 @@
     if (curChat() === tab) _flowSig = '';
     saveState(); renderThreadsSidebar();
   }
+  // Side chat (T3 Code's /side, /btw): a question about a thread without adding to it. It opens as a
+  // chat tab next to the thread, forks the thread's agent session and starts with its picks; the
+  // thread keeps working meanwhile. "Bring back" hands its history to the thread's next message.
+  // ponytail: a tab in the same pane, not a side panel; split it off by dragging if wanted.
+  async function openSideChat(parent, question, files = []) {
+    const ws = wsOf(parent) || findWs(parent.workspaceId) || activeWs();
+    if (!ws) return;
+    const seg = threadSegments(parent).findLast(x => x.used && x.sessionId);
+    const opts = chatOpts(parent);
+    const tab = newChatTab(ws, findGroupContainingTerm(ws.layout, parent.id)?.id, opts.harness);
+    if (!tab) return;
+    const cwd = seg?.cwd || chatCwd(parent); // Claude keeps sessions per folder: fork in the thread's
+    if (cwd) tab.chat.cwd = cwd;
+    tab.chat.side = { parentId: threadKey(parent), harness: seg?.harness || null, sessionId: seg?.sessionId || null };
+    setChatOpts(tab, opts);
+    setChatTabLabel(tab);
+    const text = chatMessageText(question, files);
+    if (text) await deliverChatMessage(tab, { id: uuid(), text, typed: question, files, after: Date.now() });
+  }
+  async function bringBackSideChat(tab) {
+    const parent = findThreadByKey(tab.chat?.side?.parentId);
+    if (!parent) { zoomBadge('The main thread was deleted'); return; }
+    let file = null;
+    try { file = await window.electronAPI?.threadHandoff?.({ ...threadMeta(tab), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); } catch {}
+    if (!file) { zoomBadge('Could not write the side chat for the main thread'); return; }
+    parent.chat ||= { createdAt: Date.now() };
+    parent.chat.bringBack = file;
+    saveState();
+    openChatTab(parent);
+    zoomBadge('The main thread gets this side chat with your next message there');
+  }
   function findChatThread(id) {
     return findTermById(id)?.term || closedThreads.find(t => t.id === id);
   }
@@ -8613,7 +8786,10 @@
     t.el?.classList.toggle('agent-tab', !t.threadHistory && !!harnessOf(_tabAgent.get(t.id)));
     // A Chat tab whose agent quit while its terminal shows: no chat button there (it's a plain shell now).
     t.el?.classList.toggle('no-agent', !!t.threadHistory && !harnessOf(_tabAgent.get(t.id)));
-    const h = isLiveTerminal(t) ? harnessOf(_tabAgent.get(t.id)) : null; // only while an agent runs there
+    // The agent running there; a Chat tab with none running yet (e.g. right after startup, before it
+    // resumes) shows its thread's latest agent, as the threads sidebar does.
+    const h = (isLiveTerminal(t) ? harnessOf(_tabAgent.get(t.id)) : null)
+      || (t.threadHistory ? harnessOf(threadSegments(t).findLast(x => x.used)?.harness) : null);
     const key = h?.id || '';
     let icon = el.querySelector('.tg-tab-agent');
     if ((icon?.dataset.agent || '') === key) return;
@@ -8862,16 +9038,20 @@
       models: [{ id: 'opus', name: 'Claude Opus' }, { id: 'sonnet', name: 'Claude Sonnet' }, { id: 'haiku', name: 'Claude Haiku' }, { id: 'fable', name: 'Claude Fable' }]
         .map(m => ({ ...m, efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'default' })),
       access: [['default', 'Ask first', 'ph-shield'], ['acceptEdits', 'Accept edits', 'ph-pencil-simple'], ['plan', 'Plan only', 'ph-list-checks'], ['bypassPermissions', 'Full access', 'ph-shield-slash']],
-      argv: (o, sid, resume) => [...(o.model !== 'default' ? ['--model', o.model] : []), ...(o.effort !== 'default' ? ['--effort', o.effort] : []),
-        ...(o.access !== 'default' ? ['--permission-mode', o.access] : []), resume ? '--resume' : '--session-id', sid],
+      argv: (o, sid, resume, fork) => [...(o.model !== 'default' ? ['--model', o.model] : []), ...(o.effort !== 'default' ? ['--effort', o.effort] : []),
+        ...(o.access !== 'default' ? ['--permission-mode', o.access] : []),
+        // Fast mode and Ultracode are Claude Code settings.
+        ...(o.fast || o.ultra ? ['--settings', JSON.stringify({ ...(o.fast ? { fastMode: true } : {}), ...(o.ultra ? { ultracode: true } : {}) })] : []),
+        ...(fork ? ['--resume', fork, '--fork-session'] : []), resume ? '--resume' : '--session-id', sid],
     },
     codex: {
       models: [], // filled from Codex's own model list (~/.codex/models_cache.json) in the desktop app
       access: [['default', 'Ask first', 'ph-shield'], ['read-only', 'Read only', 'ph-eye'], ['workspace-write', 'Workspace write', 'ph-pencil-simple'], ['full', 'Full access', 'ph-shield-slash']],
       // No update prompt at startup: the chat's first Enter would answer it ("Update now") instead of sending.
-      argv: (o, sid, resume) => [...(resume && sid ? ['resume', sid] : []), '-c', 'check_for_update_on_startup=false', ...(o.model !== 'default' ? ['-m', o.model] : []),
+      argv: (o, sid, resume, fork) => [...(resume && sid ? ['resume', sid] : fork ? ['fork', fork] : []), '-c', 'check_for_update_on_startup=false', ...(o.model !== 'default' ? ['-m', o.model] : []),
         ...(o.effort !== 'default' ? ['-c', `model_reasoning_effort="${o.effort}"`] : []),
-        ...(o.access === 'full' ? ['--dangerously-bypass-approvals-and-sandbox'] : o.access !== 'default' ? ['-s', o.access] : [])],
+        ...(o.access === 'full' ? ['--dangerously-bypass-approvals-and-sandbox'] : o.access !== 'default' ? ['-s', o.access] : []),
+        ...(o.fast && CHAT_AGENTS.codex.models.find(m => m.id === o.model)?.fastTier ? ['-c', `service_tier="${CHAT_AGENTS.codex.models.find(m => m.id === o.model).fastTier}"`] : [])],
     },
   };
   // The other agent CLIs TerminalVibe knows start plain (their own default model and permissions);
@@ -8910,8 +9090,15 @@
     const mm = m || models[0];
     if (!mm.efforts.includes(o.effort)) o.effort = mm.efforts.includes(mm.defaultEffort) ? mm.defaultEffort : 'default';
     if (!CHAT_AGENTS[o.harness].access.some(a => a[0] === o.access)) o.access = 'default';
+    // Fast / Ultracode only where the agent and model have them.
+    const caps = chatCaps(o);
+    o.fast = !!o.fast && caps.fast; o.ultra = !!o.ultra && caps.ultra;
     return o;
   };
+  // Fast: every Claude model (Claude Code's fast mode), a Codex model with a fast service tier. Ultracode: Claude.
+  function chatCaps(o) {
+    return { fast: o.harness === 'claude' || !!CHAT_AGENTS[o.harness]?.models.find(m => m.id === o.model)?.fastTier, ultra: o.harness === 'claude' };
+  }
   function setChatOpts(ws, changes) {
     ws.chat ||= { createdAt: Date.now() };
     ws.chat.opts = { ...chatOpts(ws), ...changes };
@@ -8939,6 +9126,20 @@
     }).observe(wrap);
   }
   thrPage.querySelector('#sbr-thread-flow').addEventListener('click', e => {
+    const mention = e.target.closest('.thr-thread-mention');
+    if (mention) {
+      e.preventDefault();
+      const t = findThreadByKey(mention.dataset.threadKey);
+      if (t) openChatTab(t); else zoomBadge('That thread was deleted');
+      return;
+    }
+    const lockBtn = e.target.closest('[data-lock-act]');
+    if (lockBtn) {
+      const ws = curChat(), t = ws && (liveThreadAgent(ws) || ws);
+      if (lockBtn.dataset.lockAct === 'take') void takeOverChatSession(ws);
+      else if (agentLocked(t)) sendStdin(t.id, new TextEncoder().encode('r'));
+      return;
+    }
     const b = e.target.closest('.thr-img-link');
     if (b) openClaudeRefViewer(null, { kind: 'file', path: b.dataset.path, label: b.dataset.path.split(/[\\/]/).pop() }, '');
     const href = e.target.closest('button.thr-link')?.dataset.href;
@@ -8977,11 +9178,12 @@
     const t = liveThreadAgent(ws), h = t && harnessOf(_tabAgent.get(t.id));
     const o = chatOpts(ws), ho = harnessOf(o.harness);
     const effort = o.effort !== 'default' ? EFFORT_NAMES[o.effort] || o.effort : '';
-    const sig = [o.harness, o.model, o.effort].join('|');
+    const sig = [o.harness, o.model, o.effort, o.fast, o.ultra].join('|');
     const chip = thrChip('model');
     if (chip.dataset.sig !== sig) {
       chip.dataset.sig = sig;
-      chip.innerHTML = `<span class="thr-chip-logo"${ho.color ? ` style="color:${ho.color}"` : ''}>${procIconHtml(ho.bin, 'ph-robot')}</span><span>${escHtml(modelName(o, true))}</span>${effort ? `<span class="thr-chip-sub">${escHtml(effort)}</span>` : ''}`;
+      chip.innerHTML = `<span class="thr-chip-logo"${ho.color ? ` style="color:${ho.color}"` : ''}>${procIconHtml(ho.bin, 'ph-robot')}</span><span>${escHtml(modelName(o, true))}</span>${effort ? `<span class="thr-chip-sub">${escHtml(effort)}</span>` : ''}`
+        + (o.fast ? '<i class="ph ph-lightning thr-chip-mode" aria-label="Fast"></i>' : '') + (o.ultra ? '<i class="ph ph-infinity thr-chip-mode" aria-label="Ultracode"></i>' : '');
     }
     syncTabAgentIcon(ws);
     // Footer: folder, the agent's tab (its permission prompts show there), branch, permissions.
@@ -8993,6 +9195,35 @@
     cwdEl.disabled = !fresh;
     cwdEl.innerHTML = `<i class="ph ph-folder" aria-hidden="true"></i><span>${escHtml(cwd.split(/[\\/]/).filter(Boolean).pop() || cwd || 'No folder')}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
     cwdEl.title = fresh ? `Working folder: ${cwd || 'none'}` : cwd;
+    // Above the composer: a thread's side chats, or (in a side chat) the thread it belongs to.
+    const sidesEl = thrChip('sides');
+    if (sidesEl) {
+      const chip = (x, icon, i = 0) => `<button type="button" class="thr-side-chip" style="--i:${i}" data-side="${escHtml(x.id)}" title="${escHtml(x.chat?.title || x.label)}">`
+        + `<i class="ph ${icon}" aria-hidden="true"></i><span>${escHtml(x.chat?.title || x.label || 'Side chat')}</span>`
+        + `${chatWorking(x) ? '<i class="ph ph-circle-notch thr-side-spin" aria-hidden="true"></i>' : ''}</button>`;
+      const parent = findThreadByKey(ws.chat?.side?.parentId), sides = ws.chat?.side ? [] : sideChatsOf(ws);
+      // A thread's side chats: a header (label + caret) over one row per chat; collapsed, the whole tray
+      // goes and a bubble on the composer's edge brings it back. A side chat's thread: always shown.
+      let collapsed = !parent; // collapsed by default; opening it is remembered
+      if (!parent) try { collapsed = !localStorage.getItem('tv-side-chats-expanded'); } catch {}
+      const what = `${sides.length} side chat${sides.length > 1 ? 's' : ''}`;
+      const html = parent ? `<span class="thr-sides-label">Side chat of</span>${chip(parent, 'ph-chats-circle')}`
+        : !sides.length ? ''
+        : collapsed ? `<button type="button" class="thr-sides-toggle thr-sides-bubble" aria-expanded="false" aria-label="Show ${what}" data-tip="Side chats">`
+          + `<i class="ph ph-chat-circle-dots" aria-hidden="true"></i><span class="thr-sides-count">${sides.length}</span><i class="ph ph-caret-up" aria-hidden="true"></i></button>`
+        : `<span class="thr-sides-label">Side chats</span>${sides.map((x, i) => chip(x, 'ph-chat-circle-dots', i)).join('')}`
+          + `<button type="button" class="thr-sides-toggle" aria-expanded="true" aria-label="Hide ${what}"><i class="ph ph-caret-down" aria-hidden="true"></i></button>`;
+      sidesEl.hidden = !html;
+      sidesEl.classList.toggle('collapsed', collapsed);
+      if (sidesEl._html !== html) { sidesEl._html = html; sidesEl.innerHTML = html; }
+    }
+    // A side chat: "Bring back" once it has something to hand over.
+    const back = thrChip('bringback');
+    if (back) {
+      const parent = findThreadByKey(ws.chat?.side?.parentId);
+      back.hidden = !parent || !threadSegments(ws).some(x => x.used);
+      back.title = parent ? `Give “${parent.chat?.title || parent.label}” this side chat with your next message there` : '';
+    }
     const branch = thrChip('branch');
     if (cwd && window.electronAPI?.gitBranch && !_gitBranch.has(cwd)) {
       _gitBranch.set(cwd, null);
@@ -9009,6 +9240,29 @@
   }
 
   // Pick a new chat's working folder: the workspaces' folders, or any folder.
+  thrChip('bringback')?.addEventListener('click', () => { const c = curChat(); if (c) void bringBackSideChat(c); });
+  thrChip('sides')?.addEventListener('click', e => {
+    if (e.target.closest('.thr-sides-toggle')) {
+      const el = e.currentTarget;
+      if (el.classList.contains('leaving')) return;
+      let done = false;
+      const flip = () => {
+        if (done) return; done = true;
+        try { localStorage.getItem('tv-side-chats-expanded') ? localStorage.removeItem('tv-side-chats-expanded') : localStorage.setItem('tv-side-chats-expanded', '1'); } catch {}
+        el.classList.remove('leaving', 'anim');
+        syncThreadComposer(curChat());
+        void el.offsetWidth; // restart the entry animation
+        el.classList.add('anim');
+        clearTimeout(el._animEnd); el._animEnd = setTimeout(() => el.classList.remove('anim'), 500); // later re-renders don't replay it
+      };
+      const animate = document.body.classList.contains('ui-animations') && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // Collapsing: the tray sinks behind the composer first, then the bubble rises.
+      if (animate && !el.classList.contains('collapsed')) { el.classList.add('leaving'); setTimeout(flip, 170); }
+      else flip();
+      return;
+    }
+    const t = findChatThread(e.target.closest('.thr-side-chip')?.dataset.side); if (t) openChatTab(t);
+  });
   thrChip('cwd')?.addEventListener('click', e => {
     e.stopPropagation(); // the document click handler would close the menu right away
     const r = e.currentTarget.getBoundingClientRect();
@@ -9047,12 +9301,19 @@
     pop.setAttribute('aria-label', 'Choose a model');
     pop.innerHTML = `<div class="mp-rail" role="tablist" aria-label="Agents"></div>
       <div class="mp-main"><label class="mp-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search models…" aria-label="Search models" spellcheck="false" autocomplete="off"></label><div class="mp-list" role="listbox" aria-label="Models"></div></div>
-      <div class="mp-side"><div class="mp-side-head"><span>Reasoning</span><span class="mp-side-model"></span></div><div class="mp-efforts" role="listbox" aria-label="Reasoning effort"></div>
-        <button type="button" class="mp-access" aria-haspopup="menu" title="Permissions for the next agent the chat starts"></button></div>`;
+      <div class="mp-side"><div class="mp-side-head"><span>Reasoning</span><span class="mp-side-model"></span></div><div class="mp-efforts" role="listbox" aria-label="Reasoning effort"></div></div>
+      <div class="mp-foot">
+        <div class="mp-speed" role="radiogroup" aria-label="Speed"><button type="button" role="radio" data-fast="0">Standard</button><button type="button" role="radio" data-fast="1"><i class="ph ph-lightning" aria-hidden="true"></i>Fast</button></div>
+        <button type="button" class="mp-ultra" aria-pressed="false" title="Ultracode: Claude Code's deepest coding mode"><i class="ph ph-infinity" aria-hidden="true"></i>Ultracode</button>
+        <button type="button" class="mp-access" aria-haspopup="menu" title="Permissions for the next agent the chat starts"></button>
+      </div>`;
     const rail = pop.querySelector('.mp-rail'), list = pop.querySelector('.mp-list'), side = pop.querySelector('.mp-efforts'), search = pop.querySelector('input');
+    const STAR_FILLED = '<svg class="mp-star-fill" viewBox="0 0 256 256" aria-hidden="true"><path fill="currentColor" d="M234.3 114.1l-45.1 39.4 13.5 58.6a16 16 0 0 1-23.8 17.3L128 198.3l-50.8 30.8a16 16 0 0 1-23.9-17.3l13.5-58.5-45.1-39.4a16 16 0 0 1 9.1-28.1l59.5-5.1 23.2-55.3a16 16 0 0 1 29.5 0l23.3 55.3 59.4 5.1a16 16 0 0 1 9.1 28.1z"/></svg>';
+    // Favorites in list order; the first nine get Ctrl+1…9 while the picker is open.
+    const favList = () => chatAgentIds().flatMap(id => chatModels(id).filter(m => favs.has(favKey(id, m.id))).map(m => ({ h: harnessOf(id), m })));
     const render = () => {
-      const o = chatOpts(ws);
-      rail.innerHTML = [['fav', '<i class="ph ph-star" aria-hidden="true"></i>', 'Favorites'],
+      const o = chatOpts(ws), favOrder = favList().map(x => favKey(x.h.id, x.m.id));
+      rail.innerHTML = [['fav', filter === 'fav' ? STAR_FILLED : '<i class="ph ph-star" aria-hidden="true"></i>', 'Favorites'],
         ...chatAgentIds().map(id => { const h = harnessOf(id); return [id, `<span${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`, h.name]; })]
         .map(([id, icon, label]) => `<button type="button" role="tab" class="mp-rail-btn${(filter || '') === id ? ' active' : ''}" data-f="${id}" title="${escHtml(label)}" aria-label="${escHtml(label)}" aria-selected="${(filter || '') === id}">${icon}</button>`).join('');
       const q = query.toLowerCase();
@@ -9060,17 +9321,23 @@
       const rows = chatAgentIds().filter(id => q || filter === 'fav' || id === filter).flatMap(id => chatModels(id).map(m => ({ h: harnessOf(id), m })))
         .filter(({ h, m }) => q ? `${m.name} ${h.name} ${m.id}`.toLowerCase().includes(q) : filter !== 'fav' || favs.has(favKey(h.id, m.id)));
       list.innerHTML = rows.map(({ h, m }) => {
+        const n = favOrder.indexOf(favKey(h.id, m.id));
         const sel = o.harness === h.id && (o.model === m.id || (m.id === 'default' && o.model === 'default'));
         return `<button type="button" role="option" class="mp-row${sel ? ' selected' : ''}" data-h="${h.id}" data-m="${escHtml(m.id)}" aria-selected="${sel}">`
           + `<span class="mp-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span><span class="mp-name">${escHtml(m.name)}</span>`
-          + (found[h.bin] ? '' : '<span class="mp-hint">not installed</span>') + (sel ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '')
-          + `<span class="mp-fav${favs.has(favKey(h.id, m.id)) ? ' on' : ''}" title="${favs.has(favKey(h.id, m.id)) ? 'Remove from favorites' : 'Add to favorites'}"><i class="ph ph-star" aria-hidden="true"></i></span></button>`;
+          + (sel ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + (found[h.bin] ? '' : '<span class="mp-hint">not installed</span>')
+          + `<span class="mp-fav${favs.has(favKey(h.id, m.id)) ? ' on' : ''}" title="${favs.has(favKey(h.id, m.id)) ? 'Remove from favorites' : 'Add to favorites'}">${favs.has(favKey(h.id, m.id)) ? STAR_FILLED : '<i class="ph ph-star" aria-hidden="true"></i>'}</span>`
+          + (n >= 0 && n < 9 ? `<kbd class="mp-kbd">Ctrl+${n + 1}</kbd>` : '') + '</button>';
       }).join('') || `<div class="mp-empty">${!q && filter === 'fav' ? 'Star a model to add it here' : 'No models match'}</div>`;
       const cur = chatModels(o.harness).find(x => x.id === o.model) || chatModels(o.harness)[0];
       pop.querySelector('.mp-side-model').textContent = modelName(o, true);
       side.innerHTML = cur.efforts.map(e => `<button type="button" role="option" class="mp-row mp-effort${o.effort === e ? ' selected' : ''}" data-e="${e}" aria-selected="${o.effort === e}">`
         + `<span class="mp-name">${escHtml(EFFORT_NAMES[e] || e)}</span>${e !== 'default' && e === cur.defaultEffort ? '<span class="mp-hint">Default</span>' : ''}`
         + (o.effort === e ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + '</button>').join('');
+      const caps = chatCaps(o), speed = pop.querySelector('.mp-speed'), ultra = pop.querySelector('.mp-ultra');
+      speed.hidden = !caps.fast; ultra.hidden = !caps.ultra;
+      speed.querySelectorAll('button').forEach(b => { const on = (b.dataset.fast === '1') === !!o.fast; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+      ultra.classList.toggle('on', !!o.ultra); ultra.setAttribute('aria-pressed', String(!!o.ultra));
       const [, aLabel, aIcon] = CHAT_AGENTS[o.harness].access.find(a => a[0] === o.access);
       const acc = pop.querySelector('.mp-access');
       acc.classList.toggle('danger', /full|bypass/i.test(o.access));
@@ -9081,6 +9348,8 @@
       openPickMenu(e.currentTarget, CHAT_AGENTS[o.harness].access.map(([v, label, icon]) => ({ value: v, label, selected: v === o.access, icon: `<i class="ph ${icon}"></i>` })),
         v => { setChatOpts(ws, { access: v }); render(); pop.querySelector('.mp-access').focus(); });
     });
+    pop.querySelector('.mp-speed').addEventListener('click', e => { const b = e.target.closest('[data-fast]'); if (b) { setChatOpts(ws, { fast: b.dataset.fast === '1' }); render(); } });
+    pop.querySelector('.mp-ultra').addEventListener('click', () => { setChatOpts(ws, { ultra: !chatOpts(ws).ultra }); render(); });
     rail.addEventListener('click', e => { const b = e.target.closest('.mp-rail-btn'); if (b) { filter = b.dataset.f; query = search.value = ''; render(); search.focus(); } });
     list.addEventListener('click', e => {
       const r = e.target.closest('.mp-row'); if (!r) return;
@@ -9097,6 +9366,11 @@
     search.addEventListener('input', () => { query = search.value; render(); });
     pop.addEventListener('keydown', e => {
       if (e.key === 'Escape') { e.stopPropagation(); closeModelPicker(true); return; }
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        const f = favList()[+e.key - 1];
+        if (f) { e.preventDefault(); e.stopPropagation(); setChatOpts(ws, { harness: f.h.id, model: f.m.id }); render(); }
+        return;
+      }
       const rows = [...pop.querySelectorAll('.mp-list .mp-row')], i = rows.indexOf(document.activeElement);
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); (rows[i < 0 ? 0 : (i + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length])?.focus(); }
       else if (e.key === 'Enter' && e.target === search) { e.preventDefault(); rows[0]?.click(); }
@@ -9116,6 +9390,9 @@
 
   // Paste-style write, then Enter on its own: sent together, Codex treats the text as a paste and Enter as a newline.
   function sendToAgent(t, text, steer = false) {
+    // The history note rides on the first real message: after a slash command it would become its argument.
+    if (t._handoff && !/^\s*\//.test(text)) { text += _handoffNote(t._handoff); t._handoff = null; }
+    if (t._sideNote && !/^\s*\//.test(text)) { text += SIDE_NOTE; t._sideNote = false; }
     const enc = str => new TextEncoder().encode(str), body = text.replace(/\r?\n/g, '\r');
     sendStdin(t.id, enc(t.term.modes?.bracketedPasteMode ? `\x1b[200~${body}\x1b[201~` : body));
     t._chatSent = true;
@@ -9138,6 +9415,23 @@
   // A question the agent asks before it takes prompts (trust this folder? update now?). Only the user answers
   // it: the chat shows the agent's terminal and sends once it is gone.
   const TRUST_RE = /trust this folder|trust the (files|contents) in this|Do you trust|Update available|Update now|new version (is )?available/i;
+  // Codex runs a conversation in one process at a time: while another copy holds it (often an orphan
+  // from an earlier run) it shows a lock screen waiting for R. Typing there would press its keys
+  // (r retry, f fork), so nothing is sent until the lock is gone.
+  const LOCK_RE = /open in another app[\s\S]*(press R\b|to retry)/i;
+  function agentLocked(t) { return !!t?.term && isLiveTerminal(t) && /open in another app[\s\S]*(press R\b|to retry)/i.test(screenText(t)); }
+  async function waitUnlocked(t, maxMs = 300000) {
+    const t0 = Date.now();
+    while (agentLocked(t) && Date.now() - t0 < maxMs) await sleep(500);
+    return isLiveTerminal(t) && !agentLocked(t);
+  }
+  // "Take over": stop the other copy holding the session, then retry (R) in this tab.
+  async function takeOverChatSession(ws) {
+    const t = liveThreadAgent(ws) || ws, sid = t._chatSeg?.sessionId || threadSegments(ws).findLast(x => x.sessionId)?.sessionId;
+    const killed = sid && window.electronAPI?.releaseAgentSession ? await window.electronAPI.releaseAgentSession(sid, t.id).catch(() => 0) : 0;
+    if (!killed) zoomBadge('No other copy found here: close the conversation where it is open, then retry');
+    setTimeout(() => { if (agentLocked(t)) sendStdin(t.id, new TextEncoder().encode('r')); }, killed ? 600 : 0);
+  }
   // The process really running in the tab right now (the watcher's view can be 1.5s old).
   async function agentRunning(entry, h) {
     const name = String(await checkTerminalRunning(entry.id) || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
@@ -9153,6 +9447,7 @@
       await sleep(120);
       const txt = screenText(entry);
       if (TRUST_RE.test(txt)) return 'trust';
+      if (LOCK_RE.test(txt)) return 'lock';
       if (txt !== last) { last = txt; since = Date.now(); }
       else if (txt.trim() && Date.now() - since > 500) return 'ready';
     }
@@ -9175,6 +9470,10 @@
   }
   // Appended to the first message a new agent gets when the chat already has history
   // (the transcript reader strips it from the history again).
+  // T3 Code's side chat framing.
+  const SIDE_NOTE = ' <terminalvibe_context side="true">You are in a side chat beside the main thread. The main thread may still be running in the same folder. Answer my questions; do not continue or redo the main thread\'s task. Never mention this context.</terminalvibe_context>';
+  // "Bring back": the main thread gets the side chat's history with the next message sent there.
+  const _bringBackNote = file => ` <terminalvibe_context side-chat="${file}">I asked side questions in a side chat; its history is in that file. Read it only if my message depends on it. Never mention this context or the file.</terminalvibe_context>`;
   const _handoffNote = file => ` <terminalvibe_context history="${file}">Read the history only if my message depends on earlier work. Never mention this context or the file and never summarize it; reply only to my message.</terminalvibe_context>`;
   // Start the picked agent and type the message in. `replace`: the chat's running agent of the
   // same kind, started with other flags.
@@ -9229,6 +9528,9 @@
       : lastUsed?.harness === o.harness && !lastUsed.frozen ? lastUsed : null);
     const resumeSid = resumeSeg?.sessionId || null;
     const sid = resumeSid || (o.harness === 'claude' ? uuid() : null);
+    // A side chat's first session forks the main thread's: it starts with what the thread knows.
+    const side = ws.chat?.side, firstSide = !!side && !resumeSid && !segs.some(x => x.used);
+    const forkSid = firstSide && side.harness === o.harness ? side.sessionId : null;
     // A new session after earlier ones: hand it everything said so far.
     let handoff = null;
     if (!resumeSid && lastUsed && window.electronAPI?.threadHandoff) {
@@ -9254,15 +9556,16 @@
       if (launch.terminalOnly && findTermById(entry.id)?.term !== entry) return false;
       entry.term.reset(); // the agent draws on a clean screen (and readiness never reads the old one)
       const started = await createAgentTerminal({ id: entry.id, ...getSlotDimensions(entry), cwd, executable: found[h.bin],
-        argv: CHAT_AGENTS[o.harness].argv(o, sid, !!resumeSid), returnToShell: true, replaceIdle: true });
+        argv: CHAT_AGENTS[o.harness].argv(o, sid, !!resumeSid, forkSid), returnToShell: true, replaceIdle: true });
       if (!started) { zoomBadge(`Could not start ${h.name}`); return false; }
       entry.dead = false;
       entry.term.options.disableStdin = false;
       if (cwd) entry.cwd = cwd;
       entry.toolProvider = h.id;
       if (o.harness === 'claude') entry.claudeSessionId = sid;
-      entry._chatCfg = { harness: o.harness, model: o.model, effort: o.effort, access: o.access };
+      entry._chatCfg = { harness: o.harness, model: o.model, effort: o.effort, access: o.access, fast: o.fast, ultra: o.ultra };
       _tabAgent.set(entry.id, h.id); // the process watcher won't adopt it a second time
+      entry._agentSince = Date.now();
       syncTabAgentIcon(entry);
       ws.chat ||= { createdAt: Date.now() };
       ws.chat.agentTermId = entry.id;
@@ -9295,9 +9598,15 @@
         if (await agentRunning(entry, h)) await waitAgentReady(entry, 10000);
         setChatView(entry, false);
       }
+      if (agentLocked(entry)) {
+        if (!await waitUnlocked(entry)) { zoomBadge(`${h.name}: the conversation is still open in another app`); return false; }
+        await waitAgentReady(entry, 10000);
+      }
       // Never type the message into the shell left behind by an agent that quit.
       if (!isLiveTerminal(entry) || !await agentRunning(entry, h)) { zoomBadge(`${h.name} exited before the message was sent`); return false; }
-      return await sendToAgent(entry, handoff ? text + _handoffNote(handoff) : text);
+      entry._handoff = handoff;
+      entry._sideNote = firstSide;
+      return await sendToAgent(entry, text);
     } catch (err) { zoomBadge(err.message || `Could not start ${h.name}`); return false; }
     finally { _chatStarting.delete(ws.id); if (curChat() === ws) syncThreadPanel(true); }
   }
@@ -9365,6 +9674,8 @@
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
         + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
+      if (file.thread) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-cite-ref thr-thread-ref" tabindex="${tabIndex}" title="Thread: ${escHtml(file.name)}">`
+        + `<i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
       const label = file.cite ? file.cite.replace(/\s+/g, ' ').slice(0, 42) + (file.cite.replace(/\s+/g, ' ').length > 42 ? '…' : '') : file.name;
       const link = file.cite
         ? `<a href="#" class="thr-cite-ref" tabindex="${tabIndex}" title="${escHtml(file.cite)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(label)}</span></a>`
@@ -9375,20 +9686,42 @@
     if (surface === thrPage && document.activeElement === editor) restoreChatEditorSelection(editor, input);
   }
   function insertChatMention(file, input = thrInput, files = _chatFiles) {
-    const kind = file.cite ? 'Citation' : 'Image';
+    const kind = file.cite ? 'Citation' : file.thread ? 'Thread' : 'Image';
     const expression = new RegExp('\\[' + kind + ' (\\d+)\\]', 'g');
     const used = [...input.value.matchAll(expression)].map(m => +m[1]);
-    file.mention = `[${kind} ${Math.max(0, ...used, ...files.filter(f => !!f.cite === !!file.cite).map(f => +(f.mention?.match(/\d+/)?.[0] || 0))) + 1}]`;
+    file.mention = `[${kind} ${Math.max(0, ...used, ...files.filter(f => f.mention?.startsWith(`[${kind} `)).map(f => +(f.mention?.match(/\d+/)?.[0] || 0))) + 1}]`;
     const start = input.selectionStart, end = input.selectionEnd;
     const before = input.value.slice(0, start), after = input.value.slice(end);
     const insert = (before && !/\s$/.test(before) ? ' ' : '') + file.mention + (!after || !/^\s/.test(after) ? ' ' : '');
     input.setRangeText(insert, start, end, 'end');
   }
+  const THREAD_DRAG = 'application/x-terminalvibe-thread';
+  // A thread dropped on the composer: its history is written to a file (as for a handoff) and the
+  // message links it by title; the path rides in a trailing note the chat never shows.
+  async function addChatThreadRef(id) {
+    const src = findChatThread(id), cur = curChat();
+    if (!src || !cur) return;
+    if (threadKey(src) === threadKey(cur)) { zoomBadge('That is this thread'); return; }
+    if (_chatFiles.some(f => f.thread === threadKey(src))) return;
+    let path = null;
+    try { path = await window.electronAPI?.threadHandoff?.({ ...threadMeta(src), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); } catch {}
+    if (!path) { zoomBadge(window.electronAPI?.threadHandoff ? 'Could not write that thread\'s history' : 'Thread context needs the desktop app'); return; }
+    const ref = { thread: threadKey(src), name: src.chat?.title || src.label || 'Thread', path };
+    insertChatMention(ref); _chatFiles.push(ref);
+    renderChatFiles(); autosizeThreadInput();
+    thrInput.focus();
+  }
   function chatMessageText(typed, files) {
-    const quoted = [], trailing = [];
+    const quoted = [], trailing = [], notes = [];
     let body = typed;
     for (const file of files) {
       if (file.at) continue; // @path stays in the text as typed
+      if (file.thread) {
+        const title = `“${file.name}”`;
+        if (file.mention && body.includes(file.mention)) body = body.split(file.mention).join(title); else trailing.push(title);
+        notes.push(` <terminalvibe_context thread="${file.path}">${title} is another chat thread; its full history is in that file. Read it for the context of my message. Never mention this context or the file.</terminalvibe_context>`);
+        continue;
+      }
       if (file.cite) {
         const quote = file.cite.split('\n').map(line => '> ' + line).join('\n');
         if (file.mention && body.includes(file.mention)) body = body.split(file.mention).join('\n' + quote + '\n');
@@ -9398,13 +9731,13 @@
         else trailing.push(shellQuote(file.path));
       }
     }
-    return [...quoted, [body, trailing.join(' ')].filter(Boolean).join(' ')].filter(Boolean).join('\n\n');
+    return [...quoted, [body, trailing.join(' ')].filter(Boolean).join(' ')].filter(Boolean).join('\n\n') + notes.join('');
   }
   function renderChatFiles(files = _chatFiles, surface = thrPage) {
     const thrFiles = threadPart(surface, 'attachments');
-    thrFiles.hidden = !files.some(f => !f.cite && !f.at);
+    thrFiles.hidden = !files.some(f => !f.cite && !f.at && !f.thread);
     thrFiles.innerHTML = files.map((f, i) => {
-      if (f.cite || f.at) return '';
+      if (f.cite || f.at || f.thread) return '';
       const preview = f.image && f.preview;
       return `<span class="thr-file${f.cite ? ' cite' : preview ? ' image' : ''}" title="${escHtml(f.cite || f.path)}">`
         + (f.cite ? `<i class="ph ph-quotes" aria-hidden="true"></i><button type="button" class="thr-cite-link" data-i="${i}" aria-label="View citation">${escHtml(f.cite.replace(/\s+/g, ' '))}</button>`
@@ -9474,6 +9807,7 @@
     e.preventDefault();
     const file = _chatFiles.find(f => f.mention === reference.dataset.mention);
     if (file?.cite) jumpToCitation(file);
+    else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
     else if (file && !file.at) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name }, '', file.preview);
   });
   {
@@ -9488,7 +9822,7 @@
         thrInput.value = chatEditorText(editor);
         rememberChatEditorSelection(editor);
         const count = _chatFiles.length;
-        _chatFiles = _chatFiles.filter(file => !(file.cite || file.at) || !file.mention || thrInput.value.includes(file.mention));
+        _chatFiles = _chatFiles.filter(file => !(file.cite || file.at || file.thread) || !file.mention || thrInput.value.includes(file.mention));
         editor._draftValue = thrInput.value;
         if (!thrInput.value) { editor.replaceChildren(); restoreChatEditorSelection(editor); }
         if (_chatFiles.length !== count) renderChatFiles();
@@ -9632,14 +9966,35 @@
     }
   }
   const thrComposer = thrPage.querySelector('#sbr-thread-composer');
-  thrComposer?.addEventListener('dragover', e => { if (isFileDrag(e)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; thrComposer.classList.add('drop'); } });
+  thrComposer?.addEventListener('dragover', e => { if (isFileDrag(e) || e.dataTransfer.types.includes(THREAD_DRAG)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; thrComposer.classList.add('drop'); } });
   thrComposer?.addEventListener('dragleave', e => { if (!thrComposer.contains(e.relatedTarget)) thrComposer.classList.remove('drop'); });
   thrComposer?.addEventListener('drop', e => {
     thrComposer.classList.remove('drop');
+    const threadId = e.dataTransfer.getData(THREAD_DRAG);
+    if (threadId) { e.preventDefault(); e.stopPropagation(); void addChatThreadRef(threadId); return; }
     if (!isFileDrag(e)) return;
     e.preventDefault(); e.stopPropagation();
     addChatFiles([...e.dataTransfer.files]);
   });
+  // ── Chat zoom: Ctrl+wheel over a chat scales its messages and composer (70–160%, remembered).
+  // Caught before the pane's own Ctrl+wheel, which would resize the terminal under the chat. ──
+  let _chatZoom = 1;
+  try { _chatZoom = Math.max(0.7, Math.min(1.6, +localStorage.getItem('tv-chat-zoom') || 1)); } catch {}
+  document.documentElement.style.setProperty('--thr-zoom', String(_chatZoom));
+  document.addEventListener('wheel', e => {
+    if (!e.ctrlKey || !e.deltaY) return;
+    const page = e.target.closest?.('#sbr-thread, .thr-snapshot');
+    if (!page) return;
+    e.preventDefault(); e.stopPropagation();
+    const next = Math.round(Math.max(0.7, Math.min(1.6, _chatZoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1))) * 100) / 100;
+    if (next === _chatZoom) return;
+    const flow = page.querySelector('.thr-flow'), atBottom = flow && flow.scrollHeight - flow.scrollTop - flow.clientHeight < 48;
+    _chatZoom = next;
+    document.documentElement.style.setProperty('--thr-zoom', String(_chatZoom));
+    try { localStorage.setItem('tv-chat-zoom', String(_chatZoom)); } catch {}
+    if (atBottom) flow.scrollTop = flow.scrollHeight; // keep the latest message in view
+    zoomBadge(`Chat ${Math.round(_chatZoom * 100)}%`);
+  }, { capture: true, passive: false });
   // ── Cite: select text in the chat, a "Cite" button appears; it adds the passage to the next message ──
   let _citationFlash = null;
   function captureCitationSource(range, flow) {
@@ -9714,7 +10069,6 @@
     for (const node of [range.startContainer, range.endContainer]) {
       for (let el = node.parentElement; el && el !== flow; el = el.parentElement) {
         if (el.tagName === 'DETAILS') el.open = true;
-        if (el.matches('.thr-msg.long')) { el.classList.add('open'); const more = el.querySelector('.thr-more'); if (more) more.textContent = 'Show less'; }
       }
     }
     clearCitationFlash();
@@ -9849,6 +10203,8 @@
     const text = chatMessageText(typed, files);
     if (!ws || !text) return;
     ws.chat ||= { createdAt: Date.now() };
+    const sideAsk = /^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(typed);
+    if (sideAsk) { clearChatDraft(ws); void openSideChat(ws, (sideAsk[1] || '').trim(), files); return; }
     const message = { id: uuid(), text, typed, files, after: _turns.get(ws.id)?.sentAt || Date.now() }, working = !!chatWorking(ws);
     if ((working && _chatCtrl) || _chatStarting.has(ws.id) || _chatSending.has(ws.id)) {
       (ws.chat.queuedMessages ||= []).push(message);
@@ -9894,9 +10250,12 @@
       if (t && !await agentRunning(t, harnessOf(_tabAgent.get(t.id)))) { _tabAgent.set(t.id, null); t = liveThreadAgent(ws); }
       const o = chatOpts(ws), cfg = t?._chatCfg;
       // Steering always targets the current agent; changed model picks apply to the next turn.
-      const same = t && (steer || (_tabAgent.get(t.id) === o.harness && (!cfg || ['model', 'effort', 'access'].every(k => cfg[k] === o[k]))));
-      if (same) { if (!await sendToAgent(t, text, steer)) throw Error('The agent closed before the message was sent'); }
-      else if (!await startChatAgent(ws, ws, text, cfg && cfg.harness === o.harness ? t : null)) throw Error('Could not start the agent');
+      const same = t && (steer || (_tabAgent.get(t.id) === o.harness && (!cfg || (['model', 'effort', 'access'].every(k => cfg[k] === o[k]) && ['fast', 'ultra'].every(k => !!cfg[k] === !!o[k])))));
+      if (same && agentLocked(t) && !await waitUnlocked(t)) throw Error('The conversation is still open in another app');
+      const back = ws.chat.bringBack && !/^\s*\//.test(text) ? _bringBackNote(ws.chat.bringBack) : '';
+      if (same) { if (!await sendToAgent(t, text + back, steer)) throw Error('The agent closed before the message was sent'); }
+      else if (!await startChatAgent(ws, ws, text + back, cfg && cfg.harness === o.harness ? t : null)) throw Error('Could not start the agent');
+      if (back) { delete ws.chat.bringBack; saveState(); }
       if (curChat() === ws) syncThreadComposer(ws);
       for (const ms of [400, 1200]) setTimeout(() => { if (curChat() === ws) refreshThreadFlow(ws); }, ms);
       return true;
@@ -10022,8 +10381,15 @@
   // A thread shows once it has messages (or one is on its way); before that only as a draft, if text is typed.
   function threadHasMessages(t) { return !!t.chat?.title || !!t.chat?.stopped?.length || threadSegments(t).some(s => s.used) || _pendingMsgs.has(t.id) || !!chatWorking(t); }
   function threadDraft(t) { return threadHasMessages(t) ? '' : (t.chat?.draft || '').trim(); }
-  const chatThreads = () => [...workspaces.flatMap(ws => getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.chat)), ...closedThreads]
+  const allChatTabs = () => [...workspaces.flatMap(ws => getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.chat)), ...closedThreads];
+  // Side chats live inside their thread (its chat lists them), never as threads of their own.
+  const chatThreads = () => allChatTabs().filter(t => !t.chat?.side)
     .filter(t => threadHasMessages(t) || (t._closed && threadDraft(t))); // a draft shows once its tab is closed
+  // A thread's id that survives closing and reopening its tab.
+  const threadKey = t => t.chat?.storeId || t.id;
+  const findThreadByKey = key => key && allChatTabs().find(t => threadKey(t) === key);
+  const sideChatsOf = t => allChatTabs().filter(x => x.chat?.side?.parentId === threadKey(t) && (threadHasMessages(x) || _chatStarting.has(x.id)))
+    .sort((a, b) => (a.chat.createdAt || 0) - (b.chat.createdAt || 0));
   // `w` is a Chat tab.
   function threadInfo(w) {
     const segs = threadSegments(w), last = segs[segs.length - 1], h = harnessOf(last?.harness);
@@ -10032,18 +10398,22 @@
       _gitBranch.set(cwd, null);
       window.electronAPI.gitBranch(cwd).then(b => { _gitBranch.set(cwd, b || null); renderThreadsSidebar(); }, () => {});
     }
-    const model = last?.model && last.model !== 'default' ? modelName({ harness: last.harness, model: last.model }, false) : h?.name || '';
+    // "Claude Haiku · Low": a session's model and effort (the agent's name when it ran its default).
+    const modelLabel = seg => [seg?.model && seg.model !== 'default' ? modelName({ harness: seg.harness, model: seg.model }, false) : harnessOf(seg?.harness)?.name || '',
+      seg?.effort && seg.effort !== 'default' ? EFFORT_NAMES[seg.effort] || seg.effort : ''].filter(Boolean).join(' · ');
     const used = [...new Set([...segs.filter(x => x.used).map(x => x.harness), ...(!w._closed && _tabAgent.get(w.id) ? [_tabAgent.get(w.id)] : [])])];
     const hs = (used.length ? used : last ? [last.harness] : []).map(harnessOf).filter(Boolean);
+    // One per agent the thread used, with its latest session's model (the card shows the same agents).
+    const models = hs.map(x => ({ h: x, text: modelLabel(segs.findLast(sg => sg.harness === x.id)) || x.name }));
     return { w, ws: wsOf(w) || findWs(w.workspaceId), h, hs, cwd, folder: cwd.split(/[\\/]/).filter(Boolean).pop() || 'No folder', branch: _gitBranch.get(cwd) || '',
       draft: threadDraft(w), title: w.chat.title || threadDraft(w).split('\n')[0].slice(0, 80) || w.label, updated: w.chat.updatedAt || last?.since || w.chat.createdAt || 0, work: chatWorking(w),
-      model: [model, last?.effort && last.effort !== 'default' ? EFFORT_NAMES[last.effort] || last.effort : ''].filter(Boolean).join(' · ') };
+      model: modelLabel(last), models, openIn: w._closed ? null : wsOf(w) };
   }
   function renderThreadsSidebar() {
     if (!tsOpen) return;
     const q = tsSearch.value.trim().toLowerCase();
     const all = chatThreads().map(threadInfo)
-      .filter(x => !q || `${x.title} ${x.folder} ${x.branch} ${x.ws?.label || ''}`.toLowerCase().includes(q))
+      .filter(x => !q || `${x.title} ${x.folder} ${x.branch} ${x.openIn?.label || ''}`.toLowerCase().includes(q))
       .sort((a, b) => b.updated - a.updated);
     const card = x => {
       if (x.draft) return `<button type="button" role="listitem" class="ts-card draft" data-tab="${x.w.id}" data-tip="Draft · ${escHtml(x.cwd || 'No folder')}">`
@@ -10052,9 +10422,9 @@
       const status = x.work
         ? `<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>${x.work.wait ? 'Waiting' : `Working ${fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))}`}</span>`
         : '<span class="ts-status"><i class="ph ph-check" aria-hidden="true"></i>Settled</span>';
-      const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No folder' }, { icon: 'ph-squares-four', text: x.ws?.label || '' },
-        ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...(x.h ? [{ proc: x.h.bin, text: x.model }] : [])];
-      return `<button type="button" role="listitem" class="ts-card" data-tab="${x.w.id}" data-tip="${escHtml(x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
+      const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No folder' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
+        ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...x.models.map(m => ({ proc: m.h.bin, text: m.text }))];
+      return `<button type="button" role="listitem" class="ts-card" draggable="true" data-tab="${x.w.id}" data-tip="${escHtml(x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
         + `<span class="ts-row"><span class="ts-folder"><i class="ph ph-folder" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span>`
         + `<span class="ts-time">${ago(x.updated)}</span>${status}</span>`
         + `<span class="ts-title">${escHtml(x.title)}</span>`
@@ -10075,6 +10445,21 @@
     if (head) { const id = head.parentElement.dataset.sec; tsCollapsed.has(id) ? tsCollapsed.delete(id) : tsCollapsed.add(id); renderThreadsSidebar(); return; }
     const c = e.target.closest('.ts-card'), tab = c && findChatThread(c.dataset.tab);
     if (tab) openChatTab(tab);
+  });
+  // Drag a thread into a chat's composer: it goes in as a link, its history the message's context.
+  tsList.addEventListener('dragstart', e => {
+    const c = e.target.closest?.('.ts-card:not(.draft)');
+    if (!c) return;
+    e.dataTransfer.setData(THREAD_DRAG, c.dataset.tab);
+    e.dataTransfer.effectAllowed = 'copy';
+    // The drag preview: a small link-like chip (the card's own snapshot showed square dark corners).
+    const ghost = document.createElement('div');
+    ghost.className = 'ts-drag-ghost';
+    ghost.innerHTML = `<span class="ts-drag-chip"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(c.querySelector('.ts-title')?.textContent || 'Thread')}</span></span>`;
+    document.body.appendChild(ghost);
+    // The chip sits up and to the right of the pointer (transparent room in the image), clear of the drop spot.
+    e.dataTransfer.setDragImage(ghost, 0, ghost.offsetHeight);
+    setTimeout(() => ghost.remove());
   });
   tsList.addEventListener('contextmenu', e => {
     const c = e.target.closest('.ts-card');
@@ -10204,6 +10589,9 @@
     }
     if (surface === thrPage ? curChat() !== ws : !surface.isConnected || surface.parentElement !== ws.el) return;
     if (segs[segs.length - 1]?.harness === 'codex' && hist[hist.length - 1]?.turnState) ws._chatTurnState = hist[hist.length - 1].turnState;
+    // A side chat's forked session starts with a copy of the thread's history: like T3 Code, it shows
+    // only what was said in the side chat itself (the agent still has the rest).
+    if (ws.chat?.side && ws.chat.createdAt) for (const h of hist) h.items = h.items.filter(m => !m.ts || Date.parse(m.ts) >= ws.chat.createdAt - 2000);
     // The chat's title (first prompt) and last activity, for its tab and the threads sidebar.
     if (t) {
       const all = hist.flatMap(h => h.items);
@@ -10226,7 +10614,8 @@
     });
     // A sent message is in the transcript: the user message at or after it was sent, starting with its text.
     const inTranscript = (text, at) => {
-      const head = text.replace(/\s+/g, ' ').slice(0, 60);
+      // (Hidden notes, e.g. a dropped thread's, never reach the transcript's text.)
+      const head = text.replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
       return hist.flatMap(h => h.items).find(m => m.role === 'user' && !m.stopped && (Date.parse(m.ts) || Infinity) >= at - 5000
         && String(m.text || '').replace(/\s+/g, ' ').includes(head));
     };
@@ -10298,21 +10687,19 @@
           + '</div></details>';
       };
       const msgHtml = (m, key, showActions = true) => {
-        const long = m.text.length > 700 || m.text.split('\n').length > 14;
-        const more = long ? `<button type="button" class="thr-more">${open.has(key) ? 'Show less' : 'Show more'}</button>` : '';
-        const cls = `thr-msg ${m.role}${long ? ' long' : ''}${open.has(key) ? ' open' : ''}`;
+        const cls = `thr-msg ${m.role}`;
         texts.set(key, m.text);
         // Copy + time under the message, shown on hover.
         const actions = showActions ? `<div class="thr-actions"><button type="button" class="thr-copy" aria-label="Copy message"><i class="ph ph-copy" aria-hidden="true"></i></button>`
           + `<span class="thr-time">${clockTime(m.ts)}</span></div>` : '';
-        const user = m.role === 'user' ? userTextHtml(m.text) : null;
+        const user = m.role === 'user' ? userTextHtml(m.text, m.threads) : null;
         const shown = user ? [...new Set([...(m.images || []), ...user.paths])] : m.images || [];
         const imgs = shown.length ? `<div class="thr-images">${shown.map(p => `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(p)}" alt="Pasted image">`
           + '<div class="thr-img-actions">'
           + '<button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></div></div>').join('')}</div>` : '';
         return m.role === 'user'
-          ? `<div class="${cls}" data-key="${key}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : t?.steered?.includes(m.ts) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div>${more}</div>` : ''}${actions}</div>`
-          : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${more}${actions}</div>`;
+          ? `<div class="${cls}" data-key="${key}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : t?.steered?.includes(m.ts) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
+          : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${actions}</div>`;
       };
       // The agent's thinking: "Thought" with a one-line peek, opening to the whole text.
       const thoughtHtml = (m, key) => `<details class="thr-thought" data-key="${key}"${open.has(key) ? ' open' : ''}><summary><i class="ph ph-brain" aria-hidden="true"></i>`
@@ -10425,10 +10812,6 @@
       const openAll = files.some(d => !d.open);
       files.forEach(d => { d.open = openAll; });
     }));
-    flow.querySelectorAll('.thr-more').forEach(b => b.addEventListener('click', () => {
-      const msg = b.closest('.thr-msg');
-      b.textContent = msg.classList.toggle('open') ? 'Show less' : 'Show more';
-    }));
     if (!flow.dataset.seen && ws._scrollState && !ws._scrollState.bottom) { flow.scrollTop = ws._scrollState.top; flow.dataset.seen = '1'; } // back where it was
     else { flow.scrollTop = atBottom || !flow.dataset.seen ? flow.scrollHeight : scrollTop; flow.dataset.seen = '1'; }
   }
@@ -10441,7 +10824,7 @@
     const flow = thrPage.querySelector('#sbr-thread-flow'), q = thrFind.q.toLowerCase(), ranges = [];
     if (q && flow) {
       const walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT, { acceptNode: n =>
-        n.parentElement?.closest('.thr-actions, .thr-more, .thr-tools-time, .thr-seg-time, .thr-img-actions') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+        n.parentElement?.closest('.thr-actions, .thr-tools-time, .thr-seg-time, .thr-img-actions') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
       for (let n; (n = walker.nextNode());) {
         const text = n.data.toLowerCase();
         for (let at = text.indexOf(q); at !== -1; at = text.indexOf(q, at + q.length)) {
@@ -10461,10 +10844,8 @@
       if (cur) CSS.highlights.set('thr-find-current', new Highlight(cur)); else CSS.highlights.delete('thr-find-current');
     }
     if (!scroll || !cur) return;
-    // Reveal a match hidden in a folded tool group or a collapsed long message, then center it.
+    // Reveal a match hidden in a folded tool group, then center it.
     for (let d = cur.startContainer.parentElement?.closest('details:not([open])'); d; d = d.parentElement?.closest('details:not([open])')) d.open = true;
-    const long = cur.startContainer.parentElement?.closest('.thr-msg.long:not(.open)');
-    if (long) { long.classList.add('open'); const more = long.querySelector('.thr-more'); if (more) more.textContent = 'Show less'; }
     const flow = thrPage.querySelector('#sbr-thread-flow'), fr = flow.getBoundingClientRect(), rr = cur.getBoundingClientRect();
     flow.scrollTop += rr.top - fr.top - fr.height / 2;
   }
@@ -11405,22 +11786,15 @@
     if (newSize === active._customFontSize) return;
     active._customFontSize = newSize;
 
-    // Use requestAnimationFrame for visual update to avoid layout thrashing
-    if (active._zoomRaf) cancelAnimationFrame(active._zoomRaf);
-    active._zoomRaf = requestAnimationFrame(() => {
-      active._zoomRaf = null;
-      if (findTermById(active.id)?.term !== active) return;
-      active.term.options.fontSize = active._customFontSize;
-      zoomBadge(active._customFontSize + 'px');
-    });
-
-    // Debounce the heavy FitAddon grid recalculation and backend PTY resize communication
-    // Prevents sending 60 resize payloads per second which freezes the app
-    if (active._zoomFitTimeout) clearTimeout(active._zoomFitTimeout);
-    active._zoomFitTimeout = setTimeout(() => {
-      active._zoomFitTimeout = null;
-      if (findTermById(active.id)?.term === active) fitTerm(active, true);
-    }, 150);
+    // Font size and the matching grid change right here, in the wheel event, never in a rAF callback:
+    // the renderer's canvas resize wipes it and its repaint is a requestAnimationFrame, which from inside
+    // a rAF callback lands a frame late — one blank frame per step (the flicker). From an event, the
+    // repaint runs in the coming frame, before it is painted.
+    active.term.options.fontSize = newSize;
+    // fitTerm tells the PTY shortly after, so a TUI redraws over xterm's reflow of its old
+    // layout quickly; writePtyData paints that redraw in one frame.
+    fitTerm(active);
+    zoomBadge(newSize + 'px');
 
   }, { capture: true, passive: false });
 

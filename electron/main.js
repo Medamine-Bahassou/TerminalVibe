@@ -1127,10 +1127,17 @@ ipcMain.handle('chat:models', () => {
     return { codex: (Array.isArray(d.models) ? d.models : []).filter(x => x && x.slug && x.visibility === 'list').map(x => ({
       id: String(x.slug), name: String(x.display_name || x.slug),
       efforts: (x.supported_reasoning_levels || []).map(l => String(l.effort)).filter(e => /^[a-z]+$/.test(e)),
-      defaultEffort: String(x.default_reasoning_level || '') })) };
+      defaultEffort: String(x.default_reasoning_level || ''),
+      // Its "Fast" service tier (e.g. priority), passed as -c service_tier="…" when the chat picks Fast.
+      fastTier: [String((x.service_tiers || [])[0]?.id || '')].find(t => /^[\w-]+$/.test(t)) || null })) };
   } catch { return { codex: [] }; }
 });
 ipcMain.handle('threads:agents', (_e, names) => ({ found: require('./threads').detectAgents(names, terminalEnv()) }));
+// The agents' plan usage (status bar): asked through each installed CLI with its own login.
+ipcMain.handle('usage:limits', (_e, fresh) => {
+  const env = terminalEnv();
+  return require('./usage-limits').usageLimits(require('./threads').detectAgents(['claude', 'codex'], env), env, fresh === true);
+});
 ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
 ipcMain.handle('threads:fork', (_e, query) => require('./threads').forkThread(query));
@@ -1325,6 +1332,22 @@ ipcMain.on('terminal:close', (_e, id) => {
 });
 // Is this process still alive? Instant, unlike the cached Windows process table.
 ipcMain.handle('process:alive', (_e, pid) => { try { return Number.isInteger(pid) && pid > 1 && process.kill(pid, 0); } catch (err) { return err.code === 'EPERM'; } });
+// Chat "Take over": stop other agent processes resuming this session (an orphan from an earlier run
+// holds Codex's conversation lock), never the requesting tab's own process tree. Not on Windows (no ps).
+ipcMain.handle('agent:release-session', (_e, sessionId, tabId) => new Promise(resolve => {
+  if (process.platform === 'win32' || !/^[\w-]{8,}$/.test(String(sessionId || ''))) return resolve(0);
+  require('child_process').execFile('ps', ['-eo', 'pid=,ppid=,args='], { timeout: 4000 }, (err, out) => {
+    if (err) return resolve(0);
+    const procs = out.split('\n').map(l => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean).map(m => ({ pid: +m[1], ppid: +m[2], args: m[3] }));
+    const parent = new Map(procs.map(p => [p.pid, p.ppid])), own = ptys.get(tabId)?.pid;
+    if (!own) return resolve(0);
+    const inOwnTree = pid => { for (let p = pid, i = 0; p > 1 && i < 64; p = parent.get(p), i++) if (p === own) return true; return false; };
+    const holds = new RegExp(`(^|\\s)(resume|--resume|--session-id)\\s+${sessionId}(\\s|$)`);
+    let killed = 0;
+    for (const p of procs) if (holds.test(p.args) && !inOwnTree(p.pid)) { try { process.kill(p.pid, 'SIGTERM'); killed++; } catch {} }
+    resolve(killed);
+  });
+}));
 // Chat input suggestions: the chat folder's files/folders (@) and the agent's slash commands (/).
 ipcMain.handle('chat:files', (_e, cwd) => require('./chat-complete').listFiles(cwd));
 ipcMain.handle('chat:commands', (_e, harness, cwd) => require('./chat-complete').listCommands(harness, cwd));

@@ -117,6 +117,7 @@
                 d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
             </svg>
           </button>
+          <button class="sa-btn" id="btn-usage" title="Usage limits" aria-label="Usage limits"><i class="ph ph-chart-bar" aria-hidden="true"></i></button>
         </div>
       </div>
     </nav>
@@ -154,6 +155,7 @@
         <button type="button" class="ts-icon-btn" id="ts-new" title="New thread" aria-label="New thread"><i class="ph ph-note-pencil"></i></button>
       </div>
       <div class="ts-list" id="ts-list" role="list"></div>
+      <button type="button" class="ts-usage" id="ts-usage" title="Usage limits" hidden></button>
     </aside>
   </div>
 
@@ -172,6 +174,7 @@
     </div>
     <div class="thr-composer-wrap">
       <div class="thr-new-head" id="sbr-thread-new-head">What should we work on?</div>
+      <div class="thr-sides" id="sbr-thread-sides" role="navigation" aria-label="Side chats" hidden></div>
       <form class="thr-composer" id="sbr-thread-composer" autocomplete="off">
         <div class="thr-complete" id="sbr-thread-complete" role="listbox" aria-label="Suggestions" hidden></div>
         <div class="thr-attachments" id="sbr-thread-attachments" aria-label="Attached files" hidden></div>
@@ -189,6 +192,7 @@
       <div class="thr-composer-foot">
         <button type="button" class="thr-foot-item thr-cwd" id="sbr-thread-cwd" aria-haspopup="menu"></button>
         <span class="thr-foot-item thr-foot-branch" id="sbr-thread-branch" hidden></span>
+        <button type="button" class="thr-foot-item thr-bring-back" id="sbr-thread-bringback" hidden><i class="ph ph-arrow-bend-up-left" aria-hidden="true"></i><span>Bring back</span></button>
       </div>
     </div>
   </div>

@@ -34,6 +34,11 @@ const rows = raw => raw.split('\n').map(l => { try { return JSON.parse(l); } cat
 // TerminalVibe's handoff context rides on the user's first message (XML tag; older builds used brackets).
 const stripNote = text => text.replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '')
   .replace(/\s*\[TerminalVibe (?:context|thread history): [^\]]*\]\s*$/, '').trim();
+// Threads dropped into a message as context: their notes name the history file and the “title” the text shows.
+const threadRefs = text => {
+  const threads = [...text.matchAll(/<terminalvibe_context thread="([^"]*)">“([^”]*)”/g)].map(m => ({ path: m[1], title: m[2] }));
+  return threads.length ? { threads } : {};
+};
 // The handoff message an older TerminalVibe typed in as its own prompt: not something the user said.
 const isOldHandoff = text => text.startsWith('Continue this conversation. The full history with the previous agent is in ');
 const clip = (s, n = 160) => { s = String(s ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
@@ -125,7 +130,7 @@ function parseClaude(list) {
     for (const b of blocks) {
       if (b?.type === 'text') {
         const text = String(b.text || '').trim();
-        if (text && !text.startsWith('<') && !(row.type === 'user' && isOldHandoff(text))) items.push({ role: row.type, text: row.type === 'user' ? stripNote(text) : text, ts: row.timestamp || null });
+        if (text && !text.startsWith('<') && !(row.type === 'user' && isOldHandoff(text))) items.push({ role: row.type, text: row.type === 'user' ? stripNote(text) : text, ...(row.type === 'user' ? threadRefs(text) : {}), ts: row.timestamp || null });
       } else if (b?.type === 'thinking' && row.type === 'assistant') {
         const text = String(b.thinking || '').trim();
         if (text) items.push({ role: 'thinking', text, ts: row.timestamp || null });
@@ -179,7 +184,7 @@ function parseCodex(list) {
     if (p.type === 'message' && ['user', 'assistant'].includes(p.role)) {
       const text = (p.content || []).map(c => typeof c?.text === 'string' ? c.text : '').filter(t => t && !t.startsWith('<')).join('\n').trim();
       const start = items.length;
-      if (text && !(p.role === 'user' && isOldHandoff(text))) items.push({ role: p.role, text: p.role === 'user' ? stripNote(text) : text, ts: r.timestamp || null });
+      if (text && !(p.role === 'user' && isOldHandoff(text))) items.push({ role: p.role, text: p.role === 'user' ? stripNote(text) : text, ...(p.role === 'user' ? threadRefs(text) : {}), ts: r.timestamp || null });
       if (p.role === 'user') addImages(items, start, r.timestamp || null, (p.content || [])
         .map(c => c?.type === 'input_image' && typeof c.image_url === 'string' && /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/.exec(c.image_url))
         .filter(Boolean).map(m => ({ mediaType: m[1], data: m[2] })));

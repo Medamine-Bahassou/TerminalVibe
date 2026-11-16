@@ -18,7 +18,12 @@ function terminalEnv(base = process.env) {
     'CLAUDE_PID', 'CLAUDE_AGENT_SDK_VERSION', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'T3CODE_THREAD_ID',
   ]) delete env[key];
   return { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor',
-    TERM_PROGRAM: 'TerminalVibe', TERM_PROGRAM_VERSION: require('../package.json').version };
+    TERM_PROGRAM: 'TerminalVibe', TERM_PROGRAM_VERSION: require('../package.json').version,
+    // Claude Code only wraps redraws in synchronized output (DEC 2026) for terminals it knows;
+    // the renderer honors it (writePtyData), so each redraw paints in one frame.
+    CLAUDE_CODE_FORCE_SYNC_OUTPUT: '1',
+    // Fullscreen (alt-screen) Claude Code by default; set CLAUDE_CODE_NO_FLICKER=0 to opt out.
+    CLAUDE_CODE_NO_FLICKER: env.CLAUDE_CODE_NO_FLICKER ?? '1' };
 }
 
 module.exports = { terminalEnv };

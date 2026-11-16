@@ -26,7 +26,7 @@ app.whenReady().then(async () => {
     const notices = [], zoomBadge = text => notices.push(text), rememberThreadScroll = () => {};
     const _chatFiles = [], renderChatFiles = () => {}, autosizeThreadInput = () => {};
     const insertChatMention = file => { file.mention = '[Citation ' + (_chatFiles.length + 1) + ']'; };
-    flow.innerHTML = '<div class="thr-worked">Worked for 2s</div><div class="thr-msg assistant" data-key="0:1"><div class="thr-msg-text">First <strong>shared words</strong> response.</div><div class="thr-actions">Copy 03:54 AM</div></div><div class="thr-seg">Antigravity CLI 03:54 AM</div><div class="thr-note">Started with full history</div><details class="thr-tools" open><summary>shell cat history</summary><pre class="thr-tool-detail">tool output only</pre></details><div class="thr-msg user" data-key="0:2"><div class="thr-msg-text">User prompt only</div></div><div style="height:600px"></div><details class="thr-turn" open><summary>Worked for 7s</summary><div class="thr-turn-steps"><div class="thr-msg assistant long" data-key="0:9"><div class="thr-msg-text">Second <strong>shared words</strong> target response.</div><button class="thr-more">Show more</button></div></div></details>';
+    flow.innerHTML = '<div class="thr-worked">Worked for 2s</div><div class="thr-msg assistant" data-key="0:1"><div class="thr-msg-text">First <strong>shared words</strong> response.</div><div class="thr-actions">Copy 03:54 AM</div></div><div class="thr-seg">Antigravity CLI 03:54 AM</div><div class="thr-note">Started with full history</div><details class="thr-tools" open><summary>shell cat history</summary><pre class="thr-tool-detail">tool output only</pre></details><div class="thr-msg user" data-key="0:2"><div class="thr-msg-text">User prompt only</div></div><div style="height:600px;flex:none"></div><details class="thr-turn" open><summary>Worked for 7s</summary><div class="thr-turn-steps"><div class="thr-msg assistant" data-key="0:9"><div class="thr-msg-text">Second <strong>shared words</strong> target response.</div></div></div></details>';
     ${citations}
     const select = range => { const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range); return selection; };
     const rangeFor = element => { const range = document.createRange(); range.selectNodeContents(element); return range; };
@@ -54,11 +54,10 @@ app.whenReady().then(async () => {
     // Replace all DOM nodes as the normal history poll does, and fold the source section.
     flow.innerHTML = flow.innerHTML;
     const turn = flow.querySelector('.thr-turn'); turn.open = false;
-    const message = flow.querySelector('[data-key="0:9"]'); message.classList.remove('open');
     flow.scrollTop = 0;
     const neighbor = document.getElementById('neighbor'); neighbor.scrollTop = 70;
     check(jumpToCitation(citation), 'Citation did not navigate after history redraw');
-    check(turn.open && message.classList.contains('open') && message.querySelector('.thr-more').textContent === 'Show less', 'Citation source stayed folded or truncated');
+    check(turn.open, 'Citation source stayed folded');
     const animated = document.body.classList.contains('ui-animations') && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (animated) {
       check(flow.scrollTop === 0, 'Citation jump skipped smooth scrolling');
