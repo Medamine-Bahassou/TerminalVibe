@@ -397,12 +397,15 @@ async function forkThread({ meta, seg, item, id, title } = {}, home = os.homedir
   seg = Number(seg); item = Number(item);
   if (!Number.isInteger(seg) || !Number.isInteger(item) || !merged[seg] || item < 0 || item >= merged[seg].items.length) throw new Error('Invalid fork point');
   await fs.promises.mkdir(path.join(dir, 'images'), { recursive: true });
+  // One copy per file: sessions share an image's file, and two copies at once to one target fail on Windows (EBUSY).
+  const copies = new Map();
   const copyImages = async it => {
     if (!it.images?.length) return it;
     const images = [];
     for (const src of it.images) {
       const dst = path.join(dir, 'images', path.basename(src));
-      try { await fs.promises.copyFile(src, dst); images.push(dst); } catch {} // a missing image drops its preview only
+      if (!copies.has(dst)) copies.set(dst, fs.promises.copyFile(src, dst).then(() => true, () => false));
+      if (await copies.get(dst)) images.push(dst); // a missing image drops its preview only
     }
     return { ...it, images };
   };
