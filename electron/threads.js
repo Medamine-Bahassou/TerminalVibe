@@ -142,10 +142,19 @@ function parseClaude(list) {
         if (text) items.push({ role: 'thinking', text, ts: row.timestamp || null });
       } else if (b?.type === 'tool_use') {
         const item = { role: 'tool', name: String(b.name || 'tool'), summary: toolSummary(b.input), detail: toolDetail(b.input), ts: row.timestamp || null };
+        // Claude's questions to the user: the chat shows each question and the answer given, not the tool's JSON.
+        if (b.name === 'AskUserQuestion' && Array.isArray(b.input?.questions)) item.qa = b.input.questions.map(q => ({ question: String(q?.question || q?.header || ''), answer: null }));
         tools.set(b.id, item); items.push(item);
       } else if (b?.type === 'tool_result' && tools.has(b.tool_use_id)) {
         const item = tools.get(b.tool_use_id);
         if (b.is_error) item.error = true;
+        if (item.qa) {
+          const answers = row.toolUseResult?.answers;
+          for (const x of item.qa) {
+            const v = answers && typeof answers === 'object' ? answers[x.question] : undefined;
+            if (v != null) x.answer = Array.isArray(v) ? v.join(', ') : String(v);
+          }
+        }
         // The edit's diff rides on the row that carries its result.
         const files = !b.is_error && claudeChanges(row.toolUseResult);
         if (files) item.files = files;
@@ -267,9 +276,28 @@ async function codexSegment({ sessionId, cwd, since, exclude = [] }, home) {
   return { sessionId, items: [] };
 }
 
+// Agents driven over the Agent Client Protocol (Antigravity CLI): their own history isn't readable, so the chat
+// records each session's messages and tool calls from the protocol (electron/chat-sdk.js) in
+// ~/.terminalvibe/acp/<session id>.jsonl, one chat item per line.
+const acpFile = (sessionId, home) => path.join(home, '.terminalvibe', 'acp', sessionId + '.jsonl');
+function parseAcp(list) {
+  return list.filter(r => ['user', 'assistant', 'thinking', 'tool'].includes(r.role)).map(r => r.role === 'user'
+    ? { role: 'user', text: stripNote(String(r.text || '')), ...threadRefs(String(r.text || '')), ts: r.ts || null }
+    : r.role === 'tool' ? { role: 'tool', name: String(r.name || 'tool'), summary: String(r.summary || ''), detail: String(r.detail || ''), ts: r.ts || null, ...(r.error ? { error: true } : {}) }
+    : { role: r.role, text: String(r.text || ''), ts: r.ts || null }).filter(r => r.role === 'tool' || r.text);
+}
+async function acpSegment({ sessionId }, home) {
+  // A session run in the terminal (no id recorded) has no history TerminalVibe can read.
+  if (!/^[\w-]{8,64}$/.test(sessionId || '')) return { items: [], unsupported: true };
+  const file = acpFile(sessionId, home);
+  if (!fs.existsSync(file)) return { sessionId, items: [] };
+  return { sessionId, items: await parseFile(file, parseAcp) };
+}
+
 function readSegment(seg = {}, home = os.homedir()) {
   if (seg.harness === 'claude') return claudeSegment(seg, home);
   if (seg.harness === 'codex') return codexSegment(seg, home);
+  if (seg.harness === 'antigravity') return acpSegment(seg, home);
   return Promise.resolve({ items: [], unsupported: true });
 }
 
@@ -426,4 +454,4 @@ async function deleteThread(id, home = os.homedir(), root = threadsRoot(home)) {
   return true;
 }
 
-module.exports = { detectAgents, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, parseClaude, parseCodex, fileChange };
+module.exports = { detectAgents, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, parseClaude, parseCodex, parseAcp, acpFile, fileChange };

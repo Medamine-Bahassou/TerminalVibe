@@ -123,6 +123,24 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   assert.strictEqual(env.CLAUDE_CODE_USE_BEDROCK, '1', 'user Claude settings stay');
   assert.strictEqual(env.PATH, '/keep');
 
+  // A question Claude asked (AskUserQuestion) keeps each question with the answer given.
+  const { parseClaude } = require('../electron/threads');
+  const q = 'What should notes.txt hold?';
+  const asked = parseClaude([
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'q1', name: 'AskUserQuestion', input: { questions: [{ question: q, header: 'Notes', options: [{ label: 'Tasks' }, { label: 'Ideas' }] }] } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'q1', content: 'The user answered' }] }, toolUseResult: { answers: { [q]: ['Tasks', 'Ideas'] } } },
+  ]);
+  assert.deepStrictEqual(asked[0].qa, [{ question: q, answer: 'Tasks, Ideas' }]);
+  const open = parseClaude([{ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'q2', name: 'AskUserQuestion', input: { questions: [{ question: q }] } }] } }]);
+  assert.deepStrictEqual(open[0].qa, [{ question: q, answer: null }], 'a question not answered yet has no answer');
+
+  // Antigravity (ACP) history: the transcript TerminalVibe records; the handoff note is hidden, empty text skipped.
+  const { parseAcp } = require('../electron/threads');
+  const acp = parseAcp([{ role: 'user', text: 'hi <terminalvibe_context history="x">n</terminalvibe_context>', ts: 't1' }, { role: 'thinking', text: '' },
+    { role: 'tool', name: 'run_command', summary: 'echo hi', detail: '{}', error: true }, { role: 'assistant', text: 'done' }, { role: 'bogus', text: 'x' }]);
+  assert.deepStrictEqual(acp.map(i => [i.role, i.text ?? i.summary]), [['user', 'hi'], ['tool', 'echo hi'], ['assistant', 'done']]);
+  assert.strictEqual(acp[1].error, true);
+
   fs.rmSync(home, { recursive: true, force: true });
   console.log('PASS: thread folders keep every agent session, survive deleted transcripts, hand off and delete');
 })().catch(err => { console.error(err); fs.rmSync(home, { recursive: true, force: true }); process.exit(1); });

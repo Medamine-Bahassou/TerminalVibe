@@ -92,9 +92,6 @@
     <button id="btn-servers" class="titlebar-btn no-drag" title="Running servers" aria-label="Running servers" aria-expanded="false" aria-controls="servers-dropdown">
       <i class="ph ph-hard-drives"></i>
     </button>
-    <button id="btn-thread-history" class="titlebar-btn no-drag" title="Open chat" aria-label="Open chat" hidden>
-      <i class="ph ph-list-star"></i>
-    </button>
     <button id="btn-threads" class="titlebar-btn no-drag" title="Threads" aria-label="Toggle threads sidebar" aria-expanded="false" aria-controls="threads-sidebar">
       <i class="ph ph-sidebar-simple" style="transform:scaleX(-1)"></i>
     </button>
@@ -174,6 +171,7 @@
     <div class="thr-composer-wrap">
       <div class="thr-new-head" id="sbr-thread-new-head">What should we work on?</div>
       <div class="thr-sides" id="sbr-thread-sides" role="navigation" aria-label="Side chats" hidden></div>
+      <div class="thr-ask" id="sbr-thread-ask" role="group" aria-label="The agent's question" hidden></div>
       <form class="thr-composer" id="sbr-thread-composer" autocomplete="off">
         <div class="thr-complete" id="sbr-thread-complete" role="listbox" aria-label="Suggestions" hidden></div>
         <div class="thr-attachments" id="sbr-thread-attachments" aria-label="Attached files" hidden></div>
@@ -387,6 +385,55 @@
                   <input type="text" id="set-custom-search-url" spellcheck="false" autocomplete="off"
                     placeholder="https://example.com/search?q=%s"
                     class="bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[260px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none">
+                </div>
+              </div>
+            </div>
+            <div class="settings-section-label mt-4 mb-1.5 ml-1">Threads</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Default agent</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">The agent a new thread
+                    starts with. It can still be changed in the thread's model picker</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-thread-harness" class="native-select-hidden">
+                    <option value="">Last used</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-thread-harness"></div>
+                </div>
+              </div>
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Default folder</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Where a new thread's
+                    agent works. No project gives each thread its own scratch folder</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-thread-folder" class="native-select-hidden">
+                    <option value="scratch">No project</option>
+                    <option value="workspace">Workspace folder</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-thread-folder"></div>
+                </div>
+              </div>
+              <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Title generator</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Writes a short title
+                    from a thread's first message. Off keeps the first line</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-thread-titles" class="native-select-hidden">
+                    <option value="agent">The thread's agent</option>
+                    <option value="claude">Claude Code (Haiku)</option>
+                    <option value="codex">Codex (small model)</option>
+                    <option value="off">Off</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-thread-titles"></div>
                 </div>
               </div>
             </div>

@@ -1197,7 +1197,6 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 @media (prefers-reduced-motion:reduce) { #sbr-thread :is(.thr-img-actions,.thr-img-actions button) { transition:none; } }
 
 /* ── Right sidebar: Tools and History titlebar buttons, one panel open at a time ── */
-#btn-thread-history[hidden] { display:none !important; }
 
 /* ── Tab bar menu: shell logos (same as Settings → Default shell) ── */
 body .ctx-item .ctx-shell-icon { display:block; width:15px; height:15px; fill:var(--muted-text); }
@@ -1918,3 +1917,81 @@ body #sidebar .ws-btn .ws-proc.ws-proc-agent .ws-proc-icon { color:var(--agent-c
 #sbr-thread .thr-status-line::after { margin-left:6px; }
 #sbr-thread .thr-status-line i { font-size:14px; color:var(--muted-text); }
 #sbr-thread .thr-status-title { font-weight:500; color:var(--muted-text); }
+
+/* ── Chat: a question the agent asks in its terminal (permission prompt), answered from the chat ── */
+/* Same tray as .thr-sides: attached to the composer's top edge, a header over one row per choice. */
+#sbr-thread .thr-ask { display:flex; flex-direction:column; gap:2px; width:calc(100% - 36px); max-width:752px; max-height:40vh; margin:0 auto; padding:6px 6px 6px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--border) transparent;
+  background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--border); border-bottom:0; border-radius:16px 16px 0 0 !important; font:400 13px var(--ui-font); color:var(--fg); }
+#sbr-thread .thr-ask[hidden] { display:none !important; }
+/* Under an open side chats tray, the two read as one tray. */
+#sbr-thread .thr-sides:not([hidden]):not(.collapsed) + .thr-ask { border-top:1px solid var(--ui-line); border-radius:0 !important; }
+#sbr-thread .thr-ask-q { display:flex; align-items:center; gap:8px; min-height:24px; padding:0 6px; font-weight:500; }
+#sbr-thread .thr-ask-q i { flex:none; font-size:15px; color:var(--muted-text); }
+#sbr-thread .thr-ask-detail { padding:0 6px 4px 29px; font:11.5px/1.5 var(--mono-font); color:var(--muted-text); overflow-wrap:anywhere; }
+#sbr-thread .thr-ask-opt { display:flex; align-items:center; gap:8px; flex-shrink:0; width:100%; min-height:30px; padding:4px 8px; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:500 12.5px var(--ui-font); text-align:left; cursor:pointer; transition:background-color 140ms, color 140ms, box-shadow 140ms; }
+#sbr-thread .thr-ask-opt:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-ask-label { flex:none; max-width:100%; }
+#sbr-thread .thr-ask-desc { min-width:0; font-weight:400; font-size:12px; color:var(--dim-text); }
+/* The free-text choice: an input in the row, same height as the others. */
+#sbr-thread .thr-ask-field { cursor:text; }
+#sbr-thread .thr-ask-field input { flex:1; min-width:0; height:24px; padding:0; background:transparent; border:0; outline:none; color:var(--fg); font:400 12.5px var(--ui-font); }
+#sbr-thread .thr-ask-field input::placeholder { color:var(--dim-text); }
+#sbr-thread .thr-ask-field:focus-within { background:var(--ui-hover); box-shadow:inset 0 0 0 1px var(--border); }
+/* Multi-select: a checkbox per choice (ticked from the agent's screen) and a primary Submit at the end. */
+#sbr-thread .thr-ask-box { flex:none; display:inline-grid; place-items:center; width:16px; height:16px; border:1px solid var(--border); border-radius:4px !important; color:transparent; font-size:11px; transition:background-color 140ms, border-color 140ms; }
+#sbr-thread .thr-ask-box.on { background:var(--accent); border-color:var(--accent); color:#0d1017; }
+#sbr-thread .thr-ask-opt[aria-checked="true"] { color:var(--fg); }
+#sbr-thread .thr-ask-submit { align-self:flex-end; display:inline-flex; align-items:center; gap:6px; flex-shrink:0; height:28px; margin:4px 2px 0; padding:0 12px; background:var(--accent); border:0; border-radius:6px !important; color:#0d1017; font:500 12.5px var(--ui-font); cursor:pointer; transition:background-color 140ms, box-shadow 140ms; }
+#sbr-thread .thr-ask-submit:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
+#sbr-thread .thr-ask-submit:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-ask-submit:disabled { opacity:.5; cursor:default; }
+#sbr-thread .thr-ask-opt:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-ask-opt:disabled { opacity:.5; cursor:default; }
+#sbr-thread .thr-ask-key { flex:none; min-width:18px; height:18px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--border); border-radius:4px !important; font:10.5px var(--mono-font); color:var(--dim-text); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread :is(.thr-ask-opt, .thr-ask-box, .thr-ask-submit) { transition:none; } }
+
+/* ── Tab agent logo: gray until the agent runs in the tab ── */
+.tg-tab .tg-tab-agent { transition: color 150ms; }
+.tg-tab .tg-tab-agent.idle { color: var(--dim-text) !important; }
+@media (prefers-reduced-motion: reduce) { .tg-tab .tg-tab-agent { transition: none; } }
+
+/* ── Chat: an agent's question (AskUserQuestion): a row like a thought, opening to the answer given ── */
+#sbr-thread .thr-qa { border-radius:8px !important; }
+#sbr-thread .thr-qa > summary { display:flex; align-items:center; gap:8px; min-height:30px; padding:0 8px; list-style:none; border-radius:8px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-qa > summary::-webkit-details-marker { display:none; }
+#sbr-thread .thr-qa > summary:hover { color:var(--fg); }
+#sbr-thread .thr-qa > summary:focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-qa > summary > i:first-child { font-size:15px; flex-shrink:0; }
+#sbr-thread .thr-qa-q { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sbr-thread .thr-qa[open] .thr-qa-q { white-space:normal; }
+#sbr-thread .thr-qa-caret { font-size:11px; color:var(--dim-text); flex-shrink:0; transition:transform 140ms; transform:rotate(-90deg); }
+#sbr-thread .thr-qa[open] .thr-qa-caret { transform:none; }
+#sbr-thread .thr-qa-a { display:flex; align-items:flex-start; gap:8px; padding:2px 8px 8px 31px; font-size:13px; line-height:1.6; color:var(--fg); overflow-wrap:anywhere; }
+#sbr-thread .thr-qa-a i { font-size:14px; margin-top:3px; color:var(--dim-text); flex-shrink:0; }
+#sbr-thread .thr-qa-a.none { color:var(--dim-text); font-size:12.5px; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread :is(.thr-qa > summary, .thr-qa-caret) { transition:none; } }
+
+/* ── Compact menus: context menus, tab-group dropdowns, pick menus and custom dropdowns ── */
+body .ctx-item, body .tg-dropdown-item,
+.tv-pick-menu .tv-pick-item,
+body .custom-dropdown-option, body #settings-modal .custom-dropdown-option {
+  min-height:28px; padding:4px 8px; gap:8px; font-size:12.5px; line-height:18px;
+}
+body .ctx-item i.ph,
+.tv-pick-menu .tv-pick-item i, .tv-pick-menu .tv-pick-item .ws-proc-icon { width:14px; height:14px; font-size:14px; }
+body .ctx-item .ctx-shell-icon, body .ctx-item .ctx-agent-icon .ws-proc-icon { width:14px; height:14px; font-size:14px; }
+body .ctx-item .ci-key { padding-left:12px; font-size:11px; }
+
+/* ── Threads sidebar usage gauges: slide up from the bottom edge when they appear ──
+   A CSS animation replays only when the row goes from hidden (display:none) to shown, not on the
+   once-a-minute redraw of its gauges (the row itself is kept, only its contents change). */
+@keyframes ts-usage-in { from { opacity:0; transform:translateY(100%); } to { opacity:1; transform:none; } }
+body.ui-animations #threads-sidebar .ts-usage:not([hidden]) { animation:ts-usage-in 180ms cubic-bezier(.2,.8,.2,1) both; }
+@media (prefers-reduced-motion: reduce) { body.ui-animations #threads-sidebar .ts-usage:not([hidden]) { animation:none; } }
+
+/* ── Chat: fork a thread from a reply (beside Copy in the reply's actions) ── */
+#sbr-thread .thr-fork { display:grid; place-items:center; width:24px; height:24px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--dim-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-fork:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-fork:focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); color:var(--fg); }
+#sbr-thread .thr-fork i { font-size:13px; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-fork { transition:none; } }

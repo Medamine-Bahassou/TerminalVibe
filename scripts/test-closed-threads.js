@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
-const functions = source.slice(source.indexOf('  function openChatTab('), source.indexOf('  // The titlebar chat button:'));
+const functions = source.slice(source.indexOf('  function openChatTab('), source.indexOf('  // A chat\'s tab is named after its first prompt.'));
 const remove = source.slice(source.indexOf('  function removeTerminal('), source.indexOf('  function applyTabColor('));
 let saved, disposed = 0, next = 0;
 const ws = { id: 'workspace', label: 'Project', cwd: '/tmp/project', layout: { id: 'group', terminals: [], activeTermId: 'original' }, activeTermId: 'original' };

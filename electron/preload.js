@@ -113,6 +113,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('terminal:data', l);
     return () => ipcRenderer.removeListener('terminal:data', l);
   },
+  // Chat tabs' structured agent sessions (electron/chat-sdk.js): Claude Code stream-json, Codex app-server.
+  chatSdkStart: (key, opts) => ipcRenderer.invoke('chat-sdk:start', key, opts),
+  chatSdkSend: (key, text, opts) => ipcRenderer.invoke('chat-sdk:send', key, text, opts),
+  chatSdkInterrupt: (key) => ipcRenderer.invoke('chat-sdk:interrupt', key),
+  chatSdkRespond: (key, id, answer) => ipcRenderer.invoke('chat-sdk:respond', key, id, answer),
+  chatSdkSetAccess: (key, access) => ipcRenderer.invoke('chat-sdk:set-access', key, access),
+  chatSdkStop: (key) => ipcRenderer.invoke('chat-sdk:stop', key),
+  chatSdkModels: (harness, bin) => ipcRenderer.invoke('chat-sdk:models', harness, bin),
+  onChatSdkEvent: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('chat-sdk:event', l);
+    return () => ipcRenderer.removeListener('chat-sdk:event', l);
+  },
   // A command or an agent (Claude Code / Codex) response finished in a terminal.
   onTerminalFinished: (cb) => {
     const l = (_e, d) => cb(d);

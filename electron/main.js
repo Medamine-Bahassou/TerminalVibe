@@ -1132,7 +1132,12 @@ ipcMain.handle('chat:models', () => {
       fastTier: [String((x.service_tiers || [])[0]?.id || '')].find(t => /^[\w-]+$/.test(t)) || null })) };
   } catch { return { codex: [] }; }
 });
-ipcMain.handle('threads:agents', (_e, names) => ({ found: require('./threads').detectAgents(names, terminalEnv()) }));
+// threadsDir: chat-started Claude Code gets it as --add-dir, so reading a handoff / side-chat / thread file never asks.
+ipcMain.handle('threads:agents', (_e, names) => {
+  const threadsDir = path.join(CONFIG_DIR, 'threads');
+  try { fs.mkdirSync(threadsDir, { recursive: true }); } catch {}
+  return { found: require('./threads').detectAgents(names, terminalEnv()), threadsDir };
+});
 // The agents' plan usage (status bar): asked through each installed CLI with its own login.
 ipcMain.handle('usage:limits', (_e, fresh) => {
   const env = terminalEnv();
@@ -1400,6 +1405,7 @@ ipcMain.on('terminal:attached', (_e, id) => {
 });
 
 ipcMain.on('terminal:close', (_e, id) => {
+  require('./chat-sdk').stop(id); // a Chat tab's agent session goes with its tab
   notifyBusy.delete(id); ptyIO.delete(id);
   const t = ptys.get(id);
   if (t) { try { t.kill(); } catch {} ptys.delete(id); }
@@ -1434,7 +1440,13 @@ ipcMain.handle('terminal:hasRunningProcess', (_e, id, fresh) => {
   const t = ptys.get(id);
   return t ? (fresh ? runningProcessInfoFresh(t.pid) : runningProcessInfo(t.pid)) : { running: false, name: null };
 });
+// Chat tabs' Claude Code / Codex sessions, driven through their structured protocols (chat-sdk.js).
+require('./chat-sdk').register(ipcMain, {
+  send: sendToRenderer, version: app.getVersion(), dataDir: CONFIG_DIR,
+  env: key => ({ ...terminalEnv(), TERMINALVIBE_PANE_ID: key, ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}) }),
+});
 ipcMain.on('terminal:kill-all', () => {
+  require('./chat-sdk').stopAll();
   notifyBusy.clear(); ptyIO.clear();
   for (const t of ptys.values()) { try { t.kill(); } catch {} }
   ptys.clear();

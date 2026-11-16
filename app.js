@@ -1723,6 +1723,9 @@
   let notifyOnCommandFinish = true; // notify when a command / agent response finishes
   let notificationSound = true;     // play sounds/notify.wav with those notifications
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
+  // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
+  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent' };
+  const loadThreadSettings = s => { if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s }; };
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
@@ -3029,6 +3032,7 @@
         notifyOnCommandFinish,
         notificationSound,
         terminalLinkTarget,
+        threadSettings,
         backgroundMode,
         globalBackgroundImage,
         backgroundOpacity,
@@ -3075,6 +3079,7 @@
       notifyOnCommandFinish,
       notificationSound,
       terminalLinkTarget,
+      threadSettings,
       backgroundMode,
       globalBackgroundImage,
       backgroundOpacity,
@@ -3158,6 +3163,7 @@
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
       if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
+      loadThreadSettings(state.threadSettings);
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -8400,6 +8406,7 @@
       }));
       for (const [i, { ws, t }] of tabs.entries()) {
         if (!isLiveTerminal(t)) continue;
+        if (t._sdk?.alive) { syncTabAgentIcon(t); continue; } // a structured session: its events say what runs there
         const h = THREAD_HARNESSES.find(x => x.bin === names[i]);
         // An agent the chat just launched may not be the terminal's foreground process yet: keep its logo.
         if (!h && t._agentSince && Date.now() - t._agentSince < 8000) continue;
@@ -8622,16 +8629,20 @@
     let turn = _turns.get(ws.id);
     const lockedBy = liveThreadAgent(ws) || ws;
     if (agentLocked(lockedBy)) return { label: `${harnessOf(_tabAgent.get(lockedBy.id))?.name || 'The agent'} has this conversation open in another app`, wait: true, lock: true, since: turn?.since || Date.now() };
+    // A question waiting in the agent's terminal shows in the chat, with its choices.
+    const ask = agentQuestion(liveThreadAgent(ws));
+    if (ask) return { ask, label: 'Waiting for your answer', wait: true, since: turn?.since || Date.now() };
     const starting = _chatStarting.get(ws.id);
     if (turn && starting) return { label: starting.text, wait: starting.wait, since: turn.since };
-    const t = liveThreadAgent(ws);
+    const t = liveThreadAgent(ws), sdk = t?._sdk?.alive ? t._sdk : null;
     const codex = t && _tabAgent.get(t.id) === 'codex', status = ws._chatTurnState;
-    const busy = !!t && (t._agentWorking || (codex && status?.status === 'working') || (!!turn && _tabAgent.get(t.id) !== 'claude' && Date.now() - (t._lastOut || 0) < 2000));
+    const busy = sdk ? sdk.busy : !!t && (t._agentWorking || (codex && status?.status === 'working') || (!!turn && _tabAgent.get(t.id) !== 'claude' && Date.now() - (t._lastOut || 0) < 2000));
     // A sent turn ends when the agent, seen working, is idle again (or, never seen working,
     // once the message is in the transcript).
     if (turn && busy) turn.sawBusy = true;
     // (A turn too quick for the 1s checks shows as Claude's title going idle after the message was typed in.)
-    const finished = codex ? status && status.status !== 'working' && status.at >= (turn?.sentAt || turn?.since || 0)
+    const finished = sdk ? (sdk.idleAt || 0) >= (turn?.sentAt || turn?.since || 0)
+      : codex ? status && status.status !== 'working' && status.at >= (turn?.sentAt || turn?.since || 0)
       : turn && (turn.sawBusy || (turn.sentAt && t?._idleAt > turn.sentAt + 300) || (!_pendingMsgs.has(ws.id) && Date.now() - turn.since > 1500));
     if (turn && !busy && finished) { _turns.delete(ws.id); turn = null; }
     if (!busy && !turn) return null;
@@ -8663,6 +8674,23 @@
   function syncWorking(ws, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow');
     const w = chatWorking(ws);
+    // The agent's question: a tray on the composer's top edge (like the side chats tray), one row per choice.
+    const askEl = threadPart(surface, 'ask');
+    if (askEl) {
+      const a = w?.ask, askHtml = a ? `<div class="thr-ask-q"><i class="ph ph-hand-pointing" aria-hidden="true"></i><span>${escHtml(a.question)}</span></div>`
+        + (a.detail.length ? `<div class="thr-ask-detail">${a.detail.map(escHtml).join('<br>')}</div>` : '')
+        + a.options.map((o, i) => o.submit
+          ? `<button type="button" class="thr-ask-submit" data-ask-i="${i}"><i class="ph ph-check" aria-hidden="true"></i><span>Submit</span></button>`
+          : o.input
+          ? `<label class="thr-ask-opt thr-ask-field"><span class="thr-ask-key">${o.key}</span><input type="text" data-ask-i="${i}" placeholder="Type something" aria-label="Your answer" spellcheck="false"></label>`
+          : `<button type="button" class="thr-ask-opt" data-ask-i="${i}"${o.checked !== undefined ? ` role="checkbox" aria-checked="${o.checked}"` : ''}>`
+            + (o.checked !== undefined ? `<span class="thr-ask-box${o.checked ? ' on' : ''}"><i class="ph ph-check" aria-hidden="true"></i></span>` : `<span class="thr-ask-key">${o.key}</span>`)
+            + `<span class="thr-ask-label">${escHtml(o.label)}</span>${o.desc ? `<span class="thr-ask-desc">${escHtml(o.desc)}</span>` : ''}</button>`).join('') : '';
+      // A redraw while typing an answer would wipe it: the tray keeps its field until the question changes.
+      const typing = askEl.contains(document.activeElement) && document.activeElement.tagName === 'INPUT' && askEl._q === a?.question;
+      askEl.hidden = !askHtml;
+      if (askEl._html !== askHtml && !typing) { askEl._html = askHtml; askEl._q = a?.question; askEl.innerHTML = askHtml; }
+    }
     let el = flow.querySelector('.thr-working');
     if (!w) { el?.remove(); renderChatQueue(ws, surface); return; }
     const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 48;
@@ -8692,7 +8720,8 @@
     if (activeWsId !== ws.id) activateWorkspace(ws.id);
     const tab = addTerminal(ws.id, groupId, { label: 'Chat', threadHistory: true });
     if (!tab) return;
-    tab.chat = { createdAt: Date.now() };
+    tab.chat = { createdAt: Date.now(), ...(threadSettings.folder !== 'workspace' ? { scratch: true } : {}) };
+    harness ||= CHAT_AGENTS[threadSettings.harness] ? threadSettings.harness : '';
     if (harness) setChatOpts(tab, { harness });
     _preferChat = tab;
     syncThreadPanel(true);
@@ -8749,7 +8778,7 @@
     rememberClosedThread(tab, ws);
     const saved = closedThreads[closedThreads.length - 1];
     if (saved?.chat === tab.chat) saved.id = uuid(); // the live tab keeps its id
-    tab.chat = { createdAt: Date.now(), storeId: uuid() };
+    tab.chat = { createdAt: Date.now(), storeId: uuid(), ...(tab.chat.scratch ? { scratch: true } : {}) }; // the old thread keeps its scratch folder
     tab._chatSeg = null; tab._scrollState = null; tab._open = null;
     _pendingMsgs.delete(tab.id); _turns.delete(tab.id);
     clearChatDraft(tab);
@@ -8769,12 +8798,35 @@
     const tab = newChatTab(ws, findGroupContainingTerm(ws.layout, parent.id)?.id, opts.harness);
     if (!tab) return;
     const cwd = seg?.cwd || chatCwd(parent); // Claude keeps sessions per folder: fork in the thread's
-    if (cwd) tab.chat.cwd = cwd;
+    if (cwd) { tab.chat.cwd = cwd; delete tab.chat.scratch; } // shares the thread's folder, never owns it
     tab.chat.side = { parentId: threadKey(parent), harness: seg?.harness || null, sessionId: seg?.sessionId || null };
     setChatOpts(tab, opts);
     setChatTabLabel(tab);
     const text = chatMessageText(question, files);
     if (text) await deliverChatMessage(tab, { id: uuid(), text, typed: question, files, after: Date.now() });
+  }
+  // Fork a thread from a reply: a new Chat tab beside it holding the history up to that reply. TerminalVibe owns the
+  // copy (frozen sessions in the fork's own thread folder, so deleting the parent never breaks it); the fork's first
+  // message starts a new session that gets that history as a handoff, with any agent.
+  async function forkChatAt(parent, seg, item) {
+    const api = window.electronAPI, ws = wsOf(parent) || activeWs();
+    if (!api?.threadFork || !ws || !parent?.chat || !Number.isInteger(seg) || !Number.isInteger(item)) return;
+    const id = uuid(), title = ('Fork: ' + (parent.chat.title || parent.label || 'Chat')).slice(0, 80);
+    let segments;
+    try { segments = await api.threadFork({ meta: threadMeta(parent), seg, item, id, title }); }
+    catch { zoomBadge('Could not fork this thread'); return; }
+    const opts = chatOpts(parent), cwd = chatCwd(parent);
+    const tab = newChatTab(ws, findGroupContainingTerm(ws.layout, parent.id)?.id, opts.harness);
+    if (!tab) return;
+    // The copied sessions count as said (so the first message hands them over), but are never resumed (frozen).
+    Object.assign(tab.chat, { storeId: id, title, segments: segments.map(s => ({ ...s, used: true })), forkOf: threadKey(parent) });
+    if (cwd) { tab.chat.cwd = tab.cwd = cwd; delete tab.chat.scratch; } // the parent's folder: shared, never owned
+    setChatOpts(tab, opts);
+    setChatTabLabel(tab);
+    saveState();
+    _flowSig = '';
+    syncThreadPanel(true);
+    renderThreadsSidebar();
   }
   async function bringBackSideChat(tab) {
     const parent = findThreadByKey(tab.chat?.side?.parentId);
@@ -8791,13 +8843,6 @@
   function findChatThread(id) {
     return findTermById(id)?.term || closedThreads.find(t => t.id === id);
   }
-  // The titlebar chat button: the workspace's most recent Chat tab, or a new one.
-  function openThreadHistory(ws, groupId) {
-    if (!ws) return;
-    const tabs = getWorkspaceTerminals(ws).filter(t => t.threadHistory);
-    const tab = tabs.find(t => t === _curChat) || tabs.sort((a, b) => (b.chat?.updatedAt || 0) - (a.chat?.updatedAt || 0))[0];
-    if (tab) openChatTab(tab); else newChatTab(ws, groupId);
-  }
   // A chat's tab is named after its first prompt.
   // The agent running in a tab, as a logo before its name.
   function syncTabAgentIcon(t, el = document.querySelector(`.tg-tab[data-termid="${t.id}"]`)) {
@@ -8812,14 +8857,17 @@
       || (t.threadHistory && !t._agentExited ? harnessOf(threadSegments(t).findLast(x => x.used)?.harness || chatOpts(t).harness) : null); // a new chat: the agent it will start
     const key = h?.id || '';
     let icon = el.querySelector('.tg-tab-agent');
-    if ((icon?.dataset.agent || '') === key) return;
-    icon?.remove();
-    if (!h) return;
-    icon = document.createElement('span');
-    icon.className = 'tg-tab-agent'; icon.dataset.agent = key; icon.setAttribute('aria-hidden', 'true');
-    if (h.color) icon.style.color = h.color;
-    icon.innerHTML = procIconHtml(h.bin, 'ph-robot');
-    el.insertBefore(icon, el.querySelector('.tg-tab-name'));
+    if ((icon?.dataset.agent || '') !== key) {
+      icon?.remove(); icon = null;
+      if (!h) return;
+      icon = document.createElement('span');
+      icon.className = 'tg-tab-agent'; icon.dataset.agent = key; icon.setAttribute('aria-hidden', 'true');
+      if (h.color) icon.style.color = h.color;
+      icon.innerHTML = procIconHtml(h.bin, 'ph-robot');
+      el.insertBefore(icon, el.querySelector('.tg-tab-name'));
+    }
+    // Gray until the agent is actually running in the tab (a new chat, or one not resumed yet).
+    icon?.classList.toggle('idle', !(isLiveTerminal(t) && harnessOf(_tabAgent.get(t.id))));
   }
   function setChatTabLabel(tab) {
     const label = (tab.chat?.title || 'Chat').replace(/\s+/g, ' ').slice(0, 28);
@@ -8851,8 +8899,6 @@
     if (!page) return;
     const ws = activeWs();
     clearInterval(_threadPoll); _threadPoll = null;
-    const histBtn = document.getElementById('btn-thread-history');
-    if (histBtn) histBtn.hidden = !ws;
     const chats = ws ? getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.el) : [];
     for (const t of chats) {
       t.el.classList.add('chat-tab');
@@ -9059,7 +9105,9 @@
         .map(m => ({ ...m, efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'default' })),
       // --permission-mode values (Claude Code 2.1.325); "auto" lets a classifier approve safe actions.
       access: [['default', 'Ask first', 'ph-shield'], ['auto', 'Auto', 'ph-magic-wand'], ['acceptEdits', 'Accept edits', 'ph-pencil-simple'], ['plan', 'Plan only', 'ph-list-checks'], ['bypassPermissions', 'Full access', 'ph-shield-slash']],
-      argv: (o, sid, resume, fork) => [...(o.model !== 'default' ? ['--model', o.model] : []), ...(o.effort !== 'default' ? ['--effort', o.effort] : []),
+      argv: (o, sid, resume, fork, threadsDir) => [...(o.model !== 'default' ? ['--model', o.model] : []), ...(o.effort !== 'default' ? ['--effort', o.effort] : []),
+        // The history files the chat points it to live there: reading them never asks for permission.
+        ...(threadsDir ? ['--add-dir', threadsDir] : []),
         // Always explicit: with no flag Claude Code starts in its own default, which can be auto mode,
         // so "Ask first" is its "manual" mode.
         '--permission-mode', o.access === 'default' ? 'manual' : o.access,
@@ -9078,6 +9126,20 @@
         ...(o.access === 'full' ? ['--dangerously-bypass-approvals-and-sandbox'] : o.access !== 'default' ? ['-s', o.access] : []),
         ...(o.fast && CHAT_AGENTS.codex.models.find(m => m.id === o.model)?.fastTier ? ['-c', `service_tier="${CHAT_AGENTS.codex.models.find(m => m.id === o.model).fastTier}"`] : [])],
     },
+    // Antigravity CLI: chats run over its Agent Client Protocol server (`agy acp`, electron/chat-sdk.js), which
+    // lists the models (each with its thinking levels) and the permission modes; Full access is its start flag.
+    antigravity: {
+      models: (() => { try { return JSON.parse(localStorage.getItem('tv-agy-models')) || []; } catch { return []; } })(),
+      access: [['default', 'Ask first', 'ph-shield'], ['auto', 'Auto', 'ph-magic-wand'], ['accept-edits', 'Accept edits', 'ph-pencil-simple'], ['plan', 'Plan only', 'ph-list-checks'], ['full', 'Full access', 'ph-shield-slash']],
+      // The terminal view runs the real CLI on the same conversation.
+      argv: (o, sid, resume) => [...(o.model !== 'default' ? ['--model', o.model] : []), ...(o.effort !== 'default' ? ['--effort', o.effort] : []),
+        ...(o.access === 'full' ? ['--dangerously-skip-permissions'] : o.access !== 'default' ? ['--mode', o.access] : []), ...(resume && sid ? ['--conversation', sid] : [])],
+    },
+  };
+  const setAgyModels = models => {
+    if (!models?.length) return;
+    CHAT_AGENTS.antigravity.models = models;
+    try { localStorage.setItem('tv-agy-models', JSON.stringify(models)); } catch {}
   };
   // The other agent CLIs TerminalVibe knows start plain (their own default model and permissions);
   // their transcripts aren't read yet, so their chats show the messages sent, not a history.
@@ -9099,6 +9161,10 @@
     return _chatAgents;
   }
   if (!DETACHED_ONLY && !SETTINGS_ONLY) loadChatAgents();
+  // Antigravity's models come from a session (opened and closed at once in the background): fresh once per run.
+  // (After loadChatAgents' state above: calling it earlier throws during startup and the app never leaves its splash.)
+  if (!DETACHED_ONLY && !SETTINGS_ONLY && window.electronAPI?.chatSdkModels) loadChatAgents().then(({ found = {} }) => found.agy
+    && window.electronAPI.chatSdkModels('antigravity', found.agy).then(m => { setAgyModels(m); syncThreadComposer(curChat()); })).catch(() => {});
   // A workspace keeps its own picks; one that has none starts from the last picks made anywhere.
   const lastChatOpts = () => { try { return JSON.parse(localStorage.getItem('tv-chat-opts')) || {}; } catch { return {}; } };
   const chatOpts = ws => {
@@ -9132,8 +9198,50 @@
     saveState();
     syncThreadComposer(ws);
   }
-  // A chat's agent runs in its own tab.
-  const liveThreadAgent = ws => ws && _tabAgent.get(ws.id) && isLiveTerminal(ws) ? ws : null;
+  // A chat's agent runs in its own tab: a structured session (ws._sdk) or the tab's terminal.
+  const liveThreadAgent = ws => ws && _tabAgent.get(ws.id) && (ws._sdk?.alive || isLiveTerminal(ws)) ? ws : null;
+  // ── Structured sessions (electron/chat-sdk.js) ──
+  // In the desktop app, Claude Code and Codex chats run through their own protocols, not a terminal: Claude Code in
+  // headless stream-json mode, Codex through `codex app-server`. Messages, permission prompts, questions, stop and
+  // permission changes go through them; the history is still read from their transcripts. Other agents (and
+  // browser mode) still run in the tab's terminal, and the terminal view resumes the same session in the real CLI.
+  const sdkHarness = h => (h === 'claude' || h === 'codex' || h === 'antigravity') && !!window.electronAPI?.chatSdkStart;
+  // Agents that take model, effort and permissions on every turn (no restart): Codex, and Antigravity except
+  // for Full access, which is a start flag.
+  const sdkPerTurn = (h, from, to) => h === 'codex' || (h === 'antigravity' && (from === 'full') === (to === 'full'));
+  // What a turn needs to know (Codex takes these on every turn; Claude Code takes the permission mode live).
+  const sdkTurnOptions = o => ({ model: o.model, effort: o.effort, access: o.access,
+    ...(o.harness === 'codex' && o.fast ? { serviceTier: CHAT_AGENTS.codex.models.find(m => m.id === o.model)?.fastTier } : {}) });
+  // A session's question in the answer tray's shape (agentQuestion's).
+  const sdkTrayAsk = a => ({ sdk: true, id: a.id, question: a.question, detail: a.detail || [], multi: !!a.multi,
+    options: a.options.map((o, i) => ({ key: o.submit ? '' : String(i + 1), label: o.label, desc: o.desc || '', selected: false, submit: !!o.submit, input: !!o.input,
+      ...(a.multi && !o.submit && !o.input ? { checked: false } : {}) })) });
+  if (!DETACHED_ONLY && !SETTINGS_ONLY) window.electronAPI?.onChatSdkEvent?.(ev => {
+    const t = findTermById(ev.key)?.term, s = t?._sdk;
+    if (!s?.alive) return;
+    const name = harnessOf(s.harness)?.name || 'The agent';
+    if (ev.type === 'session') {
+      s.sessionId = ev.sessionId;
+      if (t._chatSeg && !t._chatSeg.sessionId) { t._chatSeg.sessionId = ev.sessionId; saveState(); }
+    } else if (ev.type === 'busy') { s.busy = true; t._agentWorking = true; }
+    else if (ev.type === 'idle') {
+      s.busy = false; s.idleAt = t._idleAt = Date.now(); t._agentWorking = false;
+      if (ev.error) zoomBadge(`${name}: ${ev.error}`);
+      onTerminalFinished({ id: t.id, kind: 'agent', name: s.harness });
+      chatAgentIdle(t);
+    } else if (ev.type === 'ask') s.ask = sdkTrayAsk(ev.ask);
+    else if (ev.type === 'ask-done') { if (s.ask?.id === ev.id) s.ask = null; }
+    else if (ev.type === 'mode') { if (t._chatCfg) t._chatCfg.access = ev.mode; setChatOpts(t, { access: ev.mode }); }
+    else if (ev.type === 'models' && s.harness === 'antigravity') setAgyModels(ev.models);
+    else if (ev.type === 'exit') {
+      s.alive = s.busy = false; s.ask = null; t._agentWorking = false;
+      _tabAgent.set(t.id, null);
+      if (ev.error) zoomBadge(`${name} stopped: ${ev.error}`);
+      syncTabAgentIcon(t);
+    }
+    if (curChat() === t) { syncWorking(t); syncThreadComposer(t); syncSendBtn(); }
+    renderThreadsSidebar();
+  });
   // Display names: "Opus" for the chip, "Claude Opus" in the list.
   const modelName = (o, short) => {
     const m = chatModels(o.harness).find(x => x.id === o.model);
@@ -9149,6 +9257,47 @@
       flow.style.paddingBottom = wrap.offsetHeight + 12 + 'px';
       if (atBottom) flow.scrollTop = flow.scrollHeight;
     }).observe(wrap);
+  }
+  thrPage.querySelector('#sbr-thread-ask').addEventListener('click', e => {
+    const askBtn = e.target.closest('button[data-ask-i]');
+    if (askBtn) answerAgentQuestion(e.currentTarget, +askBtn.dataset.askI);
+  });
+  thrPage.querySelector('#sbr-thread-ask').addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.isComposing || !e.target.matches('input[data-ask-i]') || !e.target.value.trim()) return;
+    e.preventDefault();
+    answerAgentQuestion(e.currentTarget, +e.target.dataset.askI, e.target.value.trim());
+  });
+  // Answer the agent's question in its terminal. A single-choice pick presses its number. Everything else
+  // moves the agent's pointer there with the arrows and presses Enter: a multi-select box toggles (the tray
+  // stays and redraws with the new ticks), Submit sends, and a typed answer is typed into its row first.
+  async function answerAgentQuestion(tray, i, text) {
+    const t = liveThreadAgent(curChat()), ask = t && agentQuestion(t), o = ask?.options[i];
+    // Gone or changed meanwhile (answered in the terminal): nothing is pressed.
+    if (!o || ask.question !== tray._q || tray._busy) { tray._html = ''; return; }
+    const toggle = o.checked !== undefined && text == null;
+    if (ask.sdk) { // a structured session: the pick goes back over its protocol (multi-select ticks stay here until Submit)
+      if (toggle) { o.checked = !o.checked; tray._html = ''; syncWorking(curChat()); return; }
+      const answer = o.submit ? { indices: ask.options.flatMap((x, k) => x.checked ? [k] : []) } : text != null ? { text } : { index: i };
+      t._sdk.ask = null; tray._html = ''; tray._q = '';
+      await window.electronAPI.chatSdkRespond(t.id, ask.id, answer);
+      syncWorking(curChat());
+      return;
+    }
+    tray._busy = true;
+    if (!toggle) tray.querySelectorAll('button, input').forEach(b => { b.disabled = true; });
+    const enc = x => new TextEncoder().encode(x);
+    try {
+      if (!ask.multi && !o.input && !ask.nav) { sendStdin(t.id, enc(o.key)); return; }
+      const from = ask.options.findIndex(x => x.selected);
+      if (i !== from) { sendStdin(t.id, enc((i > from ? '\x1b[B' : '\x1b[A').repeat(Math.abs(i - from)))); await sleep(80); }
+      if (text != null) { sendStdin(t.id, enc(text)); await sleep(80); }
+      sendStdin(t.id, enc('\r'));
+      await sleep(150); // the agent redraws before the next click reads its pointer
+    } finally {
+      tray._busy = false;
+      tray._html = ''; // the next sync redraws it, even for an identical next question
+      if (!toggle) tray._q = '';
+    }
   }
   thrPage.querySelector('#sbr-thread-flow').addEventListener('click', e => {
     const mention = e.target.closest('.thr-thread-mention');
@@ -9196,7 +9345,10 @@
   const thrChip = id => thrPage.querySelector('#sbr-thread-' + id);
   const _chatStarting = new Map(); // chat tab id -> { text, wait } while its agent boots (shown in the working row)
   const _gitBranch = new Map(); // cwd -> branch | null
-  const chatCwd = tab => tab?.chat?.cwd || tab?.cwd || wsOf(tab)?.cwd || getWorkspaceTerminals(wsOf(tab) || {}).find(t => t.cwd)?.cwd || '';
+  // A "No project" thread (chat.scratch) has no folder until its agent first starts in its own scratch folder.
+  const chatCwd = tab => tab?.chat?.scratch ? tab.chat.cwd || '' : tab?.chat?.cwd || tab?.cwd || wsOf(tab)?.cwd || getWorkspaceTerminals(wsOf(tab) || {}).find(t => t.cwd)?.cwd || '';
+  const isScratchDir = d => /[\\/]\.terminalvibe[\\/]scratch[\\/][^\\/]+[\\/]?$/.test(d || '');
+  const chatFolderName = cwd => !cwd || isScratchDir(cwd) ? 'No project' : cwd.split(/[\\/]/).filter(Boolean).pop() || cwd;
   function syncThreadComposer(ws, surface = thrPage) {
     if (!ws) return;
     const thrChip = id => threadPart(surface, id), thrInput = threadPart(surface, 'input');
@@ -9218,8 +9370,9 @@
     const fresh = !threadHasMessages(ws);
     surface.classList.toggle('thr-new', fresh);
     cwdEl.disabled = !fresh;
-    cwdEl.innerHTML = `<i class="ph ph-folder" aria-hidden="true"></i><span>${escHtml(cwd.split(/[\\/]/).filter(Boolean).pop() || cwd || 'No folder')}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
-    cwdEl.title = fresh ? `Working folder: ${cwd || 'none'}` : cwd;
+    const folderName = chatFolderName(cwd);
+    cwdEl.innerHTML = `<i class="ph ${folderName === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(folderName)}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
+    cwdEl.title = fresh ? `Working folder: ${cwd || 'a new scratch folder'}` : cwd;
     // Above the composer: a thread's side chats, or (in a side chat) the thread it belongs to.
     const sidesEl = thrChip('sides');
     if (sidesEl) {
@@ -9305,9 +9458,10 @@
     _gitBranch.delete(cwd);
     syncThreadComposer(tab); renderThreadsSidebar();
   }
-  function setChatCwd(tab, dir) {
-    if (!tab || !dir || threadHasMessages(tab)) return;
-    tab.chat.cwd = tab.cwd = dir;
+  function setChatCwd(tab, dir, scratch = false) {
+    if (!tab || (!dir && !scratch) || threadHasMessages(tab)) return;
+    if (scratch) { if (tab.chat.scratch) return; tab.chat.scratch = true; delete tab.chat.cwd; }
+    else { delete tab.chat.scratch; tab.chat.cwd = tab.cwd = dir; }
     saveState(); syncThreadComposer(tab); renderThreadsSidebar();
   }
   // ── Model picker: agents at left, their models in the middle, reasoning effort at right ──
@@ -9430,6 +9584,24 @@
     // The history note rides on the first real message: after a slash command it would become its argument.
     if (t._handoff && !/^\s*\//.test(text)) { text += _handoffNote(t._handoff); t._handoff = null; }
     if (t._sideNote && !/^\s*\//.test(text)) { text += SIDE_NOTE; t._sideNote = false; }
+    if (t._sdk?.alive) {
+      t._chatSent = true;
+      if (t._chatSeg) t._chatSeg.used = true;
+      const turn = _turns.get(t.id);
+      if (turn) turn.sentAt = Date.now();
+      const o = chatOpts(t);
+      window.electronAPI.chatSdkSetAccess(t.id, o.access);
+      if (t._chatCfg) t._chatCfg.access = o.access;
+      // Codex and Antigravity take model and effort per turn: the session (and its history label) follows the picks.
+      if (['codex', 'antigravity'].includes(_tabAgent.get(t.id))) {
+        if (t._chatCfg) Object.assign(t._chatCfg, { model: o.model, effort: o.effort, fast: o.fast });
+        if (t._chatSeg) Object.assign(t._chatSeg, { model: o.model, effort: o.effort });
+      }
+      return window.electronAPI.chatSdkSend(t.id, text, { steer, options: sdkTurnOptions(o) }).then(r => {
+        if (!r?.ok) throw Error(r?.error || 'The agent did not take the message');
+        return true;
+      });
+    }
     const enc = str => new TextEncoder().encode(str), body = text.replace(/\r?\n/g, '\r');
     sendStdin(t.id, enc(t.term.modes?.bracketedPasteMode ? `\x1b[200~${body}\x1b[201~` : body));
     t._chatSent = true;
@@ -9447,11 +9619,18 @@
   // hidden footer (a dialog is open) leaves it to the next message, which restarts the agent with the pick.
   async function applyClaudeMode(tab, target) {
     const t = liveThreadAgent(tab);
+    if (t?._sdk?.alive) { // structured: Claude Code switches at once, Codex / Antigravity from their next turn
+      // Antigravity's Full access is a start flag: the next message restarts it (its config keeps the old pick until then).
+      if (t._sdk.harness === 'antigravity' && (target === 'full') !== (t._chatCfg?.access === 'full')) return;
+      window.electronAPI.chatSdkSetAccess(t.id, target);
+      if (t._chatCfg) t._chatCfg.access = target;
+      return;
+    }
     if (!t || _tabAgent.get(t.id) !== 'claude' || !t._chatCfg || t._modeSwitching) return;
     // Full access joins the cycle only when the agent was started with it: an idle agent restarts with it now
     // (same session); a busy one keeps working and takes it with the next message.
     if (target === 'bypassPermissions' && t._chatCfg.access !== target) {
-      if (!chatWorking(tab) && !_chatStarting.has(tab.id)) await startChatAgent(tab, tab, null, t);
+      if (!chatWorking(tab) && !_chatStarting.has(tab.id)) await startChatAgent(tab, tab, null, t).catch(err => zoomBadge(err.message));
       return;
     }
     t._modeSwitching = true; // the footer watcher leaves the pick alone meanwhile
@@ -9479,11 +9658,87 @@
   // A question the agent asks before it takes prompts (trust this folder? update now?). Only the user answers
   // it: the chat shows the agent's terminal and sends once it is gone.
   const TRUST_RE = /trust this folder|trust the (files|contents) in this|Do you trust|Update available|Update now|new version (is )?available/i;
+  // A question the agent asks in its terminal (a permission prompt, a multiple-choice question): the question,
+  // the lines above it (what it wants to run) and its numbered choices. Only a list with the selection pointer
+  // (Claude Code ❯, Codex ›) counts, so a numbered list in a reply never does.
+  // A choice's next lines are its label wrapped (the line above reached the screen's edge) or its description.
+  // "Type something." (Claude Code's free-text choice) shows as a text field. A multi-select question
+  // ("[ ]" boxes) has a "Submit" row after its choices and may say "Select all that apply." instead of asking.
+  const ASK_OPT_RE = /^\s*([❯›]\s*)?(\d)\.\s+(.+)$/, ASK_SUBMIT_RE = /^\s*([❯›]\s*)?Submit$/;
+  const ASK_RULE_RE = /^[─━╌┄═-]{8,}$/, ASK_BOX_RE = /^\[([ x✔✓])\]\s*/;
+  function agentQuestion(t) {
+    if (t?._sdk?.alive) return t._sdk.ask || null; // a structured session asks through its protocol
+    if (!t?.term || !isLiveTerminal(t)) return null;
+    return parseAgentQuestion(screenText(t), t.term.cols);
+  }
+  function parseAgentQuestion(screen, cols = 80) {
+    const lines = screen.split('\n').map(l => l.trimEnd());
+    let first = lines.findLastIndex((l, i) => ASK_OPT_RE.exec(l)?.[2] === '1' && !ASK_OPT_RE.test(lines[i - 1] || '')), nav = false;
+    // Claude Code's trust question has no numbers ("❯ No, exit" over "  Yes, I trust this folder"): its rows are
+    // numbered here, and answered with the arrows and Enter (nav).
+    if (first < 0 && TRUST_RE.test(screen)) {
+      const at = lines.findLastIndex(l => /^\s*[❯›]\s+\S/.test(l)), row = l => /^\s{2,}\S/.test(l);
+      if (at < 0) return null;
+      let s = at, e = at;
+      while (s > 0 && row(lines[s - 1])) s--;
+      while (e + 1 < lines.length && row(lines[e + 1])) e++;
+      for (let i = s; i <= e; i++) lines[i] = lines[i].replace(/^(\s*)([❯›]\s*)?/, (_, sp, ptr) => `${sp}${ptr || ''}${i - s + 1}. `);
+      first = s; nav = true;
+    }
+    if (first < 0) return null;
+    const options = [];
+    for (let i = first; i < lines.length; i++) {
+      const raw = lines[i], l = raw.trim(), m = ASK_OPT_RE.exec(raw), sub = ASK_SUBMIT_RE.exec(raw);
+      if (m) options.push({ key: m[2], label: m[3].trim(), desc: '', selected: !!m[1] });
+      else if (sub) options.push({ key: '', label: 'Submit', desc: '', selected: !!sub[1], submit: true });
+      else if (!l || ASK_RULE_RE.test(l)) continue; // gaps, and the divider before "Chat about this"
+      else if (/^(Esc|Press|Enter)\b/.test(l) || !/^\s/.test(raw)) break;
+      else {
+        const o = options[options.length - 1];
+        if (!o.desc && lines[i - 1].length >= cols - 20) o.label += ' ' + l; else o.desc += (o.desc ? ' ' : '') + l;
+      }
+    }
+    for (const o of options) {
+      const box = ASK_BOX_RE.exec(o.label);
+      if (box) { o.checked = box[1] !== ' '; o.label = o.label.slice(box[0].length); }
+    }
+    if (options.filter(o => o.key).length < 2 || !options.some(o => o.selected)) return null;
+    // The question: the nearest line ending in "?" inside the dialog, else the nearest line above the choices.
+    let q = -1, near = -1;
+    for (let i = first - 1; i >= 0 && first - i < 12; i--) {
+      const l = lines[i].trim();
+      if (ASK_RULE_RE.test(l) || /^[╭╰│]/.test(l)) break; // the dialog's top border
+      if (/\?$/.test(l)) { q = i; break; }
+      if (near < 0 && l) near = i;
+    }
+    if (q < 0) q = near;
+    let question = lines[q]?.trim() || '', detail = [];
+    // A trust/update screen (drawn on a fresh screen): its question is the first line that asks one; the folder
+    // and warning around it are the detail.
+    const top = Math.max(0, first - 20);
+    if (TRUST_RE.test(lines.slice(top).join('\n'))) {
+      const body = lines.slice(top, first).map(l => l.trim()).filter(l => l && !ASK_RULE_RE.test(l) && !/^[╭╰│]/.test(l));
+      const qi = Math.max(0, body.findIndex(l => l.includes('?') || TRUST_RE.test(l)));
+      if (!body.length) return null;
+      question = body[qi].replace(/^(.*?\?).*$/, '$1');
+      const rest = body[qi].slice(question.length).trim();
+      detail = [...body.slice(0, qi), ...(rest ? [rest] : []), ...body.slice(qi + 1)].slice(0, 4);
+    } else {
+      if (q < 0) return null;
+      for (let i = q - 1; i >= 0 && detail.length < 4; i--) {
+        const l = lines[i].trim().replace(/^←\s*|\s*→$/g, ''); // a multi-question tab bar: ← ☐ Topic ✔ Submit →
+        if (ASK_RULE_RE.test(l) || /^[╭╰│]/.test(l)) break;
+        if (l) detail.unshift(l);
+      }
+    }
+    return { question, detail, nav, multi: options.some(o => o.checked !== undefined),
+      options: options.map(o => ({ ...o, input: !o.submit && /^Type something\.?$/i.test(o.label) })) };
+  }
   // Codex runs a conversation in one process at a time: while another copy holds it (often an orphan
   // from an earlier run) it shows a lock screen waiting for R. Typing there would press its keys
   // (r retry, f fork), so nothing is sent until the lock is gone.
   const LOCK_RE = /open in another app[\s\S]*(press R\b|to retry)/i;
-  function agentLocked(t) { return !!t?.term && isLiveTerminal(t) && /open in another app[\s\S]*(press R\b|to retry)/i.test(screenText(t)); }
+  function agentLocked(t) { return !t?._sdk?.alive && !!t?.term && isLiveTerminal(t) && /open in another app[\s\S]*(press R\b|to retry)/i.test(screenText(t)); }
   async function waitUnlocked(t, maxMs = 300000) {
     const t0 = Date.now();
     while (agentLocked(t) && Date.now() - t0 < maxMs) await sleep(500);
@@ -9498,6 +9753,7 @@
   }
   // The process really running in the tab right now (the watcher's view can be 1.5s old).
   async function agentRunning(entry, h) {
+    if (entry._sdk?.alive) return true;
     const name = String(await checkTerminalRunning(entry.id, true) || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
     return name === h.bin || name === 'unknown';
   }
@@ -9520,6 +9776,12 @@
   // Quit the agent running in a tab (Ctrl+C until it is back at its shell). Anything that is not
   // an agent is left alone.
   async function stopTabAgent(entry) {
+    if (entry._sdk?.alive) { // a structured session: end it (it holds no terminal)
+      entry._sdk.alive = entry._sdk.busy = false; entry._sdk.ask = null; entry._agentWorking = false;
+      _tabAgent.set(entry.id, null);
+      await window.electronAPI.chatSdkStop(entry.id);
+      syncTabAgentIcon(entry);
+    }
     const norm = n => String(n || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
     let name = await checkTerminalRunning(entry.id);
     if (name === null) return true;
@@ -9552,6 +9814,13 @@
     tab._terminalSessionOpening = (async () => {
       try {
         if (!findTermById(tab.id) || _chatStarting.has(tab.id) || _chatSending.has(tab.id)) return true;
+        // The terminal view resumes the session in the real CLI: the structured session hands it over first
+        // (one process per session). A turn in progress is never cut off for it.
+        if (tab._sdk?.alive) {
+          if (tab._sdk.busy || tab._sdk.ask) throw Error(`${harnessOf(tab._sdk.harness)?.name || 'The agent'} is working: stop it or wait for it to finish first.`);
+          tab._sdk.alive = false; _tabAgent.set(tab.id, null);
+          await window.electronAPI.chatSdkStop(tab.id);
+        }
         const segs = threadSegments(tab);
         let latest = [...segs].reverse().find(s => s.used || s.sessionId || s === tab._chatSeg) || segs[segs.length - 1];
         const process = await checkTerminalRunning(tab.id);
@@ -9577,7 +9846,7 @@
         const options = latest ? { harness: latest.harness, model: latest.model || 'default', effort: latest.effort || 'default',
           access: current.harness === latest.harness ? current.access : 'default' } : current;
         if (!harnessOf(options.harness) || !CHAT_AGENTS[options.harness]) throw Error('This chat’s agent harness is unavailable.');
-        if (latest?.sessionId && !['claude', 'codex'].includes(options.harness)) throw Error(`Session resume is not supported for ${harnessOf(options.harness).name} yet.`);
+        if (latest?.sessionId && !['claude', 'codex', 'antigravity'].includes(options.harness)) throw Error(`Session resume is not supported for ${harnessOf(options.harness).name} yet.`);
         return await startChatAgent(tab, tab, null, null, { terminalOnly: true, resumeSegment: latest?.sessionId ? latest : null, options });
       } catch (err) { zoomBadge(err.message || 'Could not resume this chat session'); return false; }
     })().finally(() => { delete tab._terminalSessionOpening; });
@@ -9585,7 +9854,7 @@
   }
   async function startChatAgent(ws, chatTab, text, replace, launch = {}) {
     const o = launch.options || chatOpts(ws), h = harnessOf(o.harness);
-    const { found = {} } = await loadChatAgents();
+    const { found = {}, threadsDir } = await loadChatAgents();
     if (!found[h.bin]) { zoomBadge(`${h.name} was not found on PATH`); return false; }
     const segs = threadSegments(ws);
     const oldSeg = replace?._chatSeg;
@@ -9607,7 +9876,11 @@
     const holders = resumeSeg ? getWorkspaceTerminals(wsOf(ws) || {}).filter(x => x !== replace && x._chatSeg === resumeSeg) : [];
     // Transcripts are found by folder: always launch in a known one.
     // (and a resumed session in its own folder: Claude keeps sessions per project folder).
+    if (ws.chat?.scratch && !ws.chat.cwd && window.electronAPI?.threadScratch) { ws.chat.cwd = ws.cwd = await window.electronAPI.threadScratch(); saveState(); }
     const cwd = resumeSeg?.cwd || replace?.cwd || chatCwd(ws) || undefined;
+    // The PTY spawn falls back to ~ for a missing folder: never run a thread's agent somewhere else.
+    if (cwd && !cwd.startsWith('~') && window.electronAPI?.resolveLocalPath && !await window.electronAPI.resolveLocalPath(cwd))
+      throw Error(`The project folder no longer exists: ${cwd}`);
     _chatStarting.set(ws.id, { text: `${resumeSid ? 'Resuming' : 'Starting'} ${modelName(o, false)}` }); syncThreadComposer(ws);
     try {
       // The agent runs in the Chat tab's own terminal (the chat page sits over it; the footer
@@ -9620,12 +9893,24 @@
       }
       if (!await stopTabAgent(entry)) { zoomBadge('The agent in this tab did not quit; stop it in its terminal first'); return false; }
       if (launch.terminalOnly && findTermById(entry.id)?.term !== entry) return false;
-      entry.term.reset(); // the agent draws on a clean screen (and readiness never reads the old one)
-      const started = await createAgentTerminal({ id: entry.id, ...getSlotDimensions(entry), cwd, executable: found[h.bin],
-        argv: CHAT_AGENTS[o.harness].argv(o, sid, !!resumeSid, forkSid), returnToShell: true, replaceIdle: true });
-      if (!started) { zoomBadge(`Could not start ${h.name}`); return false; }
-      entry.dead = false;
-      entry.term.options.disableStdin = false;
+      // Claude Code / Codex chats run as structured sessions (not in the terminal); the terminal view runs the real CLI.
+      const viaSdk = !launch.terminalOnly && sdkHarness(o.harness);
+      if (viaSdk) {
+        const r = await window.electronAPI.chatSdkStart(entry.id, { harness: o.harness, bin: found[h.bin], cwd, access: o.access,
+          argv: o.harness === 'claude' ? CHAT_AGENTS.claude.argv(o, sid, !!resumeSid, forkSid, threadsDir) : [],
+          options: sdkTurnOptions(o), resume: o.harness !== 'claude' ? resumeSid : null, fork: o.harness === 'codex' ? forkSid : null });
+        if (!r?.ok) throw Error(r?.error || `Could not start ${h.name}`);
+        if (findTermById(entry.id)?.term !== entry) { window.electronAPI.chatSdkStop(entry.id); return false; }
+        entry._sdk = { alive: true, harness: o.harness, busy: false, ask: null, sessionId: r.sessionId || sid };
+      } else {
+        if (entry._sdk?.alive) { entry._sdk.alive = false; await window.electronAPI.chatSdkStop(entry.id); }
+        entry.term.reset(); // the agent draws on a clean screen (and readiness never reads the old one)
+        const started = await createAgentTerminal({ id: entry.id, ...getSlotDimensions(entry), cwd, executable: found[h.bin],
+          argv: CHAT_AGENTS[o.harness].argv(o, sid, !!resumeSid, forkSid, threadsDir), returnToShell: true, replaceIdle: true });
+        if (!started) { zoomBadge(`Could not start ${h.name}`); return false; }
+        entry.dead = false;
+        entry.term.options.disableStdin = false;
+      }
       if (cwd) entry.cwd = cwd;
       entry.toolProvider = h.id;
       if (o.harness === 'claude') entry.claudeSessionId = sid;
@@ -9643,7 +9928,7 @@
         // by folder and start time, so it would otherwise claim the new session's transcript.
         while (window.electronAPI?.threadHistory && segs.length && segs[segs.length - 1].harness === 'codex' && !segs[segs.length - 1].sessionId) segs.pop();
         entry._chatSent = false;
-        entry._chatSeg = { harness: h.id, sessionId: sid, cwd: entry.cwd, since: Date.now() - 5000, model: o.model, effort: o.effort, ...(handoff ? { handoff: true } : {}) };
+        entry._chatSeg = { harness: h.id, sessionId: sid || (viaSdk && entry._sdk?.sessionId) || null, cwd: entry.cwd, since: Date.now() - 5000, model: o.model, effort: o.effort, ...(handoff ? { handoff: true } : {}) };
         segs.push(entry._chatSeg);
       }
       // Set at launch: if this send fails after the start, the next message (sent straight to the running agent) carries them.
@@ -9655,10 +9940,14 @@
       // Switching views only starts/resumes the TUI. Never submit an empty message or
       // consume trust/permission prompts; the terminal is already visible for the user.
       if (launch.terminalOnly) return true;
+      // A structured session takes messages at once: no screen to wait for, no trust or lock screen.
+      if (viaSdk) return text == null ? true : await sendToAgent(entry, text);
       if (await waitAgentReady(entry) === 'trust') {
-        // Show the question in the agent's terminal; send once it is answered (or the agent quits, or 5 minutes pass).
-        _chatStarting.set(ws.id, { text: `Answer ${h.name}'s question in its terminal`, wait: true }); syncThreadComposer(ws);
-        setChatView(entry, true);
+        // The question shows in the chat's answer tray (chatWorking → ask); a screen it can't read shows the terminal.
+        // Send once it is answered (or the agent quits, or 5 minutes pass).
+        const inUi = !!agentQuestion(entry);
+        _chatStarting.set(ws.id, { text: inUi ? `Answer ${h.name}'s question` : `Answer ${h.name}'s question in its terminal`, wait: true }); syncThreadComposer(ws);
+        if (inUi) { if (curChat() === ws) syncWorking(ws); } else setChatView(entry, true);
         const t0 = Date.now();
         while (isLiveTerminal(entry) && TRUST_RE.test(screenText(entry)) && Date.now() - t0 < 300000) {
           await sleep(500);
@@ -10235,7 +10524,8 @@
   function stopChatTurn(c) {
     if (c.chat?.queuedMessages?.length) { c.chat.queuePaused = true; renderChatQueue(c); saveState(); }
     const t = liveThreadAgent(c);
-    if (_chatStarting.has(c.id)) stopTabAgent(c);
+    if (_chatStarting.has(c.id)) { if (c._sdk) { c._sdk.alive = false; window.electronAPI.chatSdkStop(c.id); } stopTabAgent(c); }
+    else if (t?._sdk?.alive) window.electronAPI.chatSdkInterrupt(t.id);
     else if (t) sendStdin(t.id, new TextEncoder().encode('\x1b'));
     // The stopped prompt stays in the chat even if the agent never writes it to its transcript.
     const stopped = pendingMessages(c).map(p => ({ text: p.text, at: p.at }));
@@ -10295,9 +10585,11 @@
   }
   // The first-message title shows at once; the agent's small model replaces it with a short one, unless renamed meanwhile.
   function autoTitleChat(ws, text, force) {
-    const first = ws.chat.title;
+    const first = ws.chat.title, pick = threadSettings.titles;
+    if (pick === 'off' && !force) return Promise.resolve(false); // Regenerate title still works
+    const harness = ['claude', 'codex'].includes(pick) ? pick : chatOpts(ws).harness;
     ws._titling = true; renderThreadsSidebar(); // its card's title shimmers meanwhile
-    return (window.electronAPI?.chatTitle?.(chatOpts(ws).harness, text) || Promise.resolve(null)).then(t => {
+    return (window.electronAPI?.chatTitle?.(harness, text) || Promise.resolve(null)).then(t => {
       if (!t || (!force && ws.chat?.title !== first)) return false;
       ws.chat.title = t; setChatTabLabel(ws); saveState();
       return true;
@@ -10378,11 +10670,18 @@
       if (t && !await agentRunning(t, harnessOf(_tabAgent.get(t.id)))) { _tabAgent.set(t.id, null); t = liveThreadAgent(ws); }
       const o = chatOpts(ws), cfg = t?._chatCfg;
       // Steering always targets the current agent; changed model picks apply to the next turn.
-      const same = t && (steer || (_tabAgent.get(t.id) === o.harness && (!cfg || (['model', 'effort', 'access'].every(k => cfg[k] === o[k]) && ['fast', 'ultra'].every(k => !!cfg[k] === !!o[k])))));
+      const sdk = !!t?._sdk?.alive, picksSame = ['model', 'effort'].every(k => cfg?.[k] === o[k]) && ['fast', 'ultra'].every(k => !!cfg?.[k] === !!o[k]);
+      const same = t && (steer || (_tabAgent.get(t.id) === o.harness
+        // A chat that runs structured takes over a session left running in the terminal view.
+        && (!sdkHarness(o.harness) || sdk)
+        // Structured Codex (and Antigravity, but for Full access) take model, effort and permissions per turn;
+        // structured Claude Code switches permissions live.
+        && (!cfg || (sdk && sdkPerTurn(o.harness, cfg.access, o.access))
+          || (picksSame && ((sdk && o.harness !== 'antigravity') || cfg.access === o.access)))));
       if (same && agentLocked(t) && !await waitUnlocked(t)) throw Error('The conversation is still open in another app');
       const back = ws.chat.bringBack && !/^\s*\//.test(text) ? _bringBackNote(ws.chat.bringBack) : '';
       if (same) { if (!await sendToAgent(t, text + back, steer)) throw Error('The agent closed before the message was sent'); }
-      else if (!await startChatAgent(ws, ws, text + back, cfg && cfg.harness === o.harness ? t : null)) throw Error('Could not start the agent');
+      else if (!await startChatAgent(ws, ws, text + back, cfg && cfg.harness === o.harness ? t : null)) throw Object.assign(Error('Could not start the agent'), { shown: true });
       if (back) { delete ws.chat.bringBack; saveState(); }
       if (curChat() === ws) syncThreadComposer(ws);
       for (const ms of [400, 1200]) setTimeout(() => { if (curChat() === ws) refreshThreadFlow(ws); }, ms);
@@ -10393,7 +10692,7 @@
       if (!steer) _turns.delete(ws.id);
       _flowSig = '';
       if (curChat() === ws) refreshThreadFlow(ws);
-      zoomBadge(err.message || 'Could not send message');
+      if (!err.shown) zoomBadge(err.message || 'Could not send message'); // startChatAgent already said why
       return false;
     } finally { _chatSending.delete(ws.id); }
   }
@@ -10478,7 +10777,8 @@
     if (!t) return; // Never send a queued prompt to a shell or restart a closed agent automatically.
     const harness = _tabAgent.get(t.id);
     let completedAt = 0;
-    if (harness === 'claude') completedAt = !t._agentWorking ? t._idleAt || 0 : 0;
+    if (t._sdk?.alive) completedAt = !t._sdk.busy && !t._sdk.ask ? t._sdk.idleAt || 0 : 0; // its turn-end event
+    else if (harness === 'claude') completedAt = !t._agentWorking ? t._idleAt || 0 : 0;
     else if (harness === 'codex' && window.electronAPI?.threadHistory) {
       _queueDraining.add(ws.id);
       try {
@@ -10533,7 +10833,7 @@
     const hs = (used.length ? used : last ? [last.harness] : []).map(harnessOf).filter(Boolean);
     // One per agent the thread used, with its latest session's model (the card shows the same agents).
     const models = hs.map(x => ({ h: x, text: modelLabel(segs.findLast(sg => sg.harness === x.id)) || x.name }));
-    return { w, ws: wsOf(w) || findWs(w.workspaceId), h, hs, cwd, folder: cwd.split(/[\\/]/).filter(Boolean).pop() || 'No folder', branch: _gitBranch.get(cwd) || '',
+    return { w, ws: wsOf(w) || findWs(w.workspaceId), h, hs, cwd, folder: chatFolderName(cwd), branch: _gitBranch.get(cwd) || '',
       draft: threadDraft(w), title: w.chat.title || threadDraft(w).split('\n')[0].slice(0, 80) || w.label, updated: w.chat.updatedAt || last?.since || w.chat.createdAt || 0, work: chatWorking(w),
       model: modelLabel(last), models, openIn: w._closed ? null : wsOf(w) };
   }
@@ -10544,16 +10844,16 @@
       .filter(x => !q || `${x.title} ${x.folder} ${x.branch} ${x.openIn?.label || ''}`.toLowerCase().includes(q))
       .sort((a, b) => b.updated - a.updated);
     const card = x => {
-      if (x.draft) return `<button type="button" role="listitem" class="ts-card draft" data-tab="${x.w.id}" data-tip="Draft · ${escHtml(x.cwd || 'No folder')}">`
-        + `<span class="ts-row"><span class="ts-folder"><i class="ph ph-note-pencil ts-draft-icon" aria-hidden="true"></i><i class="ph ${x.cwd ? 'ph-folder' : 'ph-selection'}" aria-hidden="true"></i><span>${escHtml(x.cwd ? x.folder : 'No project')}</span></span></span>`
+      if (x.draft) return `<button type="button" role="listitem" class="ts-card draft" data-tab="${x.w.id}" data-tip="Draft · ${escHtml(x.cwd || 'No project')}">`
+        + `<span class="ts-row"><span class="ts-folder"><i class="ph ph-note-pencil ts-draft-icon" aria-hidden="true"></i><i class="ph ${x.folder === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span></span>`
         + `<span class="ts-title">${escHtml(x.title)}</span></button>`;
       const status = x.work
         ? `<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>${x.work.wait ? 'Waiting' : `Working ${fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))}`}</span>`
         : '<span class="ts-status"><i class="ph ph-check" aria-hidden="true"></i>Settled</span>';
-      const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No folder' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
+      const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No project' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
         ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...x.models.map(m => ({ proc: m.h.bin, text: m.text }))];
       return `<button type="button" role="listitem" class="ts-card" draggable="true" data-tab="${x.w.id}" data-tip="${escHtml(x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
-        + `<span class="ts-row"><span class="ts-folder"><i class="ph ph-folder" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span>`
+        + `<span class="ts-row"><span class="ts-folder"><i class="ph ${x.folder === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span>`
         + `<span class="ts-time">${ago(x.updated)}</span>${status}</span>`
         + `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`
         + `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
@@ -10789,6 +11089,10 @@
       return;
     }
     let html = '';
+    if (ws.chat?.forkOf) {
+      const from = findThreadByKey(ws.chat.forkOf);
+      html += `<div class="thr-note thr-fork-note"><i class="ph ph-git-fork" aria-hidden="true"></i>Forked from ${escHtml(from?.chat?.title || from?.label || 'a deleted thread')}</div>`;
+    }
     const texts = new Map(); // data-key -> raw message text, for the copy buttons
     let lastHead = '';
     segs.forEach((seg, i) => {
@@ -10818,7 +11122,11 @@
         const cls = `thr-msg ${m.role}`;
         texts.set(key, m.text);
         // Copy + time under the message, shown on hover.
+        // A reply can be forked: a new thread with the history up to it. The fork point is the full (untrimmed)
+        // item index, which is what the main process slices.
+        const forkAt = m.role !== 'user' && window.electronAPI?.threadFork ? Number(key.split(':')[1]) + (res.trimmed || 0) : null;
         const actions = showActions ? `<div class="thr-actions"><button type="button" class="thr-copy" aria-label="Copy message"><i class="ph ph-copy" aria-hidden="true"></i></button>`
+          + (forkAt != null ? `<button type="button" class="thr-fork" data-seg="${i}" data-item="${forkAt}" data-tip="Fork from here" aria-label="Fork the thread from this reply"><i class="ph ph-git-fork" aria-hidden="true"></i></button>` : '')
           + `<span class="thr-time">${clockTime(m.ts)}</span></div>` : '';
         const user = m.role === 'user' ? userTextHtml(m.text, m.threads) : null;
         const shown = user ? [...new Set([...(m.images || []), ...user.paths])] : m.images || [];
@@ -10833,11 +11141,22 @@
       const thoughtHtml = (m, key) => `<details class="thr-thought" data-key="${key}"${open.has(key) ? ' open' : ''}><summary><i class="ph ph-brain" aria-hidden="true"></i>`
         + `<span class="thr-thought-label">Thought</span><span class="thr-thought-peek">${escHtml(m.text.replace(/\s+/g, ' ').slice(0, 140))}</span><i class="ph ph-caret-down thr-thought-caret" aria-hidden="true"></i></summary>`
         + `<div class="thr-thought-text">${mdLite(m.text)}</div></details>`;
+      // A question the agent asked (AskUserQuestion): one row per question, like a thought, opening to the answer given.
+      const qaHtml = (m, key) => m.qa.map((x, n) => `<details class="thr-qa" data-key="${key}:q${n}"${open.has(`${key}:q${n}`) ? ' open' : ''}>`
+        + `<summary><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><span class="thr-qa-q">${escHtml(x.question)}</span>`
+        + `<i class="ph ph-caret-down thr-qa-caret" aria-hidden="true"></i></summary>`
+        + (x.answer != null ? `<div class="thr-qa-a"><i class="ph ph-arrow-bend-down-right" aria-hidden="true"></i><span>${escHtml(x.answer)}</span></div>`
+          : '<div class="thr-qa-a none">Not answered</div>') + '</details>').join('');
       // A turn's steps in order: thoughts, interim replies, runs of tool calls.
       const stepsHtml = (list, base) => {
         let out = '', run = [];
         const flush = key => { if (run.length) out += toolsHtml(run, key); run = []; };
         for (const { m, j } of list) {
+          // The agent's question and your answer (a question still open shows in the answer tray instead).
+          if (m.role === 'tool' && m.qa) {
+            if (m.qa.some(x => x.answer != null) || m.error) { flush(base + ':' + j + 't'); out += qaHtml(m, i + ':' + j); }
+            continue;
+          }
           if (m.role === 'tool') { run.push(m); continue; }
           flush(base + ':' + j + 't');
           out += m.role === 'thinking' ? thoughtHtml(m, i + ':' + j) : msgHtml(m, i + ':' + j, false);
@@ -10946,6 +11265,7 @@
       b.setAttribute('aria-label', 'Copied');
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
     }));
+    flow.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     flow.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
       const files = [...b.closest('.thr-changes').querySelectorAll('details.thr-change')];
       const openAll = files.some(d => !d.open);
@@ -11237,7 +11557,9 @@
       }
     } else if (type === 'chat-cwd') {
       const tab = data, cur = chatCwd(tab);
-      const dirs = [...new Set([cur, ...workspaces.map(w => w.cwd), ...chatThreads().map(t => chatCwd(t))].filter(Boolean))].slice(0, 12);
+      const dirs = [...new Set([cur, ...workspaces.map(w => w.cwd), ...chatThreads().map(t => chatCwd(t))].filter(d => d && !isScratchDir(d)))].slice(0, 12);
+      item('<i class="ph ph-selection"></i>', 'No project', '', () => setChatCwd(tab, null, true));
+      if (dirs.length) sep();
       dirs.forEach(d => item(`<i class="ph ph-folder${d === cur ? '-open' : ''}"></i>`, escHtml(d.replace(/^\/home\/[^/]+/, '~')), '', () => setChatCwd(tab, d)));
       if (window.electronAPI?.selectDirectory) {
         if (dirs.length) sep();
@@ -11302,7 +11624,7 @@
         const storeId = tab.chat?.storeId || tab.id;
         if (!tab._closed) removeTerminal(w.id, tab.id, false, false, true, true); // already confirmed: close now, no second prompt
         closedThreads = closedThreads.filter(t => (t.chat.storeId || t.id) !== storeId);
-        window.electronAPI?.threadDelete?.(storeId, tab.cwd);
+        window.electronAPI?.threadDelete?.(storeId, tab.chat?.scratch ? tab.chat.cwd : null); // only its own scratch folder
         saveState(); renderThreadsSidebar();
       }), true);
     } else if (type === 'browser-more') {
@@ -12860,6 +13182,15 @@
     const linkDD = document.querySelector('.custom-dropdown[data-for="set-link-target"]');
     if (linkDD) initCustomDropdown(linkDD);
 
+    // Threads
+    const thHarness = document.getElementById('set-thread-harness');
+    if (thHarness.options.length < 2) for (const h of THREAD_HARNESSES) if (CHAT_AGENTS[h.id]) thHarness.add(new Option(h.name, h.id));
+    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles']]) {
+      document.getElementById(id).value = threadSettings[key];
+      const dd = document.querySelector(`.custom-dropdown[data-for="${id}"]`);
+      if (dd) initCustomDropdown(dd);
+    }
+
     // Search engine
     const searchSelect = document.getElementById('set-search-engine');
     searchSelect.value = searchEngine;
@@ -13246,6 +13577,7 @@
       if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
       if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
+      loadThreadSettings(state.threadSettings);
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -13797,7 +14129,6 @@
   // is visible and restore them when it closes, including Escape and switching.
   const profilePickerObserver = new MutationObserver(() => syncBrowserSlots());
   profilePickerObserver.observe(document.getElementById('profile-picker'), { attributes: true, attributeFilter: ['style'] });
-  document.getElementById('btn-thread-history')?.addEventListener('click', () => openThreadHistory(activeWs()));
 
   // Live agent orchestration. Launch arguments are passed directly to the PTY,
   // never typed into an interactive shell. Running entries survive rearrangement.
@@ -14292,6 +14623,8 @@
     terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';
     saveState();
   });
+  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles']])
+    document.getElementById(id).addEventListener('change', e => { threadSettings = { ...threadSettings, [key]: e.target.value }; saveState(); });
 
   // Search engine
   document.getElementById('set-search-engine').addEventListener('change', e => {
