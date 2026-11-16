@@ -45,7 +45,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalResize: (o) => ipcRenderer.send('terminal:resize', o),
   terminalWrite: (o) => ipcRenderer.send('terminal:write', o),
   terminalClose: (id) => ipcRenderer.send('terminal:close', id),
-  terminalHasRunningProcess: (id) => ipcRenderer.invoke('terminal:hasRunningProcess', id),
+  terminalHasRunningProcess: (id, fresh) => ipcRenderer.invoke('terminal:hasRunningProcess', id, fresh),
   processAlive: (pid) => ipcRenderer.invoke('process:alive', pid),
   releaseAgentSession: (sessionId, tabId) => ipcRenderer.invoke('agent:release-session', sessionId, tabId),
   claudeImage: (query) => ipcRenderer.invoke('history:claude-image', query),

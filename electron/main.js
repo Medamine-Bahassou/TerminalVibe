@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
 const yaml = require('js-yaml');
-const { hasRunningProcess, runningProcessInfo, processWorkingDirectory } = require('./proc');
+const { hasRunningProcess, runningProcessInfo, runningProcessInfoFresh, processWorkingDirectory } = require('./proc');
 const { createPtyFlow } = require('./pty-flow');
 const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceSession } = require('./agent-control');
 const { listRunningServers, killServer } = require('./servers');
@@ -1430,9 +1430,9 @@ ipcMain.handle('terminal:agent-settings', (_e, id, harness) => {
   const t = ptys.get(id);
   return t ? require('./agent-settings').ptyAgentSettings(harness, t.pid) : {};
 });
-ipcMain.handle('terminal:hasRunningProcess', (_e, id) => {
+ipcMain.handle('terminal:hasRunningProcess', (_e, id, fresh) => {
   const t = ptys.get(id);
-  return t ? runningProcessInfo(t.pid) : { running: false, name: null };
+  return t ? (fresh ? runningProcessInfoFresh(t.pid) : runningProcessInfo(t.pid)) : { running: false, name: null };
 });
 ipcMain.on('terminal:kill-all', () => {
   notifyBusy.clear(); ptyIO.clear();

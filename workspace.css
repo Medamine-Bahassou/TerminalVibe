@@ -1824,25 +1824,30 @@ body.ui-animations #sbr-thread .thr-sides.anim.collapsed .thr-sides-bubble { tra
 /* Composer model chip: Fast / Ultracode marks after the model. */
 #sbr-thread .thr-chip-mode { font-size:13px; color:var(--muted-text); }
 
-/* Threads sidebar footer: the agents' plan usage (logo, % of the most-used window, time to its reset);
-   the whole row opens the usage modal. */
-#threads-sidebar .ts-usage { display:flex; align-items:center; gap:4px; width:var(--ts-w, 284px); min-height:34px; padding:4px 10px; flex-shrink:0; background:transparent; border:0; border-top:1px solid var(--ui-line); border-radius:0 !important; color:var(--muted-text); font:400 11.5px var(--ui-font); text-align:left; cursor:pointer; overflow:hidden; white-space:nowrap; transition:background-color 140ms; }
+/* Threads sidebar footer: the agents' plan usage, side by side: a ring gauge of the most-used window
+   (--p = % used) with the agent's logo inside and the % under it; the whole row opens the usage modal. */
+#threads-sidebar .ts-usage { display:flex; align-items:center; gap:12px; width:var(--ts-w, 284px); min-height:34px; padding:8px 12px; flex-shrink:0; background:transparent; border:0; border-top:1px solid var(--ui-line); border-radius:0 !important; color:var(--muted-text); font:400 11.5px var(--ui-font); text-align:left; cursor:pointer; overflow:hidden; white-space:nowrap; transition:background-color 140ms; }
 #threads-sidebar .ts-usage[hidden] { display:none; }
 #threads-sidebar .ts-usage:hover { background:var(--ui-hover); }
 #threads-sidebar .ts-usage:focus-visible { outline:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
-#threads-sidebar .sb-usage-label { margin-right:2px; color:var(--dim-text); }
-#threads-sidebar .sb-usage-item { display:inline-flex; align-items:center; gap:5px; height:22px; padding:0 5px; color:var(--muted-text); font-variant-numeric:tabular-nums; }
+#threads-sidebar .sb-usage-item { --ring:var(--muted-text); display:inline-flex; flex-direction:column; align-items:center; gap:4px; color:var(--muted-text); font-variant-numeric:tabular-nums; }
+#threads-sidebar .sb-usage-item.high { --ring:var(--ui-warning); }
+#threads-sidebar .sb-usage-item.full { --ring:var(--ui-error); }
+#threads-sidebar .sb-usage-ring { position:relative; display:grid; place-items:center; width:28px; height:28px; }
+/* The ring: a conic fill cut to a 2.5px band by a radial mask, so the logo inside stays unmasked. */
+#threads-sidebar .sb-usage-ring::before { content:""; position:absolute; inset:0; border-radius:50% !important;
+  background:conic-gradient(var(--ring) calc(var(--p, 0) * 1%), color-mix(in srgb,var(--fg) 12%,transparent) 0);
+  -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px)); mask:radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px)); }
 #threads-sidebar .sb-usage-logo { display:inline-grid; place-items:center; }
-#threads-sidebar .sb-usage-logo .ws-proc-icon { width:12px; height:12px; font-size:12px; fill:currentColor; }
-#threads-sidebar .sb-usage-pct { color:var(--fg); font-weight:500; }
-#threads-sidebar .sb-usage-reset { color:var(--dim-text); }
+#threads-sidebar .sb-usage-logo .ws-proc-icon { width:13px; height:13px; font-size:13px; fill:currentColor; }
+#threads-sidebar .sb-usage-pct { color:var(--fg); font-size:10.5px; font-weight:500; line-height:1; }
 #threads-sidebar .sb-usage-item.high .sb-usage-pct { color:var(--ui-warning); }
 #threads-sidebar .sb-usage-item.full .sb-usage-pct { color:var(--ui-error); }
 #threads-sidebar .sb-usage-open { margin-left:auto; font-size:14px; color:var(--dim-text); }
 #threads-sidebar .ts-usage:hover .sb-usage-open { color:var(--fg); }
 @media (prefers-reduced-motion: reduce) { #threads-sidebar .ts-usage { transition:none; } }
 
-/* ── Usage modal (sidebar chart button / threads footer): limit windows per agent ── */
+/* ── Usage modal (threads sidebar footer): limit windows per agent ── */
 #usage-overlay { position:fixed; inset:0; z-index:10003; display:flex; align-items:center; justify-content:center; padding:32px; background:rgba(0,0,0,.5); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
 #usage-modal { display:flex; flex-direction:column; width:min(980px, 100%); max-height:min(720px, 100%); background:var(--bg); border:1px solid var(--border); border-radius:12px !important; box-shadow:0 24px 64px #0008; font-family:var(--ui-font); color:var(--fg); overflow:hidden; }
 #usage-modal .um-head { display:flex; align-items:center; gap:8px; height:48px; padding:0 10px 0 20px; border-bottom:1px solid var(--ui-line); flex-shrink:0; font-size:13px; }
@@ -1882,11 +1887,6 @@ body.ui-animations #sbr-thread .thr-sides.anim.collapsed .thr-sides-bubble { tra
 @media (max-width:640px) { #usage-modal .um-card { grid-template-columns:1fr; gap:10px; } #usage-overlay { padding:12px; } }
 @media (prefers-reduced-motion: reduce) { #usage-modal :is(.um-icon, .um-icon.busy i, .um-spin) { transition:none; animation:none; } }
 
-/* Left sidebar: the usage button beside settings. */
-#sidebar.expanded .sidebar-actions #btn-usage { width:34px; height:34px; padding:0; justify-content:center; }
-.sidebar-actions #btn-usage i { font-size:16px; pointer-events:none; }
-#btn-usage { background:transparent; border:0; }
-#btn-usage:hover { background:var(--ui-hover); color:var(--fg); }
 #sidebar:not(.expanded) .sidebar-actions { flex-direction:column; gap:2px; }
 
 /* Chat zoom (Ctrl+wheel over a chat): messages and composer scale together. */

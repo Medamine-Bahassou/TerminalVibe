@@ -8405,6 +8405,7 @@
         if (!h && t._agentSince && Date.now() - t._agentSince < 8000) continue;
         const before = _tabAgent.get(t.id);
         _tabAgent.set(t.id, h?.id || null);
+        t._agentExited = !h && (!!before || !!t._agentExited); // an agent quit here: its logo goes too
         syncTabAgentIcon(t); // also catches agents the chat started itself
         if (h && before !== h.id && t.threadHistory) await adoptThreadAgent(t, h, ws); // typed into the Chat tab's own terminal
         // The permission mode can change inside Claude Code (Shift+Tab, leaving plan mode): the picker follows it.
@@ -8451,15 +8452,16 @@
       const top = u.windows.reduce((a, b) => b.used > a.used ? b : a);
       const rows = u.windows.map(w => ({ icon: 'ph-clock', text: `${w.label}: ${w.used}% used${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
       const plan = u.plan ? ' · ' + u.plan[0].toUpperCase() + u.plan.slice(1) : '';
-      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" data-tip="${escHtml(h.name + plan)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
-        + `<span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`
-        + `<span class="sb-usage-pct">${top.used}%</span>${top.resetsAt ? `<span class="sb-usage-reset">${fmtLeft(top.resetsAt - Date.now())}</span>` : ''}</span>`;
+      // A ring gauge (--p: % used) around the logo, the % under it; the reset times are in the tooltip.
+      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${Math.min(100, Math.max(0, top.used))}" data-tip="${escHtml(h.name + plan)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
+        + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
+        + `<span class="sb-usage-pct">${top.used}%</span></span>`;
     }).join('');
-    left.innerHTML = items ? `<span class="sb-usage-label">Used</span>${items}<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>` : '';
+    left.innerHTML = items ? `${items}<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>` : '';
     left.hidden = !items;
     return limits;
   }
-  // ── Usage modal (sidebar's chart button): every limit window of every agent, T3 Code style —
+  // ── Usage modal (threads sidebar footer): every limit window of every agent, T3 Code style —
   // the % left, a bar (left solid, used striped) with the pace marker (where an even burn would be
   // now) and the time to the reset, and a trend icon comparing the two. ──
   let _usageModal = null, _usageReturnFocus = null, _usageLoading = false;
@@ -8519,9 +8521,7 @@
     overlay.querySelector('[data-act="close"]').focus();
     void loadUsageModal(false); // the last reading (≤ 1 min old) at once, else a new one
   }
-  document.getElementById('btn-usage')?.addEventListener('click', openUsageModal);
   document.getElementById('ts-usage')?.addEventListener('click', openUsageModal);
-  if (!window.electronAPI?.usageLimits) document.getElementById('btn-usage')?.remove();
   if (!DETACHED_ONLY && !SETTINGS_ONLY) { setTimeout(() => refreshUsageLimits(true), 3000); setInterval(() => refreshUsageLimits(true), 5 * 60000); }
 
   // A terminal running an agent becomes a Chat tab over that agent (the chat button in its tab bar).
@@ -8809,7 +8809,7 @@
     // The agent running there; a Chat tab with none running yet (e.g. right after startup, before it
     // resumes) shows its thread's latest agent, as the threads sidebar does.
     const h = (isLiveTerminal(t) ? harnessOf(_tabAgent.get(t.id)) : null)
-      || (t.threadHistory ? harnessOf(threadSegments(t).findLast(x => x.used)?.harness || chatOpts(t).harness) : null); // a new chat: the agent it will start
+      || (t.threadHistory && !t._agentExited ? harnessOf(threadSegments(t).findLast(x => x.used)?.harness || chatOpts(t).harness) : null); // a new chat: the agent it will start
     const key = h?.id || '';
     let icon = el.querySelector('.tg-tab-agent');
     if ((icon?.dataset.agent || '') === key) return;
@@ -9498,7 +9498,7 @@
   }
   // The process really running in the tab right now (the watcher's view can be 1.5s old).
   async function agentRunning(entry, h) {
-    const name = String(await checkTerminalRunning(entry.id) || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
+    const name = String(await checkTerminalRunning(entry.id, true) || '').toLowerCase().replace(/\.(exe|cmd)$/, '');
     return name === h.bin || name === 'unknown';
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -9529,6 +9529,8 @@
       await sleep(150);
       name = await checkTerminalRunning(entry.id);
     }
+    // The quick reads can still list an agent that already quit (Windows): confirm before giving up.
+    if (name !== null) name = await checkTerminalRunning(entry.id, true);
     _tabAgent.set(entry.id, null);
     return name === null;
   }
@@ -9644,6 +9646,9 @@
         entry._chatSeg = { harness: h.id, sessionId: sid, cwd: entry.cwd, since: Date.now() - 5000, model: o.model, effort: o.effort, ...(handoff ? { handoff: true } : {}) };
         segs.push(entry._chatSeg);
       }
+      // Set at launch: if this send fails after the start, the next message (sent straight to the running agent) carries them.
+      entry._handoff = handoff;
+      entry._sideNote = firstSide;
       // One process per session: another tab still on the replaced/resumed session closes.
       for (const old of [replace, ...holders].filter(x => x && x !== entry)) { _tabAgent.set(old.id, null); removeTerminal(ws.id, old.id, false, false, true, true); }
       saveState();
@@ -9668,8 +9673,6 @@
       }
       // Never type the message into the shell left behind by an agent that quit.
       if (!isLiveTerminal(entry) || !await agentRunning(entry, h)) { zoomBadge(`${h.name} exited before the message was sent`); return false; }
-      entry._handoff = handoff;
-      entry._sideNote = firstSide;
       if (text == null) return true; // a restart with new flags only: the notes ride on the next message
       return await sendToAgent(entry, text);
     } catch (err) { zoomBadge(err.message || `Could not start ${h.name}`); return false; }
@@ -11874,10 +11877,11 @@
   // running inside the PTY. Resolves null when idle, otherwise the process
   // name (or 'unknown' when we can't tell, so we never silently kill a busy
   // session).
-  function checkTerminalRunning(termId) {
+  // fresh: Windows reads a process table up to seconds old; guards that act on the answer ask for a new one.
+  function checkTerminalRunning(termId, fresh = false) {
     return new Promise((resolve) => {
       if (isDesktop() && window.electronAPI && window.electronAPI.terminalHasRunningProcess) {
-        window.electronAPI.terminalHasRunningProcess(termId)
+        window.electronAPI.terminalHasRunningProcess(termId, fresh)
           .then(info => {
             if (info && typeof info === 'object') resolve(info.running ? (info.name || 'unknown') : null);
             else resolve(info ? 'unknown' : null); // legacy boolean backends

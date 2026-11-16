@@ -107,92 +107,111 @@ function runningProcessInfo(pid) {
 
 // Names that alone mean "idle at a prompt" — never reported as busy.
 const WIN_IDLE_RE = /^(powershell|pwsh|cmd|wsl|wslhost|wslrelay|bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|nu|conhost|openconsole|windowsterminal)$/i;
+// npm shims run agents as node → native binary (codex.cmd → node codex.js → codex.exe), and the
+// table has no command lines: name the agent under an interpreter, not "node". Mirrors THREAD_HARNESSES bins.
+const WIN_AGENT_RE = /^(claude|codex|gemini|agy|opencode|cursor-agent|copilot|amp|qwen|aider)$/i;
+function winWorkload(byParent, pid, base) {
+  if (INTERP_RE.test(base.toLowerCase())) {
+    const agent = (byParent.get(pid) || []).find(k => WIN_AGENT_RE.test(k.name.replace(/\.exe$/i, '')));
+    if (agent) return { running: true, name: agent.name.replace(/\.exe$/i, ''), pid: agent.pid };
+  }
+  return { running: true, name: base, pid };
+}
 
 // Cached whole-system process table: parentPid -> [{pid, name}].
 // ponytail: async background refresh avoids blocking main event loop with powershell/wmic
 let _winTable = null; // { ts: number, byParent: Map<number, Array<{pid:number,name:string}>> | null }
-let _winUpdating = false;
+let _winRefresh = null; // the refresh in flight
 let _hasWmic = true;
 const WIN_CACHE_TTL = 3000;
 
+// Resolves once this refresh has finished (or failed): guards that act on the answer await it.
 function refreshWindowsProcessTable() {
-  if (_winUpdating) return;
-  _winUpdating = true;
-  const { execFile } = require('child_process');
+  if (_winRefresh) return _winRefresh;
+  return _winRefresh = new Promise(resolve => {
+    const done = resolve; // cleared in finally: a synchronous failure here runs before the assignment
+    const { execFile } = require('child_process');
 
-  const onOutput = (out) => {
-    _winUpdating = false;
-    if (!out) return;
-    const byParent = new Map();
-    const byPid = new Map();
-    for (const line of out.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      if (trimmed.includes(':')) {
-        const m = /^(\d+):(\d+):(.+)$/.exec(trimmed);
-        if (!m) continue;
-        const pid = parseInt(m[1], 10);
-        const ppid = parseInt(m[2], 10);
-        const name = m[3].trim();
-        if (!name || isNaN(pid) || isNaN(ppid)) continue;
-        byPid.set(pid, name);
-        if (!byParent.has(ppid)) byParent.set(ppid, []);
-        byParent.get(ppid).push({ pid, name });
-      } else if (trimmed.includes(',')) {
-        const parts = trimmed.split(',');
-        if (parts.length >= 4) {
-          const pid = parseInt(parts[parts.length - 1], 10);
-          const ppid = parseInt(parts[parts.length - 2], 10);
-          const name = parts.slice(1, parts.length - 2).join(',').trim();
+    const onOutput = (out) => {
+      done();
+      if (!out) return;
+      const byParent = new Map();
+      const byPid = new Map();
+      for (const line of out.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.includes(':')) {
+          const m = /^(\d+):(\d+):(.+)$/.exec(trimmed);
+          if (!m) continue;
+          const pid = parseInt(m[1], 10);
+          const ppid = parseInt(m[2], 10);
+          const name = m[3].trim();
           if (!name || isNaN(pid) || isNaN(ppid)) continue;
           byPid.set(pid, name);
           if (!byParent.has(ppid)) byParent.set(ppid, []);
           byParent.get(ppid).push({ pid, name });
+        } else if (trimmed.includes(',')) {
+          const parts = trimmed.split(',');
+          if (parts.length >= 4) {
+            const pid = parseInt(parts[parts.length - 1], 10);
+            const ppid = parseInt(parts[parts.length - 2], 10);
+            const name = parts.slice(1, parts.length - 2).join(',').trim();
+            if (!name || isNaN(pid) || isNaN(ppid)) continue;
+            byPid.set(pid, name);
+            if (!byParent.has(ppid)) byParent.set(ppid, []);
+            byParent.get(ppid).push({ pid, name });
+          }
         }
       }
-    }
-    _winTable = { ts: Date.now(), byParent, byPid };
-  };
+      _winTable = { ts: Date.now(), byParent, byPid };
+    };
 
-  const tryPowershell = () => {
-    try {
-      execFile(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command',
-          'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name | ForEach-Object { "$($_.ProcessId):$($_.ParentProcessId):$($_.Name)" }'],
-        { timeout: 5000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
-        (err, stdout) => {
-          _winUpdating = false;
-          if (err || !stdout) return;
-          onOutput(stdout);
-        }
-      );
-    } catch {
-      _winUpdating = false;
-    }
-  };
-
-  try {
-    if (_hasWmic) {
-      execFile(
-        'wmic',
-        ['process', 'get', 'ProcessId,ParentProcessId,Name', '/format:csv'],
-        { timeout: 3000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
-        (err, stdout) => {
-          if (err || !stdout || !stdout.includes(',')) {
-            _hasWmic = false;
-            tryPowershell();
-            return;
+    const tryPowershell = () => {
+      try {
+        execFile(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-Command',
+            'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name | ForEach-Object { "$($_.ProcessId):$($_.ParentProcessId):$($_.Name)" }'],
+          { timeout: 5000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+          (err, stdout) => {
+            done();
+            if (err || !stdout) return;
+            onOutput(stdout);
           }
-          onOutput(stdout);
-        }
-      );
-    } else {
-      tryPowershell();
+        );
+      } catch {
+        done();
+      }
+    };
+
+    try {
+      if (_hasWmic) {
+        execFile(
+          'wmic',
+          ['process', 'get', 'ProcessId,ParentProcessId,Name', '/format:csv'],
+          { timeout: 3000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+          (err, stdout) => {
+            if (err || !stdout || !stdout.includes(',')) {
+              _hasWmic = false;
+              tryPowershell();
+              return;
+            }
+            onOutput(stdout);
+          }
+        );
+      } else {
+        tryPowershell();
+      }
+    } catch {
+      done();
     }
-  } catch {
-    _winUpdating = false;
-  }
+  }).finally(() => { _winRefresh = null; });
+}
+
+// Guards that stop an agent or type into it need the processes as of now, not a table up to seconds old.
+async function runningProcessInfoFresh(pid) {
+  if (process.platform === 'win32') { await _winRefresh; await refreshWindowsProcessTable(); }
+  return runningProcessInfo(pid);
 }
 
 function windowsProcessTable() {
@@ -226,8 +245,8 @@ function windowsProcessInfo(pid) {
   // The PTY child itself can be the workload (an agent launched directly,
   // not through a shell), matching the Linux non-shell direct-child rule.
   const ownBase = own.replace(/\.exe$/i, '');
-  if (!WIN_IDLE_RE.test(ownBase.toLowerCase())) return { running: true, name: ownBase, pid };
   const byParent = table.byParent;
+  if (!WIN_IDLE_RE.test(ownBase.toLowerCase())) return winWorkload(byParent, pid, ownBase);
   // BFS through nested shells / console helpers (depth-capped) looking for
   // the first real workload process.
   const seen = new Set([pid]);
@@ -245,7 +264,7 @@ function windowsProcessInfo(pid) {
           next.push(k.pid); // nested shell / conhost — look inside it
           continue;
         }
-        return { running: true, name: base, pid: k.pid };
+        return winWorkload(byParent, k.pid, base);
       }
     }
     frontier = next;
@@ -278,4 +297,4 @@ function foregroundPid(pid) {
   return tpgid > 1 ? tpgid : null;
 }
 
-module.exports = { hasRunningProcess, runningProcessInfo, refreshWindowsProcessTable, processWorkingDirectory, foregroundPid };
+module.exports = { hasRunningProcess, runningProcessInfo, runningProcessInfoFresh, refreshWindowsProcessTable, processWorkingDirectory, foregroundPid };
