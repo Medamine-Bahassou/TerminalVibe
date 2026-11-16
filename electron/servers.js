@@ -1,6 +1,8 @@
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const execute = promisify(execFile);
+// A cold PowerShell loading the NetTCPIP/CIM modules can take over 8s (seen on CI runners).
+const TIMEOUT = process.platform === 'win32' ? 30000 : 8000;
 
 function parseSs(output) {
   return output.trim().split(/\r?\n/).filter(Boolean).map(line => {
@@ -43,7 +45,7 @@ let pending;
 async function allServers() {
   if (pending) return pending;
   pending = (async () => {
-    const options = { timeout: 8000, maxBuffer: 2 * 1024 * 1024, windowsHide: true };
+    const options = { timeout: TIMEOUT, maxBuffer: 2 * 1024 * 1024, windowsHide: true };
     if (process.platform === 'win32') {
       const command = "$ErrorActionPreference='Stop'; $names=@{}; Get-Process | ForEach-Object { $names[[int]$_.Id]=$_.ProcessName }; @(Get-NetTCPConnection -State Listen -ErrorAction Stop | ForEach-Object { @{address=$_.LocalAddress;port=[int]$_.LocalPort;pid=[int]$_.OwningProcess;process=$names[[int]$_.OwningProcess]} }) | ConvertTo-Json -Compress";
       const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], options);
@@ -67,7 +69,7 @@ async function allServers() {
 
 // pid -> parent pid for every process on the machine.
 async function processParents() {
-  const options = { timeout: 8000, maxBuffer: 8 * 1024 * 1024, windowsHide: true };
+  const options = { timeout: TIMEOUT, maxBuffer: 8 * 1024 * 1024, windowsHide: true };
   const { stdout } = process.platform === 'win32'
     ? await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }'], options)

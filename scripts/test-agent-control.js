@@ -428,7 +428,7 @@ async function main() {
     const browserDirectory = path.join(browserHome, '.terminalvibe', 'control');
     const serversUrl = `http://127.0.0.1:${appPort}/api/servers`;
     const discovered = await (await fetch(serversUrl)).json();
-    assert(Array.isArray(discovered.servers) && !discovered.servers.some(server => server.port === appPort), 'Server discovery HTTP API lists only servers started from its terminals, not the app itself');
+    assert(Array.isArray(discovered.servers) && !discovered.servers.some(server => server.port === appPort), `Server discovery HTTP API lists only servers started from its terminals, not the app itself: ${JSON.stringify(discovered)} ${logs}`);
     assert.equal((await fetch(serversUrl, { headers: { Origin: 'https://untrusted.example' } })).status, 403);
     assert.equal((await fetch(serversUrl, { method: 'POST' })).status, 405);
     const browserDescriptor = JSON.parse(fs.readFileSync(path.join(browserDirectory, fs.readdirSync(browserDirectory)[0]), 'utf8'));
