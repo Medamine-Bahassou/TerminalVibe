@@ -121,8 +121,17 @@ async function parseFile(file, parse) {
 }
 
 function parseClaude(list) {
-  const items = [], tools = new Map();
+  const items = [], tools = new Map(), queued = [];
   for (const row of list) {
+    // A message sent while Claude was working (a steer) is recorded only as a queued_command attachment, never as
+    // a user row: show it as the user's message. Claude Code's own queued notices (<task-notification>…) stay out.
+    const qc = row.type === 'attachment' && row.attachment?.type === 'queued_command' ? row.attachment : null;
+    if (qc && (qc.commandMode || 'prompt') === 'prompt' && typeof qc.prompt === 'string' && qc.prompt.trim() && !qc.prompt.trim().startsWith('<') && !row.isSidechain) {
+      const text = stripNote(qc.prompt.trim());
+      items.push({ role: 'user', text, ...threadRefs(qc.prompt), ts: qc.timestamp || row.timestamp || null, steered: true });
+      queued.push(text);
+      continue;
+    }
     if (!['user', 'assistant'].includes(row.type) || row.isMeta || row.isSidechain) continue;
     const content = row.message?.content;
     const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
@@ -132,10 +141,14 @@ function parseClaude(list) {
         const text = String(b.text || '').trim();
         // Claude Code's own "[Request interrupted by user]" / "… for tool use]" markers are not prompts:
         // they flag the step the user stopped (the chat shows an "Interrupted" line after that turn).
+        // Claude Code's own filler reply (model "<synthetic>", not the model's): never shown as an answer.
+        if (row.type === 'assistant' && row.message?.model === '<synthetic>' && /^No response requested\.?$/.test(text)) continue;
         if (row.type === 'user' && /^\[Request interrupted by user/.test(text)) {
-          if (items.length) items[items.length - 1].interrupted = /tool use/.test(text) ? 'tool' : 'reply';
+          if (items.length) Object.assign(items[items.length - 1], { interrupted: /tool use/.test(text) ? 'tool' : 'reply', interruptedAt: row.timestamp || null });
           continue;
         }
+        // A steer Claude Code also wrote as a user row (when it hosts its own turn): shown once, as the steer.
+        if (row.type === 'user' && queued.length && queued[0] === stripNote(text)) { queued.shift(); continue; }
         if (text && !text.startsWith('<') && !(row.type === 'user' && isOldHandoff(text))) items.push({ role: row.type, text: row.type === 'user' ? stripNote(text) : text, ...(row.type === 'user' ? threadRefs(text) : {}), ts: row.timestamp || null });
       } else if (b?.type === 'thinking' && row.type === 'assistant') {
         const text = String(b.thinking || '').trim();

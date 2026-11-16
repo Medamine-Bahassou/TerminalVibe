@@ -148,6 +148,7 @@
       <div class="ts-sash" aria-hidden="true"></div>
       <div class="ts-head">
         <label class="ts-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input id="ts-search" type="text" placeholder="Search" aria-label="Search threads" spellcheck="false" autocomplete="off"></label>
+        <button type="button" class="ts-icon-btn" id="ts-filter" title="Filter by project" aria-label="Filter by project"><i class="ph ph-funnel-simple"></i></button>
         <button type="button" class="ts-icon-btn" id="ts-new" title="New thread" aria-label="New thread"><i class="ph ph-note-pencil"></i></button>
       </div>
       <div class="ts-list" id="ts-list" role="list"></div>
@@ -170,10 +171,11 @@
     </div>
     <div class="thr-composer-wrap">
       <div class="thr-new-head" id="sbr-thread-new-head">What should we work on?</div>
+      <button type="button" class="thr-scroll-end" id="sbr-thread-scroll-end" hidden><i class="ph ph-caret-down" aria-hidden="true"></i>Scroll to end</button>
       <div class="thr-sides" id="sbr-thread-sides" role="navigation" aria-label="Side chats" hidden></div>
       <div class="thr-ask" id="sbr-thread-ask" role="group" aria-label="The agent's question" hidden></div>
+      <div class="thr-complete" id="sbr-thread-complete" role="listbox" aria-label="Suggestions" hidden></div>
       <form class="thr-composer" id="sbr-thread-composer" autocomplete="off">
-        <div class="thr-complete" id="sbr-thread-complete" role="listbox" aria-label="Suggestions" hidden></div>
         <div class="thr-attachments" id="sbr-thread-attachments" aria-label="Attached files" hidden></div>
         <div class="thr-input-wrap">
           <textarea id="sbr-thread-input" rows="2" aria-hidden="true" tabindex="-1" placeholder="Ask anything" spellcheck="false"></textarea>
@@ -418,6 +420,22 @@
                     <option value="workspace">Workspace folder</option>
                   </select>
                   <div class="custom-dropdown" data-for="set-thread-folder"></div>
+                </div>
+              </div>
+              <div
+                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Composer markdown</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Renders markdown in the
+                    message box as you type. The text sent is unchanged</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-thread-markdown" class="native-select-hidden">
+                    <option value="on">Rendered</option>
+                    <option value="markers">Show markers</option>
+                    <option value="off">Plain text</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-thread-markdown"></div>
                 </div>
               </div>
               <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">

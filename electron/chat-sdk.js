@@ -37,7 +37,7 @@ function toolSummary(name, input = {}) {
 // Claude Code's AskUserQuestion: one tray per question, answered in turn.
 function claudeQuestionAsk(q) {
   return {
-    question: q.question || q.header || 'Claude has a question', detail: q.header && q.question ? [q.header] : [], multi: !!q.multiSelect,
+    question: q.question || q.header || 'Claude has a question', header: q.question ? q.header || '' : '', detail: [], multi: !!q.multiSelect,
     options: [...(q.options || []).map(o => ({ label: String(o.label), desc: o.description || '' })), { label: ASK_INPUT, desc: '', input: true },
       ...(q.multiSelect ? [{ label: 'Submit', submit: true }] : [])],
   };
@@ -180,6 +180,8 @@ class ClaudeSession extends Session {
   }
   onControl(m) {
     const reply = response => this.write({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response } });
+    // Stop pressed while this request is open: refuse it and end the turn, so Claude Code stops waiting on it.
+    const stopped = () => reply({ behavior: 'deny', message: 'The user stopped this turn.', interrupt: true });
     const req = m.request || {};
     if (req.subtype !== 'can_use_tool') {
       this.write({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: `Unsupported request: ${req.subtype}` } });
@@ -190,17 +192,18 @@ class ClaudeSession extends Session {
       const next = i => {
         if (i >= questions.length) { reply({ behavior: 'allow', updatedInput: { ...req.input, questions, answers } }); return; }
         const q = questions[i], ask = claudeQuestionAsk(q);
-        this.addAsk(ask, a => {
+        const id = this.addAsk(ask, a => {
           const labels = (a.indices || []).map(k => ask.options[k]?.label).filter(Boolean);
           answers[q.question] = a.text != null ? a.text : q.multiSelect ? labels.join(', ') : ask.options[a.index]?.label ?? '';
           next(i + 1);
         });
+        this.asks.get(id).cancel = stopped;
       };
       next(0);
       return;
     }
     const ask = claudePermissionAsk(req);
-    this.addAsk(ask, a => {
+    const id = this.addAsk(ask, a => {
       const label = ask.options[a.index]?.label;
       if (req.tool_name === 'ExitPlanMode') {
         if (label === 'Yes, start') {
@@ -214,13 +217,18 @@ class ClaudeSession extends Session {
       else if (label === "Yes, and don't ask again") reply({ behavior: 'allow', updatedInput: req.input, updatedPermissions: req.permission_suggestions });
       else reply({ behavior: 'deny', message: a.text || 'The user denied this.' });
     });
+    this.asks.get(id).cancel = stopped;
   }
   send(text) {
     this.setBusy(true);
     this.write({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, session_id: this.sessionId || '' });
     return Promise.resolve(true);
   }
-  interrupt() { this.control({ subtype: 'interrupt' }); }
+  interrupt() {
+    // An open permission / question request would keep the turn waiting on its answer: deny it (and interrupt) first.
+    for (const [id, a] of this.asks) { a.cancel?.(); this.asks.delete(id); this.emit('ask-done', { id }); }
+    this.control({ subtype: 'interrupt' });
+  }
   setAccess(access) {
     if (access === this.access) return;
     this.access = access;
@@ -282,7 +290,7 @@ class CodexSession extends Session {
       const next = i => {
         if (i >= questions.length) { reply({ answers }); return; }
         const q = questions[i];
-        const ask = { question: q.question || q.header || 'Codex has a question', detail: q.header && q.question ? [q.header] : [],
+        const ask = { question: q.question || q.header || 'Codex has a question', header: q.question ? q.header || '' : '', detail: [],
           options: [...(q.options || []).map(o => ({ label: String(o.label), desc: o.description || '' })), ...(q.isOther || !q.options?.length ? [{ label: ASK_INPUT, input: true }] : [])] };
         const id = this.addAsk(ask, a => { answers[q.id] = { answers: [a.text != null ? a.text : ask.options[a.index]?.label ?? ''] }; next(i + 1); });
         this.asks.get(id).requestId = m.id;
@@ -539,6 +547,7 @@ if (require.main === module) {
   assert.strictEqual(claudePermissionAsk({ tool_name: 'ExitPlanMode', input: { plan: 'step 1\nstep 2' } }).detail.length, 2);
   const q = claudeQuestionAsk({ question: 'Pick?', header: 'H', multiSelect: true, options: [{ label: 'A', description: 'a' }, { label: 'B' }] });
   assert.deepStrictEqual(q.options.map(o => o.label), ['A', 'B', ASK_INPUT, 'Submit']);
+  assert.strictEqual(q.header, 'H');
   // Codex: the offered decisions, and full access as never-ask + no sandbox, per thread and per turn.
   const c = codexAsk('item/commandExecution/requestApproval', { command: 'ls', reason: 'List?', availableDecisions: ['accept', { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['ls'] } }, 'cancel'] });
   assert.deepStrictEqual(c.ask.options.map(o => o.label), ['Yes', "Yes, and don't ask again for this command", 'No, and stop']);
