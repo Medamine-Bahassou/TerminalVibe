@@ -1170,6 +1170,80 @@ ipcMain.handle('git:branch', async (_e, cwd) => {
     if (path.dirname(dir) === dir) return null;
   }
 });
+// Local branches of a folder's repo, and switching to one (git refuses when local changes would be lost).
+const git = (cwd, args, env) => new Promise(res => require('child_process').execFile('git', args, { cwd, env, timeout: 15000, maxBuffer: 64 << 20 }, (err, out, errOut) =>
+  res({ ok: !err, out: String(out), error: err && (String(errOut).trim().split('\n').pop() || err.message) })));
+
+// A chat turn's changes, whatever made them (edit tools, sed, scripts, formatters): the folder's working
+// tree is snapshotted as a git tree when the turn starts and diffed against its state when it ends.
+// The snapshot goes through a throwaway index (a copy of the real one, so unchanged files aren't rehashed);
+// the user's staging area is never touched. Untracked files count, ignored ones don't.
+async function gitSnapshot(cwd) {
+  if (!cwd || typeof cwd !== 'string') return null;
+  const r = await git(cwd, ['rev-parse', '--show-toplevel', '--git-path', 'index']);
+  if (!r.ok) return null;
+  const [root, index] = r.out.trim().split('\n');
+  const tmp = path.join(require('os').tmpdir(), `terminalvibe-index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  try {
+    await fs.promises.copyFile(path.resolve(cwd, index), tmp).catch(() => {}); // no index yet: starts empty
+    const env = { ...process.env, GIT_INDEX_FILE: tmp };
+    if (!(await git(root, ['add', '-A'], env)).ok) return null;
+    const tree = await git(root, ['write-tree'], env);
+    return tree.ok ? { root, tree: tree.out.trim() } : null;
+  } finally { fs.promises.rm(tmp, { force: true }).catch(() => {}); }
+}
+ipcMain.handle('git:snapshot', async (_e, cwd) => (await gitSnapshot(cwd))?.tree || null);
+// Files changed between two snapshots, as the chat's changed-files card wants them: [{ path, add, del, patch }].
+ipcMain.handle('git:turn-diff', async (_e, cwd, from, to) => {
+  const isTree = s => typeof s === 'string' && /^[0-9a-f]{40,64}$/.test(s);
+  if (!isTree(from) || !isTree(to)) return null;
+  const r = await git(cwd, ['rev-parse', '--show-toplevel']);
+  if (!r.ok) return null;
+  const root = r.out.trim();
+  const d = await git(root, ['diff', '--no-color', '--no-ext-diff', '--no-renames', from, to]);
+  if (!d.ok) return null;
+  const files = [];
+  let cur = null;
+  for (const line of d.out.split('\n')) {
+    const m = /^diff --git a\/.* b\/(.*)$/.exec(line);
+    if (m) { cur = { path: path.join(root, m[1]), lines: [], body: false }; files.push(cur); continue; }
+    if (!cur) continue;
+    if (line.startsWith('@@')) cur.body = true;
+    else if (!cur.body && line.startsWith('Binary files')) { cur.lines.push('(binary file changed)'); continue; }
+    if (cur.body && line) cur.lines.push(line);
+  }
+  return files.map(f => require('./threads').fileChange(f.path, f.lines));
+});
+ipcMain.handle('git:branches', async (_e, cwd) => {
+  if (!cwd || typeof cwd !== 'string') return [];
+  const r = await git(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);
+  return r.ok ? r.out.split('\n').filter(Boolean) : [];
+});
+ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
+  if (!cwd || typeof cwd !== 'string' || typeof branch !== 'string' || !branch || branch.startsWith('-')) return { ok: false, error: 'Invalid branch' };
+  const r = await git(cwd, ['switch', branch]);
+  return { ok: r.ok, error: r.error };
+});
+// A short title for a new chat, from its first message, by the small model of the agent the chat uses
+// (so it runs on that agent's own login/plan). Run outside any project so no CLAUDE.md/AGENTS.md is loaded.
+ipcMain.handle('chat:title', async (_e, harness, text) => {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const prompt = 'Write a 3-6 word title for a coding chat that starts with the message below. Reply with the title only: no quotes, no trailing period.\n\nMessage:\n' + text.slice(0, 2000);
+  const env = terminalEnv(), bin = require('./threads').detectAgents([harness], env)[harness];
+  let args;
+  if (harness === 'claude') args = ['-p', '--model', 'haiku', '--effort', 'low', '--tools', '', '--no-session-persistence', '--setting-sources', '', prompt];
+  else if (harness === 'codex') {
+    let small = null;
+    try { small = JSON.parse(fs.readFileSync(path.join(require('os').homedir(), '.codex', 'models_cache.json'), 'utf8')).models
+      .find(m => m.visibility === 'list' && /luna|mini|nano/.test(m.slug))?.slug; } catch {}
+    args = ['exec', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '-c', 'model_reasoning_effort="low"', ...(small ? ['-m', small] : []), prompt];
+  }
+  if (!bin || !args) return null; // ponytail: Claude Code and Codex only; other agents keep the first-message title
+  const out = await new Promise(res => require('child_process').execFile(bin, args, { cwd: require('os').tmpdir(), env, timeout: 60000 },
+    (err, stdout) => res(err ? '' : String(stdout))));
+  const title = out.trim().split('\n').pop().trim().replace(/^["'`*#\s]+|["'`*.\s]+$/g, '');
+  return title && title.length <= 80 ? title : null;
+});
 // Warm the transcript image indexes after launch, so the first "[Image #N]" hover is quick too.
 setTimeout(() => {
   const sessions = require('./claude-sessions');

@@ -130,6 +130,12 @@ function parseClaude(list) {
     for (const b of blocks) {
       if (b?.type === 'text') {
         const text = String(b.text || '').trim();
+        // Claude Code's own "[Request interrupted by user]" / "… for tool use]" markers are not prompts:
+        // they flag the step the user stopped (the chat shows an "Interrupted" line after that turn).
+        if (row.type === 'user' && /^\[Request interrupted by user/.test(text)) {
+          if (items.length) items[items.length - 1].interrupted = /tool use/.test(text) ? 'tool' : 'reply';
+          continue;
+        }
         if (text && !text.startsWith('<') && !(row.type === 'user' && isOldHandoff(text))) items.push({ role: row.type, text: row.type === 'user' ? stripNote(text) : text, ...(row.type === 'user' ? threadRefs(text) : {}), ts: row.timestamp || null });
       } else if (b?.type === 'thinking' && row.type === 'assistant') {
         const text = String(b.thinking || '').trim();
@@ -417,4 +423,4 @@ async function deleteThread(id, home = os.homedir(), root = threadsRoot(home)) {
   return true;
 }
 
-module.exports = { detectAgents, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, parseClaude, parseCodex };
+module.exports = { detectAgents, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, parseClaude, parseCodex, fileChange };

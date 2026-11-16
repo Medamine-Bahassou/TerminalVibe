@@ -8407,10 +8407,30 @@
         _tabAgent.set(t.id, h?.id || null);
         syncTabAgentIcon(t); // also catches agents the chat started itself
         if (h && before !== h.id && t.threadHistory) await adoptThreadAgent(t, h, ws); // typed into the Chat tab's own terminal
+        // The permission mode can change inside Claude Code (Shift+Tab, leaving plan mode): the picker follows it.
+        // Only a change seen in the footer is taken, so a pick waiting for the next message isn't overwritten.
+        const mode = h?.id === 'claude' && t.threadHistory && t._chatCfg && !t._modeSwitching ? claudeFooterMode(t) : null;
+        if (mode && mode !== t._footerMode) {
+          t._footerMode = mode;
+          if (t._chatCfg.access !== mode) { t._chatCfg.access = mode; setChatOpts(t, { access: mode }); }
+        }
       }
     } finally { _watching = false; }
   }
   setInterval(() => { if (!DETACHED_ONLY && !SETTINGS_ONLY) watchThreadAgents(); }, 1500);
+  // Claude Code's permission mode, read from its footer: "⏵⏵ auto mode on", "⏸ plan mode on", "⏸ manual mode on"
+  // (asks first). The footer is the last mode line on the screen: it sits mid-screen while the conversation is
+  // short, so the whole screen is read. null when no footer is showing (a dialog covers it).
+  const CLAUDE_FOOTER_MODES = { 'auto mode': 'auto', 'accept edits': 'acceptEdits', 'plan mode': 'plan', 'bypass permissions': 'bypassPermissions', 'manual mode': 'default' };
+  function claudeFooterMode(t) {
+    const b = t.term?.buffer?.active, rows = t.term?.rows;
+    if (!b || !rows) return null;
+    for (let y = b.baseY + rows - 1; y >= b.baseY; y--) {
+      const m = /^\s*(?:⏵⏵|⏸)\s*(auto mode|accept edits|plan mode|bypass permissions|manual mode) on\b/i.exec(b.getLine(y)?.translateToString(true) || '');
+      if (m) return CLAUDE_FOOTER_MODES[m[1].toLowerCase()];
+    }
+    return null;
+  }
 
   // ── Threads sidebar footer: each agent's plan usage — its most-used window and the time left to its reset;
   // the tooltip lists every window. Read through the agents' own CLIs (main process, cached 1 min). ──
@@ -8789,7 +8809,7 @@
     // The agent running there; a Chat tab with none running yet (e.g. right after startup, before it
     // resumes) shows its thread's latest agent, as the threads sidebar does.
     const h = (isLiveTerminal(t) ? harnessOf(_tabAgent.get(t.id)) : null)
-      || (t.threadHistory ? harnessOf(threadSegments(t).findLast(x => x.used)?.harness) : null);
+      || (t.threadHistory ? harnessOf(threadSegments(t).findLast(x => x.used)?.harness || chatOpts(t).harness) : null); // a new chat: the agent it will start
     const key = h?.id || '';
     let icon = el.querySelector('.tg-tab-agent');
     if ((icon?.dataset.agent || '') === key) return;
@@ -8994,7 +9014,7 @@
   // Small popover list (the chat composer's agent / model / effort / access pickers).
   let _pickMenu = null;
   function closePickMenu() { _pickMenu?.remove(); _pickMenu = null; }
-  function openPickMenu(trigger, items, onPick) {
+  function openPickMenu(trigger, items, onPick, alignRight = false) {
     const reopen = _pickMenu?._trigger === trigger;
     closePickMenu();
     if (reopen) return;
@@ -9014,7 +9034,7 @@
     document.body.appendChild(menu);
     const r = trigger.getBoundingClientRect();
     const w = menu.offsetWidth;
-    menu.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
+    menu.style.left = Math.max(8, Math.min(alignRight ? r.right - w : r.left, innerWidth - w - 8)) + 'px';
     menu.style.top = (r.bottom + 6 + menu.offsetHeight > innerHeight ? Math.max(8, r.top - 6 - menu.offsetHeight) : r.bottom + 6) + 'px';
     _pickMenu = menu;
     (menu.querySelector('.selected') || menu.firstChild)?.focus();
@@ -9037,11 +9057,16 @@
       // CLI aliases: each always means that family's latest model.
       models: [{ id: 'opus', name: 'Claude Opus' }, { id: 'sonnet', name: 'Claude Sonnet' }, { id: 'haiku', name: 'Claude Haiku' }, { id: 'fable', name: 'Claude Fable' }]
         .map(m => ({ ...m, efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'default' })),
-      access: [['default', 'Ask first', 'ph-shield'], ['acceptEdits', 'Accept edits', 'ph-pencil-simple'], ['plan', 'Plan only', 'ph-list-checks'], ['bypassPermissions', 'Full access', 'ph-shield-slash']],
+      // --permission-mode values (Claude Code 2.1.325); "auto" lets a classifier approve safe actions.
+      access: [['default', 'Ask first', 'ph-shield'], ['auto', 'Auto', 'ph-magic-wand'], ['acceptEdits', 'Accept edits', 'ph-pencil-simple'], ['plan', 'Plan only', 'ph-list-checks'], ['bypassPermissions', 'Full access', 'ph-shield-slash']],
       argv: (o, sid, resume, fork) => [...(o.model !== 'default' ? ['--model', o.model] : []), ...(o.effort !== 'default' ? ['--effort', o.effort] : []),
-        ...(o.access !== 'default' ? ['--permission-mode', o.access] : []),
-        // Fast mode and Ultracode are Claude Code settings.
-        ...(o.fast || o.ultra ? ['--settings', JSON.stringify({ ...(o.fast ? { fastMode: true } : {}), ...(o.ultra ? { ultracode: true } : {}) })] : []),
+        // Always explicit: with no flag Claude Code starts in its own default, which can be auto mode,
+        // so "Ask first" is its "manual" mode.
+        '--permission-mode', o.access === 'default' ? 'manual' : o.access,
+        // Fast mode and Ultracode are Claude Code settings. So is skipping Full access's startup warning, whose
+        // default answer ("No, exit") the chat's Enter would pick: choosing Full access in the chat is the consent.
+        ...(o.fast || o.ultra || o.access === 'bypassPermissions' ? ['--settings', JSON.stringify({ ...(o.fast ? { fastMode: true } : {}), ...(o.ultra ? { ultracode: true } : {}),
+          ...(o.access === 'bypassPermissions' ? { skipDangerousModePermissionPrompt: true } : {}) })] : []),
         ...(fork ? ['--resume', fork, '--fork-session'] : []), resume ? '--resume' : '--session-id', sid],
     },
     codex: {
@@ -9268,6 +9293,18 @@
     const r = e.currentTarget.getBoundingClientRect();
     showCtxMenu({ pageX: r.left, pageY: r.top - 6, above: true }, 'chat-cwd', curChat());
   });
+  thrChip('branch')?.addEventListener('click', async e => {
+    e.stopPropagation();
+    const tab = curChat(), cwd = chatCwd(tab), r = e.currentTarget.getBoundingClientRect();
+    const branches = await window.electronAPI?.gitBranches?.(cwd) || [];
+    showCtxMenu({ pageX: r.left, pageY: r.top - 6, above: true }, 'chat-branch', { tab, cwd, branches });
+  });
+  async function setChatBranch(tab, cwd, branch) {
+    const r = await window.electronAPI.gitCheckout(cwd, branch);
+    if (!r.ok) zoomBadge(r.error || 'Could not switch branch');
+    _gitBranch.delete(cwd);
+    syncThreadComposer(tab); renderThreadsSidebar();
+  }
   function setChatCwd(tab, dir) {
     if (!tab || !dir || threadHasMessages(tab)) return;
     tab.chat.cwd = tab.cwd = dir;
@@ -9346,7 +9383,7 @@
     pop.querySelector('.mp-access').addEventListener('click', e => {
       const o = chatOpts(ws);
       openPickMenu(e.currentTarget, CHAT_AGENTS[o.harness].access.map(([v, label, icon]) => ({ value: v, label, selected: v === o.access, icon: `<i class="ph ${icon}"></i>` })),
-        v => { setChatOpts(ws, { access: v }); render(); pop.querySelector('.mp-access').focus(); });
+        v => { setChatOpts(ws, { access: v }); render(); pop.querySelector('.mp-access').focus(); void applyClaudeMode(ws, v); }, true);
     });
     pop.querySelector('.mp-speed').addEventListener('click', e => { const b = e.target.closest('[data-fast]'); if (b) { setChatOpts(ws, { fast: b.dataset.fast === '1' }); render(); } });
     pop.querySelector('.mp-ultra').addEventListener('click', () => { setChatOpts(ws, { ultra: !chatOpts(ws).ultra }); render(); });
@@ -9404,6 +9441,33 @@
       sendStdin(t.id, enc(steer && _tabAgent.get(t.id) === 'claude' ? '\x18\x13' : '\r'));
       resolve(true);
     }, _tabAgent.get(t.id) === 'codex' ? 300 : 50));
+  }
+  // A permission mode picked in the chat applies to the running Claude Code right away: Shift+Tab cycles its
+  // modes until its footer shows the pick. A mode outside the cycle (Full access needs a start flag) or a
+  // hidden footer (a dialog is open) leaves it to the next message, which restarts the agent with the pick.
+  async function applyClaudeMode(tab, target) {
+    const t = liveThreadAgent(tab);
+    if (!t || _tabAgent.get(t.id) !== 'claude' || !t._chatCfg || t._modeSwitching) return;
+    // Full access joins the cycle only when the agent was started with it: an idle agent restarts with it now
+    // (same session); a busy one keeps working and takes it with the next message.
+    if (target === 'bypassPermissions' && t._chatCfg.access !== target) {
+      if (!chatWorking(tab) && !_chatStarting.has(tab.id)) await startChatAgent(tab, tab, null, t);
+      return;
+    }
+    t._modeSwitching = true; // the footer watcher leaves the pick alone meanwhile
+    try {
+      for (let i = 0; i < 6 && isLiveTerminal(t) && chatOpts(tab).access === target; i++) {
+        const cur = claudeFooterMode(t);
+        if (!cur) return;
+        if (cur === target) { t._chatCfg.access = t._footerMode = target; return; }
+        sendStdin(t.id, new TextEncoder().encode('\x1b[Z')); // Shift+Tab
+        for (let w = 0; w < 10 && claudeFooterMode(t) === cur; w++) await new Promise(r => setTimeout(r, 100));
+      }
+    } finally {
+      t._modeSwitching = false;
+      // Not reached: the mode it stopped on isn't taken as a new pick (the next message restarts with the pick).
+      if (t._footerMode !== target) t._footerMode = claudeFooterMode(t) || t._footerMode;
+    }
   }
   // What the agent shows right now: the visible screen only, not the scrollback
   // (a background tab's buffer fills without a renderer).
@@ -9606,6 +9670,7 @@
       if (!isLiveTerminal(entry) || !await agentRunning(entry, h)) { zoomBadge(`${h.name} exited before the message was sent`); return false; }
       entry._handoff = handoff;
       entry._sideNote = firstSide;
+      if (text == null) return true; // a restart with new flags only: the notes ride on the next message
       return await sendToAgent(entry, text);
     } catch (err) { zoomBadge(err.message || `Could not start ${h.name}`); return false; }
     finally { _chatStarting.delete(ws.id); if (curChat() === ws) syncThreadPanel(true); }
@@ -10225,6 +10290,64 @@
     if (ws.chat?.draft) { ws.chat.draft = ''; renderThreadsSidebar(); }
     if (curChat() === ws) { thrInput.value = ''; _chatFiles = []; autosizeThreadInput(); renderChatFiles(); }
   }
+  // The first-message title shows at once; the agent's small model replaces it with a short one, unless renamed meanwhile.
+  function autoTitleChat(ws, text, force) {
+    const first = ws.chat.title;
+    ws._titling = true; renderThreadsSidebar(); // its card's title shimmers meanwhile
+    return (window.electronAPI?.chatTitle?.(chatOpts(ws).harness, text) || Promise.resolve(null)).then(t => {
+      if (!t || (!force && ws.chat?.title !== first)) return false;
+      ws.chat.title = t; setChatTabLabel(ws); saveState();
+      return true;
+    }, () => false).finally(() => { ws._titling = false; renderThreadsSidebar(); });
+  }
+  // Right-click → Regenerate title: from the thread's first prompt (its saved history), else its current title.
+  async function regenerateChatTitle(tab) {
+    tab.chat ||= { createdAt: Date.now() };
+    let text = '';
+    try { text = (await window.electronAPI.threadHistory(threadMeta(tab))).flatMap(h => h.items).find(m => m.role === 'user' && m.text)?.text || ''; } catch {}
+    text ||= tab.chat.title || '';
+    if (!text || !await autoTitleChat(tab, text, true)) zoomBadge('Could not generate a title');
+  }
+  // ── A turn's changed files from git, whatever made them (edit tools, sed, scripts) ──
+  // ws.chat.snaps: [{ at, cwd, from, to? }], the working tree (a git tree id) when each turn started;
+  // a turn ends where the next one starts, or (the latest turn) when it is first shown finished.
+  async function snapshotTurn(ws) {
+    const cwd = chatCwd(ws), at = Date.now();
+    if (!cwd || !window.electronAPI?.gitSnapshot) return;
+    const from = await Promise.race([window.electronAPI.gitSnapshot(cwd).catch(() => null), new Promise(r => setTimeout(r, 3000, null))]);
+    if (!from) return; // not a repo (or too slow): the card falls back to the edit tools' diffs
+    const snaps = ws.chat.snaps ||= [];
+    snaps.push({ at, cwd, from });
+    if (snaps.length > 100) snaps.splice(0, snaps.length - 100);
+    saveState();
+  }
+  const _turnDiffs = new Map(); // "from..to" -> files ('pending' while loading)
+  const _turnEnding = new Set(); // snapshots whose end state is being taken
+  function turnGitFiles(ws, promptTs, nextTs) {
+    const snaps = ws.chat?.snaps, ts = Date.parse(promptTs);
+    if (!snaps?.length || !ts || !window.electronAPI?.gitTurnDiff) return null;
+    // The prompt lands in the transcript just after its snapshot.
+    const snapOf = t => snaps.findLastIndex(s => s.at <= t + 5000);
+    const k = snapOf(ts);
+    const s = snaps[k];
+    if (!s || s.at < ts - 60000) return null;
+    if (nextTs && snapOf(Date.parse(nextTs)) === k) return 'later'; // the next prompt is a mid-turn message of the same turn
+    const rerender = () => { _flowSig = ''; if (curChat() === ws) refreshThreadFlow(ws); };
+    const to = s.to || snaps[k + 1]?.from;
+    if (!to) {
+      if (chatWorking(ws)) return null; // its end state is taken once the agent is done
+      if (!_turnEnding.has(s)) {
+        _turnEnding.add(s);
+        window.electronAPI.gitSnapshot(s.cwd).then(tree => { if (tree) { s.to = tree; saveState(); rerender(); } }, () => {}).finally(() => _turnEnding.delete(s));
+      }
+      return null;
+    }
+    const key = s.from + '..' + to, hit = _turnDiffs.get(key);
+    if (hit) return hit === 'pending' ? null : hit;
+    _turnDiffs.set(key, 'pending');
+    window.electronAPI.gitTurnDiff(s.cwd, s.from, to).then(files => { _turnDiffs.set(key, files || []); rerender(); }, () => _turnDiffs.set(key, []));
+    return null;
+  }
   async function deliverChatMessage(ws, message, steer = false) {
     if (_chatSending.has(ws.id) || _chatStarting.has(ws.id) || !findTermById(ws.id)) return false;
     _chatSending.add(ws.id);
@@ -10233,11 +10356,12 @@
     try {
       if (ws._terminalSessionOpening) await ws._terminalSessionOpening;
       if (findTermById(ws.id)?.term !== ws) return false;
-      if (!ws.chat.title && typed) { ws.chat.title = typed.split('\n')[0].slice(0, 80); setChatTabLabel(ws); }
+      if (!ws.chat.title && typed) { ws.chat.title = typed.split('\n')[0].slice(0, 80); setChatTabLabel(ws); autoTitleChat(ws, typed); }
       ws.chat.updatedAt = Date.now();
       const flow = thrPage.querySelector('#sbr-thread-flow');
       _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, at: Date.now(), steer }]);
-      if (!steer || !_turns.has(ws.id)) _turns.set(ws.id, { since: Date.now() });
+      const newTurn = !steer || !_turns.has(ws.id);
+      if (newTurn) _turns.set(ws.id, { since: Date.now() });
       if (curChat() === ws) {
         flow.querySelector('.thr-empty')?.remove();
         flow.querySelectorAll('.thr-pending').forEach(el => el.remove());
@@ -10246,6 +10370,7 @@
         syncWorking(ws);
       }
       _flowSig = '';
+      if (newTurn) await snapshotTurn(ws); // before the agent sees the message, so all of its changes count
       let t = liveThreadAgent(ws);
       if (t && !await agentRunning(t, harnessOf(_tabAgent.get(t.id)))) { _tabAgent.set(t.id, null); t = liveThreadAgent(ws); }
       const o = chatOpts(ws), cfg = t?._chatCfg;
@@ -10427,7 +10552,7 @@
       return `<button type="button" role="listitem" class="ts-card" draggable="true" data-tab="${x.w.id}" data-tip="${escHtml(x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
         + `<span class="ts-row"><span class="ts-folder"><i class="ph ph-folder" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span>`
         + `<span class="ts-time">${ago(x.updated)}</span>${status}</span>`
-        + `<span class="ts-title">${escHtml(x.title)}</span>`
+        + `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`
         + `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
         + (x.hs.length ? `<span class="ts-agents">${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span></button>';
     };
@@ -10686,7 +10811,7 @@
             + `<pre class="thr-tool-detail">${hlCode(x.detail || x.summary || '', /^(bash|shell|local_shell|exec_command|run_terminal_cmd|terminal)$/i.test(x.name) ? 'sh' : /^\s*[{[]/.test(x.detail || '') ? 'json' : '')}</pre></details>`).join('')
           + '</div></details>';
       };
-      const msgHtml = (m, key, showActions = true) => {
+      const msgHtml = (m, key, showActions = true, extra = '') => {
         const cls = `thr-msg ${m.role}`;
         texts.set(key, m.text);
         // Copy + time under the message, shown on hover.
@@ -10699,7 +10824,7 @@
           + '<button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></div></div>').join('')}</div>` : '';
         return m.role === 'user'
           ? `<div class="${cls}" data-key="${key}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : t?.steered?.includes(m.ts) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
-          : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${actions}</div>`;
+          : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${extra}${actions}</div>`;
       };
       // The agent's thinking: "Thought" with a one-line peek, opening to the whole text.
       const thoughtHtml = (m, key) => `<details class="thr-thought" data-key="${key}"${open.has(key) ? ' open' : ''}><summary><i class="ph ph-brain" aria-hidden="true"></i>`
@@ -10719,9 +10844,11 @@
       };
       // The files a turn changed (from its edit tools' diffs): a card with +/- counts; each file,
       // or "Open diff" for all of them, opens to its diff.
-      const changesHtml = (list, key) => {
-        const files = new Map();
-        for (const { m } of list) for (const f of m.files || []) {
+      // In a git repo the turn's real changes (turnGitFiles) win, so shell edits show too.
+      const changesHtml = (list, key, promptTs, nextTs) => {
+        const files = new Map(), git = turnGitFiles(ws, promptTs, nextTs);
+        if (git === 'later') return ''; // a message sent mid-turn: the turn's card comes after its last prompt
+        for (const f of git?.length ? git : list.flatMap(({ m }) => m.files || [])) {
           const cur = files.get(f.path) || { path: f.path, add: 0, del: 0, patches: [] };
           cur.add += f.add; cur.del += f.del; cur.patches.push(f.patch); files.set(f.path, cur);
         }
@@ -10760,8 +10887,17 @@
           html += `<details class="thr-turn" data-key="${tk}"${open.has(tk) ? ' open' : ''}><summary><span>${took || 'Steps'}</span><i class="ph ph-caret-right thr-turn-caret" aria-hidden="true"></i></summary>`
             + `<div class="thr-turn-steps">${stepsHtml(steps, i + ':' + prompt.j)}</div></details>`;
         } else if (took) html += `<div class="thr-worked">${took}</div>`;
-        if (fin >= 0) html += msgHtml(rest[fin].m, i + ':' + rest[fin].j);
-        if (!live) html += changesHtml(rest, 'chg:' + i + ':' + prompt.j);
+        // The changed-files card closes a response: none while its turn runs (a message sent mid-turn
+        // splits it, so every prompt since the turn started counts), and only on the last prompt of a turn.
+        // It sits inside the final reply so the reply's copy + time row comes after it.
+        const turnSince = _turns.get(ws.id)?.since;
+        const running = working && i === segs.length - 1 && (e === list.length || (turnSince && Date.parse(prompt.m.ts) >= turnSince - 5000));
+        const changes = !live && !running ? changesHtml(rest, 'chg:' + i + ':' + prompt.j, prompt.m.ts, list[e]?.m.ts) : '';
+        html += fin >= 0 ? msgHtml(rest[fin].m, i + ':' + rest[fin].j, true, changes) : changes;
+        // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
+        const stopped = !live && rest.find(x => x.m.interrupted)?.m.interrupted;
+        if (stopped) html += `<div class="thr-status-line" role="status"><i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span>`
+          + `<span class="thr-status-detail">· ${stopped === 'tool' ? 'Stopped by you during a tool call' : 'Stopped by you'}</span></div>`;
         u = e;
       }
     });
@@ -10939,7 +11075,11 @@
         row.addEventListener('dragstart', e => { e.preventDefault(); e.stopPropagation(); });
         procsEl.insertBefore(row, procsEl.querySelector('.ws-proc-more'));
       }
-      const html = `${procIconHtml(process.name)}${process.count > 1 ? `<span class="ws-proc-count">${process.count}</span>` : ''}<span>${escHtml(process.name)}</span>`;
+      // An agent CLI shows as its harness: brand-colored logo and product name (claude → Claude Code).
+      const h = THREAD_HARNESSES.find(x => x.bin === process.name);
+      if (h?.color) row.style.setProperty('--agent-color', h.color); else row.style.removeProperty('--agent-color');
+      row.classList.toggle('ws-proc-agent', !!h?.color);
+      const html = `${procIconHtml(process.name)}${process.count > 1 ? `<span class="ws-proc-count">${process.count}</span>` : ''}<span>${escHtml(h?.name || process.name)}</span>`;
       if (row.innerHTML !== html) row.innerHTML = html;
     });
     let count = procsEl.querySelector('.ws-proc-more');
@@ -11013,6 +11153,7 @@
     // Take focus out of a browser pane so clicking back into it fires focusin (closes the menu).
     if (document.activeElement?.matches?.('webview, iframe')) document.activeElement.blur();
     ctxEl.innerHTML = '';
+    ctxEl.style.minHeight = '';
 
     const item = (icon, label, key, fn, danger) => {
       const el = document.createElement('div');
@@ -11099,6 +11240,24 @@
         if (dirs.length) sep();
         item('<i class="ph ph-folder-plus"></i>', 'Choose folder…', '', async () => setChatCwd(tab, await window.electronAPI.selectDirectory(cur || undefined)));
       }
+    } else if (type === 'chat-branch') {
+      const { tab, cwd, branches } = data, cur = _gitBranch.get(cwd);
+      // Search field (sticky at the top) that filters the rows below.
+      const search = document.createElement('label');
+      search.className = 'ctx-search';
+      search.innerHTML = '<i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search branches…" aria-label="Search branches" spellcheck="false" autocomplete="off">';
+      search.querySelector('input').addEventListener('input', e => {
+        const q = e.target.value.trim().toLowerCase();
+        ctxEl.querySelectorAll('.ctx-item').forEach(el => { el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+      });
+      ctxEl.appendChild(search);
+      if (!branches.length) item('<i class="ph ph-git-branch"></i>', 'No branches', '', () => {});
+      branches.forEach(b => item('<i class="ph ph-git-branch"></i>', escHtml(b) + (b === cur ? ' (current)' : ''), '', () => { if (b !== cur) setChatBranch(tab, cwd, b); }));
+      // Only the rows scroll; the search field stays above them.
+      const list = document.createElement('div');
+      list.className = 'ctx-list';
+      list.append(...ctxEl.querySelectorAll(':scope > .ctx-item'));
+      ctxEl.append(list);
     } else if (type === 'chat-link') {
       const copy = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
       if (/^https?:/i.test(data)) {
@@ -11124,6 +11283,7 @@
         tab.chat.title = value.trim().slice(0, 80);
         setChatTabLabel(tab); saveState(); renderThreadsSidebar();
       }));
+      if (window.electronAPI?.chatTitle) item('<i class="ph ph-sparkle"></i>', 'Regenerate title', '', () => regenerateChatTitle(tab));
       if (h) {
         sep();
         item('<i class="ph ph-terminal-window"></i>', `Show ${escHtml(h.name)} terminal`, '', () => { openChatTab(tab); setChatView(tab, true); });
@@ -11300,6 +11460,9 @@
     ctxEl.style.top = Math.max(0, y) + 'px';
     // Flip the submenu to the left when the menu sits near the right screen edge
     ctxEl.classList.toggle('sub-flip', x + menuW + 210 > window.innerWidth);
+    // A searchable menu keeps its size while filtering (it stays on its trigger) and takes the typing.
+    const searchInput = ctxEl.querySelector('.ctx-search input');
+    if (searchInput) { ctxEl.style.minHeight = menuH + 'px'; searchInput.focus(); }
   }
 
   function hideCtxMenu() {
@@ -11319,8 +11482,11 @@
     if (!ctxEl.classList.contains('open')) return;
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideCtxMenu(); return; }
     if (!['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Enter', ' '].includes(e.key)) return;
+    const inSearch = e.target.matches?.('.ctx-search input');
+    if (inSearch && !['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)) return; // typing in a menu's search field
     e.preventDefault(); e.stopPropagation();
     const items = [...ctxEl.querySelectorAll('.ctx-item')].filter(el => el.getClientRects().length);
+    if (inSearch && e.key === 'Enter') { items[0]?.click(); return; } // Enter picks the first match
     const index = items.indexOf(document.activeElement);
     if (e.key === 'ArrowRight') { document.activeElement?.querySelector('.ctx-sub > .ctx-item')?.focus(); return; }
     if (e.key === 'ArrowLeft') { document.activeElement?.closest('.ctx-sub')?.parentElement.focus(); return; }
