@@ -1158,6 +1158,37 @@ ipcMain.handle('threads:scratch', async () => {
   await fs.promises.mkdir(dir, { recursive: true });
   return dir;
 });
+// A project's own icon as a data URL (null when it has none), found the way T3 Code's ProjectFaviconResolver does:
+// well-known icon files first, then a <link rel="icon"> in the app's index.html / root route.
+const PROJECT_ICON_FILES = ['favicon.svg', 'favicon.ico', 'favicon.png', 'public/favicon.svg', 'public/favicon.ico', 'public/favicon.png',
+  'app/favicon.ico', 'app/favicon.png', 'app/icon.svg', 'app/icon.png', 'app/icon.ico', 'src/favicon.ico', 'src/favicon.svg',
+  'src/app/favicon.ico', 'src/app/icon.svg', 'src/app/icon.png', 'assets/icon.svg', 'assets/icon.png', 'assets/logo.svg', 'assets/logo.png', '.idea/icon.svg'];
+const PROJECT_ICON_SOURCES = ['index.html', 'public/index.html', 'src/index.html', 'app/routes/__root.tsx', 'src/routes/__root.tsx', 'app/root.tsx', 'src/root.tsx'];
+const ICON_TYPES = { svg: 'image/svg+xml', png: 'image/png', ico: 'image/x-icon', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+ipcMain.handle('project:icon', async (_e, cwd) => {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
+  const root = path.resolve(cwd);
+  const read = async rel => {
+    const file = path.resolve(root, rel);
+    if (!file.startsWith(root + path.sep)) return null; // stays inside the project
+    const type = ICON_TYPES[path.extname(file).slice(1).toLowerCase()];
+    const st = type && await fs.promises.stat(file).catch(() => null);
+    if (!st?.isFile() || st.size > 512 * 1024) return null;
+    return `data:${type};base64,${(await fs.promises.readFile(file)).toString('base64')}`;
+  };
+  try {
+    for (const rel of PROJECT_ICON_FILES) { const d = await read(rel); if (d) return d; }
+    for (const rel of PROJECT_ICON_SOURCES) {
+      const src = await fs.promises.readFile(path.join(root, rel), 'utf8').catch(() => '');
+      const m = src.match(/<link\b(?=[^>]*\brel=["'](?:icon|shortcut icon)["'])(?=[^>]*\bhref=["']([^"'?#]+))[^>]*>/i)
+        || (/\brel\s*:\s*["'](?:icon|shortcut icon)["']/i.test(src) && src.match(/\bhref\s*:\s*["']([^"'?#]+)/i));
+      if (!m || /^(?:[a-z]+:|\/\/)/i.test(m[1])) continue;
+      const href = m[1].trim().replace(/^\//, '');
+      for (const c of [path.join('public', href), path.join(path.dirname(rel), href), href]) { const d = await read(c); if (d) return d; }
+    }
+  } catch {}
+  return null;
+});
 // A site's /favicon.ico as a data URL (so the chat can read its pixels and tint single-color icons); null if none.
 ipcMain.handle('favicon:get', async (_e, origin) => {
   try {

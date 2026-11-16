@@ -8708,15 +8708,22 @@
     // The agent's question: a tray on the composer's top edge (like the side chats tray), one row per choice.
     const askEl = threadPart(surface, 'ask');
     if (askEl) {
-      const a = w?.ask, askHtml = a ? `<div class="thr-ask-q"><i class="ph ph-hand-pointing" aria-hidden="true"></i><span>${escHtml(a.question)}</span></div>`
+      // Header row (the question's short header, e.g. "Task"; the caret folds the tray), the question, then one row per
+      // choice: a radio (checkbox for multi-select), the label with its description below, the number key at the right.
+      const a = w?.ask;
+      const head = a && (a.header || (/^allow\b/i.test(a.question) ? 'Permission' : 'Question'));
+      const askHtml = a ? `<button type="button" class="thr-ask-head" aria-expanded="true"><span>${escHtml(head)}</span><i class="ph ph-caret-down" aria-hidden="true"></i></button>`
+        + `<div class="thr-ask-q">${escHtml(a.question)}</div>`
         + (a.detail.length ? `<div class="thr-ask-detail">${a.detail.map(escHtml).join('<br>')}</div>` : '')
         + a.options.map((o, i) => o.submit
           ? `<button type="button" class="thr-ask-submit" data-ask-i="${i}"><i class="ph ph-check" aria-hidden="true"></i><span>Submit</span></button>`
           : o.input
-          ? `<label class="thr-ask-opt thr-ask-field"><span class="thr-ask-key">${o.key}</span><input type="text" data-ask-i="${i}" placeholder="Type something" aria-label="Your answer" spellcheck="false"></label>`
+          ? `<label class="thr-ask-opt thr-ask-field"><span class="thr-ask-radio" aria-hidden="true"></span><input type="text" data-ask-i="${i}" placeholder="Type something" aria-label="Your answer" spellcheck="false"><span class="thr-ask-key">${o.key}</span></label>`
           : `<button type="button" class="thr-ask-opt" data-ask-i="${i}"${o.checked !== undefined ? ` role="checkbox" aria-checked="${o.checked}"` : ''}>`
-            + (o.checked !== undefined ? `<span class="thr-ask-box${o.checked ? ' on' : ''}"><i class="ph ph-check" aria-hidden="true"></i></span>` : `<span class="thr-ask-key">${o.key}</span>`)
-            + `<span class="thr-ask-label">${escHtml(o.label)}</span>${o.desc ? `<span class="thr-ask-desc">${escHtml(o.desc)}</span>` : ''}</button>`).join('') : '';
+            + (o.checked !== undefined ? `<span class="thr-ask-box${o.checked ? ' on' : ''}"><i class="ph ph-check" aria-hidden="true"></i></span>` : '<span class="thr-ask-radio" aria-hidden="true"></span>')
+            + `<span class="thr-ask-text"><span class="thr-ask-label">${escHtml(o.label)}</span>${o.desc ? `<span class="thr-ask-desc">${escHtml(o.desc)}</span>` : ''}</span>`
+            + (o.key != null && o.checked === undefined ? `<span class="thr-ask-key">${o.key}</span>` : '') + '</button>').join('') : '';
+      if (askEl._q !== a?.question) askEl.classList.remove('folded'); // a new question opens unfolded
       // A redraw while typing an answer would wipe it: the tray keeps its field until the question changes.
       const typing = askEl.contains(document.activeElement) && document.activeElement.tagName === 'INPUT' && askEl._q === a?.question;
       askEl.hidden = !askHtml;
@@ -9290,6 +9297,8 @@
     }).observe(wrap);
   }
   thrPage.querySelector('#sbr-thread-ask').addEventListener('click', e => {
+    const headBtn = e.target.closest('.thr-ask-head');
+    if (headBtn) { const folded = e.currentTarget.classList.toggle('folded'); headBtn.setAttribute('aria-expanded', String(!folded)); return; }
     const askBtn = e.target.closest('button[data-ask-i]');
     if (askBtn) answerAgentQuestion(e.currentTarget, +askBtn.dataset.askI);
   });
@@ -10987,6 +10996,36 @@
   const tsSearch = document.getElementById('ts-search');
   const tsCollapsed = new Set(['settled']); // section ids folded by the user (the Settled shelf starts folded, as in T3 Code)
   let tsSettledShown = 10; // Settled shelf: 10 rows, then 25 more per "Show more"
+  // Project filter (header funnel, like T3 Code): null = all projects, '' = No project, else the folder path.
+  let tsProject = null;
+  try { const p = localStorage.getItem('tv-threads-project'); if (p != null) tsProject = p; } catch {}
+  const tsProjectKey = x => x.folder === 'No project' ? '' : x.cwd || '';
+  // A project's own icon (favicon / app icon, found by the main process like T3 Code), else the folder icon.
+  // Looked up once per folder per session; the sidebar redraws when one arrives.
+  const _projIcons = new Map(); // cwd -> { value: dataUrl | null } (value absent while loading)
+  function projectIconHtml(cwd, fallback = 'ph-folder') {
+    const folderIcon = `<i class="ph ${fallback}" aria-hidden="true"></i>`;
+    if (!cwd || chatFolderName(cwd) === 'No project' || !window.electronAPI?.projectIcon) return folderIcon;
+    let entry = _projIcons.get(cwd);
+    if (!entry) {
+      _projIcons.set(cwd, entry = {});
+      window.electronAPI.projectIcon(cwd).then(v => { entry.value = v || null; if (v) renderThreadsSidebar(); }, () => { entry.value = null; });
+    }
+    return entry.value ? `<img class="ts-proj-icon" src="${entry.value}" alt="" aria-hidden="true">` : folderIcon;
+  }
+  function setThreadsProject(p) {
+    tsProject = p;
+    try { p == null ? localStorage.removeItem('tv-threads-project') : localStorage.setItem('tv-threads-project', p); } catch {}
+    syncThreadsFilterBtn(); renderThreadsSidebar();
+  }
+  function syncThreadsFilterBtn() {
+    const b = document.getElementById('ts-filter');
+    if (!b) return;
+    const label = tsProject == null ? '' : tsProject === '' ? 'No project' : chatFolderName(tsProject);
+    b.classList.toggle('active', tsProject != null);
+    b.title = label ? `Filter: ${label}` : 'Filter by project';
+    b.setAttribute('aria-pressed', String(tsProject != null));
+  }
   // A thread's T3-style states: pinned (top shelf), settled (the user's "done"; new activity un-settles).
   function setThreadFlag(tab, key, on) {
     tab.chat ||= { createdAt: Date.now() };
@@ -11049,6 +11088,7 @@
     const q = tsSearch.value.trim().toLowerCase();
     const all = chatThreads().map(threadInfo)
       .filter(x => !q || `${x.title} ${x.folder} ${x.branch} ${x.openIn?.label || ''}`.toLowerCase().includes(q))
+      .filter(x => tsProject == null || tsProjectKey(x) === tsProject)
       .sort((a, b) => b.updated - a.updated);
     // T3 Code's sidebar logic: one-line rows ([agent] title [pin] · time, the time giving way to a Settle /
     // Un-settle action on hover); shelves Pinned · Working · the active list · Settled (10, then 25 more per click).
@@ -11057,15 +11097,16 @@
     const row = (x, shelf) => {
       const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No project' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
         ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...x.models.map(m => ({ proc: m.h.bin, text: m.text }))];
+      // Settled rows lead with the project's icon (folder icon when it has none); a working thread, the spinner.
       const lead = x.work ? '<i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>'
-        : x.h ? `<span class="ts-agent"${x.h.color ? ` style="color:${x.h.color}"` : ''}>${procIconHtml(x.h.bin, 'ph-robot')}</span>` : '<i class="ph ph-chats-circle" aria-hidden="true"></i>';
+        : projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder');
       const end = x.work ? (x.work.wait ? 'Waiting' : fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))) : ago(x.updated);
       const action = x.draft || x.work ? ''
-        : shelf === 'settled' ? '<button type="button" class="ts-act" data-act="unsettle"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>Un-settle</button>'
-        : '<button type="button" class="ts-act" data-act="settle"><i class="ph ph-check" aria-hidden="true"></i>Settle</button>';
+        : shelf === 'settled' ? '<button type="button" class="ts-act" data-act="unsettle" aria-label="Un-settle thread"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><span class="ts-act-label">Un-settle</span></button>'
+        : '<button type="button" class="ts-act" data-act="settle" aria-label="Settle thread"><i class="ph ph-check" aria-hidden="true"></i><span class="ts-act-label">Settle</span></button>';
       const pin = x.w.chat.pinned ? '<button type="button" class="ts-pin" data-act="unpin" aria-label="Unpin thread" data-tip="Unpin thread"><i class="ph ph-push-pin" aria-hidden="true"></i></button>' : '';
       const title = `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`;
-      const folder = `<span class="ts-folder">${x.draft ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : ''}<i class="ph ${x.folder === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span>`;
+      const folder = `<span class="ts-folder">${x.draft ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : ''}${projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder')}<span>${escHtml(x.folder)}</span></span>`;
       // Pinned / Working / Threads keep the full card (folder · time · status, title, branch · agents); Settled is slim.
       if (shelf !== 'settled') {
         const status = x.work ? `<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>${x.work.wait ? end : `Working ${end}`}</span>` : '';
@@ -11092,7 +11133,7 @@
       ? section('pinned', 'Pinned', pinned) + section('working', 'Working', rest.filter(x => x.work))
         + section('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
         + section('settled', 'Settled', rest.filter(settled).sort((a, b) => b.w.chat.settledAt - a.w.chat.settledAt), tsSettledShown)
-      : `<div class="ts-empty">${q ? 'No threads match' : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
+      : `<div class="ts-empty">${q ? 'No threads match' : tsProject != null ? `No threads in ${escHtml(tsProject === '' ? 'No project' : chatFolderName(tsProject))}` : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
     if (tsList.querySelector('.ts-rename')) return; // an inline rename is open: don't rebuild under it
     if (tsList._html !== html) { tsList._html = html; tsList.innerHTML = html; } // rebuild only on change (keeps hover and focus)
     syncThreadSelection();
@@ -11143,6 +11184,15 @@
   });
   tsSearch.addEventListener('input', renderThreadsSidebar);
   document.getElementById('ts-new').addEventListener('click', () => newChatTab(activeWs()));
+  document.getElementById('ts-filter')?.addEventListener('click', e => {
+    e.stopPropagation(); // the document click handler would close the menu right away
+    const btn = e.currentTarget;
+    if (ctxEl.classList.contains('open') && ctxEl._owner === btn) { hideCtxMenu(); return; } // a toggle
+    const r = btn.getBoundingClientRect();
+    showCtxMenu({ pageX: r.left, pageY: r.bottom + 6 }, 'ts-project');
+    ctxEl._owner = btn;
+  });
+  syncThreadsFilterBtn();
   // Open/closed animates its width (like the left sidebar); the terminals refit once it settles.
   let tsOpen = false;
   const tsSettle = () => { const w = activeWs(); if (w) getWorkspaceTerminals(w).forEach(t => fitTerm(t)); syncBrowserSlots(); };
@@ -11288,7 +11338,7 @@
     if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) return kids(node);
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const el = node, tag = el.nodeName;
-    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, button[data-act]')) return ''; // icons, chrome
+    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-pending-kind, button[data-act]')) return ''; // icons, chrome
     if (tag === 'STRONG') return `**${kids(el)}**`;
     if (tag === 'EM') return `*${kids(el)}*`;
     if (tag === 'DEL') return `~~${kids(el)}~~`;
@@ -11633,10 +11683,19 @@
         const sel = getSelection();
         if (!sel.rangeCount || sel.isCollapsed) return;
         const r = sel.getRangeAt(0);
-        const msgs = [...flow.querySelectorAll('.thr-msg[data-key]')].filter(m => r.intersectsNode(m));
+        // A message counts only when the selection covers some of its text: a triple-click or a drag to the end
+        // of a bubble ends the range at the very start of the next message, which intersectsNode alone counts.
+        const within = m => { // the selection clipped to one message
+          const part = document.createRange(); part.selectNodeContents(m);
+          if (r.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(r.startContainer, r.startOffset);
+          if (r.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(r.endContainer, r.endOffset);
+          return part;
+        };
+        const covers = m => { if (!r.intersectsNode(m)) return false; const part = within(m); return !part.collapsed && part.toString().trim() !== ''; };
+        const msgs = [...flow.querySelectorAll('.thr-msg[data-key]')].filter(covers);
         if (!msgs.length) return; // tool output etc.: the browser's own copy
         // Inside one message: the selected part as markdown source.
-        const text = msgs.length === 1 ? mdFromDom(r.cloneContents()).replace(/\n{3,}/g, '\n\n').trim()
+        const text = msgs.length === 1 ? mdFromDom(within(msgs[0]).cloneContents()) // only that message, not the chrome after it.replace(/\n{3,}/g, '\n\n').trim()
           : msgs.map(m => `${m.classList.contains('user') ? 'User' : 'AI'}: ${flow._texts.get(m.dataset.key) || ''}`).join('\n\n');
         e.clipboardData.setData('text/plain', text);
         e.preventDefault();
@@ -12019,6 +12078,34 @@
       if (!branches.length) item('<i class="ph ph-git-branch"></i>', 'No branches', '', () => {});
       branches.forEach(b => item('<i class="ph ph-git-branch"></i>', escHtml(b) + (b === cur ? ' (current)' : ''), '', () => { if (b !== cur) setChatBranch(tab, cwd, b); }));
       // Only the rows scroll; the search field stays above them.
+      const list = document.createElement('div');
+      list.className = 'ctx-list';
+      list.append(...ctxEl.querySelectorAll(':scope > .ctx-item'));
+      ctxEl.append(list);
+    } else if (type === 'ts-project') {
+      // The threads sidebar's project filter: All projects, then each folder threads use (most recent first).
+      const search = document.createElement('label');
+      search.className = 'ctx-search';
+      search.innerHTML = '<i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search projects…" aria-label="Search projects" spellcheck="false" autocomplete="off">';
+      search.querySelector('input').addEventListener('input', e => {
+        const q = e.target.value.trim().toLowerCase();
+        ctxEl.querySelectorAll('.ctx-item').forEach(el => { el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+      });
+      ctxEl.appendChild(search);
+      const projects = new Map(); // key -> { label, path, updated }
+      for (const x of chatThreads().map(threadInfo).sort((a, b) => b.updated - a.updated)) {
+        const key = tsProjectKey(x);
+        if (!projects.has(key)) projects.set(key, { label: key === '' ? 'No project' : x.folder, path: key });
+      }
+      const pick = (icon, label, key) => {
+        // The project's own icon (as in the sidebar), with a check badge on the picked one.
+        const glyph = key ? projectIconHtml(key, icon) : `<i class="ph ${icon}"></i>`;
+        item(`<span class="ts-pick-icon">${glyph}${tsProject === key ? '<i class="ph ph-check-circle ts-pick-check" aria-hidden="true"></i>' : ''}</span>`, escHtml(label), '', () => setThreadsProject(key));
+        const el = [...ctxEl.querySelectorAll(':scope > .ctx-item')].pop();
+        if (el) { el.classList.toggle('selected', tsProject === key); if (key) el.title = key; }
+      };
+      pick('ph-folders', 'All projects', null);
+      for (const [key, p] of projects) pick(key === '' ? 'ph-selection' : 'ph-folder', p.label, key);
       const list = document.createElement('div');
       list.className = 'ctx-list';
       list.append(...ctxEl.querySelectorAll(':scope > .ctx-item'));

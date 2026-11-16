@@ -2221,3 +2221,64 @@ body #settings-modal .custom-dropdown-menu {
 /* Settle / Un-settle: no fill on hover, the label and icon just brighten. */
 #threads-sidebar .ts-act:hover { background:transparent; color:var(--fg); }
 
+/* One-line Settled rows: the action is icon-only (↶), so it never covers the title; full cards keep the label. */
+#threads-sidebar .ts-card.slim .ts-act { width:26px; padding:0; justify-content:center; }
+#threads-sidebar .ts-card.slim .ts-act-label { display:none; }
+#threads-sidebar .ts-card.slim .ts-act i { font-size:14px; }
+
+/* Threads sidebar project filter: the funnel turns accent while a project is picked; the picked row is highlighted. */
+#threads-sidebar #ts-filter.active { color:var(--accent); }
+body #ctx .ctx-item.selected { background:var(--ui-hover); }
+
+/* Project icons (the project's favicon / app icon) in thread cards, Settled rows and the project filter menu. */
+#threads-sidebar .ts-proj-icon, body #ctx .ts-proj-icon { width:14px; height:14px; flex-shrink:0; object-fit:contain; border-radius:3px !important; }
+#threads-sidebar .ts-card.slim .ts-lead .ts-proj-icon { width:15px; height:15px; }
+body #ctx .ts-pick-icon { position:relative; display:inline-grid; place-items:center; width:16px; height:16px; }
+body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size:10px; color:var(--accent); background:var(--ui-popover); border-radius:50% !important; }
+
+/* ── Question tray, list style: header row ("Task" + fold caret), the question, then rows with a radio, the label
+   over its description, and the number keycap at the right. ── */
+#sbr-thread .thr-ask { gap:0; padding:6px 8px 8px; }
+#sbr-thread .thr-ask-head { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; min-height:30px; padding:0 8px; background:transparent; border:0;
+  color:var(--muted-text); font:400 12.5px var(--ui-font); text-align:left; cursor:pointer; }
+#sbr-thread .thr-ask-head:hover { color:var(--fg); }
+#sbr-thread .thr-ask-head i { font-size:12px; transition:transform 140ms; }
+#sbr-thread .thr-ask.folded .thr-ask-head i { transform:rotate(180deg); }
+#sbr-thread .thr-ask.folded > :not(.thr-ask-head) { display:none !important; }
+#sbr-thread .thr-ask-head:focus-visible { outline:none; border-radius:6px !important; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-ask-q { display:block; min-height:0; padding:4px 8px 10px; font:400 15px/1.4 var(--ui-font); color:var(--fg); }
+#sbr-thread .thr-ask-detail { padding:0 8px 10px; }
+#sbr-thread .thr-ask-opt { align-items:flex-start; gap:12px; min-height:0; padding:8px; color:var(--fg); font:400 14px var(--ui-font); }
+#sbr-thread .thr-ask-radio { flex:none; width:16px; height:16px; margin-top:2px; border:1.5px solid var(--border); border-radius:50% !important; transition:border-color 140ms, box-shadow 140ms; }
+#sbr-thread .thr-ask-opt:hover .thr-ask-radio { border-color:var(--muted-text); }
+#sbr-thread .thr-ask-opt:active .thr-ask-radio { border-color:var(--accent); box-shadow:inset 0 0 0 3px var(--bg), inset 0 0 0 8px var(--accent); }
+#sbr-thread .thr-ask-box { margin-top:2px; }
+#sbr-thread .thr-ask-text { display:flex; flex-direction:column; gap:3px; flex:1; min-width:0; }
+#sbr-thread .thr-ask-label { font-weight:500; line-height:1.35; color:var(--fg); }
+#sbr-thread .thr-ask-desc { font-size:12px; line-height:1.4; color:var(--muted-text); }
+#sbr-thread .thr-ask-key { flex:none; min-width:20px; height:20px; margin-left:auto; padding:0 5px; background:color-mix(in srgb,var(--fg) 8%,transparent); border:0;
+  color:var(--muted-text); font:500 11px var(--mono-font); font-variant-numeric:tabular-nums; }
+#sbr-thread .thr-ask-field { align-items:center; }
+#sbr-thread .thr-ask-field .thr-ask-radio { margin-top:0; border-style:dashed; }
+#sbr-thread .thr-ask-field input { font-size:14px; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread :is(.thr-ask-radio, .thr-ask-head i) { transition:none; } }
+/* Question tray fixes: nothing in the column shrinks (a wrapped question overlapped the first choice), and the type
+   follows the app scale: header 12px, question and labels 13px / 500, descriptions 12px, keys 11px. */
+#sbr-thread .thr-ask > * { flex-shrink:0; }
+#sbr-thread .thr-ask-head { min-height:28px; font-size:12px; }
+#sbr-thread .thr-ask-q { padding:2px 8px 8px; font:500 13px/1.45 var(--ui-font); }
+#sbr-thread .thr-ask-opt { gap:10px; padding:7px 8px; font-size:13px; }
+#sbr-thread .thr-ask-radio { width:15px; height:15px; margin-top:1px; }
+#sbr-thread .thr-ask-label { font-size:13px; line-height:1.4; }
+#sbr-thread .thr-ask-desc { font-size:12px; }
+#sbr-thread .thr-ask-key { min-width:18px; height:18px; font-size:11px; }
+#sbr-thread .thr-ask-field input { font-size:13px; }
+/* Question tray, one step smaller: header 11.5px, question and labels 12.5px, descriptions 11.5px, keys 10.5px. */
+#sbr-thread .thr-ask-head { min-height:26px; font-size:11.5px; }
+#sbr-thread .thr-ask-q { padding:0 8px 6px; font-size:12.5px; }
+#sbr-thread .thr-ask-opt { gap:9px; padding:5px 8px; font-size:12.5px; }
+#sbr-thread .thr-ask-radio { width:14px; height:14px; margin-top:1px; }
+#sbr-thread .thr-ask-label { font-size:12.5px; }
+#sbr-thread .thr-ask-desc { font-size:11.5px; }
+#sbr-thread .thr-ask-key { min-width:17px; height:17px; padding:0 4px; font-size:10.5px; }
+#sbr-thread .thr-ask-field input { font-size:12.5px; }

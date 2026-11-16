@@ -182,6 +182,10 @@ readiness. Inspect the included snapshots, or read each pane when absent, to
 check its actual state. Failed launches remain
 visible. If a mutation times out, list panes before retrying to avoid duplicates.
 
+`launch` is not idempotent: every call creates new panes. Run it once per
+request and keep its result. Verify with `list` or `read`, never by launching
+again, and never chain `launch` into a verification command.
+
 Follow-up calls take one JSON argument, or `--file FILE` / `--file -` for stdin:
 
 ```sh
