@@ -1266,7 +1266,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 .tv-pick-menu .tv-pick-hint { min-width:0; margin-left:auto; font:400 11px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* ── Chat: a sent message waiting for the transcript ── */
-#sbr-thread .thr-pending .thr-bubble { opacity:.7; }
+/* A just-sent message looks like any sent message (it used to be faded until the transcript had it). */
 
 /* ── Chat composer (T3-style): message box with the model chip + send, a quiet footer row under it ── */
 /* The composer floats over the bottom of the history (which scrolls the full height behind it);
@@ -2282,3 +2282,9 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 #sbr-thread .thr-ask-desc { font-size:11.5px; }
 #sbr-thread .thr-ask-key { min-width:17px; height:17px; padding:0 4px; font-size:10.5px; }
 #sbr-thread .thr-ask-field input { font-size:12.5px; }
+
+/* Changed-files card: the same gap above it as between paragraphs (one 13px × 1.6 line ≈ 21px). */
+#sbr-thread .thr-msg-text + .thr-changes { margin-top:21px; }
+/* Project icons in thread cards a little bigger (14 → 16px); Settled rows 15 → 17px. */
+#threads-sidebar .ts-folder .ts-proj-icon { width:16px; height:16px; }
+#threads-sidebar .ts-card.slim .ts-lead .ts-proj-icon { width:17px; height:17px; }

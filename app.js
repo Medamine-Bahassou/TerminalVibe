@@ -527,6 +527,13 @@
 
   function hoverWebLink(term, termId, uri) { claudeRefHovered = { el: term.element, term, open: e => openTerminalLink(termId, uri, e) }; }
 
+  // A web link in the chat follows the same setting as terminal links (default: a TerminalVibe browser tab in the
+  // chat's workspace); Shift+click, or other=true, picks the other place.
+  function openChatWebLink(href, other = false) {
+    const inTab = (terminalLinkTarget !== 'external') !== !!other, ws = wsOf(curChat()) || activeWs();
+    if (inTab && ws) addBrowserTab(ws.id, null, href); else openExternalUrl(href);
+  }
+
   function openExternalUrl(url) {
     if (isDesktop() && window.electronAPI) {
       window.electronAPI.openExternal(url);
@@ -9358,7 +9365,7 @@
     if (b) openClaudeRefViewer(null, { kind: 'file', path: b.dataset.path, label: b.dataset.path.split(/[\\/]/).pop() }, '');
     const href = e.target.closest('button.thr-link')?.dataset.href;
     if (!href) return;
-    if (/^https?:/i.test(href)) { openExternalUrl(href); return; }
+    if (/^https?:/i.test(href)) { openChatWebLink(href, e.shiftKey); return; }
     const { path } = chatLinkPath(href);
     if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(path)) openClaudeRefViewer(null, { kind: 'file', path, label: path.split(/[\\/]/).pop() }, '');
     else if (/\.(html?|svg)$/i.test(path)) addBrowserTab(wsOf(curChat())?.id, null, path);
@@ -11344,7 +11351,7 @@
     if (tag === 'DEL') return `~~${kids(el)}~~`;
     if (tag === 'CODE' && el.parentNode?.nodeName !== 'PRE') return '`' + el.textContent + '`';
     if (tag === 'PRE' && el.matches('.thr-code')) return block('```' + (el.dataset.lang || '') + '\n' + el.textContent.replace(/\n$/, '') + '\n```');
-    if (el.matches('.thr-link')) return `[${kids(el)}](${el.dataset.href})`;
+    if (el.matches('.thr-link')) { const label = kids(el); return label === el.dataset.href ? label : `[${label}](${el.dataset.href})`; } // a bare URL copies as itself
     if (el.matches('.thr-h')) return block('#'.repeat(+el.getAttribute('aria-level') || 1) + ' ' + kids(el));
     if (tag === 'HR') return block('---');
     if (tag === 'BLOCKQUOTE') return block(kids(el).trim().split('\n').map(l => '> ' + l).join('\n'));
@@ -11368,14 +11375,23 @@
   function mdLite(text) {
     text = String(text);
     // `code` spans are cut out first so their contents never turn into emphasis.
-    const inlineMd = t => t.split(/(`[^`\n]+`)/).map((p, i) => i % 2 ? `<code>${escHtml(p.slice(1, -1))}</code>` : escHtml(p)
-      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1<em>$2</em>')
-      .replace(/(^|\W)_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1<em>$2</em>')
-      .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
-      // [label](target): web links open in the browser, images in the viewer, other paths in the file manager.
-      .replace(/\[([^\]\n]+)\]\(([^()\s]+)\)/g, (_, label, href) => `<button type="button" class="thr-link" data-href="${href}" title="${href}">`
-        + `${linkIconHtml(href)}${label}</button>`)).join('');
+    // `code` spans become placeholders first, so their contents never turn into emphasis or links, while emphasis
+    // can still wrap them (**Create `media.html`**); they are put back as <code> at the end.
+    const inlineMd = t => {
+      const codes = [];
+      return escHtml(t.replace(/`([^`\n]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`))
+        .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1<em>$2</em>')
+        .replace(/(^|\W)_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1<em>$2</em>')
+        .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
+        // [label](target): web links open in the browser, images in the viewer, other paths in the file manager.
+        // A bare http(s) URL is a link too (labelled with itself); one pass, so a [label](url)'s URL isn't linked twice.
+        .replace(/\[([^\]\n]+)\]\(([^()\s\u0000]+)\)|(?<![="'\w/])(https?:\/\/[^\s<>"'`)\]\u0000]*[^\s<>"'`)\].,;:!?\u0000])/g, (_, label, href, bare) => {
+          if (bare) { href = label = bare; }
+          return `<button type="button" class="thr-link" data-href="${href}" title="${href}">${linkIconHtml(href)}${label}</button>`;
+        })
+        .replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${escHtml(codes[i])}</code>`);
+    };
     const LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
     // Consecutive list items (blank lines between them allowed) as nested <ul>/<ol> by indent.
     const listHtml = items => {
@@ -11585,7 +11601,7 @@
           + '<div class="thr-img-actions">'
           + '<button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></div></div>').join('')}</div>` : '';
         return m.role === 'user'
-          ? `<div class="${cls}" data-key="${key}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : t?.steered?.includes(m.ts) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
+          ? `<div class="${cls}" data-key="${key}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : (m.steered || t?.steered?.includes(m.ts)) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
           : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${extra}${actions}</div>`;
       };
       // The agent's thinking: "Thought" with a one-line peek, opening to the whole text.
@@ -12113,7 +12129,8 @@
     } else if (type === 'chat-link') {
       const copy = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
       if (/^https?:/i.test(data)) {
-        item('<i class="ph ph-arrow-square-out"></i>', 'Open link', '', () => openExternalUrl(data));
+        item('<i class="ph ph-arrow-square-out"></i>', 'Open link', '', () => openChatWebLink(data));
+        item(`<i class="ph ${terminalLinkTarget === 'external' ? 'ph-browser' : 'ph-globe'}"></i>`, terminalLinkTarget === 'external' ? 'Open in a browser tab' : 'Open in system browser', '', () => openChatWebLink(data, true));
         item('<i class="ph ph-copy"></i>', 'Copy link', '', () => copy(data));
       } else {
         const { path, rel, line } = chatLinkPath(data);

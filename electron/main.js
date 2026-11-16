@@ -1190,16 +1190,34 @@ ipcMain.handle('project:icon', async (_e, cwd) => {
   return null;
 });
 // A site's /favicon.ico as a data URL (so the chat can read its pixels and tint single-color icons); null if none.
+// The icon the site's homepage declares (<link rel="icon" / "shortcut icon" / "apple-touch-icon">) comes first: a
+// single-page app often has no /favicon.ico (its server answers that path with the app's HTML). Then /favicon.ico.
 ipcMain.handle('favicon:get', async (_e, origin) => {
+  const get = (href, ms = 5000) => require('electron').net.fetch(href, { credentials: 'omit', signal: AbortSignal.timeout(ms) });
+  const icon = async href => {
+    try {
+      const url = new URL(href, origin);
+      if (!/^https?:$/.test(url.protocol)) return null;
+      const res = await get(url.href);
+      const type = (res.headers.get('content-type') || '').split(';')[0].trim();
+      if (!res.ok || /^text\/|json|javascript/.test(type)) return null; // an SPA's HTML fallback is not an icon
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (!buf.length || buf.length > 256 * 1024 || /^\s*</.test(buf.subarray(0, 64).toString()) && !/svg/.test(type + url.pathname)) return null;
+      const mime = /^image\//.test(type) ? type : /\.svg$/i.test(url.pathname) ? 'image/svg+xml' : /\.png$/i.test(url.pathname) ? 'image/png' : 'image/x-icon';
+      return `data:${mime};base64,${buf.toString('base64')}`;
+    } catch { return null; }
+  };
   try {
-    const url = new URL('/favicon.ico', origin);
-    if (!/^https?:$/.test(url.protocol)) return null;
-    const res = await require('electron').net.fetch(url.href, { credentials: 'omit', signal: AbortSignal.timeout(5000) });
-    const type = (res.headers.get('content-type') || 'image/x-icon').split(';')[0];
-    if (!res.ok || /^text\//.test(type)) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    return buf.length && buf.length < 256 * 1024 ? `data:${/^image\//.test(type) ? type : 'image/x-icon'};base64,${buf.toString('base64')}` : null;
-  } catch { return null; }
+    if (!/^https?:$/.test(new URL(origin).protocol)) return null;
+    const res = await get(new URL('/', origin).href);
+    const html = res.ok && /html/.test(res.headers.get('content-type') || '') ? (await res.text()).slice(0, 200 * 1024) : '';
+    const links = [...html.matchAll(/<link\b[^>]*>/gi)].map(m => m[0])
+      .map(tag => ({ rel: (tag.match(/\brel\s*=\s*["']([^"']+)["']/i) || [])[1]?.toLowerCase() || '', href: (tag.match(/\bhref\s*=\s*["']([^"']+)["']/i) || [])[1] }))
+      .filter(l => l.href && /(^|\s)(icon|shortcut icon|apple-touch-icon)(\s|$)/.test(l.rel))
+      .sort((a, b) => /apple/.test(a.rel) - /apple/.test(b.rel)); // a plain icon before the apple-touch one
+    for (const l of links) { const d = await icon(l.href.replace(/&amp;/g, '&')); if (d) return d; }
+  } catch {}
+  return icon('/favicon.ico');
 });
 // Current git branch of a folder (or the short commit when detached), read from .git/HEAD; null outside a repo.
 ipcMain.handle('git:branch', async (_e, cwd) => {
