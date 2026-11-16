@@ -2288,3 +2288,23 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 /* Project icons in thread cards a little bigger (14 → 16px); Settled rows 15 → 17px. */
 #threads-sidebar .ts-folder .ts-proj-icon { width:16px; height:16px; }
 #threads-sidebar .ts-card.slim .ts-lead .ts-proj-icon { width:17px; height:17px; }
+
+/* Composer: the permission mode chip beside the model picker (quiet; Full access in the error color). */
+#sbr-thread .thr-mode-chip { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; height:28px; padding:0 8px; background:transparent; border:0; border-radius:8px !important;
+  color:var(--muted-text); font:500 12.5px var(--ui-font); white-space:nowrap; cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-mode-chip[hidden] { display:none; }
+#sbr-thread .thr-mode-chip i { font-size:14px; }
+#sbr-thread .thr-mode-chip:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-mode-chip.danger { color:var(--ui-error); }
+#sbr-thread .thr-mode-chip:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (max-width:560px) { #sbr-thread .thr-mode-chip span { display:none; } }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-mode-chip { transition:none; } }
+
+/* An image a reply links to, shown below the link like a pasted one. */
+#sbr-thread .thr-msg-text .thr-md-img { display:block; width:fit-content; max-width:100%; margin:8px 0; white-space:normal; }
+/* A tool call that viewed an image shows the image in its expanded row. */
+#sbr-thread .thr-tool-image { padding:6px 10px 8px 28px; }
+#sbr-thread .thr-tool-image .thr-md-img { margin:0; }
+#sbr-thread .thr-tool-image .thr-img { max-height:200px; }
+/* The image file is gone (the loader dropped it): show its path, like before. */
+#sbr-thread .thr-tool-image:empty::before { content:attr(data-path); font:12px/1.5 var(--mono-font); color:var(--muted-text); }

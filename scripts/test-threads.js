@@ -152,6 +152,10 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
     { role: 'tool', name: 'run_command', summary: 'echo hi', detail: '{}', error: true }, { role: 'assistant', text: 'done' }, { role: 'bogus', text: 'x' }]);
   assert.deepStrictEqual(acp.map(i => [i.role, i.text ?? i.summary]), [['user', 'hi'], ['tool', 'echo hi'], ['assistant', 'done']]);
   assert.strictEqual(acp[1].error, true);
+  // The agent died mid-turn: its "interrupt" record flags the step before it (the chat's "Interrupted" line).
+  const crashed = parseAcp([{ role: 'user', text: 'go', ts: 't1' }, { role: 'tool', name: 'run_command', summary: 'python3 x', error: true, ts: 't2' },
+    { role: 'interrupt', reason: 'crash', text: 'crashed (SIGSEGV)', ts: 't3' }]);
+  assert.deepStrictEqual(crashed.map(i => [i.role, i.interrupted || null]), [['user', null], ['tool', 'crash']]);
 
   fs.rmSync(home, { recursive: true, force: true });
   console.log('PASS: thread folders keep every agent session, survive deleted transcripts, hand off and delete');

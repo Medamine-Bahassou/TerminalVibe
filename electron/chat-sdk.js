@@ -124,13 +124,18 @@ class Session {
     });
     this.proc.stderr.on('data', d => { this.stderr = (this.stderr + d).slice(-4000); });
     this.proc.stdin.on('error', () => {});
-    const gone = (code, error) => {
+    // An exit is an error when it failed (code), was killed (signal: a crash) or cut a turn short; a clean idle exit isn't.
+    const gone = (code, error, signal) => {
       if (!this.alive) return;
+      const midTurn = this.busy;
       this.alive = false; this.busy = false; this.asks.clear();
-      this.rejectPending?.(Error(error || 'The agent exited'));
-      this.emit('exit', { code, error: code ? (error || this.stderr.trim().split('\n').slice(-3).join('\n') || `exited with code ${code}`) : null });
+      const why = error || (code ? this.stderr.trim().split('\n').slice(-3).join('\n') || `exited with code ${code}`
+        : signal ? `crashed (${signal})` : midTurn ? 'exited in the middle of a turn' : null);
+      if (midTurn) this.onCrash?.(why);
+      this.rejectPending?.(Error(why || 'The agent exited'));
+      this.emit('exit', { code, error: why, midTurn });
     };
-    this.proc.on('exit', code => gone(code));
+    this.proc.on('exit', (code, signal) => gone(code, null, signal));
     this.proc.on('error', err => gone(1, err.message));
   }
   write(obj) { if (this.alive) this.proc.stdin.write(JSON.stringify(obj) + '\n'); }
@@ -400,6 +405,13 @@ class AcpSession extends Session {
     } catch (err) { console.error('[chat-sdk] acp transcript', err.message); }
   }
   flush() { if (this.buf?.text.trim()) this.record({ role: this.buf.role, text: this.buf.text.trim() }); this.buf = null; }
+  // The process died mid-turn: keep what it said and did, then mark the turn as cut short (the chat shows the line).
+  onCrash(why) {
+    this.flush();
+    for (const t of this.tools.values()) this.recordTool(t, true);
+    this.tools.clear();
+    this.record({ role: 'interrupt', reason: 'crash', text: why || '' });
+  }
   recordTool(t, error) {
     const input = t.input ?? {};
     this.record({ role: 'tool', name: t.name, summary: short(t.title || toolSummaryOf(input), 200),

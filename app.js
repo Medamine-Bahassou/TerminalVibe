@@ -9283,6 +9283,8 @@
       _tabAgent.set(t.id, null);
       if (ev.error) zoomBadge(`${name} stopped: ${ev.error}`);
       syncTabAgentIcon(t);
+      // Died mid-turn (a crash): the turn is over; redraw so its "Interrupted" line shows, and the next message restarts it.
+      if (ev.midTurn) { _turns.delete(t.id); _pendingMsgs.delete(t.id); _flowSig = ''; if (curChat() === t) refreshThreadFlow(t); }
     }
     if (curChat() === t) { syncWorking(t); syncThreadComposer(t); syncSendBtn(); }
     renderThreadsSidebar();
@@ -9371,12 +9373,23 @@
     else if (/\.(html?|svg)$/i.test(path)) addBrowserTab(wsOf(curChat())?.id, null, path);
     else window.electronAPI?.showInFolder?.(path);
   });
+  // Right-click in the chat: a link, an image, or a message (its text).
   thrPage.querySelector('#sbr-thread-flow').addEventListener('contextmenu', e => {
+    citeBtn.hidden = true; // the menu takes over (its "Cite selection" does the same)
+    const img = e.target.closest('img.thr-img');
+    if (img?.dataset.path) { e.preventDefault(); showCtxMenu(e, 'chat-image', img); return; }
     const href = e.target.closest('button.thr-link')?.dataset.href;
-    if (!href) return;
-    e.preventDefault();
-    showCtxMenu(e, 'chat-link', href);
+    if (href) { e.preventDefault(); showCtxMenu(e, 'chat-link', href); return; }
+    const msg = e.target.closest('.thr-msg[data-key]');
+    if (msg) { e.preventDefault(); showCtxMenu(e, 'chat-msg', msg); }
   });
+  // An image in the chat to the clipboard (as PNG); the copy button and the right-click menu share it.
+  async function copyChatImage(img) {
+    const c = Object.assign(document.createElement('canvas'), { width: img.naturalWidth, height: img.naturalHeight });
+    c.getContext('2d').drawImage(img, 0, 0);
+    const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+  }
   // A chat link's file: absolute path (relative ones are from the chat's folder), its folder-relative
   // path and the line it points at (#L12 or :12:3).
   function chatLinkPath(href) {
@@ -9408,6 +9421,17 @@
       chip.dataset.sig = sig;
       chip.innerHTML = `<span class="thr-chip-logo"${ho.color ? ` style="color:${ho.color}"` : ''}>${procIconHtml(ho.bin, 'ph-robot')}</span><span>${escHtml(modelName(o, true))}</span>${effort ? `<span class="thr-chip-sub">${escHtml(effort)}</span>` : ''}`
         + (o.fast ? '<i class="ph ph-lightning thr-chip-mode" aria-label="Fast"></i>' : '') + (o.ultra ? '<i class="ph ph-infinity thr-chip-mode" aria-label="Ultracode"></i>' : '');
+    }
+    // The permission mode, beside the model picker (the same choices as the picker's mode menu).
+    const modeEl = thrChip('mode'), acc = CHAT_AGENTS[o.harness]?.access?.find(x => x[0] === o.access);
+    if (modeEl) {
+      modeEl.hidden = !acc;
+      if (acc && modeEl.dataset.sig !== o.harness + o.access) {
+        modeEl.dataset.sig = o.harness + o.access;
+        modeEl.innerHTML = `<i class="ph ${acc[2]}" aria-hidden="true"></i><span>${escHtml(acc[1])}</span>`;
+        modeEl.classList.toggle('danger', /full|bypass/i.test(o.access));
+        modeEl.setAttribute('aria-label', `Permission mode: ${acc[1]}`);
+      }
     }
     syncTabAgentIcon(ws);
     // Footer: folder, the agent's tab (its permission prompts show there), branch, permissions.
@@ -9491,6 +9515,14 @@
     const del = e.target.closest('.thr-side-del');
     if (del) { const t = findChatThread(del.dataset.delSide); if (t) confirmDeleteThread(t, undefined, 'side chat'); return; }
     const t = findChatThread(e.target.closest('.thr-side-chip')?.dataset.side); if (t) openChatTab(t);
+  });
+  // Mode chip: the permission modes menu (same as in the model picker); a change applies live where the agent allows it.
+  thrChip('mode')?.addEventListener('click', e => {
+    const ws = curChat();
+    if (!ws) return;
+    const o = chatOpts(ws), btn = e.currentTarget;
+    openPickMenu(btn, CHAT_AGENTS[o.harness].access.map(([v, label, icon]) => ({ value: v, label, selected: v === o.access, icon: `<i class="ph ${icon}"></i>` })),
+      v => { setChatOpts(ws, { access: v }); syncThreadComposer(ws); btn.focus(); void applyClaudeMode(ws, v); }, true);
   });
   thrChip('cwd')?.addEventListener('click', e => {
     e.stopPropagation(); // the document click handler would close the menu right away
@@ -10658,7 +10690,7 @@
   document.body.appendChild(citeBtn);
   const hideCite = () => { citeBtn.hidden = true; };
   const flowEl = thrPage.querySelector('#sbr-thread-flow');
-  flowEl.addEventListener('mouseup', () => setTimeout(() => {
+  flowEl.addEventListener('mouseup', e => e.button === 0 && setTimeout(() => { // a right-click opens the menu instead (it has Cite)
     const sel = window.getSelection(), text = sel?.toString().trim();
     if (!text || !sel.rangeCount || !flowEl.contains(sel.anchorNode) || !flowEl.contains(sel.focusNode)) return hideCite();
     const parts = selectedResponseCitations(sel, flowEl);
@@ -11386,9 +11418,15 @@
         .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
         // [label](target): web links open in the browser, images in the viewer, other paths in the file manager.
         // A bare http(s) URL is a link too (labelled with itself); one pass, so a [label](url)'s URL isn't linked twice.
-        .replace(/\[([^\]\n]+)\]\(([^()\s\u0000]+)\)|(?<![="'\w/])(https?:\/\/[^\s<>"'`)\]\u0000]*[^\s<>"'`)\].,;:!?\u0000])/g, (_, label, href, bare) => {
+        // A link to a local image (or ![alt](path)) also shows the image itself below, like a pasted one (viewer, copy).
+        .replace(/(!?)\[([^\]\n]*)\]\(([^()\s\u0000]+)\)|(?<![="'\w/])(https?:\/\/[^\s<>"'`)\]\u0000]*[^\s<>"'`)\].,;:!?\u0000])/g, (_, bang, label, href, bare) => {
           if (bare) { href = label = bare; }
-          return `<button type="button" class="thr-link" data-href="${href}" title="${href}">${linkIconHtml(href)}${label}</button>`;
+          const link = label ? `<button type="button" class="thr-link" data-href="${href}" title="${href}">${linkIconHtml(href)}${label}</button>` : '';
+          const raw = href.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+          if (bare || /^[a-z]+:/i.test(raw) || !/\.(png|jpe?g|gif|webp|bmp)$/i.test(raw.replace(/[?#].*$/, ''))) return link || href;
+          const img = `<span class="thr-img-wrap thr-md-img"><img class="thr-img" data-path="${escHtml(chatLinkPath(raw).path)}" alt="${label}">`
+            + '<span class="thr-img-actions"><button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></span></span>';
+          return (bang ? '' : link) + img;
         })
         .replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${escHtml(codes[i])}</code>`);
     };
@@ -11459,9 +11497,18 @@
     }
     return out + inline(text.slice(last));
   }
-  const toolIcon = n => /bash|shell|exec|command|terminal/i.test(n) ? 'ph-terminal' : /read|view|cat/i.test(n) ? 'ph-file-text'
+  const toolIcon = n => /view_?image|image_?view|screenshot/i.test(n) ? 'ph-eye' : /bash|shell|exec|command|terminal/i.test(n) ? 'ph-terminal' : /read|view|cat/i.test(n) ? 'ph-file-text'
     : /edit|write|patch|update|create/i.test(n) ? 'ph-pencil-simple' : /grep|glob|search|find|list/i.test(n) ? 'ph-magnifying-glass'
     : /web|fetch|url|browser/i.test(n) ? 'ph-globe' : /task|agent/i.test(n) ? 'ph-robot' : 'ph-wrench';
+  // A tool that looks at an image (Codex view_image, Claude's Read of a .png…): its expanded row shows the image
+  // (same block as a pasted one: viewer on click, copy button) instead of just the path.
+  const toolImageHtml = x => {
+    if (!/image|^read$|read_?file|view|screenshot/i.test(x.name || '')) return '';
+    const m = `${x.summary || ''}\n${x.detail || ''}`.match(/(?:^|["'\s])((?:[A-Za-z]:)?[^\s"'<>]*\.(?:png|jpe?g|gif|webp|bmp))(?=$|["'\s,}])/im);
+    if (!m) return '';
+    return `<div class="thr-tool-image" data-path="${escHtml(m[1])}"><span class="thr-img-wrap thr-md-img"><img class="thr-img" data-path="${escHtml(chatLinkPath(m[1]).path)}" alt="">`
+      + '<span class="thr-img-actions"><button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></span></span></div>';
+  };
   const clockTime = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 
   async function refreshThreadFlow(ws, surface = thrPage) {
@@ -11582,7 +11629,7 @@
           + `${failed ? `<i class="ph ph-warning-circle thr-tool-err" aria-label="${failed} failed"></i>` : ''}<span class="thr-tools-time">${clockTime(last.ts)}</span><i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
           // Each call expands to its full command or arguments (older saved history has only the summary).
           + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
-            + `<pre class="thr-tool-detail">${hlCode(x.detail || x.summary || '', /^(bash|shell|local_shell|exec_command|run_terminal_cmd|terminal)$/i.test(x.name) ? 'sh' : /^\s*[{[]/.test(x.detail || '') ? 'json' : '')}</pre></details>`).join('')
+            + (toolImageHtml(x) || `<pre class="thr-tool-detail">${hlCode(x.detail || x.summary || '', /^(bash|shell|local_shell|exec_command|run_terminal_cmd|terminal)$/i.test(x.name) ? 'sh' : /^\s*[{[]/.test(x.detail || '') ? 'json' : '')}</pre>`) + '</details>').join('')
           + '</div></details>';
       };
       const msgHtml = (m, key, showActions = true, extra = '') => {
@@ -11686,7 +11733,7 @@
         // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
         const stopped = !live && (prompt.m.interrupted || rest.find(x => x.m.interrupted)?.m.interrupted);
         if (stopped) html += `<div class="thr-status-line" role="status"><i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span>`
-          + `<span class="thr-status-detail">· ${stopped === 'tool' ? 'Stopped by you during a tool call' : 'Stopped by you'}</span></div>`;
+          + `<span class="thr-status-detail">· ${stopped === 'crash' ? 'The agent exited unexpectedly. Send a message to continue' : stopped === 'tool' ? 'Stopped by you during a tool call' : 'Stopped by you'}</span></div>`;
         u = e;
       }
     });
@@ -11742,10 +11789,7 @@
       const copy = wrap.querySelector('[data-act="copy"]');
       copy.addEventListener('click', async () => {
         try {
-          const c = Object.assign(document.createElement('canvas'), { width: img.naturalWidth, height: img.naturalHeight });
-          c.getContext('2d').drawImage(img, 0, 0);
-          const blob = await new Promise(res => c.toBlob(res, 'image/png'));
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          await copyChatImage(img);
           copy.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
         } catch { copy.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>'; }
         setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
@@ -12126,6 +12170,29 @@
       list.className = 'ctx-list';
       list.append(...ctxEl.querySelectorAll(':scope > .ctx-item'));
       ctxEl.append(list);
+    } else if (type === 'chat-image') {
+      const img = data, path = img.dataset.path, name = path.split(/[\\/]/).pop();
+      const copyText = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
+      item('<i class="ph ph-arrows-out"></i>', 'Open image', '', () => openClaudeRefViewer(null, { kind: 'file', path, label: name }, ''));
+      item('<i class="ph ph-copy"></i>', 'Copy image', '', () => copyChatImage(img).catch(() => zoomBadge('Could not copy the image')));
+      item('<i class="ph ph-file"></i>', 'Copy path', '', () => copyText(path));
+      if (window.electronAPI?.showInFolder) { sep(); item('<i class="ph ph-folder-open"></i>', 'Show in folder', '', () => window.electronAPI.showInFolder(path)); }
+    } else if (type === 'chat-msg') {
+      // A message's text: the selection (copied as markdown by the flow's copy handler, or cited), the whole
+      // message as markdown, and a reply's fork point.
+      const msg = data, sel = window.getSelection(), raw = msg.closest('.thr-flow')?._texts?.get(msg.dataset.key) || '';
+      const selected = sel && !sel.isCollapsed && msg.closest('.thr-flow')?.contains(sel.anchorNode) && sel.toString().trim();
+      const copyText = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
+      if (selected) {
+        // Clicking the menu can drop the selection: put the one it opened on back before acting.
+        const range = sel.getRangeAt(0).cloneRange(), restore = () => { const s2 = window.getSelection(); s2.removeAllRanges(); s2.addRange(range); };
+        item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+C', () => { restore(); document.execCommand('copy'); });
+        item('<i class="ph ph-quotes"></i>', 'Cite selection', '', () => { restore(); citeBtn.click(); });
+        sep();
+      }
+      item('<i class="ph ph-text-aa"></i>', 'Copy message', '', () => copyText(raw));
+      const fork = msg.querySelector('.thr-fork');
+      if (fork) item('<i class="ph ph-git-fork"></i>', 'Fork from here', '', () => fork.click());
     } else if (type === 'chat-link') {
       const copy = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
       if (/^https?:/i.test(data)) {
