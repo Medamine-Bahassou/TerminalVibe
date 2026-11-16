@@ -1953,7 +1953,10 @@ body #sidebar .ws-btn .ws-proc.ws-proc-agent .ws-proc-icon { color:var(--agent-c
 /* ── Tab agent logo: gray until the agent runs in the tab ── */
 .tg-tab .tg-tab-agent { transition: color 150ms; }
 .tg-tab .tg-tab-agent.idle { color: var(--dim-text) !important; }
-@media (prefers-reduced-motion: reduce) { .tg-tab .tg-tab-agent { transition: none; } }
+/* Image logos (Antigravity's is a PNG) ignore color: desaturate and dim them to the same gray. */
+.tg-tab .tg-tab-agent img.ws-proc-icon { transition: filter 150ms, opacity 150ms; }
+.tg-tab .tg-tab-agent.idle img.ws-proc-icon { filter: grayscale(1); opacity: .5; }
+@media (prefers-reduced-motion: reduce) { .tg-tab .tg-tab-agent, .tg-tab .tg-tab-agent img.ws-proc-icon { transition: none; } }
 
 /* ── Chat: an agent's question (AskUserQuestion): a row like a thought, opening to the answer given ── */
 #sbr-thread .thr-qa { border-radius:8px !important; }
