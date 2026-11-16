@@ -6658,7 +6658,8 @@
       chatBackBtn.innerHTML = '<i class="ph ph-terminal-window tg-chat-to-cli"></i><i class="ph ph-chats-circle tg-cli-to-chat"></i>';
       chatBackBtn.onclick = () => {
         const t = node.terminals.find(x => x.id === node.activeTermId);
-        if (t?.threadHistory) setChatView(t, !t._cliView);
+        if (!t || viewSwitchBlocked(t)) return;
+        if (t.threadHistory) setChatView(t, !t._cliView);
         else if (t && harnessOf(_tabAgent.get(t.id))) openTerminalAsChat(t); // a terminal running an agent
       };
       actions.appendChild(chatBackBtn);
@@ -8493,7 +8494,7 @@
     }).join('');
     body.innerHTML = sections || (_usageLoading
       ? '<div class="um-empty"><i class="ph ph-circle-notch um-spin" aria-hidden="true"></i>Reading usage…</div>'
-      : '<div class="um-empty"><i class="ph ph-chart-bar" aria-hidden="true"></i>No usage limits to show. Claude Code and Codex report them when signed in with a plan.</div>');
+      : '<div class="um-empty"><i class="ph ph-chart-bar" aria-hidden="true"></i>No usage limits to show. Claude Code, Codex and Antigravity CLI report them when signed in.</div>');
     _usageModal.querySelector('[data-act="refresh"]')?.classList.toggle('busy', _usageLoading);
   }
   async function loadUsageModal(fresh) {
@@ -8647,6 +8648,13 @@
     if (turn && !busy && finished) { _turns.delete(ws.id); turn = null; }
     if (!busy && !turn) return null;
     return { label: 'Thinking', since: turn ? turn.since : (t._workSince || Date.now()) };
+  }
+  // The user can't switch chat ⇄ terminal mid-turn (a question or lock waiting on them still can).
+  function viewSwitchBlocked(tab) {
+    const w = tab.threadHistory ? chatWorking(tab) : tab._agentWorking && {};
+    if (!w || w.wait) return false;
+    zoomBadge(`${harnessOf(_tabAgent.get(tab.id))?.name || 'The agent'} is working, switch once it finishes`);
+    return true;
   }
   // A Chat tab shows the chat, or (the footer button) the terminal its agent runs in.
   // The tab bar's chat button brings the chat back.
@@ -11611,7 +11619,7 @@
       if (window.electronAPI?.chatTitle) item('<i class="ph ph-sparkle"></i>', 'Regenerate title', '', () => regenerateChatTitle(tab));
       if (h) {
         sep();
-        item('<i class="ph ph-terminal-window"></i>', `Show ${escHtml(h.name)} terminal`, '', () => { openChatTab(tab); setChatView(tab, true); });
+        item('<i class="ph ph-terminal-window"></i>', `Show ${escHtml(h.name)} terminal`, '', () => { if (viewSwitchBlocked(tab)) return; openChatTab(tab); setChatView(tab, true); });
         item('<i class="ph ph-stop-circle"></i>', `Stop ${escHtml(h.name)}`, '', () => stopTabAgent(tab).then(ok => { if (!ok) zoomBadge(`${h.name} did not stop`); syncThreadPanel(); renderThreadsSidebar(); }));
       }
       const cwd = chatCwd(tab);
