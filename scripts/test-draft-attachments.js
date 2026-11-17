@@ -1,0 +1,37 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'app.js'), 'utf8');
+const slice = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
+const reads = [];
+const ctx = vm.createContext({ window: { electronAPI: { readImageFile: async path => {
+  reads.push(path);
+  return path === '/missing.png' ? { error: 'not-found' } : { data: 'aW1hZ2U=', mediaType: 'image/png' };
+} } } });
+vm.runInContext(slice('  function serializeChat(', '  function serializeLayout('), ctx);
+vm.runInContext(slice('  const _chatPreviewLoads =', '  const thrFiles ='), ctx);
+if (!ctx.hydrateChatFiles) throw Error('Hydration helper missing');
+(async () => {
+  const attachment = { name: 'image.png', path: '/saved.png', mention: '[Image 1]', image: true, size: 5, preview: 'data:image/png;base64,aW1hZ2U=' };
+  const chat = { draft: 'Review [Image 1]', draftFiles: [attachment], queuedMessages: [{ files: [attachment] }] };
+  const restored = JSON.parse(JSON.stringify(ctx.serializeChat(chat)));
+  assert.equal(restored.draft, 'Review [Image 1]');
+  assert.equal(restored.draftFiles[0].path, '/saved.png');
+  assert.equal(restored.draftFiles[0].mention, '[Image 1]');
+  assert.equal(restored.draftFiles[0].size, 5);
+  assert(!JSON.stringify(restored).includes('base64'), 'previews do not bloat saved state');
+  assert(attachment.preview, 'saving does not mutate the live preview');
+  let refreshes = 0;
+  ctx.hydrateChatFiles(restored.draftFiles, () => refreshes++);
+  ctx.hydrateChatFiles(restored.draftFiles, () => refreshes++);
+  await Promise.resolve();
+  assert.equal(reads.length, 1, 'repeated renders do not duplicate reads');
+  assert.equal(restored.draftFiles[0].preview, attachment.preview, 'preview is rebuilt after restart');
+  assert.equal(refreshes, 1);
+  const missing = [{ name: 'missing.png', path: '/missing.png', image: true }];
+  ctx.hydrateChatFiles(missing, () => refreshes++);
+  await Promise.resolve();
+  assert.equal(missing[0].path, '/missing.png', 'unavailable images retain their attachment reference');
+  assert.equal(refreshes, 1, 'unavailable preview does not trigger a redraw loop');
+  console.log('Draft attachment persistence and preview restoration checks passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

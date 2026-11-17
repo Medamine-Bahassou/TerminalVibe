@@ -2777,9 +2777,10 @@
   const DETACHED_STATE_KEY = 'ghostterm-state-detached-' + (DETACHED_WIN_ID || 'default');
 
   function serializeChat(chat) {
-    if (!Array.isArray(chat.queuedMessages)) return chat;
-    return { ...chat, queuedMessages: chat.queuedMessages.map(message => ({ ...message,
-      files: (message.files || []).map(({ preview, ...file }) => file) })) };
+    const files = list => (list || []).map(({ preview, ...file }) => file);
+    return { ...chat,
+      ...(chat.draftFiles ? { draftFiles: files(chat.draftFiles) } : {}),
+      ...(Array.isArray(chat.queuedMessages) ? { queuedMessages: chat.queuedMessages.map(message => ({ ...message, files: files(message.files) })) } : {}) };
   }
   function serializeLayout(node) {
     if (!node) return null;
@@ -8775,7 +8776,7 @@
       const reopened = addTerminal(ws.id, null, { label: tab.label || 'Chat', cwd: tab.cwd, threadHistory: true });
       if (!reopened) return;
       reopened.chat = { ...tab.chat, storeId: tab.chat.storeId || tab.id };
-      reopened._draft = tab._draft || ''; reopened._files = tab._files || [];
+      reopened._draft = tab._draft ?? tab.chat?.draft ?? ''; reopened._files = tab._files || tab.chat?.draftFiles || [];
       reopened._scrollState = tab._scrollState;
       closedThreads = closedThreads.filter(t => t !== tab);
       openChatTab(reopened);
@@ -8981,10 +8982,10 @@
     }
     // Each chat keeps its own unsent draft and attachments.
     if (prev !== tab) {
-      thrInput.value = (tab._draft ?? tab.chat?.draft) || ''; _chatFiles = tab._files || [];
-      autosizeThreadInput(); renderChatFiles();
+      thrInput.value = (tab._draft ?? tab.chat?.draft) || ''; _chatFiles = tab._files || tab.chat?.draftFiles || [];
     }
     _curChat = tab;
+    if (prev !== tab) { autosizeThreadInput(); renderChatFiles(); }
     syncThreadSelection();
     page.style.display = tab._cliView ? 'none' : 'flex';
     if (page.dataset.chat !== tab.id || force) {
@@ -9010,7 +9011,7 @@
       delete flow.dataset.seen;
       delete flow.dataset.signature;
       threadPart(snap, 'input').value = (sibling._draft ?? sibling.chat?.draft) || '';
-      renderChatFiles(sibling._files || [], snap);
+      renderChatFiles(sibling._files || sibling.chat?.draftFiles || [], snap);
       syncThreadComposer(sibling, snap);
       refreshThreadFlow(sibling, snap);
     }
@@ -10019,6 +10020,19 @@
   // message, the way a file dropped on the agent's terminal does (Claude Code turns image paths
   // into images). ──
   let _chatFiles = []; // [{ name, path, image, preview }]
+  const _chatPreviewLoads = new WeakSet();
+  function hydrateChatFiles(files, refresh) {
+    if (!window.electronAPI?.readImageFile) return;
+    for (const file of files) {
+      if (!file.image || file.preview || !file.path || _chatPreviewLoads.has(file)) continue;
+      _chatPreviewLoads.add(file);
+      window.electronAPI.readImageFile(file.path).then(result => {
+        if (!result?.data) return;
+        file.preview = `data:${result.mediaType};base64,${result.data}`;
+        refresh();
+      }).catch(() => {});
+    }
+  }
   const thrFiles = thrPage.querySelector('#sbr-thread-attachments');
   // The textarea is the serialized draft; the visible editor keeps references atomic and clickable.
   function chatEditorText(node) {
@@ -10139,6 +10153,19 @@
     return [...quoted, [body, trailing.join(' ')].filter(Boolean).join(' ')].filter(Boolean).join('\n\n') + notes.join('');
   }
   function renderChatFiles(files = _chatFiles, surface = thrPage) {
+    const tab = curChat();
+    if (surface === thrPage && tab) {
+      tab._files = files;
+      if (!tab._editingQueued) {
+        tab.chat ||= { createdAt: Date.now() };
+        tab.chat.draftFiles = files;
+        tab.chat.draft = thrInput.value;
+        tab._draft = thrInput.value;
+      }
+    }
+    hydrateChatFiles(files, () => {
+      if (surface !== thrPage || (curChat() === tab && _chatFiles === files)) renderChatFiles(files, surface);
+    });
     const thrFiles = threadPart(surface, 'attachments');
     thrFiles.hidden = !files.some(f => !f.cite && !f.at && !f.thread);
     thrFiles.innerHTML = files.map((f, i) => {
@@ -10177,11 +10204,14 @@
             const input = document.createElement('textarea'); input.value = tab._draft || ''; input.setSelectionRange(input.value.length, input.value.length);
             insertChatMention(attachment, input, tab._files); tab._draft = input.value;
           }
+          tab.chat ||= { createdAt: Date.now() };
+          if (!tab._editingQueued) { tab.chat.draft = tab._draft || ''; tab.chat.draftFiles = tab._files; }
         }
       } catch (err) { zoomBadge(err.message || 'Could not attach ' + file.name); }
     }
     renderChatFiles();
     autosizeThreadInput();
+    saveState();
     if (curChat() === tab) thrInput.focus({ preventScroll: true });
   }
   thrFiles?.addEventListener('click', e => {
@@ -10192,7 +10222,7 @@
         const caret = thrInput.value.slice(0, thrInput.selectionStart).split(file.mention).join('').length;
         thrInput.value = thrInput.value.split(file.mention).join(''); thrInput.setSelectionRange(caret, caret);
       }
-      renderChatFiles(); autosizeThreadInput(); thrInput.focus({ preventScroll: true }); return;
+      renderChatFiles(); autosizeThreadInput(); saveState(); thrInput.focus({ preventScroll: true }); return;
     }
     const cite = e.target.closest('.thr-cite-link'), citation = cite && _chatFiles[+cite.dataset.i];
     if (citation?.cite) { jumpToCitation(citation); return; }
@@ -10632,6 +10662,7 @@
   });
   function clearChatDraft(ws) {
     ws._draft = ''; ws._files = [];
+    if (ws.chat) ws.chat.draftFiles = [];
     if (ws.chat?.draft) { ws.chat.draft = ''; renderThreadsSidebar(); }
     if (curChat() === ws) { thrInput.value = ''; _chatFiles = []; autosizeThreadInput(); renderChatFiles(); }
   }
@@ -10670,7 +10701,7 @@
     const draft = ws._queueEditDraft || { text: '', files: [] };
     delete ws._editingQueued; delete ws._queueEditDraft;
     ws._draft = draft.text; ws._files = draft.files;
-    if (ws.chat) ws.chat.draft = draft.text;
+    if (ws.chat) { ws.chat.draft = draft.text; ws.chat.draftFiles = draft.files; }
     if (curChat() === ws) {
       thrInput.value = draft.text; _chatFiles = draft.files;
       renderChatFiles(); autosizeThreadInput(); syncSendBtn(); thrInput.focus({ preventScroll: true });
@@ -10803,6 +10834,7 @@
     }
     if (box.parentElement !== flow || box !== flow.lastElementChild) flow.appendChild(box);
     const queue = ws.chat?.queuedMessages || [], paused = !!ws.chat?.queuePaused;
+    hydrateChatFiles(queue.flatMap(message => message.files || []), () => updateChatQueue(ws));
     box.hidden = !queue.length;
     const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
     const html = header + queue.map(m => {
