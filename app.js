@@ -11477,6 +11477,7 @@
     // Un-settle action on hover); shelves Pinned · Working · the active list · Settled (10, then 25 more per click).
     // Settling is the user's "done": new activity after it brings the thread back to the active list.
     const settled = x => !x.work && x.w.chat.settledAt && x.w.chat.settledAt >= x.updated;
+    const clocks = new Map();
     const row = (x, shelf) => {
       const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No project' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
         ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...x.models.map(m => ({ proc: m.h.bin, text: m.text }))];
@@ -11484,6 +11485,7 @@
       const lead = x.work ? '<i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>'
         : projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder');
       const end = x.work ? (x.work.wait ? 'Waiting' : fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))) : ago(x.updated);
+      clocks.set(x.w.id, { time: ago(x.updated), status: x.work ? (x.work.wait ? end : `Working ${end}`) : '' });
       const action = x.draft || x.work ? ''
         : shelf === 'settled' ? '<button type="button" class="ts-act" data-act="unsettle" aria-label="Un-settle thread"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><span class="ts-act-label">Un-settle</span></button>'
         : '<button type="button" class="ts-act" data-act="settle" aria-label="Settle thread"><i class="ph ph-check" aria-hidden="true"></i><span class="ts-act-label">Settle</span></button>';
@@ -11492,10 +11494,10 @@
       const folder = `<span class="ts-folder">${x.draft ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : ''}${projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder')}<span>${escHtml(x.folder)}</span></span>`;
       // Pinned / Working / Threads keep the full card (folder · time · status, title, branch · agents); Settled is slim.
       if (shelf !== 'settled') {
-        const status = x.work ? `<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>${x.work.wait ? end : `Working ${end}`}</span>` : '';
+        const status = x.work ? '<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i></span>' : '';
         return `<div role="button" tabindex="0" class="ts-card${x.draft ? ' draft' : ''}${x.work ? ' working' : ''}" draggable="${!x.draft}" data-tab="${x.w.id}"`
           + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
-          + `<span class="ts-row">${folder}${pin}<span class="ts-end">${x.draft || x.work ? '' : `<span class="ts-time">${ago(x.updated)}</span>`}${action}</span>${status}</span>`
+          + `<span class="ts-row">${folder}${pin}<span class="ts-end">${x.draft || x.work ? '' : '<span class="ts-time"></span>'}${action}</span>${status}</span>`
           + title
           + (x.draft ? '' : `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
             + (x.hs.length ? `<span class="ts-agents">${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span>')
@@ -11504,7 +11506,7 @@
       return `<div role="button" tabindex="0" class="ts-card slim" draggable="true" data-tab="${x.w.id}"`
         + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
         + `<span class="ts-lead">${lead}</span>${title}${pin}`
-        + `<span class="ts-end"><span class="ts-time">${ago(x.updated)}</span>${action}</span></div>`;
+        + `<span class="ts-end"><span class="ts-time"></span>${action}</span></div>`;
     };
     const section = (id, label, list, more = 0) => !list.length ? '' : `<div class="ts-section${tsCollapsed.has(id) ? ' collapsed' : ''}" data-sec="${id}">`
       + `<button type="button" class="ts-section-head" aria-expanded="${!tsCollapsed.has(id)}"><span>${label}</span><span class="ts-count">${list.length}</span><i class="ph ph-caret-down ts-caret" aria-hidden="true"></i></button>`
@@ -11519,6 +11521,19 @@
       : `<div class="ts-empty">${q ? 'No threads match' : tsProject != null ? `No threads in ${escHtml(tsProject === '' ? 'No project' : chatFolderName(tsProject))}` : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
     if (tsList.querySelector('.ts-rename')) return; // an inline rename is open: don't rebuild under it
     if (tsList._html !== html) { tsList._html = html; tsList.innerHTML = html; } // rebuild only on change (keeps hover and focus)
+    // Countdown ticks must preserve cards, tooltip anchors, focus, and spinner animations.
+    tsList.querySelectorAll('.ts-card').forEach(card => {
+      const clock = clocks.get(card.dataset.tab);
+      if (!clock) return;
+      const time = card.querySelector('.ts-time');
+      if (time && time.textContent !== clock.time) time.textContent = clock.time;
+      const status = card.querySelector('.ts-status.working');
+      if (status) {
+        const text = status.lastChild;
+        if (text?.nodeType === Node.TEXT_NODE) { if (text.nodeValue !== clock.status) text.nodeValue = clock.status; }
+        else status.append(document.createTextNode(clock.status));
+      }
+    });
     syncThreadSelection();
   }
   tsList.addEventListener('click', e => {
