@@ -1731,7 +1731,7 @@
   let notificationSound = true;     // play sounds/notify.wav with those notifications
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
-  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', markdown: 'on' };
+  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed', markdown: 'on' };
   const loadThreadSettings = s => { if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s }; };
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
@@ -2786,9 +2786,10 @@
   const DETACHED_STATE_KEY = 'ghostterm-state-detached-' + (DETACHED_WIN_ID || 'default');
 
   function serializeChat(chat) {
-    if (!Array.isArray(chat.queuedMessages)) return chat;
-    return { ...chat, queuedMessages: chat.queuedMessages.map(message => ({ ...message,
-      files: (message.files || []).map(({ preview, ...file }) => file) })) };
+    const files = list => (list || []).map(({ preview, ...file }) => file);
+    return { ...chat,
+      ...(chat.draftFiles ? { draftFiles: files(chat.draftFiles) } : {}),
+      ...(Array.isArray(chat.queuedMessages) ? { queuedMessages: chat.queuedMessages.map(message => ({ ...message, files: files(message.files) })) } : {}) };
   }
   function serializeLayout(node) {
     if (!node) return null;
@@ -8489,32 +8490,38 @@
     const limits = await api.usageLimits(fresh).catch(() => null);
     _usageLimits = limits;
     if (_usageModal) renderUsageModal();
+    renderUsageSidebar();
+    return limits;
+  }
+  const usageRemaining = () => threadSettings.usageDisplay === 'remaining';
+  const usagePercent = used => usageRemaining() ? 100 - Math.min(100, Math.max(0, used)) : Math.min(100, Math.max(0, used));
+  function renderUsageSidebar() {
     const left = document.getElementById('ts-usage');
-    if (!left) return limits;
-    const ids = Object.entries(limits || {}).filter(([id, u]) => harnessOf(id) && u.windows?.length).map(([id]) => id);
-    if (limits) try { localStorage.setItem('tv-usage-agents', JSON.stringify(ids)); } catch {}
+    if (!left) return;
+    const label = usageRemaining() ? 'remaining' : 'consumed';
+    left.setAttribute('aria-label', `Usage limits: ${label}`);
+    const ids = Object.entries(_usageLimits || {}).filter(([id, u]) => harnessOf(id) && u.windows?.length).map(([id]) => id);
+    if (_usageLimits) try { localStorage.setItem('tv-usage-agents', JSON.stringify(ids)); } catch {}
     // The first reading after the startup placeholders fades in (rings sweep from empty); later refreshes don't.
     const reveal = left.classList.contains('loading');
     left.classList.remove('loading');
     left.classList.toggle('reveal', reveal);
-    const items = Object.entries(limits || {}).map(([id, u]) => {
+    const items = Object.entries(_usageLimits || {}).map(([id, u]) => {
       const h = harnessOf(id);
       if (!h || !u.windows?.length) return '';
       const top = u.windows.reduce((a, b) => b.used > a.used ? b : a);
-      const rows = u.windows.map(w => ({ icon: 'ph-clock', text: `${w.label}: ${w.used}% used${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
+      const rows = u.windows.map(w => ({ icon: 'ph-clock', text: `${w.label}: ${usagePercent(w.used)}% ${label}${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
       const plan = u.plan ? ' · ' + u.plan[0].toUpperCase() + u.plan.slice(1) : '';
-      // A ring gauge (--p: % used) around the logo, the % under it; the reset times are in the tooltip.
-      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${Math.min(100, Math.max(0, top.used))}" data-tip="${escHtml(h.name + plan)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
+      // Gauge and percentage use the selected mode; warnings always reflect consumed quota.
+      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${usagePercent(top.used)}" data-tip="${escHtml(h.name + plan)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
         + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
-        + `<span class="sb-usage-pct">${top.used}%</span></span>`;
+        + `<span class="sb-usage-pct">${usagePercent(top.used)}%</span></span>`;
     }).join('');
     left.innerHTML = items ? `${items}<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>` : '';
     left.hidden = !items;
-    return limits;
   }
-  // ── Usage modal (threads sidebar footer): every limit window of every agent, T3 Code style —
-  // the % left, a bar (left solid, used striped) with the pace marker (where an even burn would be
-  // now) and the time to the reset, and a trend icon comparing the two. ──
+  // Usage modal: every agent's limit windows, shown in the selected display mode,
+  // with an even-pace marker, reset time, and trend based on the remaining quota.
   let _usageModal = null, _usageReturnFocus = null, _usageLoading = false;
   function renderUsageModal() {
     const body = _usageModal?.querySelector('.um-body');
@@ -8523,13 +8530,14 @@
       const h = harnessOf(id);
       if (!h || !u.windows?.length) return '';
       const cards = u.windows.map(w => {
-        const left = 100 - w.used;
+        const left = 100 - Math.min(100, Math.max(0, w.used));
+        const value = usagePercent(w.used), label = usageRemaining() ? 'remaining' : 'consumed';
         const pace = w.resetsAt && w.mins ? Math.max(0, Math.min(100, (w.resetsAt - Date.now()) / (w.mins * 60000) * 100)) : null;
         const [trend, trendTip] = pace == null ? ['ph-gauge', ''] : left < pace - 5 ? ['ph-trend-down', 'Using it faster than it resets'] : left > pace + 5 ? ['ph-trend-up', 'Under pace: it lasts until the reset'] : ['ph-gauge', 'On pace'];
         return `<div class="um-card"><div class="um-stat"><div class="um-label">${escHtml(w.label)}</div>`
-          + `<div class="um-big"><span class="um-num">${left}%</span><span class="um-left">left<i class="ph ${trend} um-trend" aria-hidden="true"${trendTip ? ` title="${trendTip}"` : ''}></i></span></div></div>`
-          + `<div class="um-bar" role="img" aria-label="${left}% left${w.resetsAt ? `, resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}"><div class="um-fill" style="width:${left}%"></div>`
-          + (pace != null ? `<div class="um-pace" style="left:${pace}%" title="Even pace: ${Math.round(pace)}% would be left now"></div>` : '')
+          + `<div class="um-big"><span class="um-num">${value}%</span><span class="um-left">${label}</span><i class="ph ${trend} um-trend" aria-hidden="true"${trendTip ? ` title="${trendTip}"` : ''}></i></div></div>`
+          + `<div class="um-bar" role="img" aria-label="${value}% ${label}${w.resetsAt ? `, resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}"><div class="um-fill" style="width:${value}%"></div>`
+          + (pace != null ? `<div class="um-pace" style="left:${usageRemaining() ? pace : 100 - pace}%" title="Even pace: ${Math.round(usageRemaining() ? pace : 100 - pace)}% ${label} now"></div>` : '')
           + (w.resetsAt ? `<span class="um-reset"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>${fmtLeft(w.resetsAt - Date.now())}</span>` : '') + '</div></div>';
       }).join('');
       const plan = u.plan ? `<span class="um-plan">${escHtml(u.plan[0].toUpperCase() + u.plan.slice(1))}</span>` : '';
@@ -8647,6 +8655,22 @@
   // the images themselves show above the bubble. Both open the image viewer.
   const _thrImgSize = new Map(); // path -> bytes, known once the image was read
   const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+  function chatImageLinkHtml(file, attrs = '', extraClass = '') {
+    return `<a href="#" class="thr-image-ref ${extraClass}" ${attrs} title="${escHtml(file.path || file.name)}"><span class="thr-inline-image-icon">${file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span>${escHtml(file.name)}</span><small class="thr-img-size" data-size-path="${escHtml(file.path || '')}">${file.size ? escHtml(fmtBytes(file.size).replace(' ', '')) : ''}</small></a>`;
+  }
+  function queuedMessageTextHtml(message) {
+    let text = message.typed || '';
+    const links = [];
+    for (const [i, file] of (message.files || []).entries()) {
+      const image = file.image && !file.cite && !file.at && !file.thread;
+      const replacement = image ? `\u0000I${links.length}\u0000` : file.cite ? '“' + file.cite.replace(/\s+/g, ' ').slice(0, 80) + '”' : file.name;
+      if (image) links.push(chatImageLinkHtml(file, `data-queue-act="preview" data-file-i="${i}"`));
+      if (file.mention && text.includes(file.mention)) text = text.split(file.mention).join(replacement);
+      else if (image) text += (text ? ' ' : '') + replacement;
+    }
+    if (!text) text = message.files?.map(f => f.name || f.cite).join(', ') || message.text || '';
+    return escHtml(text).replace(/\u0000I(\d+)\u0000/g, (_, i) => links[i] || '');
+  }
   function userTextHtml(text, threads = []) {
     // Threads dropped in as context: from the transcript (threads) or a pending message's own notes.
     const refs = [...threads, ...[...String(text).matchAll(/<terminalvibe_context thread="([^"]*)">“([^”]*)”/g)].map(m => ({ path: m[1], title: m[2] }))];
@@ -8835,7 +8859,15 @@
     renderChatQueue(ws, surface);
   }
   const pendingMessages = ws => { const p = _pendingMsgs.get(ws.id); return p ? (Array.isArray(p) ? p : [p]) : []; };
-  const pendingHtml = ws => pendingMessages(ws).map(p => `<div class="thr-msg user thr-pending">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}<div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(p.text).html}</div></div></div>`).join('');
+  const pendingHtml = (ws, previousHead = '') => {
+    const pending = pendingMessages(ws);
+    if (!pending.length) return '';
+    const o = pending[0].options || chatOpts(ws), h = harnessOf(o.harness), name = h?.name || o.harness;
+    const meta = [o.model && o.model !== 'default' ? o.model : '', o.effort && o.effort !== 'default' ? o.effort : ''].filter(Boolean).join(' · ');
+    const head = name + '|' + meta;
+    const header = head === previousHead ? '' : `<div class="thr-seg thr-pending" data-head="${escHtml(head)}"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(pending[0].at)}</span></div>`;
+    return header + pending.map(p => `<div class="thr-msg user thr-pending">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}<div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(p.text).html}</div></div></div>`).join('');
+  };
   const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
   // A chat is a tab (its history + a message box); a workspace can hold any number of them.
   // ponytail: it is a terminal tab whose shell sits under the page until the chat starts its agent
@@ -8862,7 +8894,7 @@
       const reopened = addTerminal(ws.id, null, { label: tab.label || 'Chat', cwd: tab.cwd, threadHistory: true });
       if (!reopened) return;
       reopened.chat = { ...tab.chat, storeId: tab.chat.storeId || tab.id };
-      reopened._draft = tab._draft || ''; reopened._files = tab._files || [];
+      reopened._draft = tab._draft ?? tab.chat?.draft ?? ''; reopened._files = tab._files || tab.chat?.draftFiles || [];
       reopened._scrollState = tab._scrollState;
       closedThreads = closedThreads.filter(t => t !== tab);
       openChatTab(reopened);
@@ -9068,10 +9100,10 @@
     }
     // Each chat keeps its own unsent draft and attachments.
     if (prev !== tab) {
-      thrInput.value = (tab._draft ?? tab.chat?.draft) || ''; _chatFiles = tab._files || [];
-      autosizeThreadInput(); renderChatFiles();
+      thrInput.value = (tab._draft ?? tab.chat?.draft) || ''; _chatFiles = tab._files || tab.chat?.draftFiles || [];
     }
     _curChat = tab;
+    if (prev !== tab) { autosizeThreadInput(); renderChatFiles(); }
     syncThreadSelection();
     page.style.display = tab._cliView ? 'none' : 'flex';
     if (page.dataset.chat !== tab.id || force) {
@@ -9097,7 +9129,7 @@
       delete flow.dataset.seen;
       delete flow.dataset.signature;
       threadPart(snap, 'input').value = (sibling._draft ?? sibling.chat?.draft) || '';
-      renderChatFiles(sibling._files || [], snap);
+      renderChatFiles(sibling._files || sibling.chat?.draftFiles || [], snap);
       syncThreadComposer(sibling, snap);
       refreshThreadFlow(sibling, snap);
     }
@@ -9444,7 +9476,10 @@
       return;
     }
     const b = e.target.closest('.thr-img-link');
-    if (b) openClaudeRefViewer(null, { kind: 'file', path: b.dataset.path, label: b.dataset.path.split(/[\\/]/).pop() }, '');
+    if (b) {
+      e.preventDefault();
+      openClaudeRefViewer(null, { kind: 'file', path: b.dataset.path, label: b.dataset.path.split(/[\\/]/).pop() }, '');
+    }
     const href = e.target.closest('button.thr-link')?.dataset.href;
     if (!href) return;
     if (/^https?:/i.test(href)) { openChatWebLink(href, e.shiftKey); return; }
@@ -9522,7 +9557,7 @@
     surface.classList.toggle('thr-new', fresh);
     cwdEl.disabled = !fresh;
     const folderName = chatFolderName(cwd);
-    cwdEl.innerHTML = `<i class="ph ${folderName === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(folderName)}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
+    cwdEl.innerHTML = `${folderName === 'No project' ? '<i class="ph ph-selection" aria-hidden="true"></i>' : chatFolderIcon(cwd)}<span>${escHtml(folderName)}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
     cwdEl.title = fresh ? `Working folder: ${cwd || 'a new scratch folder'}` : cwd;
     // Above the composer: a thread's side chats, or (in a side chat) the thread it belongs to.
     const sidesEl = thrChip('sides');
@@ -9627,6 +9662,13 @@
     if (!r.ok) zoomBadge(r.error || 'Could not switch branch');
     _gitBranch.delete(cwd);
     syncThreadComposer(tab); renderThreadsSidebar();
+  }
+  function chatFolderIcon(path, open = false) {
+    // Both Windows UNC spellings identify WSL folders; ordinary Linux paths do not.
+    if (/^[\\/]{2}wsl(?:\.localhost|\$)[\\/]/i.test(path || '')) {
+      return '<i class="ph ph-linux-logo" aria-hidden="true"></i>';
+    }
+    return `<i class="ph ph-folder${open ? '-open' : ''}" aria-hidden="true"></i>`;
   }
   function setChatCwd(tab, dir, scratch = false) {
     if (!tab || (!dir && !scratch) || threadHasMessages(tab)) return;
@@ -10141,6 +10183,19 @@
   // message, the way a file dropped on the agent's terminal does (Claude Code turns image paths
   // into images). ──
   let _chatFiles = []; // [{ name, path, image, preview }]
+  const _chatPreviewLoads = new WeakSet();
+  function hydrateChatFiles(files, refresh) {
+    if (!window.electronAPI?.readImageFile) return;
+    for (const file of files) {
+      if (!file.image || file.preview || !file.path || _chatPreviewLoads.has(file)) continue;
+      _chatPreviewLoads.add(file);
+      window.electronAPI.readImageFile(file.path).then(result => {
+        if (!result?.data) return;
+        file.preview = `data:${result.mediaType};base64,${result.data}`;
+        refresh();
+      }).catch(() => {});
+    }
+  }
   const thrFiles = thrPage.querySelector('#sbr-thread-attachments');
   // The textarea is the serialized draft; the visible editor keeps references atomic and clickable.
   function chatEditorText(node) {
@@ -10329,6 +10384,19 @@
     return [...quoted, [body, trailing.join(' ')].filter(Boolean).join(' ')].filter(Boolean).join('\n\n') + notes.join('');
   }
   function renderChatFiles(files = _chatFiles, surface = thrPage) {
+    const tab = curChat();
+    if (surface === thrPage && tab) {
+      tab._files = files;
+      if (!tab._editingQueued) {
+        tab.chat ||= { createdAt: Date.now() };
+        tab.chat.draftFiles = files;
+        tab.chat.draft = thrInput.value;
+        tab._draft = thrInput.value;
+      }
+    }
+    hydrateChatFiles(files, () => {
+      if (surface !== thrPage || (curChat() === tab && _chatFiles === files)) renderChatFiles(files, surface);
+    });
     const thrFiles = threadPart(surface, 'attachments');
     thrFiles.hidden = !files.some(f => !f.cite && !f.at && !f.thread);
     thrFiles.innerHTML = files.map((f, i) => {
@@ -10343,8 +10411,31 @@
     syncChatInputLinks(surface, files);
     if (surface === thrPage) syncSendBtn();
   }
-  async function addChatFiles(files) {
+  const _chatFileAdds = new WeakMap();
+  function addChatFiles(files) {
     const tab = curChat();
+    if (!tab) return Promise.resolve();
+    const pending = (_chatFileAdds.get(tab) || Promise.resolve()).catch(() => {}).then(() => addChatFilesToTab(tab, files));
+    _chatFileAdds.set(tab, pending);
+    return pending;
+  }
+  async function findChatImageDuplicate(files, attachment) {
+    if (!attachment.image) return null;
+    const data = attachment.preview?.split(',')[1];
+    for (const file of files) {
+      if (!file.image) continue;
+      if (file.path === attachment.path) return file;
+      let existing = file.preview?.split(',')[1];
+      // Restored drafts have metadata only until their preview has loaded.
+      if (!existing && data && window.electronAPI?.readImageFile) {
+        const result = await window.electronAPI.readImageFile(file.path).catch(() => null);
+        existing = result?.data;
+      }
+      if (data && existing === data) return file;
+    }
+    return null;
+  }
+  async function addChatFilesToTab(tab, files) {
     for (const file of files) {
       try {
         const path = await localPathForFile(tab, file);
@@ -10357,6 +10448,23 @@
           reader.readAsDataURL(file);
         }) : '';
         const attachment = { name: file.name || path.split(/[\\/]/).pop(), path, image, preview, size: file.size || 0 };
+        const attached = curChat() === tab ? _chatFiles : (tab._files ||= tab.chat?.draftFiles || []);
+        const duplicate = await findChatImageDuplicate(attached, attachment);
+        if (duplicate) {
+          duplicate.preview ||= preview;
+          duplicate.size ||= attachment.size;
+          // Removing an inline link keeps its preview; repasting restores that link.
+          if (curChat() === tab) {
+            if (!duplicate.mention || !thrInput.value.includes(duplicate.mention)) insertChatMention(duplicate);
+          } else {
+            const input = document.createElement('textarea'); input.value = tab._draft ?? tab.chat?.draft ?? '';
+            input.setSelectionRange(input.value.length, input.value.length);
+            if (!duplicate.mention || !input.value.includes(duplicate.mention)) insertChatMention(duplicate, input, attached);
+            tab._draft = input.value;
+            if (!tab._editingQueued) { tab.chat ||= {}; tab.chat.draft = input.value; tab.chat.draftFiles = attached; }
+          }
+          continue;
+        }
         if (curChat() === tab) {
           if (image) insertChatMention(attachment);
           _chatFiles.push(attachment);
@@ -10367,11 +10475,14 @@
             const input = document.createElement('textarea'); input.value = tab._draft || ''; input.setSelectionRange(input.value.length, input.value.length);
             insertChatMention(attachment, input, tab._files); tab._draft = input.value;
           }
+          tab.chat ||= { createdAt: Date.now() };
+          if (!tab._editingQueued) { tab.chat.draft = tab._draft || ''; tab.chat.draftFiles = tab._files; }
         }
       } catch (err) { zoomBadge(err.message || 'Could not attach ' + file.name); }
     }
     renderChatFiles();
     autosizeThreadInput();
+    saveState();
     if (curChat() === tab) thrInput.focus({ preventScroll: true });
   }
   thrFiles?.addEventListener('click', e => {
@@ -10382,7 +10493,7 @@
         const caret = thrInput.value.slice(0, thrInput.selectionStart).split(file.mention).join('').length;
         thrInput.value = thrInput.value.split(file.mention).join(''); thrInput.setSelectionRange(caret, caret);
       }
-      renderChatFiles(); autosizeThreadInput(); thrInput.focus({ preventScroll: true }); return;
+      renderChatFiles(); autosizeThreadInput(); saveState(); thrInput.focus({ preventScroll: true }); return;
     }
     const cite = e.target.closest('.thr-cite-link'), citation = cite && _chatFiles[+cite.dataset.i];
     if (citation?.cite) { jumpToCitation(citation); return; }
@@ -10829,16 +10940,18 @@
   // Enter steers an active turn; Ctrl+Enter queues for the next turn.
   function syncSendBtn() {
     const c = curChat(), typed = !!(thrInput.value.trim() || _chatFiles.length);
+    const editing = !!c?._editingQueued;
+    syncQueuedEditUI(c);
     const working = !!c && (!!chatWorking(c) || _chatStarting.has(c.id));
-    const queue = working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = working && !typed && !queue;
+    const queue = !editing && working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = !editing && working && !typed && !queue;
     thrSend.classList.toggle('stop', stop);
     thrSend.disabled = !stop && !typed;
-    const label = queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : 'Send';
+    const label = editing ? 'Save queued message' : queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : 'Send';
     if (thrSend.dataset.mode !== label) {
       thrSend.dataset.mode = label;
-      thrSend.innerHTML = queue ? queueIcon : `<i class="ph ${stop ? 'ph-stop' : 'ph-arrow-up'}" aria-hidden="true"></i>`;
+      thrSend.innerHTML = queue ? queueIcon : `<i class="ph ${editing ? 'ph-check' : stop ? 'ph-stop' : 'ph-arrow-up'}" aria-hidden="true"></i>`;
       thrSend.setAttribute('aria-label', label);
-      thrSend.dataset.tip = queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter)' : 'Send (Enter)';
+      thrSend.dataset.tip = editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter)' : 'Send (Enter)';
     }
   }
   function stopChatTurn(c) {
@@ -10867,7 +10980,8 @@
     autosizeThreadInput(); syncSendBtn();
     const c = curChat();
     if (!c?.chat) return;
-    c.chat.draft = thrInput.value; c._draft = thrInput.value;
+    if (!c._editingQueued) c.chat.draft = thrInput.value;
+    c._draft = thrInput.value;
     clearTimeout(_draftSave); _draftSave = setTimeout(saveState, 400);
     renderThreadsSidebar();
   });
@@ -10880,6 +10994,7 @@
     const ws = curChat(), typed = thrInput.value.trim(), files = _chatFiles;
     const text = chatMessageText(typed, files);
     if (!ws || !text) return;
+    if (ws._editingQueued) { finishQueuedEdit(ws, true); return; }
     ws.chat ||= { createdAt: Date.now() };
     const sideAsk = /^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(typed);
     if (sideAsk) { clearChatDraft(ws); void openSideChat(ws, (sideAsk[1] || '').trim(), files); return; }
@@ -10900,8 +11015,51 @@
   });
   function clearChatDraft(ws) {
     ws._draft = ''; ws._files = [];
+    if (ws.chat) ws.chat.draftFiles = [];
     if (ws.chat?.draft) { ws.chat.draft = ''; renderThreadsSidebar(); }
     if (curChat() === ws) { thrInput.value = ''; _chatFiles = []; autosizeThreadInput(); renderChatFiles(); }
+  }
+  function syncQueuedEditUI(ws) {
+    const composer = thrPage.querySelector('#sbr-thread-composer');
+    if (!composer) return;
+    let bar = composer.querySelector('.thr-queue-edit');
+    if (!ws?._editingQueued) { bar?.remove(); return; }
+    if (!bar) {
+      bar = document.createElement('div'); bar.className = 'thr-queue-edit';
+      bar.innerHTML = '<span role="status">Editing queued message</span><button type="button">Cancel</button>';
+      bar.querySelector('button').addEventListener('click', () => { const tab = curChat(); if (tab?._editingQueued) finishQueuedEdit(tab, false); });
+      composer.prepend(bar);
+    }
+  }
+  function beginQueuedEdit(ws, message) {
+    if (curChat() !== ws || _queueDraining.has(ws.id) || _chatSending.has(ws.id)) return;
+    if (ws._editingQueued === message.id) { thrInput.focus(); return; }
+    if (ws._editingQueued) finishQueuedEdit(ws, false);
+    ws._queueEditDraft = { text: thrInput.value, files: _chatFiles };
+    ws._editingQueued = message.id;
+    thrInput.value = message.typed || '';
+    _chatFiles = (message.files || []).map(file => ({ ...file }));
+    ws._draft = thrInput.value; ws._files = _chatFiles;
+    renderChatFiles(); autosizeThreadInput(); syncSendBtn();
+    thrInput.focus({ preventScroll: true });
+  }
+  function finishQueuedEdit(ws, save) {
+    const message = ws.chat?.queuedMessages?.find(m => m.id === ws._editingQueued);
+    if (save) {
+      if (!message || curChat() !== ws) return;
+      const typed = thrInput.value.trim(), files = _chatFiles, text = chatMessageText(typed, files);
+      if (!text) return;
+      Object.assign(message, { typed, files, text });
+    }
+    const draft = ws._queueEditDraft || { text: '', files: [] };
+    delete ws._editingQueued; delete ws._queueEditDraft;
+    ws._draft = draft.text; ws._files = draft.files;
+    if (ws.chat) { ws.chat.draft = draft.text; ws.chat.draftFiles = draft.files; }
+    if (curChat() === ws) {
+      thrInput.value = draft.text; _chatFiles = draft.files;
+      renderChatFiles(); autosizeThreadInput(); syncSendBtn(); thrInput.focus({ preventScroll: true });
+    }
+    updateChatQueue(ws); saveState();
   }
   // The first-message title shows at once; the agent's small model replaces it with a short one, unless renamed meanwhile.
   function autoTitleChat(ws, text, force) {
@@ -10974,13 +11132,13 @@
       if (!ws.chat.title && typed) { ws.chat.title = typed.split('\n')[0].slice(0, 80); setChatTabLabel(ws); autoTitleChat(ws, typed); }
       ws.chat.updatedAt = Date.now();
       const flow = thrPage.querySelector('#sbr-thread-flow');
-      _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, at: Date.now(), steer }]);
+      _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, at: Date.now(), steer, options: { ...(steer ? liveThreadAgent(ws)?._chatCfg || chatOpts(ws) : chatOpts(ws)) } }]);
       const newTurn = !steer || !_turns.has(ws.id);
       if (newTurn) _turns.set(ws.id, { since: Date.now() });
       if (curChat() === ws) {
         flow.querySelector('.thr-empty')?.remove();
         flow.querySelectorAll('.thr-pending').forEach(el => el.remove());
-        flow.insertAdjacentHTML('beforeend', pendingHtml(ws));
+        flow.insertAdjacentHTML('beforeend', pendingHtml(ws, [...flow.querySelectorAll('.thr-seg')].at(-1)?.dataset.head || ''));
         flow.scrollTop = flow.scrollHeight;
         syncWorking(ws);
       }
@@ -11029,14 +11187,13 @@
     }
     if (box.parentElement !== flow || box !== flow.lastElementChild) flow.appendChild(box);
     const queue = ws.chat?.queuedMessages || [], paused = !!ws.chat?.queuePaused;
+    hydrateChatFiles(queue.flatMap(message => message.files || []), () => updateChatQueue(ws));
     box.hidden = !queue.length;
     const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
     const html = header + queue.map(m => {
-      let label = m.typed || '';
-      for (const file of m.files || []) if (file.mention) label = label.split(file.mention).join(file.cite ? '“' + file.cite.replace(/\s+/g, ' ').slice(0, 80) + '”' : file.name);
-      if (!label) label = m.files?.map(f => f.name || f.cite).join(', ') || m.text;
+      const label = queuedMessageTextHtml(m);
       const previews = (m.files || []).map((file, i) => !file.image ? '' : `<button type="button" class="thr-queued-preview" data-queue-act="preview" data-file-i="${i}" aria-label="Preview ${escHtml(file.name)}">${file.preview ? `<img src="${escHtml(file.preview)}" alt="${escHtml(file.name)}">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</button>`).join('');
-      return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"><div class="thr-queued-bubble">${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${escHtml(label)}</div></div>`
+      return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"><div class="thr-queued-bubble">${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${label}</div></div>`
         + '<div class="thr-queued-actions"><button type="button" data-queue-act="send" aria-label="Send queued message now"><i class="ph ph-arrow-up" aria-hidden="true"></i><span>Send now</span></button><button type="button" data-queue-act="edit" aria-label="Edit queued message"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button><button type="button" data-queue-act="remove" aria-label="Remove queued message"><i class="ph ph-x" aria-hidden="true"></i></button></div></div>';
     }).join('');
     if (box.innerHTML !== html) box.innerHTML = html;
@@ -11070,23 +11227,19 @@
     if (button.dataset.queueAct === 'send') { sendQueuedMessage(ws, id); return; }
     const message = ws.chat.queuedMessages?.find(m => m.id === id);
     if (button.dataset.queueAct === 'preview') {
+      e.preventDefault();
       const file = message?.files?.[+button.dataset.fileI];
       if (file) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name }, '', file.preview);
       return;
     }
     if (button.dataset.queueAct === 'edit' && message) {
-      if (_queueDraining.has(ws.id) || _chatSending.has(ws.id)) return;
-      ws._editingQueued = id;
-      showPrompt('Edit queued message', message.typed || '', { onClose: () => { ws._editingQueued = null; } }, value => {
-        if (!ws.chat.queuedMessages.includes(message)) return;
-        const text = chatMessageText(value.trim(), message.files || []);
-        if (!text) return;
-        message.typed = value.trim(); message.text = text;
-        updateChatQueue(ws); saveState();
-      });
+      beginQueuedEdit(ws, message);
       return;
     }
-    if (button.dataset.queueAct === 'remove') ws.chat.queuedMessages = ws.chat.queuedMessages.filter(m => m.id !== id);
+    if (button.dataset.queueAct === 'remove') {
+      if (ws._editingQueued === id) finishQueuedEdit(ws, false);
+      ws.chat.queuedMessages = ws.chat.queuedMessages.filter(m => m.id !== id);
+    }
     else ws.chat.queuePaused = !ws.chat.queuePaused;
     updateChatQueue(ws); saveState();
   });
@@ -11400,6 +11553,36 @@
     return out + escHtml(text.slice(last));
   }
   const hlCode = (text, lang) => lang === 'sh' ? hlShell(text) : lang === 'json' ? hlJson(text) : escHtml(text);
+  // Diff prefixes and hunk coordinates are metadata, not source code.
+  function hlDiffLine(line, file) {
+    const cls = line.startsWith('@@') ? ' hunk' : line[0] === '+' ? ' add' : line[0] === '-' ? ' del' : '';
+    const ext = file.split('.').pop().toLowerCase();
+    const supported = /^(?:[cm]?[jt]sx?|css|scss|less|html?|xml|svg|vue|svelte|py|rs|c|h|cpp|hpp|cc|java|go|rb|php|sql|ya?ml|toml|ini|jsonc?|sh|bash|zsh)$/;
+    let content = escHtml(line) || ' ';
+    if (!line.startsWith('@@') && /^[ +\-]/.test(line) && supported.test(ext)) {
+      const source = line.slice(1);
+      content = escHtml(line[0]) + (/^(sh|bash|zsh)$/.test(ext) ? hlShell(source) : /^jsonc?$/.test(ext) ? hlJson(source) : hlSourceLine(source, ext));
+    }
+    return `<span class="dl${cls}">${content}</span>`;
+  }
+  function hlSourceLine(text, lang) {
+    const hashComments = /^(py|rb|ya?ml|toml|ini)$/.test(lang);
+    const re = /\/\/[^\n]*|\/\*.*?(?:\*\/|$)|<!--.*?(?:-->|$)|#[^\n]*|"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|`(?:\\.|[^`\\])*`?|\b(?:0x[\da-f]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\b|[A-Za-z_$][\w$-]*|[{}()[\];:=<>!+*%&|?~^/-]/gi;
+    const keywords = /^(?:async|await|break|case|catch|class|const|continue|def|delete|do|elif|else|enum|except|export|extends|finally|fn|for|from|function|if|impl|import|in|interface|let|match|new|of|pub|raise|return|self|static|struct|super|switch|this|throw|try|type|typeof|use|var|void|while|with|yield|select|where|insert|update|into|as)$/i;
+    let out = '', last = 0;
+    for (const m of text.matchAll(re)) {
+      out += escHtml(text.slice(last, m.index));
+      const token = m[0], after = text.slice(m.index + token.length);
+      const cls = /^(\/\/|\/\*|<!--)/.test(token) || (hashComments && token[0] === '#') ? 'cm'
+        : /^["'`]/.test(token) ? 's' : /^\d/.test(token) ? 'n'
+        : /^(true|false|null|none|undefined)$/i.test(token) ? 'b'
+        : keywords.test(token) ? 'k' : /^\s*\(/.test(after) ? 'c'
+        : /^\s*:/.test(after) ? 'v' : /^[{}()[\];:=<>!+*%&|?~^/-]$/.test(token) ? 'o' : '';
+      out += cls ? tk(cls, token) : escHtml(token);
+      last = m.index + token.length;
+    }
+    return out + escHtml(text.slice(last));
+  }
   // A file link's type icon, from its extension.
   const FILE_ICONS = { js: 'js', mjs: 'js', cjs: 'js', jsx: 'jsx', ts: 'ts', mts: 'ts', cts: 'ts', tsx: 'tsx', html: 'html', htm: 'html', css: 'css', scss: 'css',
     py: 'py', rs: 'rs', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp', md: 'md', csv: 'csv', sql: 'sql', svg: 'svg', vue: 'vue', pdf: 'pdf', txt: 'txt',
@@ -11718,7 +11901,7 @@
       const meta = [seg.model && seg.model !== 'default' ? seg.model : '', seg.effort && seg.effort !== 'default' ? seg.effort : ''].filter(Boolean).join(' · ');
       // The agent header shows only where the agent or its model changes, not at every session.
       const head = name + '|' + meta;
-      if (head !== lastHead) html += `<div class="thr-seg"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
+      if (head !== lastHead) html += `<div class="thr-seg" data-head="${escHtml(head)}"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
       lastHead = head;
       if (seg.handoff) html += `<div class="thr-note"><i class="ph ph-arrows-left-right" aria-hidden="true"></i>Started with the full history of the ${i} earlier session${i > 1 ? 's' : ''}</div>`;
       if (res.trimmed) html += `<div class="thr-note">${res.trimmed} earlier items not shown</div>`;
@@ -11794,14 +11977,13 @@
         if (!files.size) return '';
         const all = [...files.values()];
         const rel = p => seg.cwd && p.startsWith(seg.cwd.replace(/[\\/]$/, '') + '/') ? p.slice(seg.cwd.replace(/[\\/]$/, '').length + 1) : p;
-        const line = l => `<span class="dl${l[0] === '+' ? ' add' : l[0] === '-' ? ' del' : l.startsWith('@@') ? ' hunk' : ''}">${escHtml(l) || ' '}</span>`;
         const sum = k => all.reduce((s, f) => s + f[k], 0);
         return `<div class="thr-changes"><div class="thr-changes-head"><span class="thr-changes-count">${all.length} changed file${all.length > 1 ? 's' : ''}</span>`
           + `<span class="thr-add">+${sum('add')}</span><span class="thr-del">-${sum('del')}</span>`
           + `<button type="button" class="thr-diff-btn"><i class="ph ph-file-text" aria-hidden="true"></i>Open diff</button></div>`
-          + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ph-file-code" aria-hidden="true"></i>`
+          + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ${linkFileIcon(f.path)}" aria-hidden="true"></i>`
             + `<span class="thr-change-path" title="${escHtml(f.path)}">${escHtml(rel(f.path))}</span><span class="thr-add">+${f.add}</span><span class="thr-del">-${f.del}</span></summary>`
-            + `<pre class="thr-diff">${f.patches.map(p => p.split('\n').map(line).join('')).join('<span class="dl sep"></span>')}</pre></details>`).join('')
+            + `<pre class="thr-diff">${f.patches.map(p => p.split('\n').map(l => hlDiffLine(l, f.path)).join('')).join('<span class="dl sep"></span>')}</pre></details>`).join('')
           + '</div>';
       };
       // T3-style turns: the prompt; for a finished turn a collapsible "Worked for 16s" holding its
@@ -11840,7 +12022,7 @@
         u = e;
       }
     });
-    flow.innerHTML = html + pendingHtml(ws);
+    flow.innerHTML = html + pendingHtml(ws, lastHead);
     flow._texts = texts;
     // A selection across messages copies them as a transcript of their original markdown.
     if (!flow._copyBound) {
@@ -12226,7 +12408,7 @@
       const dirs = [...new Set([cur, ...workspaces.map(w => w.cwd), ...chatThreads().map(t => chatCwd(t))].filter(d => d && !isScratchDir(d)))].slice(0, 12);
       item('<i class="ph ph-selection"></i>', 'No project', '', () => setChatCwd(tab, null, true));
       if (dirs.length) sep();
-      dirs.forEach(d => item(`<i class="ph ph-folder${d === cur ? '-open' : ''}"></i>`, escHtml(d.replace(/^\/home\/[^/]+/, '~')), '', () => setChatCwd(tab, d)));
+      dirs.forEach(d => item(chatFolderIcon(d, d === cur), escHtml(d.replace(/^\/home\/[^/]+/, '~')), '', () => setChatCwd(tab, d)));
       if (window.electronAPI?.selectDirectory) {
         if (dirs.length) sep();
         item('<i class="ph ph-folder-plus"></i>', 'Choose folder…', '', async () => setChatCwd(tab, await window.electronAPI.selectDirectory(cur || undefined)));
@@ -13608,7 +13790,17 @@
     dd.append(btn, menu);
     const label = btn.querySelector('.custom-dropdown-label');
     const arrow = btn.querySelector('.dropdown-arrow');
-    function appendIcon(host, pathData) {
+    function appendIcon(host, pathData, agentId) {
+      if (agentId) {
+        const h = harnessOf(agentId);
+        if (!h) return;
+        const icon = document.createElement('span');
+        icon.className = 'dropdown-icon dropdown-agent-icon';
+        icon.style.color = h.color || 'var(--fg)';
+        icon.innerHTML = procIconHtml(h.bin, 'ph-robot');
+        host.append(icon);
+        return;
+      }
       if (!pathData) return;
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       svg.classList.add('dropdown-icon'); svg.setAttribute('viewBox', '0 0 24 24');
@@ -13618,7 +13810,7 @@
     }
     function refresh() {
       label.replaceChildren();
-      appendIcon(label, select.selectedOptions[0]?.dataset.icon);
+      appendIcon(label, select.selectedOptions[0]?.dataset.icon, select.selectedOptions[0]?.dataset.agent);
       label.append(document.createTextNode(select.selectedOptions[0]?.textContent || ''));
       btn.disabled = select.disabled;
       for (const option of menu.children) {
@@ -13654,7 +13846,7 @@
           }
           item.append(swatches);
         }
-        appendIcon(item, option.dataset.icon);
+        appendIcon(item, option.dataset.icon, option.dataset.agent);
         const text = document.createElement('span'); text.textContent = option.textContent; item.append(text);
         item.addEventListener('click', () => {
           if (option.disabled) return;
@@ -13780,6 +13972,25 @@
     if (focusedTheme) [...grid.children].find(card => card.dataset.theme === focusedTheme)?.focus({ preventScroll: true });
   }
 
+  function refreshThreadHarnessSetting() {
+    const select = document.getElementById('set-thread-harness');
+    if (!select) return;
+    const render = found => {
+      select.replaceChildren(new Option('Last used', ''));
+      for (const h of THREAD_HARNESSES) {
+        if (!CHAT_AGENTS[h.id] || !found[h.bin]) continue;
+        const option = new Option(h.name, h.id);
+        option.dataset.agent = h.id;
+        select.add(option);
+      }
+      select.value = [...select.options].some(o => o.value === threadSettings.harness) ? threadSettings.harness : '';
+      const dd = document.querySelector('.custom-dropdown[data-for="set-thread-harness"]');
+      if (dd) initCustomDropdown(dd);
+    };
+    render(_chatAgentsFound || {});
+    loadChatAgents().then(r => render(r?.found || {}));
+  }
+
   function openSettings(cat) {
     // Populate theme select
     const themeSelect = document.getElementById('set-theme');
@@ -13898,9 +14109,8 @@
     if (linkDD) initCustomDropdown(linkDD);
 
     // Threads
-    const thHarness = document.getElementById('set-thread-harness');
-    if (thHarness.options.length < 2) for (const h of THREAD_HARNESSES) if (CHAT_AGENTS[h.id]) thHarness.add(new Option(h.name, h.id));
-    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-markdown', 'markdown']]) {
+    refreshThreadHarnessSetting();
+    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown']]) {
       document.getElementById(id).value = threadSettings[key];
       const dd = document.querySelector(`.custom-dropdown[data-for="${id}"]`);
       if (dd) initCustomDropdown(dd);
@@ -14293,6 +14503,8 @@
       if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
       loadThreadSettings(state.threadSettings);
+      renderUsageSidebar();
+      renderUsageModal();
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -15338,10 +15550,12 @@
     terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';
     saveState();
   });
-  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-markdown', 'markdown']])
+  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown']])
     document.getElementById(id).addEventListener('change', e => {
-      threadSettings = { ...threadSettings, [key]: e.target.value }; saveState();
+      threadSettings = { ...threadSettings, [key]: e.target.value };
+      if (key === 'usageDisplay') { renderUsageSidebar(); renderUsageModal(); }
       if (key === 'markdown') syncChatInputLinks();
+      saveState();
     });
 
   // Search engine
