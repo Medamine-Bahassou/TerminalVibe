@@ -415,7 +415,8 @@ class AcpSession extends Session {
   recordTool(t, error) {
     const input = t.input ?? {};
     this.record({ role: 'tool', name: t.name, summary: short(t.title || toolSummaryOf(input), 200),
-      detail: short(typeof input === 'string' ? input : JSON.stringify(input, null, 2), ACP_TOOL_DETAIL), ...(error ? { error: true } : {}) });
+      detail: short(typeof input === 'string' ? input : JSON.stringify(input, null, 2), ACP_TOOL_DETAIL),
+      ...(t.output !== undefined ? { output: require('./threads').toolOutput(t.output) } : {}), ...(error ? { error: true } : {}) });
   }
   onMessage(m) {
     if (m.id !== undefined && !m.method) {
@@ -449,6 +450,8 @@ class AcpSession extends Session {
       if (u.name || u.kind) t.name = String(u.name || u.kind);
       if (u.title) t.title = String(u.title);
       if (u.rawInput !== undefined || u.args !== undefined) t.input = u.rawInput ?? u.args;
+      if (u.rawOutput !== undefined) t.output = u.rawOutput;
+      else if (u.content !== undefined) t.output = u.content;
       this.tools.set(u.toolCallId, t);
       if (u.status === 'completed' || u.status === 'failed') { this.recordTool(t, u.status === 'failed'); this.tools.delete(u.toolCallId); }
     }

@@ -23,7 +23,7 @@ function setup(segments, picks = { harness: 'claude', model: 'sonnet', effort: '
     modelName: o => o.harness, syncThreadComposer() {}, saveState() {}, curChat: () => null,
     removeTerminal: () => { throw Error('Unexpected removal of another chat tab'); },
     waitAgentReady: async () => { state.waits++; return 'ready'; },
-    isLiveTerminal: () => state.live, agentRunning: async () => true, agentLocked: () => false, syncTabAgentIcon() {},
+    isLiveTerminal: () => state.live, agentRunning: async () => true, agentLocked: () => false, syncTabAgentIcon() {}, refreshWorkspaceProcsSoon() {},
     sendToAgent: async (_, text) => { state.sent.push(text); return true; },
     zoomBadge: text => state.notices.push(text), uuid: () => 'new-claude-id',
     threadMeta: t => ({ id: t.id }), window: { electronAPI: {} },

@@ -1282,12 +1282,12 @@ ipcMain.handle('git:turn-diff', async (_e, cwd, from, to) => {
 });
 ipcMain.handle('git:branches', async (_e, cwd) => {
   if (!cwd || typeof cwd !== 'string') return [];
-  const r = await git(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);
-  return r.ok ? r.out.split('\n').filter(Boolean) : [];
+  const r = await require('./git-command').runGit(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);
+  return r.ok ? r.out.split(/\r?\n/).filter(Boolean) : [];
 });
 ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
   if (!cwd || typeof cwd !== 'string' || typeof branch !== 'string' || !branch || branch.startsWith('-')) return { ok: false, error: 'Invalid branch' };
-  const r = await git(cwd, ['switch', branch]);
+  const r = await require('./git-command').runGit(cwd, ['switch', branch]);
   return { ok: r.ok, error: r.error };
 });
 // A short title for a new chat, from its first message, by the small model of the agent the chat uses

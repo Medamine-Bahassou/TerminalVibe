@@ -120,6 +120,21 @@ async function parseFile(file, parse) {
   return result;
 }
 
+function toolOutput(value) {
+  let text = '';
+  if (typeof value === 'string') {
+    try { const parsed = JSON.parse(value); if (parsed && typeof parsed === 'object') return toolOutput(parsed); } catch {}
+    text = value;
+  } else if (Array.isArray(value)) text = value.map(toolOutput).filter(Boolean).join('\n');
+  else if (value && typeof value === 'object') {
+    if (value.output !== undefined) return toolOutput(value.output);
+    if (value.stdout !== undefined || value.stderr !== undefined) text = [value.stdout, value.stderr].filter(v => v != null && v !== '').map(toolOutput).join('\n');
+    else if (value.text !== undefined) return toolOutput(value.text);
+    else if (value.content !== undefined) return toolOutput(value.content);
+  }
+  return text.length > 64000 ? text.slice(0, 64000) + '\n… output truncated' : text;
+}
+
 function parseClaude(list) {
   const items = [], tools = new Map(), queued = [];
   for (const row of list) {
@@ -160,6 +175,7 @@ function parseClaude(list) {
         tools.set(b.id, item); items.push(item);
       } else if (b?.type === 'tool_result' && tools.has(b.tool_use_id)) {
         const item = tools.get(b.tool_use_id);
+        item.output = toolOutput(b.content);
         if (b.is_error) item.error = true;
         if (item.qa) {
           const answers = row.toolUseResult?.answers;
@@ -193,7 +209,7 @@ function parseCodex(list) {
       const it = p.item, ts = r.timestamp || null;
       if (it.type === 'CommandExecution') {
         const cmd = Array.isArray(it.command) ? shellArgv(it.command) : String(it.command || '');
-        items.push({ role: 'tool', name: 'shell', summary: clip(cmd), detail: cmd.length > 4000 ? cmd.slice(0, 3999) + '…' : cmd, ts,
+        items.push({ role: 'tool', name: 'shell', summary: clip(cmd), detail: cmd.length > 4000 ? cmd.slice(0, 3999) + '…' : cmd, output: toolOutput(it.aggregated_output ?? it.output ?? { stdout: it.stdout, stderr: it.stderr }), ts,
           ...(typeof it.exit_code === 'number' && it.exit_code !== 0 ? { error: true } : {}) });
       } else if (it.type === 'FileChange' && it.changes && typeof it.changes === 'object') {
         const files = Object.entries(it.changes).map(([file, ch]) => fileChange(file, ch?.type === 'add' ? String(ch.content || '').split('\n').map(l => '+' + l)
@@ -233,6 +249,7 @@ function parseCodex(list) {
       if (item.name !== 'exec') items.push(item);
     } else if (['function_call_output', 'custom_tool_call_output'].includes(p.type) && tools.has(p.call_id)) {
       let out = p.output; try { out = JSON.parse(out); } catch {}
+      tools.get(p.call_id).output = toolOutput(out);
       const code = out?.metadata?.exit_code;
       if ((typeof code === 'number' && code !== 0) || out?.success === false) tools.get(p.call_id).error = true;
     }
@@ -302,7 +319,7 @@ function parseAcp(list) {
   }
   return items.filter(r => ['user', 'assistant', 'thinking', 'tool'].includes(r.role)).map(r => ({ ...(r.role === 'user'
     ? { role: 'user', text: stripNote(String(r.text || '')), ...threadRefs(String(r.text || '')), ts: r.ts || null }
-    : r.role === 'tool' ? { role: 'tool', name: String(r.name || 'tool'), summary: String(r.summary || ''), detail: String(r.detail || ''), ts: r.ts || null, ...(r.error ? { error: true } : {}) }
+    : r.role === 'tool' ? { role: 'tool', name: String(r.name || 'tool'), summary: String(r.summary || ''), detail: String(r.detail || ''), ...(r.output !== undefined ? { output: toolOutput(r.output) } : {}), ts: r.ts || null, ...(r.error ? { error: true } : {}) }
     : { role: r.role, text: String(r.text || ''), ts: r.ts || null }), ...(r.interrupted ? { interrupted: r.interrupted, interruptedAt: r.interruptedAt } : {}) }))
     .filter(r => r.role === 'tool' || r.text || r.interrupted);
 }
@@ -474,4 +491,4 @@ async function deleteThread(id, home = os.homedir(), root = threadsRoot(home)) {
   return true;
 }
 
-module.exports = { detectAgents, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, parseClaude, parseCodex, parseAcp, acpFile, fileChange };
+module.exports = { detectAgents, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, toolOutput, parseClaude, parseCodex, parseAcp, acpFile, fileChange };
