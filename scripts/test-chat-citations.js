@@ -14,9 +14,23 @@ app.whenReady().then(async () => {
   await win.loadURL('about:blank');
   for (const file of ['style.css', 'workspace.css']) await win.webContents.insertCSS(fs.readFileSync(path.join(root, file), 'utf8'));
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const copyHelpers = source.slice(source.indexOf('  function mdFromDom('), source.indexOf('  // Escape first, then the markdown agents use:'));
   const citations = source.slice(source.indexOf('  let _citationFlash = null;'), source.indexOf('  let _chatCtrl = false;'));
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
+    ${copyHelpers}
+    const copyScope = document.createElement('div');
+    copyScope.innerHTML = '<div class="thr-msg-text"><button class="thr-link" data-href="/tmp/source.png"><i></i>View the latest screenshot</button> and <strong>bold text</strong></div>';
+    const link = copyScope.querySelector('.thr-link'), label = link.lastChild;
+    const copyRange = document.createRange();
+    copyRange.selectNodeContents(label);
+    check(mdFromRange(copyRange, copyScope) === '[View the latest screenshot](/tmp/source.png)', 'Selected link label lost its source path');
+    copyRange.setStart(label, 5); copyRange.setEnd(label, 8);
+    check(mdFromRange(copyRange, copyScope) === '[the](/tmp/source.png)', 'Partial link label lost its source path');
+    copyRange.selectNodeContents(copyScope.querySelector('strong').firstChild);
+    check(mdFromRange(copyRange, copyScope) === '**bold text**', 'Selected formatted text lost its markdown');
+    copyRange.selectNodeContents(copyScope);
+    check(mdFromRange(copyRange, copyScope) === '[View the latest screenshot](/tmp/source.png) and **bold text**', 'Mixed selection changed markdown');
     const tick = ms => new Promise(resolve => setTimeout(resolve, ms || 30));
     document.body.classList.add('ui-animations');
     document.body.innerHTML = '<div id="sbr-thread" style="position:relative;display:flex;width:500px;height:400px"><div class="thr-flow" id="sbr-thread-flow" tabindex="-1" style="height:300px;flex:none;overflow:auto"></div><div class="thr-composer-wrap" style="height:80px"></div><textarea id="draft"></textarea></div><div id="neighbor" style="height:100px;overflow:auto"><div style="height:500px">Other pane</div></div>';

@@ -2380,6 +2380,8 @@
       const terms = getWorkspaceTerminals(ws);
       const t = terms.find(x => x.id === id);
       if (t) return { ws, term: t };
+      const child = terms.find(x => x._bottomTerminal?.id === id)?._bottomTerminal;
+      if (child) return { ws, term: child };
     }
     return null;
   }
@@ -5547,6 +5549,7 @@
     if (idx === -1) return;
 
     const entry = group.terminals[idx];
+    disposeChatBottomTerminal(entry);
     if (!skipPtyClose) rememberClosedThread(entry, wsp);
     if (entry.type !== 'browser') {
       if (!skipPtyClose) {
@@ -5771,6 +5774,7 @@
     if (!result) return;
     const { ws, term: t } = result;
     t.dead = true;
+    if (t._chatOwner) { disposeChatBottomTerminal(t._chatOwner); return; }
     pluginEmit('terminal:exit', { termId: id, code });
     // Other agent panes returned to a shell when the agent ended, so this exit is the user's: close like any tab.
     if (t.agentManaged && t.keepOnExit) {
@@ -8700,6 +8704,58 @@
     }
     else { _flowSig = ''; if (curChat() === tab) { restoreThreadScroll(tab); refreshThreadFlow(tab); syncThreadComposer(tab); } thrInput.focus(); }
   }
+  function disposeChatBottomTerminal(owner) {
+    const entry = owner?._bottomTerminal;
+    if (!entry) return;
+    delete owner._bottomTerminal;
+    sendControl({ type: 'close', id: entry.id });
+    clearTimeout(entry._resizeTimeout);
+    _termFitObserver.unobserve(entry.el);
+    _disposeTermRenderers(entry.term);
+    entry.term.dispose();
+    entry.el.remove();
+    owner.el?.classList.remove('chat-bottom-open');
+  }
+  function toggleChatBottomTerminal(owner) {
+    if (!owner?.threadHistory || owner._cliView || !wsReady) return;
+    let entry = owner._bottomTerminal;
+    if (!entry) {
+      const wsp = findTermById(owner.id)?.ws;
+      if (!wsp) return;
+      entry = _createTermEntry(wsp, uuid(), 'Terminal');
+      entry._chatOwner = owner;
+      entry.cwd = chatCwd(owner) || null;
+      owner._bottomTerminal = entry;
+      const panel = document.createElement('section');
+      panel.className = 'chat-bottom-terminal';
+      panel.id = 'slot-' + entry.id;
+      panel.setAttribute('aria-label', 'Project terminal');
+      panel.innerHTML = '<div class="chat-bottom-header"><span>Terminal</span><button type="button" aria-label="Hide terminal (Ctrl+J)" title="Hide terminal (Ctrl+J)"><i class="ph ph-x" aria-hidden="true"></i></button></div><div class="chat-bottom-body"></div>';
+      owner.el.append(panel);
+      entry.el = panel;
+      entry.term.open(panel.querySelector('.chat-bottom-body'));
+      entry.opened = true;
+      // Keep the chat as the active tab when its shell receives focus.
+      panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); });
+      panel.querySelector('button').addEventListener('click', () => toggleChatBottomTerminal(owner));
+      owner.el.classList.add('chat-bottom-open');
+      _termFitObserver.observe(panel);
+      fitTerm(entry, true);
+      sendControl({ type: 'create', id: entry.id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd });
+    } else {
+      entry.el.hidden = !entry.el.hidden;
+      owner.el.classList.toggle('chat-bottom-open', !entry.el.hidden);
+    }
+    if (entry.el.hidden) { owner.term.focus(); return; }
+    requestAnimationFrame(() => { fitTerm(entry, true); entry.term.focus(); });
+  }
+  document.addEventListener('keydown', e => {
+    if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.key.toLowerCase() !== 'j') return;
+    const owner = activeTerminal();
+    if (!owner?.threadHistory || owner._cliView || !owner.el?.offsetParent) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (!e.repeat) toggleChatBottomTerminal(owner);
+  }, true);
   // An agent finished its turn: update the chat now, not on the next poll.
   function chatAgentIdle(entry) {
     void refreshUsageLimits();
@@ -11402,6 +11458,19 @@
     }
     return kids(el);
   }
+  function mdFromRange(range, scope) {
+    let fragment = range.cloneContents();
+    // cloneContents omits shared ancestors, including a link when only its label is selected.
+    let ancestor = range.commonAncestorContainer;
+    if (ancestor.nodeType !== Node.ELEMENT_NODE) ancestor = ancestor.parentElement;
+    while (ancestor && ancestor !== scope && scope.contains(ancestor)) {
+      const wrapper = ancestor.cloneNode(false);
+      wrapper.append(fragment);
+      fragment = wrapper;
+      ancestor = ancestor.parentElement;
+    }
+    return mdFromDom(fragment);
+  }
   // Escape first, then the markdown agents use: fences (highlighted by their language tag), `code`, **bold**,
   // *italic*, ~~strike~~, links, headings, lists, > quotes, tables and --- rules.
   function mdLite(text) {
@@ -11758,7 +11827,7 @@
         const msgs = [...flow.querySelectorAll('.thr-msg[data-key]')].filter(covers);
         if (!msgs.length) return; // tool output etc.: the browser's own copy
         // Inside one message: the selected part as markdown source.
-        const text = msgs.length === 1 ? mdFromDom(within(msgs[0]).cloneContents()) // only that message, not the chrome after it.replace(/\n{3,}/g, '\n\n').trim()
+        const text = msgs.length === 1 ? mdFromRange(within(msgs[0]), msgs[0])
           : msgs.map(m => `${m.classList.contains('user') ? 'User' : 'AI'}: ${flow._texts.get(m.dataset.key) || ''}`).join('\n\n');
         e.clipboardData.setData('text/plain', text);
         e.preventDefault();
