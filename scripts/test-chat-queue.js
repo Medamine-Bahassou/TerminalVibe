@@ -62,6 +62,7 @@ app.whenReady().then(async () => {
     const stopTabAgent = () => {};
     const syncThreadComposer = ws => { if (current === ws) { renderChatQueue(ws); syncSendBtn(); } };
     const escHtml = s => String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+    const _thrImgCache = new Map(), _thrImgSize = new Map();
     const fmtBytes = bytes => Math.round(bytes / 1024) + ' KB';
     const showPrompt = (label, value, options, accept) => {
       if (typeof options === 'function') accept = options;

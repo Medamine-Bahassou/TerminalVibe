@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'app.js'), 'utf8');
-const sidebar = { innerHTML: '', setAttribute() {} }, body = { innerHTML: '' };
+const sidebar = { innerHTML: '', setAttribute() {}, classList: { contains: () => false, remove() {}, toggle() {} } }, body = { innerHTML: '' };
 const threadSettings = { usageDisplay: 'consumed' };
 let reads = 0;
 const context = vm.createContext({

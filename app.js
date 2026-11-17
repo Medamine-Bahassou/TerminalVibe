@@ -527,6 +527,13 @@
 
   function hoverWebLink(term, termId, uri) { claudeRefHovered = { el: term.element, term, open: e => openTerminalLink(termId, uri, e) }; }
 
+  // A web link in the chat follows the same setting as terminal links (default: a TerminalVibe browser tab in the
+  // chat's workspace); Shift+click, or other=true, picks the other place.
+  function openChatWebLink(href, other = false) {
+    const inTab = (terminalLinkTarget !== 'external') !== !!other, ws = wsOf(curChat()) || activeWs();
+    if (inTab && ws) addBrowserTab(ws.id, null, href); else openExternalUrl(href);
+  }
+
   function openExternalUrl(url) {
     if (isDesktop() && window.electronAPI) {
       window.electronAPI.openExternal(url);
@@ -1724,7 +1731,7 @@
   let notificationSound = true;     // play sounds/notify.wav with those notifications
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
-  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed' };
+  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed', markdown: 'on' };
   const loadThreadSettings = s => { if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s }; };
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
@@ -2373,6 +2380,8 @@
       const terms = getWorkspaceTerminals(ws);
       const t = terms.find(x => x.id === id);
       if (t) return { ws, term: t };
+      const child = terms.find(x => x._bottomTerminal?.id === id)?._bottomTerminal;
+      if (child) return { ws, term: child };
     }
     return null;
   }
@@ -4884,6 +4893,27 @@
     return entry;
   }
 
+  function syncBrowserTabIcon(entry, tab) {
+    const icon = tab.querySelector('.tg-tab-icon');
+    if (!icon) return;
+    icon.innerHTML = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg>';
+    if (!entry._favicon) return;
+    const src = entry._favicon, img = document.createElement('img');
+    img.className = 'tg-tab-favicon'; img.alt = ''; img.draggable = false;
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', () => {
+      if (entry._favicon === src) setBrowserTabFavicon(entry, []);
+    }, { once: true });
+    icon.replaceChildren(img);
+    img.src = src;
+  }
+  function setBrowserTabFavicon(entry, favicons) {
+    entry._favicon = (Array.isArray(favicons) ? favicons : []).find(url =>
+      typeof url === 'string' && /^(https?:\/\/|data:image\/)/i.test(url)) || null;
+    document.querySelectorAll('.tg-tab[data-termid]').forEach(tab => {
+      if (tab.dataset.termid === entry.id) syncBrowserTabIcon(entry, tab);
+    });
+  }
   function addBrowserTab(wsId, targetGroupId, url) {
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
@@ -4928,6 +4958,7 @@
             tab.className = 'tg-tab active';
             tab.dataset.termid = entry.id;
             tab.innerHTML = `<span class="tg-tab-dot tg-tab-icon"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
+            syncBrowserTabIcon(entry, tab);
             tab.title = entry.label;
             applyTabColor(tab, entry.color);
             tab.draggable = true;
@@ -5541,6 +5572,7 @@
     if (idx === -1) return;
 
     const entry = group.terminals[idx];
+    disposeChatBottomTerminal(entry);
     if (!skipPtyClose) rememberClosedThread(entry, wsp);
     if (entry.type !== 'browser') {
       if (!skipPtyClose) {
@@ -5765,6 +5797,7 @@
     if (!result) return;
     const { ws, term: t } = result;
     t.dead = true;
+    if (t._chatOwner) { disposeChatBottomTerminal(t._chatOwner); return; }
     pluginEmit('terminal:exit', { termId: id, code });
     // Other agent panes returned to a shell when the agent ended, so this exit is the user's: close like any tab.
     if (t.agentManaged && t.keepOnExit) {
@@ -6362,6 +6395,7 @@
         <span class="tg-tab-close" title="Close">✕</span>
         `;
         tab.title = t.label;
+        if (t.type === 'browser') syncBrowserTabIcon(t, tab);
         syncTabAgentIcon(t, tab);
         applyTabColor(tab, t.color);
 
@@ -7047,8 +7081,9 @@
                 showLoading(false);
                 resumeBrowserTab(entry);
               });
-              surface.addEventListener('did-navigate', e => syncUrl(e.url));
+              surface.addEventListener('did-navigate', e => { setBrowserTabFavicon(entry, []); syncUrl(e.url); });
               surface.addEventListener('did-navigate-in-page', e => syncUrl(e.url));
+              surface.addEventListener('page-favicon-updated', e => setBrowserTabFavicon(entry, e.favicons));
               surface.addEventListener('page-title-updated', e => setBrowserHistoryTitle(entry.url, e.title));
               surface.addEventListener('did-fail-load', (e, errorCode) => {
                 if (errorCode === -3) return; // ERR_ABORTED = redirect, not real error
@@ -7068,6 +7103,7 @@
                 clearTimeout(entry._loadTimer);
                 showLoading(false);
                 resumeBrowserTab(entry);
+                try { setBrowserTabFavicon(entry, [new URL('/favicon.ico', entry.url).href]); } catch {}
               });
               surface.addEventListener('error', () => {
                 clearTimeout(entry._loadTimer);
@@ -7155,6 +7191,7 @@
 
           showLoading(true);
           urlInput.value = url;
+          setBrowserTabFavicon(entry, []);
           entry.url = url;
 
           if (entry._history[entry._historyIdx] !== url) {
@@ -8463,6 +8500,12 @@
     if (!left) return;
     const label = usageRemaining() ? 'remaining' : 'consumed';
     left.setAttribute('aria-label', `Usage limits: ${label}`);
+    const ids = Object.entries(_usageLimits || {}).filter(([id, u]) => harnessOf(id) && u.windows?.length).map(([id]) => id);
+    if (_usageLimits) try { localStorage.setItem('tv-usage-agents', JSON.stringify(ids)); } catch {}
+    // The first reading after the startup placeholders fades in (rings sweep from empty); later refreshes don't.
+    const reveal = left.classList.contains('loading');
+    left.classList.remove('loading');
+    left.classList.toggle('reveal', reveal);
     const items = Object.entries(_usageLimits || {}).map(([id, u]) => {
       const h = harnessOf(id);
       if (!h || !u.windows?.length) return '';
@@ -8498,7 +8541,8 @@
           + (w.resetsAt ? `<span class="um-reset"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>${fmtLeft(w.resetsAt - Date.now())}</span>` : '') + '</div></div>';
       }).join('');
       const plan = u.plan ? `<span class="um-plan">${escHtml(u.plan[0].toUpperCase() + u.plan.slice(1))}</span>` : '';
-      return `<section class="um-agent" style="--um-agent:${h.color || 'var(--fg)'}"><div class="um-agent-head"><span class="um-logo">${procIconHtml(h.bin, 'ph-robot')}</span><span>${escHtml(h.name)}</span>${plan}</div>${cards}</section>`;
+      // Antigravity has no brand color of its own (its logo is an image): a lavender whose bar fill is #39334f.
+      return `<section class="um-agent" style="--um-agent:${h.color || (id === 'antigravity' ? '#9784db' : 'var(--fg)')}"><div class="um-agent-head"><span class="um-logo">${procIconHtml(h.bin, 'ph-robot')}</span><span>${escHtml(h.name)}</span>${plan}</div>${cards}</section>`;
     }).join('');
     body.innerHTML = sections || (_usageLoading
       ? '<div class="um-empty"><i class="ph ph-circle-notch um-spin" aria-hidden="true"></i>Reading usage…</div>'
@@ -8511,7 +8555,9 @@
   }
   function closeUsageModal() {
     if (!_usageModal) return;
-    _usageModal.remove(); _usageModal = null;
+    const el = _usageModal; _usageModal = null;
+    el.classList.add('closing'); // fades out when UI animations are on; 0s otherwise
+    setTimeout(() => el.remove(), parseFloat(getComputedStyle(el).transitionDuration) * 1000 || 0);
     _usageReturnFocus?.focus?.(); _usageReturnFocus = null;
   }
   function openUsageModal() {
@@ -8538,6 +8584,20 @@
     void loadUsageModal(false); // the last reading (≤ 1 min old) at once, else a new one
   }
   document.getElementById('ts-usage')?.addEventListener('click', openUsageModal);
+  // From startup: the agents seen last time, as logos in empty rings, until the first reading arrives.
+  if (!DETACHED_ONLY && !SETTINGS_ONLY && window.electronAPI?.usageLimits) {
+    const left = document.getElementById('ts-usage');
+    let ids = null;
+    try { ids = JSON.parse(localStorage.getItem('tv-usage-agents')); } catch {}
+    const known = (Array.isArray(ids) ? ids : ['claude', 'codex', 'antigravity']).map(harnessOf).filter(Boolean);
+    if (left && known.length) {
+      left.innerHTML = known.map(h => `<span class="sb-usage-item" style="--p:0" data-tip="${escHtml(h.name)}: loading usage…">`
+        + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
+        + '<span class="sb-usage-pct">&nbsp;</span></span>').join('') + '<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>';
+      left.classList.add('loading');
+      left.hidden = false;
+    }
+  }
   if (!DETACHED_ONLY && !SETTINGS_ONLY) { setTimeout(() => refreshUsageLimits(true), 3000); setInterval(() => refreshUsageLimits(true), 5 * 60000); }
 
   // A terminal running an agent becomes a Chat tab over that agent (the chat button in its tab bar).
@@ -8628,16 +8688,15 @@
     const paths = [];
     const marked = String(text).replace(new RegExp(IMAGE_PATH_RE.source, 'gi'), (m, q, quoted, bare) => {
       paths.push(quoted || bare);
-      return `\u0000${paths.length - 1}\u0000`;
+      return `\u0000I${paths.length - 1}\u0000`;
     });
     // Each “title” of a dropped thread shows as a link to it (its history file sits in the thread's folder).
     const markedRefs = refs.reduce((out, r, n) => out.split(`“${r.title}”`).join(`\u0000T${n}\u0000`), marked);
     const html = mdLite(markedRefs).replace(/\u0000T(\d+)\u0000/g, (_, n) => {
       const r = refs[n], key = r.path.split(/[\\/]/).slice(-2, -1)[0] || '';
       return `<a href="#" class="thr-thread-mention" data-thread-key="${escHtml(key)}" title="Thread: ${escHtml(r.title)}"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(r.title)}</span></a>`;
-    }).replace(/\u0000(\d+)\u0000/g, (_, n) => {
-      const p = paths[n], size = _thrImgSize.get(p);
-      return chatImageLinkHtml({ path: p, name: p.split(/[\\/]/).pop(), size }, `data-path="${escHtml(p)}"`, 'thr-img-link');
+    }).replace(/\u0000I(\d+)\u0000/g, (_, n) => {
+      return `<span class="thr-inline-ref">${chatImageReferenceHtml({ path: paths[n] })}</span>`;
     }).trim();
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
   }
@@ -8693,6 +8752,58 @@
     }
     else { _flowSig = ''; if (curChat() === tab) { restoreThreadScroll(tab); refreshThreadFlow(tab); syncThreadComposer(tab); } thrInput.focus(); }
   }
+  function disposeChatBottomTerminal(owner) {
+    const entry = owner?._bottomTerminal;
+    if (!entry) return;
+    delete owner._bottomTerminal;
+    sendControl({ type: 'close', id: entry.id });
+    clearTimeout(entry._resizeTimeout);
+    _termFitObserver.unobserve(entry.el);
+    _disposeTermRenderers(entry.term);
+    entry.term.dispose();
+    entry.el.remove();
+    owner.el?.classList.remove('chat-bottom-open');
+  }
+  function toggleChatBottomTerminal(owner) {
+    if (!owner?.threadHistory || owner._cliView || !wsReady) return;
+    let entry = owner._bottomTerminal;
+    if (!entry) {
+      const wsp = findTermById(owner.id)?.ws;
+      if (!wsp) return;
+      entry = _createTermEntry(wsp, uuid(), 'Terminal');
+      entry._chatOwner = owner;
+      entry.cwd = chatCwd(owner) || null;
+      owner._bottomTerminal = entry;
+      const panel = document.createElement('section');
+      panel.className = 'chat-bottom-terminal';
+      panel.id = 'slot-' + entry.id;
+      panel.setAttribute('aria-label', 'Project terminal');
+      panel.innerHTML = '<div class="chat-bottom-header"><span>Terminal</span><button type="button" aria-label="Hide terminal (Ctrl+J)" title="Hide terminal (Ctrl+J)"><i class="ph ph-x" aria-hidden="true"></i></button></div><div class="chat-bottom-body"></div>';
+      owner.el.append(panel);
+      entry.el = panel;
+      entry.term.open(panel.querySelector('.chat-bottom-body'));
+      entry.opened = true;
+      // Keep the chat as the active tab when its shell receives focus.
+      panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); });
+      panel.querySelector('button').addEventListener('click', () => toggleChatBottomTerminal(owner));
+      owner.el.classList.add('chat-bottom-open');
+      _termFitObserver.observe(panel);
+      fitTerm(entry, true);
+      sendControl({ type: 'create', id: entry.id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd });
+    } else {
+      entry.el.hidden = !entry.el.hidden;
+      owner.el.classList.toggle('chat-bottom-open', !entry.el.hidden);
+    }
+    if (entry.el.hidden) { owner.term.focus(); return; }
+    requestAnimationFrame(() => { fitTerm(entry, true); entry.term.focus(); });
+  }
+  document.addEventListener('keydown', e => {
+    if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.key.toLowerCase() !== 'j') return;
+    const owner = activeTerminal();
+    if (!owner?.threadHistory || owner._cliView || !owner.el?.offsetParent) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (!e.repeat) toggleChatBottomTerminal(owner);
+  }, true);
   // An agent finished its turn: update the chat now, not on the next poll.
   function chatAgentIdle(entry) {
     void refreshUsageLimits();
@@ -8708,15 +8819,22 @@
     // The agent's question: a tray on the composer's top edge (like the side chats tray), one row per choice.
     const askEl = threadPart(surface, 'ask');
     if (askEl) {
-      const a = w?.ask, askHtml = a ? `<div class="thr-ask-q"><i class="ph ph-hand-pointing" aria-hidden="true"></i><span>${escHtml(a.question)}</span></div>`
+      // Header row (the question's short header, e.g. "Task"; the caret folds the tray), the question, then one row per
+      // choice: a radio (checkbox for multi-select), the label with its description below, the number key at the right.
+      const a = w?.ask;
+      const head = a && (a.header || (/^allow\b/i.test(a.question) ? 'Permission' : 'Question'));
+      const askHtml = a ? `<button type="button" class="thr-ask-head" aria-expanded="true"><span>${escHtml(head)}</span><i class="ph ph-caret-down" aria-hidden="true"></i></button>`
+        + `<div class="thr-ask-q">${escHtml(a.question)}</div>`
         + (a.detail.length ? `<div class="thr-ask-detail">${a.detail.map(escHtml).join('<br>')}</div>` : '')
         + a.options.map((o, i) => o.submit
           ? `<button type="button" class="thr-ask-submit" data-ask-i="${i}"><i class="ph ph-check" aria-hidden="true"></i><span>Submit</span></button>`
           : o.input
-          ? `<label class="thr-ask-opt thr-ask-field"><span class="thr-ask-key">${o.key}</span><input type="text" data-ask-i="${i}" placeholder="Type something" aria-label="Your answer" spellcheck="false"></label>`
+          ? `<label class="thr-ask-opt thr-ask-field"><span class="thr-ask-radio" aria-hidden="true"></span><input type="text" data-ask-i="${i}" placeholder="Type something" aria-label="Your answer" spellcheck="false"><span class="thr-ask-key">${o.key}</span></label>`
           : `<button type="button" class="thr-ask-opt" data-ask-i="${i}"${o.checked !== undefined ? ` role="checkbox" aria-checked="${o.checked}"` : ''}>`
-            + (o.checked !== undefined ? `<span class="thr-ask-box${o.checked ? ' on' : ''}"><i class="ph ph-check" aria-hidden="true"></i></span>` : `<span class="thr-ask-key">${o.key}</span>`)
-            + `<span class="thr-ask-label">${escHtml(o.label)}</span>${o.desc ? `<span class="thr-ask-desc">${escHtml(o.desc)}</span>` : ''}</button>`).join('') : '';
+            + (o.checked !== undefined ? `<span class="thr-ask-box${o.checked ? ' on' : ''}"><i class="ph ph-check" aria-hidden="true"></i></span>` : '<span class="thr-ask-radio" aria-hidden="true"></span>')
+            + `<span class="thr-ask-text"><span class="thr-ask-label">${escHtml(o.label)}</span>${o.desc ? `<span class="thr-ask-desc">${escHtml(o.desc)}</span>` : ''}</span>`
+            + (o.key != null && o.checked === undefined ? `<span class="thr-ask-key">${o.key}</span>` : '') + '</button>').join('') : '';
+      if (askEl._q !== a?.question) askEl.classList.remove('folded'); // a new question opens unfolded
       // A redraw while typing an answer would wipe it: the tray keeps its field until the question changes.
       const typing = askEl.contains(document.activeElement) && document.activeElement.tagName === 'INPUT' && askEl._q === a?.question;
       askEl.hidden = !askHtml;
@@ -9277,6 +9395,8 @@
       _tabAgent.set(t.id, null);
       if (ev.error) zoomBadge(`${name} stopped: ${ev.error}`);
       syncTabAgentIcon(t);
+      // Died mid-turn (a crash): the turn is over; redraw so its "Interrupted" line shows, and the next message restarts it.
+      if (ev.midTurn) { _turns.delete(t.id); _pendingMsgs.delete(t.id); _flowSig = ''; if (curChat() === t) refreshThreadFlow(t); }
     }
     if (curChat() === t) { syncWorking(t); syncThreadComposer(t); syncSendBtn(); }
     renderThreadsSidebar();
@@ -9298,6 +9418,8 @@
     }).observe(wrap);
   }
   thrPage.querySelector('#sbr-thread-ask').addEventListener('click', e => {
+    const headBtn = e.target.closest('.thr-ask-head');
+    if (headBtn) { const folded = e.currentTarget.classList.toggle('folded'); headBtn.setAttribute('aria-expanded', String(!folded)); return; }
     const askBtn = e.target.closest('button[data-ask-i]');
     if (askBtn) answerAgentQuestion(e.currentTarget, +askBtn.dataset.askI);
   });
@@ -9360,18 +9482,29 @@
     }
     const href = e.target.closest('button.thr-link')?.dataset.href;
     if (!href) return;
-    if (/^https?:/i.test(href)) { openExternalUrl(href); return; }
+    if (/^https?:/i.test(href)) { openChatWebLink(href, e.shiftKey); return; }
     const { path } = chatLinkPath(href);
     if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(path)) openClaudeRefViewer(null, { kind: 'file', path, label: path.split(/[\\/]/).pop() }, '');
     else if (/\.(html?|svg)$/i.test(path)) addBrowserTab(wsOf(curChat())?.id, null, path);
     else window.electronAPI?.showInFolder?.(path);
   });
+  // Right-click in the chat: a link, an image, or a message (its text).
   thrPage.querySelector('#sbr-thread-flow').addEventListener('contextmenu', e => {
+    citeBtn.hidden = true; // the menu takes over (its "Cite selection" does the same)
+    const img = e.target.closest('img.thr-img');
+    if (img?.dataset.path) { e.preventDefault(); showCtxMenu(e, 'chat-image', img); return; }
     const href = e.target.closest('button.thr-link')?.dataset.href;
-    if (!href) return;
-    e.preventDefault();
-    showCtxMenu(e, 'chat-link', href);
+    if (href) { e.preventDefault(); showCtxMenu(e, 'chat-link', href); return; }
+    const msg = e.target.closest('.thr-msg[data-key]');
+    if (msg) { e.preventDefault(); showCtxMenu(e, 'chat-msg', msg); }
   });
+  // An image in the chat to the clipboard (as PNG); the copy button and the right-click menu share it.
+  async function copyChatImage(img) {
+    const c = Object.assign(document.createElement('canvas'), { width: img.naturalWidth, height: img.naturalHeight });
+    c.getContext('2d').drawImage(img, 0, 0);
+    const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+  }
   // A chat link's file: absolute path (relative ones are from the chat's folder), its folder-relative
   // path and the line it points at (#L12 or :12:3).
   function chatLinkPath(href) {
@@ -9404,6 +9537,17 @@
       chip.innerHTML = `<span class="thr-chip-logo"${ho.color ? ` style="color:${ho.color}"` : ''}>${procIconHtml(ho.bin, 'ph-robot')}</span><span>${escHtml(modelName(o, true))}</span>${effort ? `<span class="thr-chip-sub">${escHtml(effort)}</span>` : ''}`
         + (o.fast ? '<i class="ph ph-lightning thr-chip-mode" aria-label="Fast"></i>' : '') + (o.ultra ? '<i class="ph ph-infinity thr-chip-mode" aria-label="Ultracode"></i>' : '');
     }
+    // The permission mode, beside the model picker (the same choices as the picker's mode menu).
+    const modeEl = thrChip('mode'), acc = CHAT_AGENTS[o.harness]?.access?.find(x => x[0] === o.access);
+    if (modeEl) {
+      modeEl.hidden = !acc;
+      if (acc && modeEl.dataset.sig !== o.harness + o.access) {
+        modeEl.dataset.sig = o.harness + o.access;
+        modeEl.innerHTML = `<i class="ph ${acc[2]}" aria-hidden="true"></i><span>${escHtml(acc[1])}</span>`;
+        modeEl.classList.toggle('danger', /full|bypass/i.test(o.access));
+        modeEl.setAttribute('aria-label', `Permission mode: ${acc[1]}`);
+      }
+    }
     syncTabAgentIcon(ws);
     // Footer: folder, the agent's tab (its permission prompts show there), branch, permissions.
     const cwd = chatCwd(ws);
@@ -9431,7 +9575,8 @@
         : !sides.length ? ''
         : collapsed ? `<button type="button" class="thr-sides-toggle thr-sides-bubble" aria-expanded="false" aria-label="Show ${what}" data-tip="Side chats">`
           + `<i class="ph ph-chat-circle-dots" aria-hidden="true"></i><span class="thr-sides-count">${sides.length}</span><i class="ph ph-caret-up" aria-hidden="true"></i></button>`
-        : `<span class="thr-sides-label">Side chats</span>${sides.map((x, i) => chip(x, 'ph-chat-circle-dots', i)).join('')}`
+        : `<span class="thr-sides-label">Side chats</span>${sides.map((x, i) => `<div class="thr-side-row" style="--i:${i}">${chip(x, 'ph-chat-circle-dots', i)}`
+          + `<button type="button" class="thr-side-del" data-del-side="${escHtml(x.id)}" aria-label="Delete side chat “${escHtml(x.chat?.title || x.label || 'Side chat')}”" data-tip="Delete side chat"><i class="ph ph-trash" aria-hidden="true"></i></button></div>`).join('')}`
           + `<button type="button" class="thr-sides-toggle" aria-expanded="true" aria-label="Hide ${what}"><i class="ph ph-caret-down" aria-hidden="true"></i></button>`;
       sidesEl.hidden = !html;
       sidesEl.classList.toggle('collapsed', collapsed);
@@ -9462,7 +9607,8 @@
   // Pick a new chat's working folder: the workspaces' folders, or any folder.
   thrChip('bringback')?.addEventListener('click', () => { const c = curChat(); if (c) void bringBackSideChat(c); });
   thrChip('sides')?.addEventListener('click', e => {
-    if (e.target.closest('.thr-sides-toggle')) {
+    // The caret, or anywhere on the open tray's "Side chats" header row.
+    if (e.target.closest('.thr-sides-toggle, .thr-sides:not(.collapsed):has(> .thr-sides-toggle) > .thr-sides-label')) {
       const el = e.currentTarget;
       if (el.classList.contains('leaving')) return;
       let done = false;
@@ -9481,18 +9627,35 @@
       else flip();
       return;
     }
+    const del = e.target.closest('.thr-side-del');
+    if (del) { const t = findChatThread(del.dataset.delSide); if (t) confirmDeleteThread(t, undefined, 'side chat'); return; }
     const t = findChatThread(e.target.closest('.thr-side-chip')?.dataset.side); if (t) openChatTab(t);
+  });
+  // Mode chip: the permission modes menu (same as in the model picker); a change applies live where the agent allows it.
+  thrChip('mode')?.addEventListener('click', e => {
+    const ws = curChat();
+    if (!ws) return;
+    const o = chatOpts(ws), btn = e.currentTarget;
+    openPickMenu(btn, CHAT_AGENTS[o.harness].access.map(([v, label, icon]) => ({ value: v, label, selected: v === o.access, icon: `<i class="ph ${icon}"></i>` })),
+      v => { setChatOpts(ws, { access: v }); syncThreadComposer(ws); btn.focus(); void applyClaudeMode(ws, v); }, true);
   });
   thrChip('cwd')?.addEventListener('click', e => {
     e.stopPropagation(); // the document click handler would close the menu right away
-    const r = e.currentTarget.getBoundingClientRect();
+    const chip = e.currentTarget;
+    if (ctxEl.classList.contains('open') && ctxEl._owner === chip) { hideCtxMenu(); return; } // a toggle
+    const r = chip.getBoundingClientRect();
     showCtxMenu({ pageX: r.left, pageY: r.top - 6, above: true }, 'chat-cwd', curChat());
+    ctxEl._owner = chip;
   });
   thrChip('branch')?.addEventListener('click', async e => {
     e.stopPropagation();
-    const tab = curChat(), cwd = chatCwd(tab), r = e.currentTarget.getBoundingClientRect();
+    const chip = e.currentTarget;
+    if (ctxEl.classList.contains('open') && ctxEl._owner === chip) { hideCtxMenu(); return; } // a toggle
+    const tab = curChat(), cwd = chatCwd(tab), r = chip.getBoundingClientRect();
     const branches = await window.electronAPI?.gitBranches?.(cwd) || [];
-    showCtxMenu({ pageX: r.left, pageY: r.top - 6, above: true }, 'chat-branch', { tab, cwd, branches });
+    // The chip sits at the composer's right end: the menu grows leftward from it (right edges aligned).
+    showCtxMenu({ pageX: r.right, pageY: r.top - 6, above: true, alignRight: true }, 'chat-branch', { tab, cwd, branches });
+    ctxEl._owner = chip;
   });
   async function setChatBranch(tab, cwd, branch) {
     const r = await window.electronAPI.gitCheckout(cwd, branch);
@@ -10059,21 +10222,84 @@
     input.setSelectionRange(start, chatEditorText(prefix.cloneContents()).length);
   }
   function restoreChatEditorSelection(editor, input = thrInput) {
-    const point = offset => {
+    const point = (offset, parent = editor) => {
       let index = 0;
-      for (const child of editor.childNodes) {
+      for (const child of parent.childNodes) {
         const length = chatEditorText(child).length;
         if (offset <= length) {
           if (child.nodeType === Node.TEXT_NODE) return [child, Math.min(offset, child.data.length)];
-          return [editor, index + (offset > 0 ? 1 : 0)];
+          // Markdown styling spans hold plain text: step inside them; references stay atomic.
+          if (child.nodeType === Node.ELEMENT_NODE && !child.dataset.mention && child.firstChild) return point(offset, child);
+          return [parent, index + (offset > 0 ? 1 : 0)];
         }
         offset -= length; index++;
       }
-      return [editor, editor.childNodes.length];
+      return [parent, parent.childNodes.length];
     };
     const range = document.createRange();
     range.setStart(...point(input.selectionStart)); range.setEnd(...point(input.selectionEnd));
     const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+  }
+  // Live markdown in the composer: styles the text but keeps every character (markers dimmed),
+  // so the draft, caret offsets and what is sent stay exactly as typed.
+  function mdInputHtml(s, lineStart = true) {
+    const mark = t => `<span class="md-mark">${escHtml(t)}</span>`;
+    const inline = t => {
+      const re = /(`+)([^`\n]+?)\1|(\*\*|__)(?=\S)([^\n]*?\S)\3|~~(?=\S)([^\n]*?\S)~~|(?<![\w*])(\*|_)(?=[^\s*_])([^\n*_]*?[^\s*_])\6(?![\w*])|\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+      let out = '', last = 0;
+      for (const x of t.matchAll(re)) {
+        out += escHtml(t.slice(last, x.index)); last = x.index + x[0].length;
+        if (x[1]) out += `<span class="md-code">${mark(x[1])}${escHtml(x[2])}${mark(x[1])}</span>`;
+        else if (x[3]) out += `<span class="md-strong">${mark(x[3])}${inline(x[4])}${mark(x[3])}</span>`;
+        else if (x[5]) out += `<span class="md-del">${mark('~~')}${inline(x[5])}${mark('~~')}</span>`;
+        else if (x[6]) out += `<span class="md-em">${mark(x[6])}${inline(x[7])}${mark(x[6])}</span>`;
+        else out += `<span class="md-link">${mark('[')}${escHtml(x[8])}${mark('](')}<span class="md-url">${escHtml(x[9])}</span>${mark(')')}</span>`;
+      }
+      return out + escHtml(t.slice(last));
+    };
+    let fence = false;
+    return s.split('\n').map((line, i) => {
+      const start = i > 0 || lineStart;
+      if (start && /^\s*```/.test(line)) { fence = !fence; return `<span class="md-code-block">${mark(line)}</span>`; }
+      if (fence) return `<span class="md-code-block">${escHtml(line)}</span>`;
+      if (!start) return inline(line);
+      let m = line.match(/^(#{1,6} )(.*)$/);
+      if (m) return `<span class="md-h md-h${m[1].length - 1}">${mark(m[1])}${inline(m[2])}</span>`;
+      if ((m = line.match(/^(\s*>\s?)(.*)$/))) return `<span class="md-quote">${mark(m[1])}${inline(m[2])}</span>`;
+      // List items: indent (widened when rendered) + marker; a bullet's dash is drawn as • / ◦ by depth.
+      if ((m = line.match(/^(\s*)([-*+]|\d+[.)])(\s)(.*)$/))) {
+        const bullet = /^[-*+]$/.test(m[2]), sub = Math.floor(m[1].replace(/\t/g, '  ').length / 2) % 2;
+        return (m[1] ? `<span class="md-indent">${escHtml(m[1])}</span>` : '')
+          + `<span class="md-mark md-list${bullet ? ' md-bullet' + (sub ? ' md-bullet-sub' : '') : ''}">${escHtml(m[2] + m[3])}</span>` + inline(m[4]);
+      }
+      return inline(line);
+    }).join('\n');
+  }
+  // Rendered mode hides the markers; the token(s) at the caret show theirs (class md-open), so editing them is predictable.
+  function openMdTokens(editor) {
+    editor.querySelectorAll('.md-open').forEach(x => x.classList.remove('md-open'));
+    const sel = window.getSelection();
+    if (!editor.classList.contains('md-render') || !sel?.rangeCount) return;
+    const r = sel.getRangeAt(0);
+    if (!editor.contains(r.startContainer)) return;
+    const open = n => { for (let x = n; x && x !== editor; x = x.parentNode) if (x.nodeType === Node.ELEMENT_NODE && /\bmd-(?!mark|url)/.test(x.className)) x.classList.add('md-open'); };
+    for (const [c, o] of [[r.startContainer, r.startOffset], [r.endContainer, r.endOffset]]) {
+      open(c);
+      // At a token's edge (caret just before or after it): open that neighbour too.
+      const text = c.nodeType === Node.TEXT_NODE;
+      open(text ? (o === 0 ? c.previousSibling : null) : c.childNodes[o - 1]);
+      open(text ? (o === c.data.length ? c.nextSibling : null) : c.childNodes[o]);
+    }
+  }
+  function chatImageReferenceHtml(file, tabIndex = 0) {
+    const path = file.path || '', name = file.name || path.split(/[\\/]/).pop();
+    if (file.preview) {
+      _thrImgCache.set(path, file.preview);
+      if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
+    }
+    if (file.size) _thrImgSize.set(path, file.size);
+    const preview = file.preview || _thrImgCache.get(path), size = file.size || _thrImgSize.get(path);
+    return `<a href="#" class="thr-image-ref thr-img-link" tabindex="${tabIndex}" data-path="${escHtml(path)}" title="${escHtml(name)}"><span class="thr-inline-image-icon">${preview ? `<img src="${escHtml(preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span class="thr-img-link-name">${escHtml(name)}</span><small class="thr-img-size" data-size-path="${escHtml(path)}">${size ? escHtml(fmtBytes(size).replace(' ', '')) : ''}</small></a>`;
   }
   function syncChatInputLinks(surface = thrPage, files = _chatFiles) {
     const input = threadPart(surface, 'input'), editor = threadPart(surface, 'input-links');
@@ -10084,12 +10310,16 @@
     editor.dataset.placeholder = input.placeholder || 'Ask anything';
     editor.dataset.empty = String(!input.value);
     editor.setAttribute('aria-disabled', String(input.disabled));
-    if (editor._draftValue === input.value && editor._draftReferences === signature) return;
+    const md = threadSettings.markdown !== 'off';
+    editor.classList.toggle('md-render', threadSettings.markdown === 'on');
+    if (editor._draftValue === input.value && editor._draftReferences === signature && editor._draftMd === md) return;
     const tabIndex = surface === thrPage ? 0 : -1;
     const tokens = [...references.keys()].sort((a, b) => b.length - a.length).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    let at = 0;
     editor.innerHTML = (tokens.length ? input.value.split(new RegExp(`(${tokens.join('|')})`, 'g')) : [input.value]).map(part => {
-      const file = references.get(part);
-      if (!file) return escHtml(part);
+      const file = references.get(part), lineStart = !at || input.value[at - 1] === '\n';
+      at += part.length;
+      if (!file) return md ? mdInputHtml(part, lineStart) : escHtml(part);
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
         + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
@@ -10098,11 +10328,12 @@
       const label = file.cite ? file.cite.replace(/\s+/g, ' ').slice(0, 42) + (file.cite.replace(/\s+/g, ' ').length > 42 ? '…' : '') : file.name;
       const link = file.cite
         ? `<a href="#" class="thr-cite-ref" tabindex="${tabIndex}" title="${escHtml(file.cite)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(label)}</span></a>`
-        : chatImageLinkHtml(file, `tabindex="${tabIndex}"`);
+        : chatImageReferenceHtml(file, tabIndex);
       return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}">${link}</span>`;
     }).join('');
-    editor._draftValue = input.value; editor._draftReferences = signature;
+    editor._draftValue = input.value; editor._draftReferences = signature; editor._draftMd = md;
     if (surface === thrPage && document.activeElement === editor) restoreChatEditorSelection(editor, input);
+    openMdTokens(editor); // now, not on the async selectionchange: no frame with the caret's markers hidden
   }
   function insertChatMention(file, input = thrInput, files = _chatFiles) {
     const kind = file.cite ? 'Citation' : file.thread ? 'Thread' : 'Image';
@@ -10292,19 +10523,82 @@
       thrInput.focus = options => {
         syncChatInputLinks(); editor.focus(options); restoreChatEditorSelection(editor);
       };
-      document.addEventListener('selectionchange', () => rememberChatEditorSelection(editor));
-      editor.addEventListener('input', () => {
+      document.addEventListener('selectionchange', () => { rememberChatEditorSelection(editor); openMdTokens(editor); });
+      // Live markdown re-renders the editor, which drops the browser's undo: keep our own (typing bursts).
+      const hist = { undo: [], redo: [], at: 0, chat: null };
+      const snap = () => ({ v: thrInput.value, s: thrInput.selectionStart, e: thrInput.selectionEnd });
+      const restore = (from, to) => {
+        const state = from.pop();
+        if (!state) return;
+        to.push(snap());
+        thrInput.value = state.v; thrInput.setSelectionRange(state.s, state.e);
+        editor._draftValue = null; syncChatInputLinks();
+        thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      // Like VS Code's auto-surround: a quote / bracket / markdown marker typed over a selection wraps it.
+      const SURROUND = { '"': '"', "'": "'", '`': '`', '(': ')', '[': ']', '{': '}', '*': '*', '_': '_', '~': '~' };
+      editor.addEventListener('beforeinput', e => {
+        if (e.inputType !== 'insertText' || e.isComposing || !SURROUND[e.data]) return;
+        rememberChatEditorSelection(editor);
+        const v = thrInput.value, s = thrInput.selectionStart, end = thrInput.selectionEnd;
+        if (s === end) return;
+        e.preventDefault(); e.stopImmediatePropagation();
+        applyDraft(v.slice(0, s) + e.data + v.slice(s, end) + SURROUND[e.data] + v.slice(end), s + 1, end + 1); // the text stays selected
+      });
+      editor.addEventListener('beforeinput', e => { // (all modes: paste replaces the DOM too, so native undo can't follow)
+        if (hist.chat !== curChat()) Object.assign(hist, { undo: [], redo: [], chat: curChat() });
+        if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
+          e.preventDefault();
+          if (e.inputType === 'historyUndo') restore(hist.undo, hist.redo); else restore(hist.redo, hist.undo);
+          return;
+        }
+        rememberChatEditorSelection(editor);
+        if (Date.now() - hist.at > 400) { hist.undo.push(snap()); if (hist.undo.length > 200) hist.undo.shift(); }
+        hist.at = Date.now(); hist.redo.length = 0;
+      });
+      editor.addEventListener('input', e => {
         thrInput.value = chatEditorText(editor);
         rememberChatEditorSelection(editor);
         const count = _chatFiles.length;
         _chatFiles = _chatFiles.filter(file => !(file.cite || file.at || file.thread) || !file.mention || thrInput.value.includes(file.mention));
         editor._draftValue = thrInput.value;
+        if (threadSettings.markdown !== 'off' && !e.isComposing) { editor._draftValue = null; syncChatInputLinks(); }
         if (!thrInput.value) { editor.replaceChildren(); restoreChatEditorSelection(editor); }
         if (_chatFiles.length !== count) renderChatFiles();
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
       });
+      // A programmatic edit of the draft (list keys below), undoable like typing.
+      const applyDraft = (value, caret, caretEnd = caret) => {
+        hist.undo.push(snap()); hist.redo.length = 0; hist.at = 0;
+        thrInput.value = value; thrInput.setSelectionRange(caret, caretEnd);
+        editor._draftValue = null; syncChatInputLinks();
+        thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+      };
       editor.addEventListener('keydown', e => {
         rememberChatEditorSelection(editor);
+        // Lists, like GitHub's editor (Enter sends here, so Shift+Enter is the new line): Shift+Enter continues the
+        // item (next number), on an empty item ends the list; Tab / Shift+Tab indent / outdent the item.
+        if (threadSettings.markdown !== 'off' && !e.isComposing && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'Tab' || (e.key === 'Enter' && e.shiftKey))) {
+          const v = thrInput.value, s = thrInput.selectionStart, end = thrInput.selectionEnd;
+          const ls = v.lastIndexOf('\n', s - 1) + 1, nl = v.indexOf('\n', s), le = nl < 0 ? v.length : nl;
+          const line = v.slice(ls, le), m = line.match(/^(\s*)([-*+]|(\d+)[.)])(\s+)(.*)$/);
+          if (m) {
+            e.preventDefault(); e.stopPropagation();
+            if (e.key === 'Tab') {
+              // At most one level deeper than the list item above (none above: can't nest).
+              const prevLine = ls ? v.slice(v.lastIndexOf('\n', ls - 2) + 1, ls - 1) : '';
+              const above = prevLine.match(/^(\s*)(?:[-*+]|\d+[.)])\s/);
+              const maxIndent = above ? above[1].length + 2 : 0;
+              const cut = e.shiftKey ? Math.min(2, m[1].length) : m[1].length + 2 <= maxIndent ? -2 : 0;
+              if (cut) applyDraft(v.slice(0, ls) + (cut < 0 ? '  ' + line : line.slice(cut)) + v.slice(le), Math.max(ls, s - cut));
+            } else if (!m[5].trim()) applyDraft(v.slice(0, ls) + v.slice(le), ls); // empty item: end the list
+            else {
+              const ins = '\n' + m[1] + (m[3] ? `${+m[3] + 1}${m[2].slice(-1)}` : m[2]) + m[4];
+              applyDraft(v.slice(0, s) + ins + v.slice(end), s + ins.length);
+            }
+            return;
+          }
+        }
         if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
         const forwarded = new KeyboardEvent('keydown', { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, cancelable: true });
         thrInput.dispatchEvent(forwarded);
@@ -10314,7 +10608,16 @@
         e.preventDefault();
         const files = [...(e.clipboardData?.files || [])];
         if (files.length) { rememberChatEditorSelection(editor); addChatFiles(files); }
-        else document.execCommand('insertText', false, e.clipboardData?.getData('text/plain') || '');
+        else {
+          // Into the draft text itself: execCommand('insertText') splits lines into <div>s and blank lines
+          // (paragraph breaks) got lost reading them back.
+          rememberChatEditorSelection(editor);
+          const text = (e.clipboardData?.getData('text/plain') || '').replace(/\r\n?/g, '\n');
+          if (!text) return;
+          const v = thrInput.value, s = thrInput.selectionStart, end = thrInput.selectionEnd;
+          applyDraft(v.slice(0, s) + text + v.slice(end), s + text.length);
+          updateChatComplete();
+        }
       });
     }
   }
@@ -10588,7 +10891,7 @@
   document.body.appendChild(citeBtn);
   const hideCite = () => { citeBtn.hidden = true; };
   const flowEl = thrPage.querySelector('#sbr-thread-flow');
-  flowEl.addEventListener('mouseup', () => setTimeout(() => {
+  flowEl.addEventListener('mouseup', e => e.button === 0 && setTimeout(() => { // a right-click opens the menu instead (it has Cite)
     const sel = window.getSelection(), text = sel?.toString().trim();
     if (!text || !sel.rangeCount || !flowEl.contains(sel.anchorNode) || !flowEl.contains(sel.focusNode)) return hideCite();
     const parts = selectedResponseCitations(sel, flowEl);
@@ -10613,9 +10916,19 @@
   });
   document.addEventListener('mousedown', e => { if (!citeBtn.hidden && e.target !== citeBtn && !citeBtn.contains(e.target)) hideCite(); }, true);
   flowEl.addEventListener('scroll', hideCite);
+  // "Scroll to end": a pill over the composer while the chat is scrolled up from its latest message.
+  const scrollEndBtn = threadPart(thrPage, 'scroll-end');
+  function syncScrollEnd() {
+    if (scrollEndBtn) scrollEndBtn.hidden = flowEl.scrollHeight - flowEl.scrollTop - flowEl.clientHeight < 160;
+  }
+  scrollEndBtn?.addEventListener('click', () => {
+    const smooth = document.body.classList.contains('ui-animations') && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    flowEl.scrollTo({ top: flowEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+  });
   // Each chat remembers where it was scrolled (restored after a tab or chat switch).
   flowEl.addEventListener('scroll', () => {
     rememberThreadScroll(_curChat);
+    syncScrollEnd();
   }, { passive: true });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCite(); });
   let _chatCtrl = false;
@@ -10963,7 +11276,62 @@
   const tsAside = document.getElementById('threads-sidebar');
   const tsList = document.getElementById('ts-list');
   const tsSearch = document.getElementById('ts-search');
-  const tsCollapsed = new Set(); // section ids folded by the user
+  const tsCollapsed = new Set(['settled']); // section ids folded by the user (the Settled shelf starts folded, as in T3 Code)
+  let tsSettledShown = 10; // Settled shelf: 10 rows, then 25 more per "Show more"
+  // Project filter (header funnel, like T3 Code): null = all projects, '' = No project, else the folder path.
+  let tsProject = null;
+  try { const p = localStorage.getItem('tv-threads-project'); if (p != null) tsProject = p; } catch {}
+  const tsProjectKey = x => x.folder === 'No project' ? '' : x.cwd || '';
+  // A project's own icon (favicon / app icon, found by the main process like T3 Code), else the folder icon.
+  // Looked up once per folder per session; the sidebar redraws when one arrives.
+  const _projIcons = new Map(); // cwd -> { value: dataUrl | null } (value absent while loading)
+  function projectIconHtml(cwd, fallback = 'ph-folder') {
+    const folderIcon = `<i class="ph ${fallback}" aria-hidden="true"></i>`;
+    if (!cwd || chatFolderName(cwd) === 'No project' || !window.electronAPI?.projectIcon) return folderIcon;
+    let entry = _projIcons.get(cwd);
+    if (!entry) {
+      _projIcons.set(cwd, entry = {});
+      window.electronAPI.projectIcon(cwd).then(v => { entry.value = v || null; if (v) renderThreadsSidebar(); }, () => { entry.value = null; });
+    }
+    return entry.value ? `<img class="ts-proj-icon" src="${entry.value}" alt="" aria-hidden="true">` : folderIcon;
+  }
+  function setThreadsProject(p) {
+    tsProject = p;
+    try { p == null ? localStorage.removeItem('tv-threads-project') : localStorage.setItem('tv-threads-project', p); } catch {}
+    syncThreadsFilterBtn(); renderThreadsSidebar();
+  }
+  function syncThreadsFilterBtn() {
+    const b = document.getElementById('ts-filter');
+    if (!b) return;
+    const label = tsProject == null ? '' : tsProject === '' ? 'No project' : chatFolderName(tsProject);
+    b.classList.toggle('active', tsProject != null);
+    b.title = label ? `Filter: ${label}` : 'Filter by project';
+    b.setAttribute('aria-pressed', String(tsProject != null));
+  }
+  // A thread's T3-style states: pinned (top shelf), settled (the user's "done"; new activity un-settles).
+  function setThreadFlag(tab, key, on) {
+    tab.chat ||= { createdAt: Date.now() };
+    if (on) tab.chat[key] = key === 'settledAt' ? Date.now() : true; else delete tab.chat[key];
+    saveState(); renderThreadsSidebar();
+  }
+  // Inline rename (double-click / F2): Enter or leaving saves, Escape cancels.
+  function startThreadRename(card) {
+    const tab = findChatThread(card?.dataset.tab), title = card?.querySelector('.ts-title');
+    if (!tab || !title || card.querySelector('.ts-rename')) return;
+    const input = document.createElement('input');
+    input.className = 'ts-rename'; input.value = tab.chat?.title || tab.label || ''; input.setAttribute('aria-label', 'Thread title'); input.spellcheck = false;
+    title.replaceWith(input); input.focus(); input.select();
+    let done = false;
+    const finish = save => {
+      if (done) return; done = true;
+      const v = input.value.trim();
+      if (save && v && v !== tab.chat?.title) { tab.chat ||= { createdAt: Date.now() }; tab.chat.title = v.slice(0, 80); setChatTabLabel(tab); saveState(); }
+      input.remove(); tsList._html = null; renderThreadsSidebar();
+    };
+    input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); finish(false); } });
+    input.addEventListener('blur', () => finish(true));
+    for (const ev of ['click', 'dblclick', 'mousedown']) input.addEventListener(ev, e => e.stopPropagation());
+  }
   const ago = t => { const m = (Date.now() - t) / 6e4;
     return !t ? '' : m < 1 ? 'now' : m < 60 ? `${m | 0}m` : m < 1440 ? `${m / 60 | 0}h` : m < 10080 ? `${m / 1440 | 0}d` : new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' }); };
   // A thread shows once it has messages (or one is on its way); before that only as a draft, if text is typed.
@@ -11002,37 +11370,78 @@
     const q = tsSearch.value.trim().toLowerCase();
     const all = chatThreads().map(threadInfo)
       .filter(x => !q || `${x.title} ${x.folder} ${x.branch} ${x.openIn?.label || ''}`.toLowerCase().includes(q))
+      .filter(x => tsProject == null || tsProjectKey(x) === tsProject)
       .sort((a, b) => b.updated - a.updated);
-    const card = x => {
-      if (x.draft) return `<button type="button" role="listitem" class="ts-card draft" data-tab="${x.w.id}" data-tip="Draft · ${escHtml(x.cwd || 'No project')}">`
-        + `<span class="ts-row"><span class="ts-folder"><i class="ph ph-note-pencil ts-draft-icon" aria-hidden="true"></i><i class="ph ${x.folder === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span></span>`
-        + `<span class="ts-title">${escHtml(x.title)}</span></button>`;
-      const status = x.work
-        ? `<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>${x.work.wait ? 'Waiting' : `Working ${fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))}`}</span>`
-        : '<span class="ts-status"><i class="ph ph-check" aria-hidden="true"></i>Settled</span>';
+    // T3 Code's sidebar logic: one-line rows ([agent] title [pin] · time, the time giving way to a Settle /
+    // Un-settle action on hover); shelves Pinned · Working · the active list · Settled (10, then 25 more per click).
+    // Settling is the user's "done": new activity after it brings the thread back to the active list.
+    const settled = x => !x.work && x.w.chat.settledAt && x.w.chat.settledAt >= x.updated;
+    const row = (x, shelf) => {
       const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No project' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
         ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...x.models.map(m => ({ proc: m.h.bin, text: m.text }))];
-      return `<button type="button" role="listitem" class="ts-card" draggable="true" data-tab="${x.w.id}" data-tip="${escHtml(x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
-        + `<span class="ts-row"><span class="ts-folder"><i class="ph ${x.folder === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(x.folder)}</span></span>`
-        + `<span class="ts-time">${ago(x.updated)}</span>${status}</span>`
-        + `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`
-        + `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
-        + (x.hs.length ? `<span class="ts-agents">${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span></button>';
+      // Settled rows lead with the project's icon (folder icon when it has none); a working thread, the spinner.
+      const lead = x.work ? '<i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>'
+        : projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder');
+      const end = x.work ? (x.work.wait ? 'Waiting' : fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))) : ago(x.updated);
+      const action = x.draft || x.work ? ''
+        : shelf === 'settled' ? '<button type="button" class="ts-act" data-act="unsettle" aria-label="Un-settle thread"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><span class="ts-act-label">Un-settle</span></button>'
+        : '<button type="button" class="ts-act" data-act="settle" aria-label="Settle thread"><i class="ph ph-check" aria-hidden="true"></i><span class="ts-act-label">Settle</span></button>';
+      const pin = x.w.chat.pinned ? '<button type="button" class="ts-pin" data-act="unpin" aria-label="Unpin thread" data-tip="Unpin thread"><i class="ph ph-push-pin" aria-hidden="true"></i></button>' : '';
+      const title = `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`;
+      const folder = `<span class="ts-folder">${x.draft ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : ''}${projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder')}<span>${escHtml(x.folder)}</span></span>`;
+      // Pinned / Working / Threads keep the full card (folder · time · status, title, branch · agents); Settled is slim.
+      if (shelf !== 'settled') {
+        const status = x.work ? `<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>${x.work.wait ? end : `Working ${end}`}</span>` : '';
+        return `<div role="button" tabindex="0" class="ts-card${x.draft ? ' draft' : ''}${x.work ? ' working' : ''}" draggable="${!x.draft}" data-tab="${x.w.id}"`
+          + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
+          + `<span class="ts-row">${folder}${pin}<span class="ts-end">${x.draft || x.work ? '' : `<span class="ts-time">${ago(x.updated)}</span>`}${action}</span>${status}</span>`
+          + title
+          + (x.draft ? '' : `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
+            + (x.hs.length ? `<span class="ts-agents">${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span>')
+          + '</div>';
+      }
+      return `<div role="button" tabindex="0" class="ts-card slim" draggable="true" data-tab="${x.w.id}"`
+        + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
+        + `<span class="ts-lead">${lead}</span>${title}${pin}`
+        + `<span class="ts-end"><span class="ts-time">${ago(x.updated)}</span>${action}</span></div>`;
     };
-    const section = (id, label, list) => !list.length ? '' : `<div class="ts-section${tsCollapsed.has(id) ? ' collapsed' : ''}" data-sec="${id}">`
+    const section = (id, label, list, more = 0) => !list.length ? '' : `<div class="ts-section${tsCollapsed.has(id) ? ' collapsed' : ''}" data-sec="${id}">`
       + `<button type="button" class="ts-section-head" aria-expanded="${!tsCollapsed.has(id)}"><span>${label}</span><span class="ts-count">${list.length}</span><i class="ph ph-caret-down ts-caret" aria-hidden="true"></i></button>`
-      + `<div class="ts-cards">${tsCollapsed.has(id) ? '' : list.map(card).join('')}</div></div>`;
+      + `<div class="ts-cards">${tsCollapsed.has(id) ? '' : list.slice(0, more || undefined).map(x => row(x, id)).join('')
+        + (more && list.length > more ? `<button type="button" class="ts-more">Show more <span class="ts-count">${list.length - more}</span></button>` : '')}</div></div>`;
+    const pinned = all.filter(x => x.w.chat.pinned);
+    const rest = all.filter(x => !x.w.chat.pinned);
     const html = all.length
-      ? section('working', 'Working', all.filter(x => x.work)) + section('settled', 'Settled', all.filter(x => !x.work))
-      : `<div class="ts-empty">${q ? 'No threads match' : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
+      ? section('pinned', 'Pinned', pinned) + section('working', 'Working', rest.filter(x => x.work))
+        + section('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
+        + section('settled', 'Settled', rest.filter(settled).sort((a, b) => b.w.chat.settledAt - a.w.chat.settledAt), tsSettledShown)
+      : `<div class="ts-empty">${q ? 'No threads match' : tsProject != null ? `No threads in ${escHtml(tsProject === '' ? 'No project' : chatFolderName(tsProject))}` : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
+    if (tsList.querySelector('.ts-rename')) return; // an inline rename is open: don't rebuild under it
     if (tsList._html !== html) { tsList._html = html; tsList.innerHTML = html; } // rebuild only on change (keeps hover and focus)
     syncThreadSelection();
   }
   tsList.addEventListener('click', e => {
     const head = e.target.closest('.ts-section-head');
     if (head) { const id = head.parentElement.dataset.sec; tsCollapsed.has(id) ? tsCollapsed.delete(id) : tsCollapsed.add(id); renderThreadsSidebar(); return; }
+    if (e.target.closest('.ts-more')) { tsSettledShown += 25; renderThreadsSidebar(); return; }
     const c = e.target.closest('.ts-card'), tab = c && findChatThread(c.dataset.tab);
-    if (tab) openChatTab(tab);
+    if (!tab || e.target.closest('.ts-rename')) return;
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'settle' || act === 'unsettle') { setThreadFlag(tab, 'settledAt', act === 'settle'); return; }
+    if (act === 'unpin') { setThreadFlag(tab, 'pinned', false); return; }
+    openChatTab(tab);
+  });
+  tsList.addEventListener('dblclick', e => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.target.closest('button, input')) return;
+    const c = e.target.closest('.ts-card:not(.draft)');
+    if (c) { e.preventDefault(); startThreadRename(c); }
+  });
+  // Rows are role="button" divs (they hold an inline rename input and action buttons): Enter / Space open, F2 renames.
+  tsList.addEventListener('keydown', e => {
+    const c = e.target.classList?.contains('ts-card') ? e.target : null;
+    if (!c) return;
+    if (e.key === 'F2' && !c.classList.contains('draft')) { e.preventDefault(); startThreadRename(c); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const tab = findChatThread(c.dataset.tab); if (tab) openChatTab(tab); }
   });
   // Drag a thread into a chat's composer: it goes in as a link, its history the message's context.
   tsList.addEventListener('dragstart', e => {
@@ -11057,6 +11466,15 @@
   });
   tsSearch.addEventListener('input', renderThreadsSidebar);
   document.getElementById('ts-new').addEventListener('click', () => newChatTab(activeWs()));
+  document.getElementById('ts-filter')?.addEventListener('click', e => {
+    e.stopPropagation(); // the document click handler would close the menu right away
+    const btn = e.currentTarget;
+    if (ctxEl.classList.contains('open') && ctxEl._owner === btn) { hideCtxMenu(); return; } // a toggle
+    const r = btn.getBoundingClientRect();
+    showCtxMenu({ pageX: r.left, pageY: r.bottom + 6 }, 'ts-project');
+    ctxEl._owner = btn;
+  });
+  syncThreadsFilterBtn();
   // Open/closed animates its width (like the left sidebar); the terminals refit once it settles.
   let tsOpen = false;
   const tsSettle = () => { const w = activeWs(); if (w) getWorkspaceTerminals(w).forEach(t => fitTerm(t)); syncBrowserSlots(); };
@@ -11169,29 +11587,214 @@
   const FILE_ICONS = { js: 'js', mjs: 'js', cjs: 'js', jsx: 'jsx', ts: 'ts', mts: 'ts', cts: 'ts', tsx: 'tsx', html: 'html', htm: 'html', css: 'css', scss: 'css',
     py: 'py', rs: 'rs', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp', md: 'md', csv: 'csv', sql: 'sql', svg: 'svg', vue: 'vue', pdf: 'pdf', txt: 'txt',
     ini: 'ini', toml: 'ini', yml: 'ini', yaml: 'ini', png: 'png', jpg: 'jpg', jpeg: 'jpg', gif: 'image', webp: 'image', bmp: 'image', zip: 'archive', gz: 'archive', tar: 'archive' };
+  // Its color group (an ft-* class, colored in workspace.css); any other file gets ft-other.
+  const FILE_COLORS = Object.fromEntries(Object.entries({
+    js: 'js mjs cjs', ts: 'ts mts cts tsx jsx', html: 'html htm xml', css: 'css scss sass less', py: 'py', rs: 'rs',
+    c: 'c h cpp cc hpp cs', go: 'go', jvm: 'java kt kts scala', rb: 'rb', php: 'php', shell: 'sh bash zsh fish ps1 bat cmd',
+    json: 'json jsonc json5', config: 'yml yaml toml ini env conf lock cfg', md: 'md mdx txt rst', data: 'csv tsv sql db',
+    vue: 'vue', svelte: 'svelte', pdf: 'pdf', image: 'png jpg jpeg gif webp bmp svg ico', archive: 'zip gz tar rar 7z',
+  }).flatMap(([group, exts]) => exts.split(' ').map(ext => [ext, group])));
   const linkFileIcon = href => {
     const path = href.replace(/#.*$/, '').replace(/:\d+(:\d+)?$/, '');
-    if (/[\\/]$/.test(path)) return 'ph-folder';
+    if (/[\\/]$/.test(path)) return 'ph-folder ft-folder';
     const ext = (path.match(/\.(\w+)$/) || [])[1]?.toLowerCase();
-    return FILE_ICONS[ext] ? 'ph-file-' + FILE_ICONS[ext] : ext ? 'ph-file-code' : 'ph-file';
+    const icon = /^json[c5]?$/.test(ext) ? 'ph-brackets-curly' : FILE_ICONS[ext] ? 'ph-file-' + FILE_ICONS[ext] : ext ? 'ph-file-code' : 'ph-file';
+    return `${icon} ft-${FILE_COLORS[ext] || 'other'}`;
   };
-  // Escape first, then a few markdown bits agents use a lot: fences (highlighted by their language tag), `code`, **bold**, headings.
+  // A link's icon: web links show the site's /favicon.ico (the globe when it has none), paths their file type.
+  const _faviconMissing = new Set(); // hosts whose favicon failed: straight to the globe on re-render
+  // Desktop: the icon comes through the main process as a data URL, so its pixels can be read: a single-color
+  // icon on a transparent background (GitHub's black octocat) is drawn as a mask in the link color instead.
+  const _favicons = new Map(); // host -> Promise<{ src, mono } | null>
+  const faviconHtml = f => f.mono ? `<span class="thr-favicon mono" style="--icon:url('${f.src}')" aria-hidden="true"></span>` : `<img class="thr-favicon" src="${f.src}" alt="">`;
+  const faviconMono = src => new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'); c.width = c.height = 32;
+      const g = c.getContext('2d'); g.drawImage(img, 0, 0, 32, 32);
+      const d = g.getImageData(0, 0, 32, 32).data;
+      let clear = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 40) { clear++; continue; }
+        if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 28) return resolve(false); // has color
+      }
+      resolve(clear > 32 * 32 * 0.1); // gray and partly transparent: a glyph, not a gray tile
+    };
+    img.onerror = () => resolve(false);
+    img.src = src;
+  });
+  const loadFavicon = (host, origin) => {
+    if (!_favicons.has(host)) _favicons.set(host, window.electronAPI.faviconGet(origin)
+      .then(async src => src ? { src, mono: await faviconMono(src) } : null).catch(() => null)
+      .then(f => { _favicons.get(host).value = f; return f; }));
+    return _favicons.get(host);
+  };
+  const linkIconHtml = href => {
+    const host = (href.match(/^https?:\/\/([^/?#\s]+)/i) || [])[1];
+    const globe = '<i class="ph ph-globe" aria-hidden="true"></i>';
+    if (!host) return /^https?:/i.test(href) ? globe : `<i class="ph ${linkFileIcon(href)}" aria-hidden="true"></i>`;
+    const origin = href.slice(0, href.indexOf(host) + host.length);
+    if (window.electronAPI?.faviconGet) {
+      const p = _favicons.get(host);
+      if (p && 'value' in p) return p.value ? faviconHtml(p.value) : globe; // known: no flash on re-render
+      return `<i class="ph ph-globe" data-favicon="${host}" data-origin="${origin}" aria-hidden="true"></i>`;
+    }
+    if (_faviconMissing.has(host)) return globe;
+    return `<img class="thr-favicon" src="${origin}/favicon.ico" data-host="${host}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
+  };
+  // mdLite's output (or a copied slice of it) back to markdown source, for copying a selection.
+  function mdFromDom(node) {
+    const kids = n => [...n.childNodes].map(mdFromDom).join('');
+    const block = s => `\n\n${s}\n\n`;
+    if (node.nodeType === Node.TEXT_NODE) return node.data;
+    if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) return kids(node);
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const el = node, tag = el.nodeName;
+    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-pending-kind, button[data-act]')) return ''; // icons, chrome
+    if (tag === 'STRONG') return `**${kids(el)}**`;
+    if (tag === 'EM') return `*${kids(el)}*`;
+    if (tag === 'DEL') return `~~${kids(el)}~~`;
+    if (tag === 'CODE' && el.parentNode?.nodeName !== 'PRE') return '`' + el.textContent + '`';
+    if (tag === 'PRE' && el.matches('.thr-code')) return block('```' + (el.dataset.lang || '') + '\n' + el.textContent.replace(/\n$/, '') + '\n```');
+    if (el.matches('.thr-link')) { const label = kids(el); return label === el.dataset.href ? label : `[${label}](${el.dataset.href})`; } // a bare URL copies as itself
+    if (el.matches('.thr-h')) return block('#'.repeat(+el.getAttribute('aria-level') || 1) + ' ' + kids(el));
+    if (tag === 'HR') return block('---');
+    if (tag === 'BLOCKQUOTE') return block(kids(el).trim().split('\n').map(l => '> ' + l).join('\n'));
+    if (tag === 'UL' || tag === 'OL') {
+      const list = (l, depth) => [...l.children].filter(li => li.nodeName === 'LI').map((li, i) => {
+        const own = [...li.childNodes].filter(c => !['UL', 'OL'].includes(c.nodeName)).map(mdFromDom).join('').trim();
+        const sub = [...li.children].filter(c => ['UL', 'OL'].includes(c.nodeName)).map(s => '\n' + list(s, depth + 1)).join('');
+        return '  '.repeat(depth) + (l.nodeName === 'OL' ? `${(+l.getAttribute('start') || 1) + i}. ` : '- ') + own + sub;
+      }).join('\n');
+      return block(list(el, 0));
+    }
+    if (tag === 'TABLE') {
+      const rows = [...el.querySelectorAll('tr')].map(tr => '| ' + [...tr.children].map(c => mdFromDom(c).trim()).join(' | ') + ' |');
+      if (el.querySelector('thead tr') && rows.length) rows.splice(1, 0, '|' + [...el.querySelector('thead tr').children].map(() => '---').join('|') + '|');
+      return block(rows.join('\n'));
+    }
+    return kids(el);
+  }
+  function mdFromRange(range, scope) {
+    let fragment = range.cloneContents();
+    // cloneContents omits shared ancestors, including a link when only its label is selected.
+    let ancestor = range.commonAncestorContainer;
+    if (ancestor.nodeType !== Node.ELEMENT_NODE) ancestor = ancestor.parentElement;
+    while (ancestor && ancestor !== scope && scope.contains(ancestor)) {
+      const wrapper = ancestor.cloneNode(false);
+      wrapper.append(fragment);
+      fragment = wrapper;
+      ancestor = ancestor.parentElement;
+    }
+    return mdFromDom(fragment);
+  }
+  // Escape first, then the markdown agents use: fences (highlighted by their language tag), `code`, **bold**,
+  // *italic*, ~~strike~~, links, headings, lists, > quotes, tables and --- rules.
   function mdLite(text) {
     text = String(text);
-    const inline = t => escHtml(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/^#{1,6} (.+)$/gm, '<strong>$1</strong>').replace(/^(\s*)[-*] /gm, '$1• ')
-      // [label](target): web links open in the browser, images in the viewer, other paths in the file manager.
-      .replace(/\[([^\]\n]+)\]\(([^()\s]+)\)/g, (_, label, href) => `<button type="button" class="thr-link" data-href="${href}" title="${href}">`
-        + `${/^https?:/i.test(href) ? '' : `<i class="ph ${linkFileIcon(href)}" aria-hidden="true"></i>`}${label}</button>`);
+    // `code` spans are cut out first so their contents never turn into emphasis.
+    // `code` spans become placeholders first, so their contents never turn into emphasis or links, while emphasis
+    // can still wrap them (**Create `media.html`**); they are put back as <code> at the end.
+    const inlineMd = t => {
+      const codes = [];
+      return escHtml(t.replace(/`([^`\n]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`))
+        .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1<em>$2</em>')
+        .replace(/(^|\W)_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1<em>$2</em>')
+        .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
+        // [label](target): web links open in the browser, images in the viewer, other paths in the file manager.
+        // A bare http(s) URL is a link too (labelled with itself); one pass, so a [label](url)'s URL isn't linked twice.
+        // A link to a local image (or ![alt](path)) also shows the image itself below, like a pasted one (viewer, copy).
+        .replace(/(!?)\[([^\]\n]*)\]\(([^()\s\u0000]+)\)|(?<![="'\w/])(https?:\/\/[^\s<>"'`)\]\u0000]*[^\s<>"'`)\].,;:!?\u0000])/g, (_, bang, label, href, bare) => {
+          if (bare) { href = label = bare; }
+          const link = label ? `<button type="button" class="thr-link" data-href="${href}" title="${href}">${linkIconHtml(href)}${label}</button>` : '';
+          const raw = href.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+          if (bare || /^[a-z]+:/i.test(raw) || !/\.(png|jpe?g|gif|webp|bmp)$/i.test(raw.replace(/[?#].*$/, ''))) return link || href;
+          const img = `<span class="thr-img-wrap thr-md-img"><img class="thr-img" data-path="${escHtml(chatLinkPath(raw).path)}" alt="${label}">`
+            + '<span class="thr-img-actions"><button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></span></span>';
+          return (bang ? '' : link) + img;
+        })
+        .replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${escHtml(codes[i])}</code>`);
+    };
+    const LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+    // Consecutive list items (blank lines between them allowed) as nested <ul>/<ol> by indent.
+    const listHtml = items => {
+      let html = '';
+      const stack = [];
+      for (const it of items) {
+        while (stack.length && it.ind < stack.at(-1).ind) html += `</li></${stack.pop().tag}>`;
+        if (!stack.length || it.ind > stack.at(-1).ind) {
+          const tag = it.num ? 'ol' : 'ul';
+          html += `<${tag} class="thr-list"${it.num > 1 ? ` start="${it.num}"` : ''}>`;
+          stack.push({ ind: it.ind, tag });
+        } else html += '</li>';
+        html += `<li>${inlineMd(it.text)}`;
+      }
+      while (stack.length) html += `</li></${stack.pop().tag}>`;
+      return html;
+    };
+    // Lines in; headings, lists, tables, quotes and rules come out as blocks (which take the line breaks around them).
+    const inline = t => {
+      const lines = t.split('\n'), segs = [];
+      const isRow = l => /^\s*\|.*\|\s*$/.test(l);
+      const cells = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      for (let i = 0; i < lines.length; i++) {
+        const l = lines[i];
+        let m;
+        if (isRow(l) && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1] || '')) {
+          const start = i, align = cells(lines[i + 1]).map(c => c.endsWith(':') ? (c.startsWith(':') ? 'center' : 'right') : '');
+          const cell = (tag, c, k) => `<${tag}${align[k] ? ` style="text-align:${align[k]}"` : ''}>${inlineMd(c)}</${tag}>`;
+          let html = `<table class="thr-table"><thead><tr>${cells(l).map((c, k) => cell('th', c, k)).join('')}</tr></thead><tbody>`;
+          for (i += 2; i < lines.length && isRow(lines[i]); i++) html += `<tr>${cells(lines[i]).map((c, k) => cell('td', c, k)).join('')}</tr>`;
+          html = `<div class="thr-table-wrap"><div class="thr-table-scroll">${html}</tbody></table></div>`
+            + `<button type="button" class="thr-table-copy" data-md="${escHtml(lines.slice(start, i).join('\n'))}" aria-label="Copy table as markdown"><i class="ph ph-copy" aria-hidden="true"></i></button></div>`;
+          i--; segs.push({ html, block: true });
+        } else if ((m = l.match(/^(#{1,6}) (.+)$/))) {
+          segs.push({ html: `<div class="thr-h thr-h${Math.min(m[1].length, 3)}" role="heading" aria-level="${m[1].length}">${inlineMd(m[2])}</div>`, block: true });
+        } else if (LIST.test(l)) {
+          const items = [];
+          for (; i < lines.length; i++) {
+            const x = lines[i].match(LIST);
+            if (x) items.push({ ind: x[1].replace(/\t/g, '    ').length, num: /\d/.test(x[2]) ? parseInt(x[2]) : 0, text: x[3] });
+            else if (!(lines[i].trim() === '' && LIST.test(lines[i + 1] || ''))) break;
+          }
+          i--; segs.push({ html: listHtml(items), block: true });
+        } else if (/^\s*>/.test(l)) {
+          const q = [];
+          for (; i < lines.length && /^\s*>/.test(lines[i]); i++) q.push(lines[i].replace(/^\s*>\s?/, ''));
+          i--; segs.push({ html: `<blockquote class="thr-quote">${q.map(inlineMd).join('\n')}</blockquote>`, block: true });
+        } else if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(l)) segs.push({ html: '<hr class="thr-hr">', block: true });
+        else segs.push({ html: inlineMd(l) });
+      }
+      // Blank lines next to a block (or at a chunk's edges) would show as empty lines in pre-wrap text.
+      const kept = [];
+      for (const s of segs) {
+        if (!s.block && !s.html && (!kept.length || kept.at(-1).block)) continue;
+        if (s.block) while (kept.length && !kept.at(-1).block && !kept.at(-1).html) kept.pop();
+        kept.push(s);
+      }
+      while (kept.length && !kept.at(-1).block && !kept.at(-1).html) kept.pop();
+      return kept.reduce((out, s, k) => out + (k && !s.block && !kept[k - 1].block ? '\n' : '') + s.html, '');
+    };
     let out = '', last = 0;
     for (const m of text.matchAll(/```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g)) {
-      out += inline(text.slice(last, m.index)) + `<pre class="thr-code"><code>${hlCode(m[2].replace(/\n$/, ''), codeLang(m[1].trim()))}</code></pre>`;
+      out += inline(text.slice(last, m.index)) + `<pre class="thr-code" data-lang="${escHtml(m[1].trim())}"><code>${hlCode(m[2].replace(/\n$/, ''), codeLang(m[1].trim()))}</code></pre>`;
       last = m.index + m[0].length;
     }
     return out + inline(text.slice(last));
   }
-  const toolIcon = n => /bash|shell|exec|command|terminal/i.test(n) ? 'ph-terminal' : /read|view|cat/i.test(n) ? 'ph-file-text'
+  const toolIcon = n => /view_?image|image_?view|screenshot/i.test(n) ? 'ph-eye' : /bash|shell|exec|command|terminal/i.test(n) ? 'ph-terminal' : /read|view|cat/i.test(n) ? 'ph-file-text'
     : /edit|write|patch|update|create/i.test(n) ? 'ph-pencil-simple' : /grep|glob|search|find|list/i.test(n) ? 'ph-magnifying-glass'
     : /web|fetch|url|browser/i.test(n) ? 'ph-globe' : /task|agent/i.test(n) ? 'ph-robot' : 'ph-wrench';
+  // A tool that looks at an image (Codex view_image, Claude's Read of a .png…): its expanded row shows the image
+  // (same block as a pasted one: viewer on click, copy button) instead of just the path.
+  const toolImageHtml = x => {
+    if (!/image|^read$|read_?file|view|screenshot/i.test(x.name || '')) return '';
+    const m = `${x.summary || ''}\n${x.detail || ''}`.match(/(?:^|["'\s])((?:[A-Za-z]:)?[^\s"'<>]*\.(?:png|jpe?g|gif|webp|bmp))(?=$|["'\s,}])/im);
+    if (!m) return '';
+    return `<div class="thr-tool-image" data-path="${escHtml(m[1])}"><span class="thr-img-wrap thr-md-img"><img class="thr-img" data-path="${escHtml(chatLinkPath(m[1]).path)}" alt="">`
+      + '<span class="thr-img-actions"><button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></span></span></div>';
+  };
   const clockTime = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 
   async function refreshThreadFlow(ws, surface = thrPage) {
@@ -11246,7 +11849,14 @@
         let i = segs.findLastIndex(sg => (sg.since || 0) <= x.at);
         if (i < 0 || !hist[i]) i = hist.length - 1;
         const items = hist[i].items, j = items.findIndex(m => (Date.parse(m.ts) || 0) > x.at);
-        items.splice(j < 0 ? items.length : j, 0, { role: 'user', text: x.text, ts: new Date(x.at).toISOString(), stopped: true });
+        const k = j < 0 ? items.length : j, item = { role: 'user', text: x.text, ts: new Date(x.at).toISOString(), stopped: true };
+        items.splice(k, 0, item);
+        // The interrupt that stopped it was flagged on the step before (the transcript never got this prompt):
+        // when it came after this prompt was sent, it's this prompt's, so the "Interrupted" line follows it.
+        const prev = items[k - 1];
+        if (prev?.interrupted && (Date.parse(prev.interruptedAt) || Infinity) >= x.at - 1000) {
+          item.interrupted = prev.interrupted; delete prev.interrupted;
+        }
       }
     }
     const sig = note + '|' + segs.length + '|' + hist.map(h => { const l = h.items[h.items.length - 1]; return `${h.items.length}:${l?.text?.length || 0}:${l?.error ? 1 : 0}`; }).join(',');
@@ -11305,7 +11915,7 @@
           + `${failed ? `<i class="ph ph-warning-circle thr-tool-err" aria-label="${failed} failed"></i>` : ''}<span class="thr-tools-time">${clockTime(last.ts)}</span><i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
           // Each call expands to its full command or arguments (older saved history has only the summary).
           + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
-            + `<pre class="thr-tool-detail">${hlCode(x.detail || x.summary || '', /^(bash|shell|local_shell|exec_command|run_terminal_cmd|terminal)$/i.test(x.name) ? 'sh' : /^\s*[{[]/.test(x.detail || '') ? 'json' : '')}</pre></details>`).join('')
+            + (toolImageHtml(x) || `<pre class="thr-tool-detail">${hlCode(x.detail || x.summary || '', /^(bash|shell|local_shell|exec_command|run_terminal_cmd|terminal)$/i.test(x.name) ? 'sh' : /^\s*[{[]/.test(x.detail || '') ? 'json' : '')}</pre>`) + '</details>').join('')
           + '</div></details>';
       };
       const msgHtml = (m, key, showActions = true, extra = '') => {
@@ -11324,7 +11934,7 @@
           + '<div class="thr-img-actions">'
           + '<button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></div></div>').join('')}</div>` : '';
         return m.role === 'user'
-          ? `<div class="${cls}" data-key="${key}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : t?.steered?.includes(m.ts) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
+          ? `<div class="${cls}" data-key="${key}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : (m.steered || t?.steered?.includes(m.ts)) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
           : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${extra}${actions}</div>`;
       };
       // The agent's thinking: "Thought" with a one-line peek, opening to the whole text.
@@ -11406,13 +12016,39 @@
         const changes = !live && !running ? changesHtml(rest, 'chg:' + i + ':' + prompt.j, prompt.m.ts, list[e]?.m.ts) : '';
         html += fin >= 0 ? msgHtml(rest[fin].m, i + ':' + rest[fin].j, true, changes) : changes;
         // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
-        const stopped = !live && rest.find(x => x.m.interrupted)?.m.interrupted;
+        const stopped = !live && (prompt.m.interrupted || rest.find(x => x.m.interrupted)?.m.interrupted);
         if (stopped) html += `<div class="thr-status-line" role="status"><i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span>`
-          + `<span class="thr-status-detail">· ${stopped === 'tool' ? 'Stopped by you during a tool call' : 'Stopped by you'}</span></div>`;
+          + `<span class="thr-status-detail">· ${stopped === 'crash' ? 'The agent exited unexpectedly. Send a message to continue' : stopped === 'tool' ? 'Stopped by you during a tool call' : 'Stopped by you'}</span></div>`;
         u = e;
       }
     });
     flow.innerHTML = html + pendingHtml(ws, lastHead);
+    flow._texts = texts;
+    // A selection across messages copies them as a transcript of their original markdown.
+    if (!flow._copyBound) {
+      flow._copyBound = true;
+      flow.addEventListener('copy', e => {
+        const sel = getSelection();
+        if (!sel.rangeCount || sel.isCollapsed) return;
+        const r = sel.getRangeAt(0);
+        // A message counts only when the selection covers some of its text: a triple-click or a drag to the end
+        // of a bubble ends the range at the very start of the next message, which intersectsNode alone counts.
+        const within = m => { // the selection clipped to one message
+          const part = document.createRange(); part.selectNodeContents(m);
+          if (r.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(r.startContainer, r.startOffset);
+          if (r.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(r.endContainer, r.endOffset);
+          return part;
+        };
+        const covers = m => { if (!r.intersectsNode(m)) return false; const part = within(m); return !part.collapsed && part.toString().trim() !== ''; };
+        const msgs = [...flow.querySelectorAll('.thr-msg[data-key]')].filter(covers);
+        if (!msgs.length) return; // tool output etc.: the browser's own copy
+        // Inside one message: the selected part as markdown source.
+        const text = msgs.length === 1 ? mdFromRange(within(msgs[0]), msgs[0])
+          : msgs.map(m => `${m.classList.contains('user') ? 'User' : 'AI'}: ${flow._texts.get(m.dataset.key) || ''}`).join('\n\n');
+        e.clipboardData.setData('text/plain', text);
+        e.preventDefault();
+      });
+    }
     syncWorking(ws, surface);
     if (surface === thrPage && thrFind.q) thrFindRun(true); // the re-render dropped the old match ranges
     flow.querySelectorAll('img.thr-img').forEach(async img => {
@@ -11428,7 +12064,11 @@
       }
       img.src = src;
       const size = _thrImgSize.get(p);
-      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size); });
+      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size).replace(' ', ''); });
+      flow.querySelectorAll('.thr-img-link').forEach(link => {
+        if (link.dataset.path !== p) return;
+        link.querySelector('.thr-inline-image-icon').innerHTML = `<img src="${escHtml(src)}" alt="">`;
+      });
     });
     // Image actions: open in the full viewer (zoom, pan, rotate, flip) or copy as PNG.
     flow.querySelectorAll('.thr-img-wrap').forEach(wrap => {
@@ -11438,10 +12078,7 @@
       const copy = wrap.querySelector('[data-act="copy"]');
       copy.addEventListener('click', async () => {
         try {
-          const c = Object.assign(document.createElement('canvas'), { width: img.naturalWidth, height: img.naturalHeight });
-          c.getContext('2d').drawImage(img, 0, 0);
-          const blob = await new Promise(res => c.toBlob(res, 'image/png'));
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          await copyChatImage(img);
           copy.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
         } catch { copy.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>'; }
         setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
@@ -11454,6 +12091,16 @@
       b.setAttribute('aria-label', 'Copied');
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
     }));
+    flow.querySelectorAll('i[data-favicon]').forEach(i => loadFavicon(i.dataset.favicon, i.dataset.origin).then(f => { if (f && i.isConnected) i.outerHTML = faviconHtml(f); }));
+    flow.querySelectorAll('img.thr-favicon[data-host]').forEach(img => {
+      const fail = () => { _faviconMissing.add(img.dataset.host); img.outerHTML = '<i class="ph ph-globe" aria-hidden="true"></i>'; };
+      if (img.complete && !img.naturalWidth) fail(); else img.addEventListener('error', fail, { once: true });
+    });
+    flow.querySelectorAll('.thr-table-copy').forEach(b => b.addEventListener('click', () => {
+      if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(b.dataset.md); else navigator.clipboard?.writeText(b.dataset.md).catch(() => {});
+      b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+      setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
+    }));
     flow.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     flow.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
       const files = [...b.closest('.thr-changes').querySelectorAll('details.thr-change')];
@@ -11462,6 +12109,7 @@
     }));
     if (!flow.dataset.seen && ws._scrollState && !ws._scrollState.bottom) { flow.scrollTop = ws._scrollState.top; flow.dataset.seen = '1'; } // back where it was
     else { flow.scrollTop = atBottom || !flow.dataset.seen ? flow.scrollHeight : scrollTop; flow.dataset.seen = '1'; }
+    if (surface === thrPage) syncScrollEnd();
   }
   // ── Find in the thread history: Ctrl+F while the panel has focus, or the header button ──
   // Matches are painted with the CSS Highlight API, so the message markup is never touched.
@@ -11544,6 +12192,17 @@
   };
 
   // Brand logo for a known process (proc-icons.js), else a generic terminal glyph.
+  // Delete a thread (or side chat) after a confirm: close its tab, forget it, remove its saved history.
+  function confirmDeleteThread(tab, w = wsOf(tab) || activeWs(), what = 'thread') {
+    showConfirm(`Delete ${what} "${tab.chat?.title || tab.label}"? Its saved history is removed.`, () => {
+      const storeId = tab.chat?.storeId || tab.id;
+      if (!tab._closed) removeTerminal(w.id, tab.id, false, false, true, true); // already confirmed: close now, no second prompt
+      closedThreads = closedThreads.filter(t => (t.chat.storeId || t.id) !== storeId);
+      window.electronAPI?.threadDelete?.(storeId, tab.chat?.scratch ? tab.chat.cwd : null); // only its own scratch folder
+      saveState(); renderThreadsSidebar();
+      const cur = curChat(); if (cur) syncThreadComposer(cur); // its row leaves the side chats tray
+    });
+  }
   function procIconHtml(name, fallback = 'ph-terminal-window') {
     const key = String(name).toLowerCase().replace(/[\d.]+$/, '');
     if (key === 'codex') return '<i class="ws-proc-icon ph ph-open-ai-logo"></i>';
@@ -11772,10 +12431,62 @@
       list.className = 'ctx-list';
       list.append(...ctxEl.querySelectorAll(':scope > .ctx-item'));
       ctxEl.append(list);
+    } else if (type === 'ts-project') {
+      // The threads sidebar's project filter: All projects, then each folder threads use (most recent first).
+      const search = document.createElement('label');
+      search.className = 'ctx-search';
+      search.innerHTML = '<i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search projects…" aria-label="Search projects" spellcheck="false" autocomplete="off">';
+      search.querySelector('input').addEventListener('input', e => {
+        const q = e.target.value.trim().toLowerCase();
+        ctxEl.querySelectorAll('.ctx-item').forEach(el => { el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+      });
+      ctxEl.appendChild(search);
+      const projects = new Map(); // key -> { label, path, updated }
+      for (const x of chatThreads().map(threadInfo).sort((a, b) => b.updated - a.updated)) {
+        const key = tsProjectKey(x);
+        if (!projects.has(key)) projects.set(key, { label: key === '' ? 'No project' : x.folder, path: key });
+      }
+      const pick = (icon, label, key) => {
+        // The project's own icon (as in the sidebar), with a check badge on the picked one.
+        const glyph = key ? projectIconHtml(key, icon) : `<i class="ph ${icon}"></i>`;
+        item(`<span class="ts-pick-icon">${glyph}${tsProject === key ? '<i class="ph ph-check-circle ts-pick-check" aria-hidden="true"></i>' : ''}</span>`, escHtml(label), '', () => setThreadsProject(key));
+        const el = [...ctxEl.querySelectorAll(':scope > .ctx-item')].pop();
+        if (el) { el.classList.toggle('selected', tsProject === key); if (key) el.title = key; }
+      };
+      pick('ph-folders', 'All projects', null);
+      for (const [key, p] of projects) pick(key === '' ? 'ph-selection' : 'ph-folder', p.label, key);
+      const list = document.createElement('div');
+      list.className = 'ctx-list';
+      list.append(...ctxEl.querySelectorAll(':scope > .ctx-item'));
+      ctxEl.append(list);
+    } else if (type === 'chat-image') {
+      const img = data, path = img.dataset.path, name = path.split(/[\\/]/).pop();
+      const copyText = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
+      item('<i class="ph ph-arrows-out"></i>', 'Open image', '', () => openClaudeRefViewer(null, { kind: 'file', path, label: name }, ''));
+      item('<i class="ph ph-copy"></i>', 'Copy image', '', () => copyChatImage(img).catch(() => zoomBadge('Could not copy the image')));
+      item('<i class="ph ph-file"></i>', 'Copy path', '', () => copyText(path));
+      if (window.electronAPI?.showInFolder) { sep(); item('<i class="ph ph-folder-open"></i>', 'Show in folder', '', () => window.electronAPI.showInFolder(path)); }
+    } else if (type === 'chat-msg') {
+      // A message's text: the selection (copied as markdown by the flow's copy handler, or cited), the whole
+      // message as markdown, and a reply's fork point.
+      const msg = data, sel = window.getSelection(), raw = msg.closest('.thr-flow')?._texts?.get(msg.dataset.key) || '';
+      const selected = sel && !sel.isCollapsed && msg.closest('.thr-flow')?.contains(sel.anchorNode) && sel.toString().trim();
+      const copyText = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
+      if (selected) {
+        // Clicking the menu can drop the selection: put the one it opened on back before acting.
+        const range = sel.getRangeAt(0).cloneRange(), restore = () => { const s2 = window.getSelection(); s2.removeAllRanges(); s2.addRange(range); };
+        item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+C', () => { restore(); document.execCommand('copy'); });
+        item('<i class="ph ph-quotes"></i>', 'Cite selection', '', () => { restore(); citeBtn.click(); });
+        sep();
+      }
+      item('<i class="ph ph-text-aa"></i>', 'Copy message', '', () => copyText(raw));
+      const fork = msg.querySelector('.thr-fork');
+      if (fork) item('<i class="ph ph-git-fork"></i>', 'Fork from here', '', () => fork.click());
     } else if (type === 'chat-link') {
       const copy = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
       if (/^https?:/i.test(data)) {
-        item('<i class="ph ph-arrow-square-out"></i>', 'Open link', '', () => openExternalUrl(data));
+        item('<i class="ph ph-arrow-square-out"></i>', 'Open link', '', () => openChatWebLink(data));
+        item(`<i class="ph ${terminalLinkTarget === 'external' ? 'ph-browser' : 'ph-globe'}"></i>`, terminalLinkTarget === 'external' ? 'Open in a browser tab' : 'Open in system browser', '', () => openChatWebLink(data, true));
         item('<i class="ph ph-copy"></i>', 'Copy link', '', () => copy(data));
       } else {
         const { path, rel, line } = chatLinkPath(data);
@@ -11791,13 +12502,16 @@
       if (!tab || !w) return;
       const agent = liveThreadAgent(tab), h = agent && harnessOf(_tabAgent.get(tab.id));
       item('<i class="ph ph-chats-circle"></i>', 'Open', '', () => openChatTab(tab));
-      item('<i class="ph ph-pencil-simple"></i>', 'Rename…', '', () => showPrompt('Rename thread', tab.chat?.title || tab.label, value => {
+      item('<i class="ph ph-pencil-simple"></i>', 'Rename', '', () => { const card = tsOpen && [...tsList.querySelectorAll('.ts-card')].find(c => c.dataset.tab === tab.id); if (card) return startThreadRename(card); showPrompt('Rename thread', tab.chat?.title || tab.label, value => {
         if (!value.trim()) return;
         tab.chat ||= { createdAt: Date.now() };
         tab.chat.title = value.trim().slice(0, 80);
         setChatTabLabel(tab); saveState(); renderThreadsSidebar();
-      }));
+      }); });
       if (window.electronAPI?.chatTitle) item('<i class="ph ph-sparkle"></i>', 'Regenerate title', '', () => regenerateChatTitle(tab));
+      item(`<i class="ph ${tab.chat?.pinned ? 'ph-push-pin-slash' : 'ph-push-pin'}"></i>`, tab.chat?.pinned ? 'Unpin' : 'Pin', '', () => setThreadFlag(tab, 'pinned', !tab.chat?.pinned));
+      const isSettled = tab.chat?.settledAt && tab.chat.settledAt >= (tab.chat.updatedAt || 0);
+      item(`<i class="ph ${isSettled ? 'ph-arrow-counter-clockwise' : 'ph-check'}"></i>`, isSettled ? 'Un-settle' : 'Settle', '', () => setThreadFlag(tab, 'settledAt', !isSettled));
       if (h) {
         sep();
         item('<i class="ph ph-terminal-window"></i>', `Show ${escHtml(h.name)} terminal`, '', () => { if (viewSwitchBlocked(tab)) return; openChatTab(tab); setChatView(tab, true); });
@@ -11809,13 +12523,7 @@
         item('<i class="ph ph-copy"></i>', 'Copy folder path', '', () => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(cwd); else navigator.clipboard?.writeText(cwd).catch(() => {}); });
       }
       sep();
-      item('<i class="ph ph-trash"></i>', 'Delete thread', '', () => showConfirm(`Delete "${tab.chat?.title || tab.label}"? Its saved history is removed.`, () => {
-        const storeId = tab.chat?.storeId || tab.id;
-        if (!tab._closed) removeTerminal(w.id, tab.id, false, false, true, true); // already confirmed: close now, no second prompt
-        closedThreads = closedThreads.filter(t => (t.chat.storeId || t.id) !== storeId);
-        window.electronAPI?.threadDelete?.(storeId, tab.chat?.scratch ? tab.chat.cwd : null); // only its own scratch folder
-        saveState(); renderThreadsSidebar();
-      }), true);
+      item('<i class="ph ph-trash"></i>', 'Delete thread', '', () => confirmDeleteThread(tab, w), true);
     } else if (type === 'browser-more') {
       const { entry, history } = data;
       item('<i class="ph ph-clock-counter-clockwise"></i>', 'History', '', history);
@@ -13402,7 +14110,7 @@
 
     // Threads
     refreshThreadHarnessSetting();
-    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay']]) {
+    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown']]) {
       document.getElementById(id).value = threadSettings[key];
       const dd = document.querySelector(`.custom-dropdown[data-for="${id}"]`);
       if (dd) initCustomDropdown(dd);
@@ -14842,10 +15550,11 @@
     terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';
     saveState();
   });
-  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay']])
+  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown']])
     document.getElementById(id).addEventListener('change', e => {
       threadSettings = { ...threadSettings, [key]: e.target.value };
       if (key === 'usageDisplay') { renderUsageSidebar(); renderUsageModal(); }
+      if (key === 'markdown') syncChatInputLinks();
       saveState();
     });
 

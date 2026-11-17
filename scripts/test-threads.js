@@ -134,12 +134,28 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   const open = parseClaude([{ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'q2', name: 'AskUserQuestion', input: { questions: [{ question: q }] } }] } }]);
   assert.deepStrictEqual(open[0].qa, [{ question: q, answer: null }], 'a question not answered yet has no answer');
 
+  // A steer (a message sent while Claude works) is only a queued_command attachment: it shows as the user's
+  // message, marked steered, once even if Claude Code also writes it as a user row; its own notices stay hidden.
+  const steer = (prompt, extra = {}) => ({ type: 'attachment', timestamp: 't2', attachment: { type: 'queued_command', prompt, commandMode: 'prompt', timestamp: 't2', ...extra } });
+  const steered = parseClaude([
+    { type: 'user', message: { content: 'build it' }, timestamp: 't1' },
+    steer('make it black and white'),
+    steer('<task-notification><task-id>x</task-id></task-notification>'),
+    { type: 'user', message: { content: 'make it black and white' }, timestamp: 't3' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] }, timestamp: 't4' },
+  ]);
+  assert.deepStrictEqual(steered.map(m => [m.role, m.text, !!m.steered]), [['user', 'build it', false], ['user', 'make it black and white', true], ['assistant', 'Done.', false]]);
+
   // Antigravity (ACP) history: the transcript TerminalVibe records; the handoff note is hidden, empty text skipped.
   const { parseAcp } = require('../electron/threads');
   const acp = parseAcp([{ role: 'user', text: 'hi <terminalvibe_context history="x">n</terminalvibe_context>', ts: 't1' }, { role: 'thinking', text: '' },
     { role: 'tool', name: 'run_command', summary: 'echo hi', detail: '{}', error: true }, { role: 'assistant', text: 'done' }, { role: 'bogus', text: 'x' }]);
   assert.deepStrictEqual(acp.map(i => [i.role, i.text ?? i.summary]), [['user', 'hi'], ['tool', 'echo hi'], ['assistant', 'done']]);
   assert.strictEqual(acp[1].error, true);
+  // The agent died mid-turn: its "interrupt" record flags the step before it (the chat's "Interrupted" line).
+  const crashed = parseAcp([{ role: 'user', text: 'go', ts: 't1' }, { role: 'tool', name: 'run_command', summary: 'python3 x', error: true, ts: 't2' },
+    { role: 'interrupt', reason: 'crash', text: 'crashed (SIGSEGV)', ts: 't3' }]);
+  assert.deepStrictEqual(crashed.map(i => [i.role, i.interrupted || null]), [['user', null], ['tool', 'crash']]);
 
   fs.rmSync(home, { recursive: true, force: true });
   console.log('PASS: thread folders keep every agent session, survive deleted transcripts, hand off and delete');

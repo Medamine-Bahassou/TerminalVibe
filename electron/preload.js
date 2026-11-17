@@ -61,6 +61,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   threadDelete: (id, scratchDir) => ipcRenderer.invoke('threads:delete', id, scratchDir),
   threadScratch: () => ipcRenderer.invoke('threads:scratch'),
   gitBranch: (cwd) => ipcRenderer.invoke('git:branch', cwd),
+  faviconGet: (origin) => ipcRenderer.invoke('favicon:get', origin),
+  projectIcon: (cwd) => ipcRenderer.invoke('project:icon', cwd),
   chatTitle: (harness, text) => ipcRenderer.invoke('chat:title', harness, text),
   gitBranches: (cwd) => ipcRenderer.invoke('git:branches', cwd),
   gitSnapshot: (cwd) => ipcRenderer.invoke('git:snapshot', cwd),

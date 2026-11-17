@@ -1075,6 +1075,7 @@ isolation: isolate;
   width: 11px; height: 11px;
   display: block;
 }
+.tg-tab-icon img.tg-tab-favicon { width:14px; height:14px; object-fit:contain; border-radius:2px; }
 .tg-tab.active .tg-tab-dot { opacity: 1; }
 .tg-tab.active .tg-tab-icon { opacity: 0.9; }
 /* Exited terminals retain output; their tabs must still be selectable/closable. */

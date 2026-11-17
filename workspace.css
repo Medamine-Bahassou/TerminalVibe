@@ -897,6 +897,11 @@ body #sidebar.expanded .ws-folder-row.drop-below .ws-folder-header { background:
   body.ui-animations #prompt-overlay.open #prompt-modal,
   body.ui-animations #close-confirm-overlay.open #close-confirm-modal,
   body.ui-animations #settings-overlay.open #settings-modal { transform:scale(1); }
+  /* Usage modal is created/removed, not toggled: enter via @starting-style, leave via .closing. */
+  body.ui-animations #usage-overlay { transition:opacity 180ms ease-out; }
+  body.ui-animations #usage-modal { transition:transform 180ms cubic-bezier(.2,.8,.2,1); }
+  body.ui-animations #usage-overlay.closing { opacity:0; pointer-events:none; }
+  body.ui-animations #usage-overlay.closing #usage-modal { transform:scale(.96); }
   body.ui-animations :is(#profile-picker, #tab-search) {
     opacity:1;
     transition:opacity 180ms ease-out, display 180ms allow-discrete;
@@ -939,7 +944,8 @@ body #sidebar.expanded .ws-folder-row.drop-below .ws-folder-header { background:
   body.ui-animations #ctx.open { opacity:1; }
   @starting-style {
     body.ui-animations :is(#prompt-overlay, #close-confirm-overlay, #settings-overlay).open,
-    body.ui-animations :is(#profile-picker, #tab-search) { opacity:0; }
+    body.ui-animations :is(#profile-picker, #tab-search, #usage-overlay) { opacity:0; }
+    body.ui-animations #usage-modal,
     body.ui-animations #prompt-overlay.open #prompt-modal,
     body.ui-animations #close-confirm-overlay.open #close-confirm-modal,
     body.ui-animations #settings-overlay.open #settings-modal,
@@ -1149,7 +1155,10 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 #sbr-thread .thr-msg.user { align-self:stretch; align-items:flex-end; }
 #sbr-thread .thr-bubble { max-width:85%; display:flex; flex-direction:column; gap:4px; min-width:0; padding:10px 14px; background:color-mix(in srgb,var(--fg) 9%,var(--bg)); border-radius:14px !important; }
 /* Copy + time under each message: space kept, shown on hover or keyboard focus. */
-#sbr-thread .thr-actions { display:flex; align-items:center; gap:4px; height:24px; opacity:0; transition:opacity 140ms; }
+/* Buttons are 24px boxes around 13px icons (5.5px inner space each side): no gap between them, and the
+   time gets the same 5.5px, so icon→icon and icon→time read as one even gap. */
+#sbr-thread .thr-actions { display:flex; align-items:center; gap:0; height:24px; opacity:0; transition:opacity 140ms; }
+#sbr-thread .thr-actions .thr-time { margin-left:5.5px; }
 #sbr-thread .thr-msg:hover .thr-actions, #sbr-thread .thr-msg:focus-within .thr-actions { opacity:1; }
 #sbr-thread .thr-copy { display:grid; place-items:center; width:24px; height:24px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--dim-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
 #sbr-thread .thr-copy:hover { background:var(--ui-hover); color:var(--fg); }
@@ -1257,7 +1266,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 .tv-pick-menu .tv-pick-hint { min-width:0; margin-left:auto; font:400 11px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* ── Chat: a sent message waiting for the transcript ── */
-#sbr-thread .thr-pending .thr-bubble { opacity:.7; }
+/* A just-sent message looks like any sent message (it used to be faded until the transcript had it). */
 
 /* ── Chat composer (T3-style): message box with the model chip + send, a quiet footer row under it ── */
 /* The composer floats over the bottom of the history (which scrolls the full height behind it);
@@ -1471,11 +1480,6 @@ body.detached #threads-sidebar { display:none; }
 /* ── Chat prompts: images above the bubble; image paths in the text as link chips (both open the viewer) ── */
 #sbr-thread .thr-msg.user > .thr-images { justify-content:flex-end; max-width:85%; }
 #sbr-thread .thr-msg.user .thr-img { max-height:220px; cursor:zoom-in; }
-#sbr-thread .thr-img-link { display:inline-flex; align-items:baseline; gap:6px; max-width:100%; padding:0; background:none; border:0; color:var(--accent); font:inherit; text-align:left; cursor:pointer; vertical-align:baseline; }
-#sbr-thread .thr-img-link-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent); text-underline-offset:3px; }
-#sbr-thread .thr-img-link:hover .thr-img-link-name { text-decoration-color:var(--accent); }
-#sbr-thread .thr-img-link:focus-visible { outline:none; border-radius:4px !important; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
-#sbr-thread .thr-img-size { flex-shrink:0; font:400 11px var(--mono-font); color:var(--dim-text); }
 #sbr-thread .thr-img-size:empty { display:none; }
 
 /* ── Tab bar menu: Chat › agents (brand logos), and a disabled row when none is installed ── */
@@ -1708,14 +1712,17 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 /* Threads sidebar: every agent a thread used, side by side. */
 #threads-sidebar .ts-agents { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; }
 
-/* Chat input suggestions: "@" files/folders and "/" commands, a popover above the composer. */
+/* Chat input suggestions: "@" files/folders and "/" commands. Same in-flow tray as .thr-ask / .thr-sides, right
+   above the composer, so the side chats bubble sits on top of it like it does on a question. */
 #sbr-thread .thr-composer { position:relative; }
-#sbr-thread .thr-complete { position:absolute; left:0; right:0; bottom:calc(100% + 6px); z-index:5; max-height:min(300px, 50vh); overflow-y:auto; padding:4px;
-  background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; box-shadow:0 8px 24px #0005; }
+#sbr-thread .thr-complete { width:calc(100% - 36px); max-width:752px; margin:0 auto; max-height:min(300px, 50vh); overflow-y:auto; padding:6px;
+  scrollbar-width:thin; scrollbar-color:var(--border) transparent;
+  background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--border); border-bottom:0; border-radius:16px 16px 0 0 !important; }
 #sbr-thread .thr-complete[hidden] { display:none; }
-#sbr-thread .thr-complete-item { display:flex; align-items:center; gap:8px; min-height:32px; padding:6px 8px; border-radius:6px !important; cursor:pointer; font:400 13px/1.3 var(--ui-font); color:var(--fg); }
-#sbr-thread .thr-complete-item[aria-selected="true"], #sbr-thread .thr-complete-item:hover { background:var(--ui-hover); }
-#sbr-thread .thr-complete-item > i { flex-shrink:0; font-size:15px; color:var(--muted-text); }
+#sbr-thread .thr-complete-item { display:flex; align-items:center; gap:8px; min-height:28px; padding:4px 8px; border-radius:6px !important; cursor:pointer; font:400 12px/1.3 var(--ui-font); color:var(--fg); }
+/* On the composer-colored popover, a selected row needs a step above it (--ui-hover would barely show). */
+#sbr-thread .thr-complete-item[aria-selected="true"], #sbr-thread .thr-complete-item:hover { background:color-mix(in srgb,var(--fg) 7%,transparent); }
+#sbr-thread .thr-complete-item > i { flex-shrink:0; font-size:14px; color:var(--muted-text); }
 /* The completion menu and changed files share type icons and their palette. */
 #sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-js, .ph-file-csv) { color:#d9b94b; }
 #sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-ts, .ph-file-py, .ph-file-sql) { color:#65a9ed; }
@@ -1727,7 +1734,7 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-png, .ph-file-jpg, .ph-file-image) { color:#7dbf9d; }
 #sbr-thread :is(.thr-complete-item, .thr-change > summary) > i.ph-file-pdf { color:#ec8585; }
 #sbr-thread .thr-complete-name { flex-shrink:0; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
-#sbr-thread .thr-complete-meta { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--dim-text); }
+#sbr-thread .thr-complete-meta { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--dim-text); }
 #sbr-thread .thr-at-ref > i { font-size:13px; align-self:center; }
 #sbr-thread .thr-at-ref > span { max-width:min(240px,44vw); overflow:hidden; text-overflow:ellipsis; }
 
@@ -1884,8 +1891,9 @@ body.ui-animations #sbr-thread .thr-sides.anim.collapsed .thr-sides-bubble { tra
 #usage-modal .um-label { font-size:13px; color:var(--muted-text); }
 #usage-modal .um-big { display:flex; align-items:baseline; gap:6px; margin-top:2px; }
 #usage-modal .um-num { font-size:28px; font-weight:600; line-height:1.15; font-variant-numeric:tabular-nums; }
-#usage-modal .um-left { font-size:12.5px; color:var(--muted-text); }
-#usage-modal .um-trend { align-self:center; font-size:14px; color:var(--muted-text); }
+/* "left" + trend icon: one inline-flex group on the number's baseline, the icon centered on the word's line. */
+#usage-modal .um-left { display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted-text); }
+#usage-modal .um-trend { font-size:14px; color:var(--muted-text); }
 /* The bar: left = solid agent tint, used = stripes; the pace marker is where an even burn would be now. */
 #usage-modal .um-bar { position:relative; height:32px; border-radius:6px !important; overflow:hidden;
   background:repeating-linear-gradient(135deg, color-mix(in srgb,var(--um-agent) 14%,var(--bg)) 0 3px, color-mix(in srgb,var(--um-agent) 6%,var(--bg)) 3px 7px); }
@@ -1939,6 +1947,11 @@ body #sidebar .ws-btn .ws-proc.ws-proc-agent .ws-proc-icon { color:var(--agent-c
 #sbr-thread .thr-ask[hidden] { display:none !important; }
 /* Under an open side chats tray, the two read as one tray. */
 #sbr-thread .thr-sides:not([hidden]):not(.collapsed) + .thr-ask { border-top:1px solid var(--ui-line); border-radius:0 !important; }
+/* Collapsed side chats bubble over the question or suggestions: sit on its flat top edge, clear of the 16px corner. */
+#sbr-thread .thr-sides.collapsed:has(~ :is(.thr-ask, .thr-complete):not([hidden])) .thr-sides-bubble { margin-right:16px; }
+/* Trays stacked on each other read as one: the lower one loses its rounded top for a hairline. */
+#sbr-thread .thr-ask:not([hidden]) + .thr-complete,
+#sbr-thread .thr-sides:not([hidden]):not(.collapsed) + .thr-ask[hidden] + .thr-complete { border-top:1px solid var(--ui-line); border-radius:0 !important; }
 #sbr-thread .thr-ask-q { display:flex; align-items:center; gap:8px; min-height:24px; padding:0 6px; font-weight:500; }
 #sbr-thread .thr-ask-q i { flex:none; font-size:15px; color:var(--muted-text); }
 #sbr-thread .thr-ask-detail { padding:0 6px 4px 29px; font:11.5px/1.5 var(--mono-font); color:var(--muted-text); overflow-wrap:anywhere; }
@@ -2012,3 +2025,306 @@ body.ui-animations #threads-sidebar .ts-usage:not([hidden]) { animation:ts-usage
 #sbr-thread .thr-fork:focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); color:var(--fg); }
 #sbr-thread .thr-fork i { font-size:13px; }
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-fork { transition:none; } }
+
+/* Chat chrome (turn timers, times, action rows, headers) stays out of text selection and copies. */
+#sbr-thread :is(.thr-actions, .thr-turn > summary, .thr-worked, .thr-seg, .thr-tools > summary, .thr-status-line) { user-select:none; -webkit-user-select:none; }
+
+/* Chat messages: markdown blocks from mdLite (tables, quotes, rules) and emphasis. */
+#sbr-thread .thr-msg-text em { font-style:italic; }
+#sbr-thread .thr-msg-text del { color:var(--muted-text); }
+#sbr-thread .thr-msg-text :is(.thr-h, .thr-list, .thr-quote, .thr-table-wrap, .thr-hr, .thr-code) { margin:8px 0; }
+#sbr-thread .thr-msg-text > :first-child { margin-top:0; }
+#sbr-thread .thr-msg-text > :last-child { margin-bottom:0; }
+#sbr-thread .thr-msg-text .thr-h { font-weight:600; line-height:1.35; color:var(--fg); }
+#sbr-thread .thr-msg-text .thr-h1 { margin-top:16px; font-size:18px; }
+#sbr-thread .thr-msg-text .thr-h2 { margin-top:16px; font-size:15.5px; }
+#sbr-thread .thr-msg-text .thr-h3 { margin-top:12px; font-size:13.5px; }
+#sbr-thread .thr-msg-text .thr-list { padding-left:20px; white-space:normal; }
+#sbr-thread .thr-msg-text .thr-list .thr-list { margin:2px 0; }
+#sbr-thread .thr-msg-text ul.thr-list { list-style:disc; }
+#sbr-thread .thr-msg-text ul.thr-list ul.thr-list { list-style:circle; }
+#sbr-thread .thr-msg-text ol.thr-list { list-style:decimal; }
+#sbr-thread .thr-msg-text .thr-list li { margin:3px 0; padding-left:2px; }
+#sbr-thread .thr-msg-text .thr-list li::marker { color:var(--muted-text); font-variant-numeric:tabular-nums; }
+#sbr-thread .thr-msg-text .thr-quote { padding:2px 0 2px 10px; border-left:2px solid var(--border); color:color-mix(in srgb,var(--fg) 85%,transparent); }
+#sbr-thread .thr-msg-text .thr-hr { border:0; border-top:1px solid var(--ui-line); }
+#sbr-thread .thr-msg-text .thr-table-wrap { display:flex; flex-direction:column; align-items:flex-end; gap:4px; white-space:normal; }
+#sbr-thread .thr-msg-text .thr-table-scroll { width:100%; overflow-x:auto; }
+#sbr-thread .thr-msg-text .thr-table { width:100%; border-collapse:collapse; font-size:12.5px; font-variant-numeric:tabular-nums; }
+#sbr-thread .thr-msg-text .thr-table :is(th, td) { padding:8px 16px 8px 0; border-bottom:1px solid var(--ui-line); text-align:left; vertical-align:top; }
+#sbr-thread .thr-msg-text .thr-table th { font-weight:600; }
+#sbr-thread .thr-table-copy { display:grid; place-items:center; width:24px; height:24px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; user-select:none; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-table-copy:hover { background:var(--ui-hover); color:var(--fg); }
+/* Shown on hovering the table (or keyboard focus), like the message actions. */
+#sbr-thread .thr-table-copy { opacity:0; transition:opacity 140ms, background-color 140ms, color 140ms; }
+#sbr-thread .thr-table-wrap:hover .thr-table-copy, #sbr-thread .thr-table-copy:focus-visible { opacity:1; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-table-copy { transition:none; } }
+#sbr-thread .thr-table-copy:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-table-copy i { font-size:13px; }
+
+/* Composer live markdown: every character stays (markers dimmed), so caret and sent text match. */
+#sbr-thread .thr-input-links .md-mark { color:var(--dim-text); }
+#sbr-thread .thr-input-links .md-strong, #sbr-thread .thr-input-links .md-h { font-weight:600; }
+#sbr-thread .thr-input-links .md-em { font-style:italic; }
+#sbr-thread .thr-input-links .md-del { text-decoration:line-through; color:var(--muted-text); }
+#sbr-thread .thr-input-links :is(.md-code, .md-code-block) { font-family:var(--mono-font); font-size:.9em; background:color-mix(in srgb,var(--fg) 9%,transparent); }
+#sbr-thread .thr-input-links .md-quote { color:var(--muted-text); }
+#sbr-thread .thr-input-links .md-link { color:var(--accent); }
+#sbr-thread .thr-input-links .md-url { color:var(--dim-text); }
+
+/* File icons colored by type with the Seti palette (VS Code's default icon theme), for @ suggestions,
+   @ references and file links in chat. linkFileIcon() adds the ft-* group from the file's extension. */
+:root {
+  --seti-blue:#519aba; --seti-yellow:#cbcb41; --seti-orange:#e37933; --seti-green:#8dc149; --seti-red:#cc3e44;
+  --seti-purple:#a074c4; --seti-pink:#f55385; --seti-grey:#6d8086; --seti-white:#d4d7d6; --seti-folder:#dcb67a;
+}
+#sbr-thread i:is(.ft-js, .ft-json) { color:var(--seti-yellow); }
+#sbr-thread i:is(.ft-ts, .ft-css, .ft-py, .ft-go, .ft-c, .ft-md) { color:var(--seti-blue); }
+#sbr-thread i:is(.ft-html, .ft-archive) { color:var(--seti-orange); }
+#sbr-thread i:is(.ft-vue, .ft-shell, .ft-data) { color:var(--seti-green); }
+#sbr-thread i:is(.ft-jvm, .ft-rb, .ft-pdf, .ft-svelte) { color:var(--seti-red); }
+#sbr-thread i:is(.ft-php, .ft-image, .ft-config) { color:var(--seti-purple); }
+#sbr-thread i.ft-rs { color:var(--seti-pink); }
+#sbr-thread i.ft-other { color:var(--seti-grey); }
+#sbr-thread i.ft-folder, #sbr-thread .thr-complete-item > i.ph-folder, #sbr-thread .thr-at-ref i.ph-folder { color:var(--seti-folder); }
+
+/* All dropdowns / menus / pickers share the chat composer's surface (a step above --bg), and a hover one step
+   above that so selected rows still read. Same selectors with body/ID weight to beat the per-menu rules. */
+:root { --ui-popover:color-mix(in srgb,var(--fg) 5%,var(--bg)); }
+body :is(#ctx, .ctx-sub, .tg-dropdown, #servers-dropdown, .tv-pick-menu, .tv-model-picker, .custom-dropdown-menu, #sbr-thread .thr-complete),
+body #settings-modal .custom-dropdown-menu {
+  background:var(--ui-popover) !important;
+  --ui-hover:color-mix(in srgb,var(--fg) 11%,var(--bg));
+}
+
+/* Zoomed chat: the composer stack never grows past the pane; the suggestions tray is what shrinks (and scrolls). */
+#sbr-thread .thr-composer-wrap { display:flex; flex-direction:column; max-height:100%; }
+:where(#sbr-thread .thr-composer-wrap) > * { width:100%; flex-shrink:0; } /* zero specificity: the trays keep their inset widths */
+#sbr-thread .thr-composer-wrap > .thr-complete { flex-shrink:1; min-height:0; }
+
+/* Web links in chat: the site's favicon (or a globe) before the label, sized like the file-link icons. */
+#sbr-thread .thr-link > .thr-favicon { display:inline-block; width:14px; height:14px; margin-right:4px; vertical-align:-2px; object-fit:contain; border-radius:3px !important; }
+#sbr-thread .thr-link > i.ph-globe { color:var(--muted-text); }
+
+/* Link icons (favicon, globe, file type) stay out of text selection. */
+#sbr-thread .thr-link > :is(i, img, .thr-favicon) { user-select:none; -webkit-user-select:none; }
+
+/* Composer "Rendered" markdown: markers and link URLs hidden, except in the token at the caret (.md-open). */
+#sbr-thread .thr-input-links.md-render :is(.md-mark:not(.md-list), .md-url) { display:none; } /* list markers stay, dimmed */
+#sbr-thread .thr-input-links .md-list { color:var(--muted-text); font-variant-numeric:tabular-nums; }
+#sbr-thread .thr-input-links.md-render .md-open > :is(.md-mark, .md-url) { display:inline; }
+#sbr-thread .thr-input-links.md-render .md-h1 { font-size:1.3em; }
+#sbr-thread .thr-input-links.md-render .md-h2 { font-size:1.15em; }
+#sbr-thread .thr-input-links.md-render .md-quote { padding-left:8px; border-left:2px solid var(--border); }
+#sbr-thread .thr-input-links.md-render .md-code { padding:1px 4px; border-radius:4px !important; }
+#sbr-thread .thr-input-links.md-render .md-link:not(.md-open) { text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent); text-underline-offset:3px; }
+
+/* Single-color favicons (detected in app.js) are drawn as a mask in the link color, like T3 Code. */
+#sbr-thread .thr-link > .thr-favicon.mono { background-color:currentColor; -webkit-mask:var(--icon) center / contain no-repeat; mask:var(--icon) center / contain no-repeat; }
+
+/* "Scroll to end" pill: floats centered just above the composer stack while the chat is scrolled up. */
+#sbr-thread .thr-composer-wrap > .thr-scroll-end { position:absolute; left:50%; bottom:calc(100% - 22px); transform:translateX(-50%); width:auto; z-index:3;
+  display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 9px 0 7px; background:var(--ui-popover); border:1px solid var(--border); border-radius:9999px !important;
+  box-shadow:0 4px 12px #0004; color:var(--fg); font:500 11px var(--ui-font); white-space:nowrap; cursor:pointer; transition:background-color 140ms, border-color 140ms; }
+#sbr-thread .thr-composer-wrap > .thr-scroll-end[hidden] { display:none; }
+#sbr-thread .thr-scroll-end:hover { background:color-mix(in srgb,var(--fg) 10%,var(--bg)); border-color:var(--muted-text); }
+#sbr-thread .thr-scroll-end:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-scroll-end i { font-size:11px; color:var(--muted-text); }
+#sbr-thread.thr-new .thr-scroll-end { display:none; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-scroll-end { transition:none; } }
+
+/* Composer "Rendered": a list dash shows as a bullet (drawn over the transparent dash, so caret offsets stay put),
+   and leading spaces are widened so nested items indent like the message view. */
+#sbr-thread .thr-input-links.md-render .md-bullet { position:relative; color:transparent; caret-color:var(--fg); }
+#sbr-thread .thr-input-links.md-render .md-bullet::before { content:'•'; position:absolute; left:0; color:var(--muted-text); }
+#sbr-thread .thr-input-links.md-render .md-bullet-sub::before { content:'◦'; }
+#sbr-thread .thr-input-links.md-render .md-indent { letter-spacing:.5em; }
+
+/* Usage modal: a fixed near-black (#0d0d0d) surface for the dialog and its cards (cards keep their hairline border).
+   Bars mix into --bg, so it's pointed at the same color here to keep their tints true. */
+#usage-modal { --usage-bg:#0d0d0d; --bg:var(--usage-bg); background:var(--usage-bg); }
+#usage-modal .um-card { background:var(--usage-bg); }
+
+/* Usage modal: same footprint as the settings dialog (size, overlay padding, corners, shadow). */
+#usage-overlay { padding:max(24px,calc(env(titlebar-area-height,0px) + 8px)) 24px 24px; }
+#usage-modal { width:min(1440px,100%); height:min(760px,100%); max-height:none; border:1px solid var(--ui-line); border-radius:16px !important; box-shadow:0 24px 80px #0006; }
+@media(max-width:700px) {
+  #usage-overlay { padding:max(12px,calc(env(titlebar-area-height,0px) + 8px)) 12px 12px; }
+  #usage-modal { height:100%; }
+}
+/* Bigger cards in the larger dialog: wider column, roomier padding, a slightly taller bar. */
+#usage-modal .um-agent { max-width:920px; }
+#usage-modal .um-card { grid-template-columns:200px minmax(0,1fr); gap:20px; padding:18px 20px; }
+#usage-modal .um-bar { height:36px; }
+@media (max-width:640px) { #usage-modal .um-card { grid-template-columns:1fr; gap:12px; padding:16px; } }
+
+/* Usage widget: shown from startup with empty rings (.loading); the first reading fades in (.reveal) — the % fades,
+   the ring sweeps from empty (--p is registered so it can animate). */
+@property --p { syntax:'<number>'; inherits:true; initial-value:0; }
+#threads-sidebar .ts-usage.loading .sb-usage-logo { opacity:.55; }
+/* Loading: no % line, so the rings sit centered in the row. On reveal the line grows open (its negative margin
+   cancels the item's 4px gap at the start), so the rings glide up as the % fades in. */
+#threads-sidebar .ts-usage.loading .sb-usage-pct { display:none; }
+@keyframes sb-usage-pct-in { from { opacity:0; max-height:0; margin-top:-4px; } to { opacity:1; max-height:12px; margin-top:0; } }
+@keyframes sb-usage-ring-in { from { --p:0; } }
+#threads-sidebar .ts-usage.reveal .sb-usage-pct { overflow:hidden; animation:sb-usage-pct-in 360ms cubic-bezier(.2,.8,.2,1) both; }
+#threads-sidebar .ts-usage.reveal .sb-usage-item { animation:sb-usage-ring-in 600ms cubic-bezier(.2,.8,.2,1) both; }
+@media (prefers-reduced-motion: reduce) { #threads-sidebar .ts-usage.reveal :is(.sb-usage-pct, .sb-usage-item) { animation:none; } }
+
+/* Side chats tray: each row is the chat + a delete button at its right (shown on row hover / focus). */
+#sbr-thread .thr-sides:not(.collapsed) .thr-side-row { grid-column:1 / -1; display:flex; align-items:center; gap:2px; min-width:0; }
+#sbr-thread .thr-side-row .thr-side-chip { flex:1; min-width:0; }
+#sbr-thread .thr-side-del { display:grid; place-items:center; flex-shrink:0; width:26px; height:26px; padding:0; background:transparent; border:0; border-radius:6px !important;
+  color:var(--dim-text); cursor:pointer; opacity:0; transition:opacity 140ms, background-color 140ms, color 140ms; }
+#sbr-thread .thr-side-del i { font-size:13px; }
+#sbr-thread .thr-side-row:is(:hover, :focus-within) .thr-side-del { opacity:1; }
+#sbr-thread .thr-side-del:hover { background:color-mix(in srgb,var(--ui-error) 14%,transparent); color:var(--ui-error); }
+#sbr-thread .thr-side-del:focus-visible { outline:none; opacity:1; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-side-del { transition:none; } }
+/* The row keeps its final height (padding 16 + ring 28 + gap 4 + % line ~11), so loading rings center in it and glide up. */
+#threads-sidebar .ts-usage { min-height:59px; }
+/* The delete button sits inside the row (over the chip's right end), not beside it; the row highlights as one. */
+#sbr-thread .thr-sides:not(.collapsed) .thr-side-row { position:relative; gap:0; }
+#sbr-thread .thr-side-row .thr-side-chip { padding-right:34px; }
+#sbr-thread .thr-side-row:hover .thr-side-chip { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-side-row .thr-side-del { position:absolute; right:3px; top:50%; transform:translateY(-50%); width:24px; height:24px; }
+#sbr-thread .thr-side-row .thr-side-del:hover { background:color-mix(in srgb,var(--ui-error) 16%,var(--ui-hover)); }
+/* The open tray's header row ("Side chats" + caret) is one click target that collapses it. */
+#sbr-thread .thr-sides:not(.collapsed):has(> .thr-sides-toggle) > .thr-sides-label { cursor:pointer; margin-right:0; border-radius:6px 0 0 6px !important; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-sides:not(.collapsed) > .thr-sides-toggle { width:auto; min-width:24px; border-radius:0 6px 6px 0 !important; }
+#sbr-thread .thr-sides:not(.collapsed):has(> .thr-sides-toggle):has(> .thr-sides-label:hover, > .thr-sides-toggle:hover) > :is(.thr-sides-label, .thr-sides-toggle) { background:transparent; color:var(--fg); } /* text brightens, no fill */
+
+/* ── Threads sidebar: Settled shelf rows are T3 Code-style (slim): [agent] title [pin] · time; on hover the time gives way to Settle /
+   Un-settle. The agent logo is gray and faint until the row is hovered, focused or open. ── */
+#threads-sidebar .ts-card.slim { position:relative; flex-direction:row; align-items:center; gap:10px; height:36px; padding:0 10px; border-radius:8px !important; cursor:pointer; user-select:none; }
+#threads-sidebar .ts-lead { display:grid; place-items:center; flex-shrink:0; width:16px; color:var(--muted-text); opacity:.4; filter:grayscale(1); transition:opacity 140ms, filter 140ms; }
+#threads-sidebar .ts-card:is(:hover, :focus-visible, .active, .working) .ts-lead { opacity:1; filter:none; }
+#threads-sidebar .ts-lead > i { font-size:15px; }
+#threads-sidebar .ts-card.working .ts-lead { color:var(--accent); }
+#threads-sidebar .ts-card.slim .ts-title { flex:1; min-width:0; font-size:13px; font-weight:500; line-height:1.3; }
+#threads-sidebar .ts-draft-icon { flex-shrink:0; font-size:13px; color:var(--ui-warning); }
+#threads-sidebar .ts-pin { display:grid; place-items:center; flex-shrink:0; width:20px; height:20px; padding:0; background:transparent; border:0; border-radius:4px !important; color:var(--muted-text); cursor:pointer; }
+#threads-sidebar .ts-pin i { font-size:12px; }
+#threads-sidebar .ts-pin:hover { color:var(--fg); }
+#threads-sidebar .ts-end { position:relative; display:flex; align-items:center; justify-content:flex-end; flex-shrink:0; min-width:32px; height:24px; margin-left:auto; }
+#threads-sidebar .ts-time { margin:0; transition:opacity 120ms; }
+#threads-sidebar .ts-time.working { color:var(--muted-text); }
+#threads-sidebar .ts-act { position:absolute; top:0; right:-6px; display:grid; place-items:center; width:26px; height:24px; padding:0; background:transparent; border:0; border-radius:6px !important;
+  color:var(--muted-text); cursor:pointer; opacity:0; pointer-events:none; transition:opacity 120ms, background-color 120ms, color 120ms; }
+#threads-sidebar .ts-act i { font-size:13px; }
+#threads-sidebar .ts-card:is(:hover, :focus-within) .ts-act { opacity:1; pointer-events:auto; }
+#threads-sidebar .ts-card:is(:hover, :focus-within) .ts-end:has(.ts-act) .ts-time { opacity:0; }
+#threads-sidebar .ts-act:hover { background:color-mix(in srgb,var(--fg) 8%,transparent); color:var(--fg); }
+#threads-sidebar :is(.ts-act, .ts-pin):focus-visible { outline:none; opacity:1; box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#threads-sidebar .ts-rename { flex:1; min-width:0; height:24px; margin-left:-6px; padding:0 6px; background:var(--bg); border:1px solid var(--accent); border-radius:6px !important;
+  color:var(--fg); font:500 13px var(--ui-font); outline:none; box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+#threads-sidebar .ts-more { display:flex; align-items:center; gap:6px; width:100%; height:30px; padding:0 10px; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:400 12px var(--ui-font); text-align:left; cursor:pointer; }
+#threads-sidebar .ts-more .ts-count { margin-left:0; }
+#threads-sidebar .ts-more:hover { background:var(--ui-hover); color:var(--fg); }
+@media (prefers-reduced-motion: reduce) { #threads-sidebar :is(.ts-lead, .ts-time, .ts-act) { transition:none; } }
+/* The full cards (Pinned / Working / Threads) share the hover Settle action, pin and inline rename. */
+#threads-sidebar .ts-card:not(.slim) .ts-rename { flex:none; width:100%; margin-left:-7px; }
+/* The hover action is labelled in the button (icon + "Settle" / "Un-settle"), no tooltip. */
+#threads-sidebar .ts-act { width:auto; gap:5px; display:inline-flex; align-items:center; padding:0 8px; font:500 12px var(--ui-font); white-space:nowrap; }
+#threads-sidebar .ts-act i { font-size:12px; }
+/* Settle / Un-settle: no fill on hover, the label and icon just brighten. */
+#threads-sidebar .ts-act:hover { background:transparent; color:var(--fg); }
+
+/* One-line Settled rows: the action is icon-only (↶), so it never covers the title; full cards keep the label. */
+#threads-sidebar .ts-card.slim .ts-act { width:26px; padding:0; justify-content:center; }
+#threads-sidebar .ts-card.slim .ts-act-label { display:none; }
+#threads-sidebar .ts-card.slim .ts-act i { font-size:14px; }
+
+/* Threads sidebar project filter: the funnel turns accent while a project is picked; the picked row is highlighted. */
+#threads-sidebar #ts-filter.active { color:var(--accent); }
+body #ctx .ctx-item.selected { background:var(--ui-hover); }
+
+/* Project icons (the project's favicon / app icon) in thread cards, Settled rows and the project filter menu. */
+#threads-sidebar .ts-proj-icon, body #ctx .ts-proj-icon { width:14px; height:14px; flex-shrink:0; object-fit:contain; border-radius:3px !important; }
+#threads-sidebar .ts-card.slim .ts-lead .ts-proj-icon { width:15px; height:15px; }
+body #ctx .ts-pick-icon { position:relative; display:inline-grid; place-items:center; width:16px; height:16px; }
+body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size:10px; color:var(--accent); background:var(--ui-popover); border-radius:50% !important; }
+
+/* ── Question tray, list style: header row ("Task" + fold caret), the question, then rows with a radio, the label
+   over its description, and the number keycap at the right. ── */
+#sbr-thread .thr-ask { gap:0; padding:6px 8px 8px; }
+#sbr-thread .thr-ask-head { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; min-height:30px; padding:0 8px; background:transparent; border:0;
+  color:var(--muted-text); font:400 12.5px var(--ui-font); text-align:left; cursor:pointer; }
+#sbr-thread .thr-ask-head:hover { color:var(--fg); }
+#sbr-thread .thr-ask-head i { font-size:12px; transition:transform 140ms; }
+#sbr-thread .thr-ask.folded .thr-ask-head i { transform:rotate(180deg); }
+#sbr-thread .thr-ask.folded > :not(.thr-ask-head) { display:none !important; }
+#sbr-thread .thr-ask-head:focus-visible { outline:none; border-radius:6px !important; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-ask-q { display:block; min-height:0; padding:4px 8px 10px; font:400 15px/1.4 var(--ui-font); color:var(--fg); }
+#sbr-thread .thr-ask-detail { padding:0 8px 10px; }
+#sbr-thread .thr-ask-opt { align-items:flex-start; gap:12px; min-height:0; padding:8px; color:var(--fg); font:400 14px var(--ui-font); }
+#sbr-thread .thr-ask-radio { flex:none; width:16px; height:16px; margin-top:2px; border:1.5px solid var(--border); border-radius:50% !important; transition:border-color 140ms, box-shadow 140ms; }
+#sbr-thread .thr-ask-opt:hover .thr-ask-radio { border-color:var(--muted-text); }
+#sbr-thread .thr-ask-opt:active .thr-ask-radio { border-color:var(--accent); box-shadow:inset 0 0 0 3px var(--bg), inset 0 0 0 8px var(--accent); }
+#sbr-thread .thr-ask-box { margin-top:2px; }
+#sbr-thread .thr-ask-text { display:flex; flex-direction:column; gap:3px; flex:1; min-width:0; }
+#sbr-thread .thr-ask-label { font-weight:500; line-height:1.35; color:var(--fg); }
+#sbr-thread .thr-ask-desc { font-size:12px; line-height:1.4; color:var(--muted-text); }
+#sbr-thread .thr-ask-key { flex:none; min-width:20px; height:20px; margin-left:auto; padding:0 5px; background:color-mix(in srgb,var(--fg) 8%,transparent); border:0;
+  color:var(--muted-text); font:500 11px var(--mono-font); font-variant-numeric:tabular-nums; }
+#sbr-thread .thr-ask-field { align-items:center; }
+#sbr-thread .thr-ask-field .thr-ask-radio { margin-top:0; border-style:dashed; }
+#sbr-thread .thr-ask-field input { font-size:14px; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread :is(.thr-ask-radio, .thr-ask-head i) { transition:none; } }
+/* Question tray fixes: nothing in the column shrinks (a wrapped question overlapped the first choice), and the type
+   follows the app scale: header 12px, question and labels 13px / 500, descriptions 12px, keys 11px. */
+#sbr-thread .thr-ask > * { flex-shrink:0; }
+#sbr-thread .thr-ask-head { min-height:28px; font-size:12px; }
+#sbr-thread .thr-ask-q { padding:2px 8px 8px; font:500 13px/1.45 var(--ui-font); }
+#sbr-thread .thr-ask-opt { gap:10px; padding:7px 8px; font-size:13px; }
+#sbr-thread .thr-ask-radio { width:15px; height:15px; margin-top:1px; }
+#sbr-thread .thr-ask-label { font-size:13px; line-height:1.4; }
+#sbr-thread .thr-ask-desc { font-size:12px; }
+#sbr-thread .thr-ask-key { min-width:18px; height:18px; font-size:11px; }
+#sbr-thread .thr-ask-field input { font-size:13px; }
+/* Question tray, one step smaller: header 11.5px, question and labels 12.5px, descriptions 11.5px, keys 10.5px. */
+#sbr-thread .thr-ask-head { min-height:26px; font-size:11.5px; }
+#sbr-thread .thr-ask-q { padding:0 8px 6px; font-size:12.5px; }
+#sbr-thread .thr-ask-opt { gap:9px; padding:5px 8px; font-size:12.5px; }
+#sbr-thread .thr-ask-radio { width:14px; height:14px; margin-top:1px; }
+#sbr-thread .thr-ask-label { font-size:12.5px; }
+#sbr-thread .thr-ask-desc { font-size:11.5px; }
+#sbr-thread .thr-ask-key { min-width:17px; height:17px; padding:0 4px; font-size:10.5px; }
+#sbr-thread .thr-ask-field input { font-size:12.5px; }
+
+/* Changed-files card: the same gap above it as between paragraphs (one 13px × 1.6 line ≈ 21px). */
+#sbr-thread .thr-msg-text + .thr-changes { margin-top:21px; }
+/* Project icons in thread cards a little bigger (14 → 16px); Settled rows 15 → 17px. */
+#threads-sidebar .ts-folder .ts-proj-icon { width:16px; height:16px; }
+#threads-sidebar .ts-card.slim .ts-lead .ts-proj-icon { width:17px; height:17px; }
+
+/* Composer: the permission mode chip beside the model picker (quiet; Full access in the error color). */
+#sbr-thread .thr-mode-chip { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; height:28px; padding:0 8px; background:transparent; border:0; border-radius:8px !important;
+  color:var(--muted-text); font:500 12.5px var(--ui-font); white-space:nowrap; cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-mode-chip[hidden] { display:none; }
+#sbr-thread .thr-mode-chip i { font-size:14px; }
+#sbr-thread .thr-mode-chip:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-mode-chip.danger { color:var(--ui-error); }
+#sbr-thread .thr-mode-chip:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (max-width:560px) { #sbr-thread .thr-mode-chip span { display:none; } }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-mode-chip { transition:none; } }
+
+/* An image a reply links to, shown below the link like a pasted one. */
+#sbr-thread .thr-msg-text .thr-md-img { display:block; width:fit-content; max-width:100%; margin:8px 0; white-space:normal; }
+/* A tool call that viewed an image shows the image in its expanded row. */
+#sbr-thread .thr-tool-image { padding:6px 10px 8px 28px; }
+#sbr-thread .thr-tool-image .thr-md-img { margin:0; }
+#sbr-thread .thr-tool-image .thr-img { max-height:200px; }
+/* The image file is gone (the loader dropped it): show its path, like before. */
+#sbr-thread .thr-tool-image:empty::before { content:attr(data-path); font:12px/1.5 var(--mono-font); color:var(--muted-text); }
+
+/* A chat's auxiliary shell is a split within the pane, without a tab. */
+#pane-area .term-slot.chat-bottom-open:not(.chat-cli) > #sbr-thread,
+.term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { bottom:var(--chat-terminal-height, 35%); height:auto; }
+.chat-bottom-terminal { position:absolute; bottom:0; left:0; right:0; height:var(--chat-terminal-height, 35%); z-index:3; display:flex; flex-direction:column; border-top:1px solid var(--border); background:var(--bg); }
+.chat-bottom-terminal[hidden], .chat-cli > .chat-bottom-terminal { display:none; }
+.chat-bottom-header { display:flex; align-items:center; justify-content:space-between; flex:none; padding:4px 10px; color:var(--muted-text); font-size:12px; }
+.chat-bottom-header button { display:grid; place-items:center; width:24px; height:24px; border:0; background:transparent; color:inherit; cursor:pointer; border-radius:4px; }
+.chat-bottom-header button:hover { background:var(--ui-hover); color:var(--fg); }
+.chat-bottom-header button:focus-visible { outline:2px solid var(--accent); }
+.chat-bottom-body { flex:1; min-height:0; padding:0 8px 6px; }
