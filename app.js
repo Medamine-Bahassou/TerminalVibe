@@ -12116,13 +12116,13 @@
         const all = [...files.values()];
         const rel = p => seg.cwd && p.startsWith(seg.cwd.replace(/[\\/]$/, '') + '/') ? p.slice(seg.cwd.replace(/[\\/]$/, '').length + 1) : p;
         const sum = k => all.reduce((s, f) => s + f[k], 0);
-        return `<div class="thr-changes"><div class="thr-changes-head"><span class="thr-changes-count">${all.length} changed file${all.length > 1 ? 's' : ''}</span>`
-          + `<span class="thr-add">+${sum('add')}</span><span class="thr-del">-${sum('del')}</span>`
-          + `<button type="button" class="thr-diff-btn"><i class="ph ph-file-text" aria-hidden="true"></i>Open diff</button></div>`
+        return `<div class="thr-changes"><details class="thr-changes-list" data-key="${key}"><summary class="thr-changes-head">`
+          + `<i class="ph ph-caret-right thr-changes-caret" aria-hidden="true"></i><span class="thr-changes-count">${all.length} changed file${all.length > 1 ? 's' : ''}</span>`
+          + `<span class="thr-add">+${sum('add')}</span><span class="thr-del">-${sum('del')}</span></summary>`
           + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"><summary><i class="ph ${linkFileIcon(f.path)}" aria-hidden="true"></i>`
             + `<span class="thr-change-path" title="${escHtml(f.path)}">${escHtml(rel(f.path))}</span><span class="thr-add">+${f.add}</span><span class="thr-del">-${f.del}</span></summary>`
             + `<pre class="thr-diff">${f.patches.map(p => p.split('\n').map(l => hlDiffLine(l, f.path)).join('')).join('<span class="dl sep"></span>')}</pre></details>`).join('')
-          + '</div>';
+          + '</details><button type="button" class="thr-diff-btn"><i class="ph ph-file-text" aria-hidden="true"></i>Open diff</button></div>';
       };
       // T3-style turns: the prompt; for a finished turn a collapsible "Worked for 16s" holding its
       // steps, then the final reply and the files it changed. The turn in progress shows its steps live.
@@ -12242,8 +12242,10 @@
     }));
     content.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     content.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
-      const files = [...b.closest('.thr-changes').querySelectorAll('details.thr-change')];
-      const openAll = files.some(d => !d.open);
+      const list = b.closest('.thr-changes').querySelector('.thr-changes-list');
+      const files = [...list.querySelectorAll('details.thr-change')];
+      const openAll = !list.open || files.some(d => !d.open);
+      list.open = true;
       files.forEach(d => { d.open = openAll; });
     }));
     flow.append(content);

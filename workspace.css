@@ -1429,13 +1429,17 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-thought[open] .thr-thought-caret { transform:none; }
 #sbr-thread .thr-thought-text { padding:2px 8px 8px 31px; font-size:13px; line-height:1.6; color:var(--muted-text); white-space:pre-wrap; overflow-wrap:anywhere; }
 
-#sbr-thread .thr-changes { display:flex; flex-direction:column; margin:4px 0 6px; padding:4px; background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--ui-line); border-radius:10px !important; }
-#sbr-thread .thr-changes-head { display:flex; align-items:center; gap:8px; min-height:32px; padding:0 8px; font-size:12.5px; }
+#sbr-thread .thr-changes { position:relative; margin:4px 0 6px; padding:4px; background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--ui-line); border-radius:10px !important; }
+#sbr-thread .thr-changes-head { display:flex; align-items:center; flex-wrap:wrap; gap:2px 8px; min-height:32px; margin-right:104px; padding:4px 8px; list-style:none; border-radius:6px !important; font-size:12.5px; cursor:pointer; }
+#sbr-thread .thr-changes-head::-webkit-details-marker { display:none; }
+#sbr-thread .thr-changes-head:hover { background:var(--ui-hover); }
+#sbr-thread .thr-changes-caret { font-size:11px; color:var(--dim-text); }
+#sbr-thread .thr-changes-list[open] > summary .thr-changes-caret { transform:rotate(90deg); }
 #sbr-thread .thr-changes-count { font-weight:500; color:var(--fg); }
 #sbr-thread .thr-add, #sbr-thread .thr-del { font:500 11.5px var(--mono-font); font-variant-numeric:tabular-nums; }
 #sbr-thread .thr-add { color:var(--ui-success); }
 #sbr-thread .thr-del { color:var(--ui-error); }
-#sbr-thread .thr-diff-btn { display:inline-flex; align-items:center; gap:6px; height:26px; margin-left:auto; padding:0 8px; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:400 12px var(--ui-font); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-diff-btn { position:absolute; top:7px; right:8px; display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 8px; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:400 12px var(--ui-font); cursor:pointer; transition:background-color 140ms, color 140ms; }
 #sbr-thread .thr-diff-btn:hover { background:var(--ui-hover); color:var(--fg); }
 #sbr-thread .thr-diff-btn:focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #sbr-thread .thr-diff-btn i { font-size:13px; }
