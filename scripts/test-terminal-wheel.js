@@ -1,0 +1,17 @@
+const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
+const source = fs.readFileSync(require('node:path').join(__dirname, '../app.js'), 'utf8');
+const helper = source.slice(source.indexOf('  function setupTerminalWheel('), source.indexOf('  function _createTermEntry('));
+const scrolled = []; let handler;
+const entry = { threadHistory: true, _cliView: true, term: { rows: 24, options: { fontSize: 10, lineHeight: 1 }, modes: { mouseTrackingMode: 'none' }, buffer: { active: { type: 'normal' } }, scrollLines: n => scrolled.push(n), element: { addEventListener: (_type, fn) => handler = fn } } };
+vm.runInNewContext(helper + '\nsetupTerminalWheel(entry);', { entry, currentFontSize: 10 });
+let prevented = 0;
+const event = extra => ({ stopImmediatePropagation() {}, deltaY: 30, deltaMode: 0, preventDefault() { prevented++; }, ...extra });
+handler(event()); assert.deepEqual(scrolled, [3]);
+handler(event({ deltaY: -20 })); assert.deepEqual(scrolled, [3, -2]);
+handler(event({ deltaY: 1, deltaMode: 1 })); assert.equal(scrolled.at(-1), 1);
+handler(event({ ctrlKey: true }));
+entry.term.modes.mouseTrackingMode = 'vt200'; handler(event());
+entry.term.modes.mouseTrackingMode = 'none'; entry.term.buffer.active.type = 'alternate'; handler(event());
+entry.term.buffer.active.type = 'normal'; entry._cliView = false; handler(event());
+assert.equal(prevented, 3);
+console.log('PASS: terminal wheel scrollback, direction, line units, zoom, TUI mouse tracking and chat-view isolation');

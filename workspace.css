@@ -2352,3 +2352,6 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 #sbr-thread .thr-file.image .thr-file-open { flex:1; min-height:0; height:auto; }
 #sbr-thread .thr-file.image .thr-file-name { display:block; flex-shrink:0; width:100%; box-sizing:border-box; padding:3px 5px 5px; font-size:10px; line-height:13px; text-align:center; }
 #sbr-thread .thr-file.image .thr-file-x { top:2px; right:2px; width:18px; height:18px; border-radius:5px !important; }
+
+#sbr-thread .thr-document-open { display:flex; flex-direction:column; cursor:pointer; color:inherit; font:inherit; }
+#sbr-thread .thr-document-open:hover { background:var(--ui-hover); }
