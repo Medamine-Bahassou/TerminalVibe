@@ -1297,7 +1297,7 @@ ipcMain.handle('chat:title', async (_e, harness, text) => {
   const prompt = 'Write a 3-6 word title for a coding chat that starts with the message below. Reply with the title only: no quotes, no trailing period.\n\nMessage:\n' + text.slice(0, 2000);
   const env = terminalEnv(), bin = require('./threads').detectAgents([harness], env)[harness];
   let args;
-  if (harness === 'claude') args = ['-p', '--model', 'haiku', '--effort', 'low', '--tools', '', '--no-session-persistence', '--setting-sources', '', prompt];
+  if (harness === 'claude') args = ['-p', '--output-format', 'text', '--model', 'haiku', '--effort', 'low', '--tools', '', '--no-session-persistence', '--setting-sources', '', prompt];
   else if (harness === 'codex') {
     let small = null;
     try { small = JSON.parse(fs.readFileSync(path.join(require('os').homedir(), '.codex', 'models_cache.json'), 'utf8')).models
@@ -1305,8 +1305,12 @@ ipcMain.handle('chat:title', async (_e, harness, text) => {
     args = ['exec', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '-c', 'model_reasoning_effort="low"', ...(small ? ['-m', small] : []), prompt];
   }
   if (!bin || !args) return null; // ponytail: Claude Code and Codex only; other agents keep the first-message title
-  const out = await new Promise(res => require('child_process').execFile(bin, args, { cwd: require('os').tmpdir(), env, timeout: 60000 },
-    (err, stdout) => res(err ? '' : String(stdout))));
+  const out = await new Promise(res => {
+    const child = require('child_process').execFile(bin, args, { cwd: require('os').tmpdir(), env, timeout: 60000 },
+      (err, stdout) => res(err ? '' : String(stdout)));
+    // Non-interactive CLIs read piped stdin even with a prompt argument. Signal EOF so they can finish.
+    child.stdin?.end();
+  });
   const title = out.trim().split('\n').pop().trim().replace(/^["'`*#\s]+|["'`*.\s]+$/g, '');
   return title && title.length <= 80 ? title : null;
 });
