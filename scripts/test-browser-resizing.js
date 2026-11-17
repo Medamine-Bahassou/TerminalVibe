@@ -17,6 +17,7 @@ app.whenReady().then(async () => {
   await win.loadURL('about:blank');
   await win.webContents.insertCSS(fs.readFileSync(path.join(root, 'style.css'), 'utf8'));
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const faviconHelpers = source.slice(source.indexOf('  function syncBrowserTabIcon('), source.indexOf('  function addBrowserTab('));
   const surfaceFactory = source.slice(source.indexOf('        function getBrowserSurface()'), source.indexOf('        function normalizeAssetUrl('));
   const sync = source.slice(source.indexOf('  function syncBrowserSlots()'), source.indexOf('   B R*OWSER TAB IFRAME'));
   const syncFunction = sync.slice(0, sync.lastIndexOf('  /*'));
@@ -42,11 +43,26 @@ app.whenReady().then(async () => {
     const focusSlot = () => {}, showLoading = () => {}, resumeBrowserTab = () => {};
     const syncUrl = () => {}, setBrowserHistoryTitle = () => {}, showError = () => {};
     ${syncFunction}
+    ${faviconHelpers}
     ${surfaceFactory}
     syncBrowserSlots();
     const surface = getBrowserSurface();
     surface.src = 'data:text/html,' + encodeURIComponent('<html style="background:#25282d"><body style="margin:0"><div style="height:2000px">Resize fixture</div></body></html>');
     await new Promise(resolve => surface.addEventListener('dom-ready', resolve, {once:true}));
+    const tab = document.createElement('div'); tab.className = 'tg-tab'; tab.dataset.termid = entry.id;
+    tab.innerHTML = '<span class="tg-tab-icon"></span>'; document.body.append(tab);
+    const favicon = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="red"/></svg>');
+    surface.dispatchEvent(Object.assign(new Event('page-favicon-updated'), { favicons: [favicon] }));
+    check(tab.querySelector('img')?.src === favicon, 'Website favicon did not reach tab');
+    syncBrowserTabIcon(entry, tab);
+    check(tab.querySelector('img')?.src === favicon, 'Tab redraw lost website favicon');
+    surface.dispatchEvent(Object.assign(new Event('did-navigate'), { url: 'https://example.test' }));
+    check(!tab.querySelector('img') && tab.querySelector('svg'), 'Navigation retained previous website icon');
+    surface.dispatchEvent(Object.assign(new Event('page-favicon-updated'), { favicons: [favicon] }));
+    tab.querySelector('img').dispatchEvent(new Event('error'));
+    check(!tab.querySelector('img') && tab.querySelector('svg'), 'Broken icon did not fall back to globe');
+    setBrowserTabFavicon(entry, ['javascript:alert(1)']);
+    check(!entry._favicon, 'Invalid favicon URL accepted');
     let navigations = 0;
     surface.addEventListener('did-navigate', () => navigations++);
     await surface.executeJavaScript('window.fixtureState = 42; scrollTo(0, 180)');
@@ -70,7 +86,7 @@ app.whenReady().then(async () => {
     slot.style.display = 'none'; syncBrowserSlots(); check(!shown, 'Hidden browser remains visible');
     slot.style.display = ''; syncBrowserSlots(); check(shown, 'Browser did not restore');
     settingsWindowOpen = true; syncBrowserSlots(); check(!shown, 'Browser overlaps settings');
-    return 'PASS: real webview grow/shrink, guest viewport, page state, current native bounds and visibility';
+    return 'PASS: real webview grow/shrink, guest viewport, page state, current native bounds, visibility and tab favicons';
   })()`));
   clearTimeout(timeout); win.destroy(); app.quit();
 }).catch(error => { console.error(error); win?.destroy(); app.exit(1); });

@@ -4892,6 +4892,27 @@
     return entry;
   }
 
+  function syncBrowserTabIcon(entry, tab) {
+    const icon = tab.querySelector('.tg-tab-icon');
+    if (!icon) return;
+    icon.innerHTML = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg>';
+    if (!entry._favicon) return;
+    const src = entry._favicon, img = document.createElement('img');
+    img.className = 'tg-tab-favicon'; img.alt = ''; img.draggable = false;
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', () => {
+      if (entry._favicon === src) setBrowserTabFavicon(entry, []);
+    }, { once: true });
+    icon.replaceChildren(img);
+    img.src = src;
+  }
+  function setBrowserTabFavicon(entry, favicons) {
+    entry._favicon = (Array.isArray(favicons) ? favicons : []).find(url =>
+      typeof url === 'string' && /^(https?:\/\/|data:image\/)/i.test(url)) || null;
+    document.querySelectorAll('.tg-tab[data-termid]').forEach(tab => {
+      if (tab.dataset.termid === entry.id) syncBrowserTabIcon(entry, tab);
+    });
+  }
   function addBrowserTab(wsId, targetGroupId, url) {
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
@@ -4936,6 +4957,7 @@
             tab.className = 'tg-tab active';
             tab.dataset.termid = entry.id;
             tab.innerHTML = `<span class="tg-tab-dot tg-tab-icon"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
+            syncBrowserTabIcon(entry, tab);
             tab.title = entry.label;
             applyTabColor(tab, entry.color);
             tab.draggable = true;
@@ -6372,6 +6394,7 @@
         <span class="tg-tab-close" title="Close">✕</span>
         `;
         tab.title = t.label;
+        if (t.type === 'browser') syncBrowserTabIcon(t, tab);
         syncTabAgentIcon(t, tab);
         applyTabColor(tab, t.color);
 
@@ -7057,8 +7080,9 @@
                 showLoading(false);
                 resumeBrowserTab(entry);
               });
-              surface.addEventListener('did-navigate', e => syncUrl(e.url));
+              surface.addEventListener('did-navigate', e => { setBrowserTabFavicon(entry, []); syncUrl(e.url); });
               surface.addEventListener('did-navigate-in-page', e => syncUrl(e.url));
+              surface.addEventListener('page-favicon-updated', e => setBrowserTabFavicon(entry, e.favicons));
               surface.addEventListener('page-title-updated', e => setBrowserHistoryTitle(entry.url, e.title));
               surface.addEventListener('did-fail-load', (e, errorCode) => {
                 if (errorCode === -3) return; // ERR_ABORTED = redirect, not real error
@@ -7078,6 +7102,7 @@
                 clearTimeout(entry._loadTimer);
                 showLoading(false);
                 resumeBrowserTab(entry);
+                try { setBrowserTabFavicon(entry, [new URL('/favicon.ico', entry.url).href]); } catch {}
               });
               surface.addEventListener('error', () => {
                 clearTimeout(entry._loadTimer);
@@ -7165,6 +7190,7 @@
 
           showLoading(true);
           urlInput.value = url;
+          setBrowserTabFavicon(entry, []);
           entry.url = url;
 
           if (entry._history[entry._historyIdx] !== url) {
