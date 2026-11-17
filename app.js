@@ -1731,8 +1731,11 @@
   let notificationSound = true;     // play sounds/notify.wav with those notifications
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
-  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed', markdown: 'on' };
-  const loadThreadSettings = s => { if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s }; };
+  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed', markdown: 'on', usernames: 'show' };
+  const loadThreadSettings = s => {
+    if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s };
+    document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
+  };
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
@@ -9393,6 +9396,7 @@
     else if (ev.type === 'exit') {
       s.alive = s.busy = false; s.ask = null; t._agentWorking = false;
       _tabAgent.set(t.id, null);
+      refreshWorkspaceProcsSoon();
       if (ev.error) zoomBadge(`${name} stopped: ${ev.error}`);
       syncTabAgentIcon(t);
       // Died mid-turn (a crash): the turn is over; redraw so its "Interrupted" line shows, and the next message restarts it.
@@ -9510,6 +9514,8 @@
   function chatLinkPath(href) {
     const line = (href.match(/#L(\d+)|:(\d+)(?::\d+)?$/) || []).slice(1).find(Boolean) || '';
     let path = href.replace(/#.*$/, '').replace(/:\d+(:\d+)?$/, '');
+    // Tool transcripts may encode Windows paths with a URI-style leading slash.
+    path = path.replace(/^\/(?=[A-Za-z]:[\\/]|\\\\)/, '');
     const cwd = chatCwd(curChat()).replace(/[\\/]$/, '');
     if (!/^([\\/]|[A-Za-z]:)/.test(path)) path = `${cwd}/${path.replace(/^\.\//, '')}`;
     const rel = cwd && path.startsWith(cwd + '/') ? path.slice(cwd.length + 1) : path;
@@ -9991,6 +9997,7 @@
     if (entry._sdk?.alive) { // a structured session: end it (it holds no terminal)
       entry._sdk.alive = entry._sdk.busy = false; entry._sdk.ask = null; entry._agentWorking = false;
       _tabAgent.set(entry.id, null);
+      refreshWorkspaceProcsSoon();
       await window.electronAPI.chatSdkStop(entry.id);
       syncTabAgentIcon(entry);
     }
@@ -10128,6 +10135,7 @@
       if (o.harness === 'claude') entry.claudeSessionId = sid;
       entry._chatCfg = { harness: o.harness, model: o.model, effort: o.effort, access: o.access, fast: o.fast, ultra: o.ultra };
       _tabAgent.set(entry.id, h.id); // the process watcher won't adopt it a second time
+      refreshWorkspaceProcsSoon();
       entry._agentSince = Date.now();
       syncTabAgentIcon(entry);
       ws.chat ||= { createdAt: Date.now() };
@@ -10949,10 +10957,26 @@
     const label = editing ? 'Save queued message' : queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : 'Send';
     if (thrSend.dataset.mode !== label) {
       thrSend.dataset.mode = label;
-      thrSend.innerHTML = queue ? queueIcon : `<i class="ph ${editing ? 'ph-check' : stop ? 'ph-stop' : 'ph-arrow-up'}" aria-hidden="true"></i>`;
+      setSendIcon(queue ? queueIcon : `<i class="ph ${editing ? 'ph-check' : stop ? 'ph-stop' : working ? 'ph-arrow-elbow-up-right' : 'ph-arrow-up'}" aria-hidden="true"></i>`);
       thrSend.setAttribute('aria-label', label);
       thrSend.dataset.tip = editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter)' : 'Send (Enter)';
     }
+  }
+  function setSendIcon(html) {
+    const previous = thrSend.querySelector('.thr-send-icon:not(.leaving)');
+    const animate = previous && document.body.classList.contains('ui-animations') && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const state = animate ? getComputedStyle(previous) : null;
+    const from = state ? { opacity: state.opacity, transform: state.transform } : null;
+    thrSend.querySelectorAll('.thr-send-icon').forEach(icon => icon.getAnimations().forEach(animation => animation.cancel()));
+    thrSend.querySelectorAll('.thr-send-icon.leaving').forEach(icon => icon.remove());
+    const next = document.createElement('span'); next.className = 'thr-send-icon'; next.setAttribute('aria-hidden', 'true'); next.innerHTML = html;
+    if (!animate) { thrSend.replaceChildren(next); return; }
+    previous.classList.add('leaving');
+    thrSend.replaceChildren(previous, next);
+    const options = { duration: 160, easing: 'cubic-bezier(.2,.8,.2,1)' };
+    previous.animate([from, { opacity: 0, transform: 'translateY(-3px) scale(.8)' }], { ...options, fill: 'forwards' }).finished
+      .then(() => previous.remove()).catch(() => previous.remove());
+    next.animate([{ opacity: 0, transform: 'translateY(3px) scale(.8)' }, { opacity: 1, transform: 'translateY(0) scale(1)' }], options);
   }
   function stopChatTurn(c) {
     if (c.chat?.queuedMessages?.length) { c.chat.queuePaused = true; renderChatQueue(c); saveState(); }
@@ -11796,6 +11820,37 @@
       + '<span class="thr-img-actions"><button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></span></span></div>';
   };
   const clockTime = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  function toolDetailsHtml(tool) {
+    const image = toolImageHtml(tool);
+    if (image) return image;
+    const shell = /(?:^|\.)(bash|shell|local_shell|exec_command|run_terminal_cmd|terminal|run_command|execute)$/i.test(tool.name);
+    const command = `<pre class="thr-tool-detail">${hlCode(tool.detail || tool.summary || '', shell ? 'sh' : /^\s*[{[]/.test(tool.detail || '') ? 'json' : '')}</pre>`;
+    return command + (shell && tool.output !== undefined
+      ? `<pre class="thr-tool-output" tabindex="0" role="region" aria-label="Command output">${escHtml(tool.output || 'No output')}</pre>` : '');
+  }
+  function decorateWorkUsernames(root) {
+    for (const element of root.querySelectorAll('.thr-tools-text, .thr-tool-sum, .thr-tool-detail, .thr-tool-output, .thr-change-path, .thr-tool-image-path')) {
+      if (element.dataset.usernamesDecorated) continue;
+      element.dataset.usernamesDecorated = '1';
+      // Match username components only, including JSON-escaped Windows paths.
+      const matches = [...element.textContent.matchAll(/(?:[A-Za-z]:[\\/]+Users[\\/]+|[\\/](?:home|Users)[\\/]+)([^\\/\s"'<>]+)/gi)];
+      for (const match of matches.reverse()) {
+        const start = match.index + match[0].length - match[1].length, end = start + match[1].length;
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let offset = 0, startNode, endNode, startOffset, endOffset;
+        while (walker.nextNode()) {
+          const node = walker.currentNode, next = offset + node.length;
+          if (!startNode && start < next) { startNode = node; startOffset = start - offset; }
+          if (end <= next) { endNode = node; endOffset = end - offset; break; }
+          offset = next;
+        }
+        if (!startNode || !endNode) continue;
+        const range = document.createRange(); range.setStart(startNode, startOffset); range.setEnd(endNode, endOffset);
+        const span = document.createElement('span'); span.className = 'thr-work-username';
+        span.append(range.extractContents()); range.insertNode(span);
+      }
+    }
+  }
 
   async function refreshThreadFlow(ws, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow');
@@ -11859,7 +11914,8 @@
         }
       }
     }
-    const sig = note + '|' + segs.length + '|' + hist.map(h => { const l = h.items[h.items.length - 1]; return `${h.items.length}:${l?.text?.length || 0}:${l?.error ? 1 : 0}`; }).join(',');
+    const sig = note + '|' + segs.length + '|' + hist.map(h => { const l = h.items[h.items.length - 1]; return `${h.items.length}:${l?.text?.length || 0}:${l?.error ? 1 : 0}`; }).join(',')
+      + '|' + JSON.stringify(hist.map(h => h.items.filter(m => m.role === 'tool').map(m => m.output)));
     // The sent message shows until the transcript has it (or 60s pass).
     const pending = pendingMessages(ws);
     const remaining = pending.filter(pend => {
@@ -11915,7 +11971,7 @@
           + `${failed ? `<i class="ph ph-warning-circle thr-tool-err" aria-label="${failed} failed"></i>` : ''}<span class="thr-tools-time">${clockTime(last.ts)}</span><i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
           // Each call expands to its full command or arguments (older saved history has only the summary).
           + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
-            + (toolImageHtml(x) || `<pre class="thr-tool-detail">${hlCode(x.detail || x.summary || '', /^(bash|shell|local_shell|exec_command|run_terminal_cmd|terminal)$/i.test(x.name) ? 'sh' : /^\s*[{[]/.test(x.detail || '') ? 'json' : '')}</pre>`) + '</details>').join('')
+            + toolDetailsHtml(x) + '</details>').join('')
           + '</div></details>';
       };
       const msgHtml = (m, key, showActions = true, extra = '') => {
@@ -12023,6 +12079,7 @@
       }
     });
     flow.innerHTML = html + pendingHtml(ws, lastHead);
+    decorateWorkUsernames(flow);
     flow._texts = texts;
     // A selection across messages copies them as a transcript of their original markdown.
     if (!flow._copyBound) {
@@ -12056,7 +12113,15 @@
       let src = _thrImgCache.get(p);
       if (!src) {
         const r = await window.electronAPI?.readImageFile?.(p).catch(() => null);
-        if (!r?.data) { img.closest('.thr-img-wrap').remove(); return; }
+        if (!r?.data) {
+          const tool = img.closest('.thr-tool-image');
+          img.closest('.thr-img-wrap').remove();
+          if (tool) {
+            const label = document.createElement('span'); label.className = 'thr-tool-image-path'; label.textContent = tool.dataset.path;
+            tool.append(label); decorateWorkUsernames(tool);
+          }
+          return;
+        }
         src = `data:${r.mediaType};base64,${r.data}`;
         _thrImgSize.set(p, Math.floor(r.data.length * 3 / 4) - (r.data.endsWith('==') ? 2 : r.data.endsWith('=') ? 1 : 0));
         _thrImgCache.set(p, src);
@@ -12272,8 +12337,11 @@
   function updateWorkspaceProcs(wsp, btn) {
     const procsEl = btn && btn.querySelector('.ws-procs');
     if (!procsEl) return;
-    const terms = getWorkspaceTerminals(wsp).filter(isLiveTerminal);
-    const termIds = terms.map(t => t.id).sort().join(',');
+    // Structured chat agents own a process without occupying the tab's PTY.
+    const terms = getWorkspaceTerminals(wsp).filter(t => t._sdk?.alive || isLiveTerminal(t));
+    const signature = () => getWorkspaceTerminals(wsp).filter(t => t._sdk?.alive || isLiveTerminal(t))
+      .map(t => `${t.id}:${t._sdk?.alive ? t._sdk.harness : 'pty'}`).sort().join(',');
+    const termIds = signature();
     const cached = _wsProcsCache.get(wsp.id);
     if (cached && cached.termIds === termIds && Date.now() - cached.ts < _WS_PROCS_TTL) {
       renderWsProcs(procsEl, cached.processes, wsp.id);
@@ -12284,8 +12352,9 @@
       renderWsProcs(procsEl, [], wsp.id);
       return;
     }
-    Promise.all(terms.map(t => checkTerminalRunning(t.id))).then(names => {
+    Promise.all(terms.map(t => t._sdk?.alive ? harnessOf(t._sdk.harness)?.bin || t._sdk.harness : checkTerminalRunning(t.id))).then(names => {
       if (!btn.isConnected) return;
+      if (signature() !== termIds) { updateWorkspaceProcs(wsp, btn); return; }
       const processes = names.map((name, i) => ({id:terms[i].id, name, label:terms[i].label, cwd:terms[i].cwd}))
         .filter(process => !_isHiddenWsProc(process.name));
       _wsProcsCache.set(wsp.id, { processes, termIds, ts: Date.now() });
@@ -14110,7 +14179,7 @@
 
     // Threads
     refreshThreadHarnessSetting();
-    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown']]) {
+    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown'], ['set-thread-usernames', 'usernames']]) {
       document.getElementById(id).value = threadSettings[key];
       const dd = document.querySelector(`.custom-dropdown[data-for="${id}"]`);
       if (dd) initCustomDropdown(dd);
@@ -15550,9 +15619,10 @@
     terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';
     saveState();
   });
-  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown']])
+  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown'], ['set-thread-usernames', 'usernames']])
     document.getElementById(id).addEventListener('change', e => {
       threadSettings = { ...threadSettings, [key]: e.target.value };
+      if (key === 'usernames') document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
       if (key === 'usageDisplay') { renderUsageSidebar(); renderUsageModal(); }
       if (key === 'markdown') syncChatInputLinks();
       saveState();

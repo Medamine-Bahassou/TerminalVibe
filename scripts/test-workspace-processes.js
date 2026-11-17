@@ -20,6 +20,7 @@ app.whenReady().then(async()=>{
     const terms=[{id:'a',label:'Claude one',cwd:'/one'},{id:'b',label:'Claude two',cwd:'/two'},{id:'c',label:'Build APK'},{id:'d',label:'Development server'},{id:'idle',label:'Idle shell'}];
     let names={a:'claude',b:'claude',c:'node',d:'npm',idle:'vite'},parentClicks=0,opened=[],removed=0,_suppressPasteUntil=0;
     const workspace={id:'ws'};
+    const THREAD_HARNESSES=[]; // Generic process fixture; brand mapping is covered separately.
     const escHtml=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
     const getWorkspaceTerminals=()=>terms;
     const isLiveTerminal=t=>!t.dead;

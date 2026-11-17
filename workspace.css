@@ -1183,7 +1183,8 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 #sbr-thread .thr-tools summary > i { font-size:14px; flex-shrink:0; }
 #sbr-thread .thr-tools-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #sbr-thread .thr-tools-count { font-size:11px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
-#sbr-thread .thr-tools-time { font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+#sbr-thread .thr-tools-time { font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; opacity:0; }
+#sbr-thread .thr-tools > summary:is(:hover, :focus-visible) > .thr-tools-time { opacity:1; }
 #sbr-thread .thr-tools-caret { color:var(--dim-text); transition:transform 140ms; }
 #sbr-thread .thr-tools[open] .thr-tools-caret { transform:rotate(90deg); }
 #sbr-thread .thr-tool-list { display:flex; flex-direction:column; gap:2px; margin:2px 0 0 22px; }
@@ -1291,6 +1292,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-send:disabled { background:var(--ui-hover); color:var(--dim-text); cursor:default; }
 #sbr-thread .thr-send:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #sbr-thread .thr-send i { font-size:15px; }
+#sbr-thread .thr-send-icon { grid-area:1 / 1; display:grid; place-items:center; pointer-events:none; }
 #sbr-thread .thr-composer-foot { display:flex; align-items:center; gap:4px; min-height:28px; padding:4px 6px 0; font-size:12px; color:var(--muted-text); }
 #sbr-thread .thr-foot-item { display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 6px; min-width:0; white-space:nowrap; }
 #sbr-thread .thr-foot-item[hidden] { display:none; }
@@ -1489,8 +1491,12 @@ body .ctx-item.disabled { color:var(--dim-text); cursor:default; pointer-events:
 
 /* ── Chat code: tool details and code blocks without borders (a soft tint instead); syntax colors from
    the terminal theme's palette (--ansi-*, set in applyTheme) ── */
-#sbr-thread .thr-tool-detail, #sbr-thread .thr-code { border:0; background:color-mix(in srgb,var(--fg) 5%,var(--bg)); color:var(--fg); }
+#sbr-thread .thr-code { border:0; background:color-mix(in srgb,var(--fg) 5%,var(--bg)); color:var(--fg); }
+#sbr-thread .thr-tool-detail { border:0; background:transparent; color:var(--fg); }
 #sbr-thread .thr-tool-detail { padding:10px 12px; }
+#sbr-thread .thr-tool-output { box-sizing:border-box; height:180px; overflow:auto; margin:0 0 8px 19px; padding:8px 12px; border:0; background:transparent; color:var(--fg); font:400 11.5px/1.5 var(--mono-font); white-space:pre; user-select:text; }
+#sbr-thread .thr-tool-output:focus-visible { outline:1px solid var(--accent); outline-offset:-1px; }
+body.blur-work-usernames #sbr-thread .thr-work-username { display:inline-block; filter:blur(4px); }
 #sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-c { color:var(--ansi-blue, #7aa2f7); }
 #sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-f { color:var(--ansi-yellow, #e0af68); }
 #sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-s { color:var(--ansi-green, #9ece6a); }
@@ -1567,8 +1573,8 @@ body.ui-animations.resizing #threads-sidebar { transition:none; }
 }
 
 /* ── Composer: the send button turns into a red stop button while the agent works ── */
-#sbr-thread .thr-send.stop { background:var(--ui-error); color:#fff; }
-#sbr-thread .thr-send.stop:hover { background:color-mix(in srgb,var(--ui-error) 85%,#000); }
+#sbr-thread .thr-send.stop { background:#ef3340; color:#fff; }
+#sbr-thread .thr-send.stop:hover { background:#d92330; }
 #sbr-thread .thr-send.stop i { font-size:13px; }
 
 /* Center history and context notices within the chat column. */
@@ -1662,6 +1668,7 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread .thr-queued-images { display:flex; flex-wrap:wrap; gap:6px; }
 #sbr-thread .thr-queued-images .thr-queued-preview { width:32px; height:32px; padding:0; overflow:hidden; background:var(--bg); border-radius:6px !important; }
 #sbr-thread .thr-queued-preview img { display:block; width:100%; height:100%; object-fit:cover; }
+#sbr-thread .thr-queue .thr-queued-preview { cursor:zoom-in; }
 #sbr-thread .thr-queued-actions { display:flex; align-items:center; justify-content:flex-end; gap:4px; min-height:24px; color:var(--muted-text); }
 #sbr-thread .thr-queued-actions button { height:24px; }
 /* Queued message actions: text-only buttons, no hover background, they just brighten. */
