@@ -314,6 +314,54 @@ function getIconPath() {
   return undefined;
 }
 
+function registerChatInputMenu(win) {
+  const contents = win.webContents;
+  const session = contents.session;
+  session.setSpellCheckerEnabled(true);
+  if (process.platform !== 'darwin' && !session.getSpellCheckerLanguages().length
+      && session.availableSpellCheckerLanguages.includes('en-US')) {
+    session.setSpellCheckerLanguages(['en-US']);
+  }
+  contents.on('context-menu', async (_event, params) => {
+    const { isEditable, x, y, menuSourceType, misspelledWord, dictionarySuggestions, editFlags } = params;
+    if (!isEditable) return;
+    // Electron reports editability but does not identify the DOM element under the pointer.
+    // Scope this menu to the composer so terminal and browser menus keep their own behavior.
+    const keyboard = menuSourceType === 'keyboard';
+    const hit = keyboard ? 'document.activeElement'
+      : `document.elementFromPoint(${Number(x)}, ${Number(y)})`;
+    const context = await contents.executeJavaScript(`(() => {
+      if (!${hit}?.closest('#sbr-thread-input-links')) return null;
+      return { fallback: ${misspelledWord ? 'null' : `window.electronAPI?.chatSpellingAt(${Number(x)}, ${Number(y)}, ${keyboard})`} };
+    })()`).catch(() => null);
+    if (!context || win.isDestroyed()) return;
+    const items = [];
+    const word = misspelledWord || context.fallback?.word;
+    if (word) {
+      const suggestions = misspelledWord ? dictionarySuggestions : context.fallback.suggestions;
+      for (const suggestion of suggestions || []) {
+        items.push({
+          label: suggestion,
+          click: () => {
+            if (misspelledWord) contents.replaceMisspelling(suggestion);
+            else void contents.executeJavaScript(`window.electronAPI?.replaceChatSpelling(${JSON.stringify(suggestion)})`).catch(() => {});
+          },
+        });
+      }
+      items.push({ label: 'Add to dictionary', click: () => session.addWordToSpellCheckerDictionary(word) });
+      items.push({ type: 'separator' });
+    }
+    items.push(
+      { role: 'cut', enabled: editFlags.canCut },
+      { role: 'copy', enabled: editFlags.canCopy },
+      { role: 'paste', enabled: editFlags.canPaste },
+      { type: 'separator' },
+      { role: 'selectAll', enabled: editFlags.canSelectAll },
+    );
+    Menu.buildFromTemplate(items).popup({ window: win });
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     title: 'TerminalVibe',
@@ -338,10 +386,12 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      spellcheck: true,
       webviewTag: true, // browser tabs render in native <webview>
     },
   });
 
+  registerChatInputMenu(mainWindow);
   mainWindow.once('ready-to-show', () => mainWindow.show());
   if (isDev) {
     mainWindow.loadURL(`http://127.0.0.1:${devPort}`);
@@ -1332,6 +1382,8 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       const old = ptys.get(id);
       try { old.kill(); } catch {}
       ptys.delete(id);
+      notifyBusy.delete(id);
+      ptyIO.delete(id);
     }
     let spawnCwd = processWorkingDirectory(ptys.get(inheritFromId)?.pid) || cwd || undefined;
     const homeDir = require('os').homedir();
@@ -1371,6 +1423,9 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
         ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}) },
     });
     ptys.set(id, t);
+    // Explicit launches can finish without input. An interactive shell has to
+    // receive a submitted command before its foreground processes count.
+    ptyIO.set(id, { hasCommand: !!(executable || argv?.length) });
     // Coalesce PTY output: the first chunk goes out immediately (zero-latency
     // keystroke echo), anything arriving within the next 5ms is batched into
     // one IPC message. Floods (cat, builds) drop from thousands of IPC
@@ -1385,6 +1440,7 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       outTimer = setTimeout(flushOut, 5);
     };
     t.onData((data) => {
+      if (ptys.get(id) !== t) return;
       const io = ptyIO.get(id) || {}; io.out = Date.now(); ptyIO.set(id, io);
       flow.sent(data.length);
       if (outTimer) { outBuf += data; return; }
@@ -1395,13 +1451,13 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       if (startup.tmpDir) {
         try { fs.rmSync(startup.tmpDir, { recursive: true, force: true }); } catch {}
       }
-      notifyBusy.delete(id); ptyIO.delete(id);
       clearTimeout(outTimer);
       flow.stop();
       if (ptyFlow.get(id) === flow) ptyFlow.delete(id);
       if (outBuf && ptys.get(id) === t) sendToRenderer('terminal:data', { id, data: outBuf });
       outBuf = '';
       if (ptys.get(id) !== t) return;
+      notifyBusy.delete(id); ptyIO.delete(id);
       ptys.delete(id);
       // Only natural agent exit returns to a shell. Close/replacement removes
       // this PTY from the map, so its stale exit callback cannot resurrect it.
@@ -1428,8 +1484,14 @@ ipcMain.on('terminal:resize', (_e, { id, cols, rows }) => {
 ipcMain.on('terminal:write', (_e, { id, data }) => {
   const t = ptys.get(id);
   if (!t) return;
-  const io = ptyIO.get(id) || {}; io.in = Date.now(); ptyIO.set(id, io);
-  try { t.write(Buffer.isBuffer(data) ? data : Buffer.from(data || [])); } catch {}
+  try {
+    const input = Buffer.isBuffer(data) ? data : Buffer.from(data || []);
+    t.write(input);
+    const io = ptyIO.get(id) || {};
+    io.in = Date.now();
+    if (input.includes(13) || input.includes(10)) io.hasCommand = true;
+    ptyIO.set(id, io);
+  } catch {}
 });
 // xterm parsed `n` chars of this terminal's output (see pty-flow.js).
 ipcMain.on('terminal:ack', (_e, { id, n }) => ptyFlow.get(id)?.ack(n));
@@ -1441,22 +1503,33 @@ ipcMain.on('terminal:close', (_e, id) => {
 });
 // Is this process still alive? Instant, unlike the cached Windows process table.
 ipcMain.handle('process:alive', (_e, pid) => { try { return Number.isInteger(pid) && pid > 1 && process.kill(pid, 0); } catch (err) { return err.code === 'EPERM'; } });
-// Chat "Take over": stop other agent processes resuming this session (an orphan from an earlier run
-// holds Codex's conversation lock), never the requesting tab's own process tree. Not on Windows (no ps).
-ipcMain.handle('agent:release-session', (_e, sessionId, tabId) => new Promise(resolve => {
-  if (process.platform === 'win32' || !/^[\w-]{8,}$/.test(String(sessionId || ''))) return resolve(0);
-  require('child_process').execFile('ps', ['-eo', 'pid=,ppid=,args='], { timeout: 4000 }, (err, out) => {
-    if (err) return resolve(0);
-    const procs = out.split('\n').map(l => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean).map(m => ({ pid: +m[1], ppid: +m[2], args: m[3] }));
-    const parent = new Map(procs.map(p => [p.pid, p.ppid])), own = ptys.get(tabId)?.pid;
-    if (!own) return resolve(0);
-    const inOwnTree = pid => { for (let p = pid, i = 0; p > 1 && i < 64; p = parent.get(p), i++) if (p === own) return true; return false; };
-    const holds = new RegExp(`(^|\\s)(resume|--resume|--session-id)\\s+${sessionId}(\\s|$)`);
-    let killed = 0;
-    for (const p of procs) if (holds.test(p.args) && !inOwnTree(p.pid)) { try { process.kill(p.pid, 'SIGTERM'); killed++; } catch {} }
-    resolve(killed);
+// Chat "Take over": release Codex's writer lock before retrying the requesting PTY.
+ipcMain.handle('agent:release-session', async (event, sessionId, tabId) => {
+  if (event.sender !== mainWindow?.webContents || typeof sessionId !== 'string' || !/^[\w-]{8,}$/.test(sessionId)) return false;
+  const terminal = ptys.get(tabId);
+  if (!terminal || process.platform === 'win32') return false;
+  if (process.platform === 'linux') {
+    try {
+      return await require('./codex-lock').releaseCodexLock(sessionId, terminal.pid, () => ptys.get(tabId) === terminal);
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'ESRCH') return true;
+      return false;
+    }
+  }
+  return new Promise(resolve => {
+    require('child_process').execFile('ps', ['-eo', 'pid=,ppid=,args='], { timeout: 4000 }, (err, out) => {
+      if (err) return resolve(false);
+      const procs = out.split('\n').map(l => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean).map(m => ({ pid: +m[1], ppid: +m[2], args: m[3] }));
+      if (ptys.get(tabId) !== terminal) return resolve(false);
+      const parent = new Map(procs.map(p => [p.pid, p.ppid])), own = terminal.pid;
+      const inOwnTree = pid => { for (let p = pid, i = 0; p > 1 && i < 64; p = parent.get(p), i++) if (p === own) return true; return false; };
+      const holds = new RegExp(`(^|\\s)(resume|--resume|--session-id)\\s+${sessionId}(\\s|$)`);
+      let killed = 0;
+      for (const p of procs) if (holds.test(p.args) && !inOwnTree(p.pid)) { try { process.kill(p.pid, 'SIGTERM'); killed++; } catch {} }
+      setTimeout(() => resolve(killed > 0), killed ? 600 : 0);
+    });
   });
-}));
+});
 // Chat input suggestions: the chat folder's files/folders (@) and the agent's slash commands (/).
 ipcMain.handle('chat:files', (_e, cwd) => require('./chat-complete').listFiles(cwd));
 ipcMain.handle('chat:commands', (_e, harness, cwd) => require('./chat-complete').listCommands(harness, cwd));
@@ -1490,7 +1563,7 @@ ipcMain.on('terminal:kill-all', () => {
 // plays the sound / shows the notification. Opt-in via Settings → Advanced
 // "Notify when a command or agent finishes" (state.json).
 const notifyBusy = new Map(); // termId -> { wasBusy, name, agentSince }
-const ptyIO = new Map();      // termId -> { out, in } last output/input timestamps
+const ptyIO = new Map();      // termId -> { out, in, hasCommand }
 const { finishStep } = require('./finish-notify');
 // Re-parse state.json only when its mtime changes (this runs every second).
 let _notifyCache = { path: null, mtime: 0, enabled: false };

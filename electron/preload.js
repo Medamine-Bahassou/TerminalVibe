@@ -1,7 +1,41 @@
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webFrame, webUtils } = require('electron');
+
+let spellingTarget;
+function chatSpellingAt(x, y, keyboard) {
+  spellingTarget = undefined;
+  const editor = document.getElementById('sbr-thread-input-links');
+  const selection = window.getSelection();
+  const caret = keyboard ? (selection.rangeCount ? selection.getRangeAt(0) : null) : document.caretRangeFromPoint(x, y);
+  const node = caret?.startContainer;
+  if (!editor?.isContentEditable || !node || node.nodeType !== Node.TEXT_NODE || !editor.contains(node)) return null;
+  if (node.parentElement.closest('[contenteditable="false"], .md-code, .md-code-block, .md-url, .md-mark')) return null;
+  for (const match of node.data.matchAll(/[\p{L}\p{M}]+(?:['’][\p{L}\p{M}]+)*/gu)) {
+    const word = match[0], end = match.index + word.length;
+    if (caret.startOffset < match.index || caret.startOffset > end || !webFrame.isWordMisspelled(word)) continue;
+    const range = document.createRange();
+    range.setStart(node, match.index);
+    range.setEnd(node, end);
+    if (!keyboard && ![...range.getClientRects()].some(r => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom)) continue;
+    spellingTarget = { editor, range, word };
+    return { word, suggestions: webFrame.getWordSuggestions(word) };
+  }
+  return null;
+}
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  chatSpellingAt,
+  replaceChatSpelling: replacement => {
+    const target = spellingTarget;
+    spellingTarget = undefined;
+    if (!target?.editor.isContentEditable || !target.editor.contains(target.range.startContainer)
+        || target.range.toString() !== target.word) return false;
+    target.editor.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(target.range);
+    return document.execCommand('insertText', false, replacement);
+  },
   listSkills: () => ipcRenderer.invoke('skills:list'),
   setSkillEnabled: (id, enabled) => ipcRenderer.invoke('skills:set-enabled', id, enabled),
   listRunningServers: () => ipcRenderer.invoke('servers:list'),

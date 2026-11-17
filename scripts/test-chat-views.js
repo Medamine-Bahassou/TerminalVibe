@@ -18,6 +18,7 @@ app.whenReady().then(async () => {
   const sync = source.slice(source.indexOf('  function syncThreadPanel(force)'), source.indexOf('  // Small popover list', source.indexOf('  function syncThreadPanel(force)')));
   const view = source.slice(source.indexOf('  function setChatView(tab, cli)'), source.indexOf('  // An agent finished its turn:', source.indexOf('  function setChatView(tab, cli)')));
   const refresh = source.slice(source.indexOf('  async function refreshThreadFlow('), source.indexOf('  // ── Find in the thread history:', source.indexOf('  async function refreshThreadFlow(')));
+  const pending = source.slice(source.indexOf('  const pendingMessages ='), source.indexOf('  const _thrImgCache ='));
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     document.body.innerHTML = '<div id="sbr-thread" style="display:none"><div class="thr-flow" id="sbr-thread-flow"></div><textarea id="sbr-thread-input"></textarea><div class="attachments" id="sbr-thread-attachments"></div><button id="sbr-thread-model"><span>Model</span></button></div>';
@@ -29,17 +30,21 @@ app.whenReady().then(async () => {
     const syncThreadComposer = () => {}, fitTerm = () => {}, syncWorking = () => {};
     const ensureChatTerminalSession = async () => true;
     const clearCitationFlash = () => {};
-    const applyWorkUsernamePrivacy = () => {}; // Privacy rendering is covered by test-work-usernames.
+    const decorateWorkUsernames = () => {}; // Privacy rendering is covered by test-work-usernames.
+    const renderChatErrors = () => {}, renderChatResume = () => {}, syncChatInterruption = () => {}, syncScrollEnd = () => {};
+    const turnGitFiles = () => [];
     const hydrateChatAttachmentSizes = () => {};
     const threadSegments = tab => tab.chat?.segments || [], threadMeta = tab => ({ id: tab.id });
-    const pendingHtml = () => '', chatWorking = () => false, saveState = () => {}, setChatTabLabel = () => {};
-    const pendingMessages = () => [];
-    const _pendingMsgs = new Map(), thrFind = { q: '' }, _thrImgSize = new Map(), _thrImgCache = new Map();
+    const chatWorking = () => false, saveState = () => {}, setChatTabLabel = () => {};
+    const _pendingMsgs = new Map(), _turns = new Map(), thrFind = { q: '' }, _thrImgSize = new Map(), _thrImgCache = new Map();
     const escHtml = s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     const mdLite = escHtml, userTextHtml = s => ({ html: escHtml(s), paths: [] });
+    ${pending}
     const harnessOf = () => ({ name: 'Codex', bin: 'codex' }), procIconHtml = () => '', clockTime = () => '', fmtSecs = s => s + 's';
     const historyLoads = [];
+    let replySuffix = '';
     const copies = [], modelActions = [];
+    const copyPrivateText = async text => copies.push(text);
     document.getElementById('sbr-thread-model').onclick = () => modelActions.push(_curChat.id);
     window.electronAPI = { threadHistory: async meta => {
       historyLoads.push(meta.id);
@@ -47,10 +52,12 @@ app.whenReady().then(async () => {
       return [{ items: [
         { role: 'user', text: 'History for ' + meta.id, ts: '2026-11-15T00:00:00Z' },
         { role: 'thinking', text: 'Thinking for ' + meta.id, ts: '2026-11-15T00:00:01Z' },
-        { role: 'assistant', text: 'Reply for ' + meta.id, ts: '2026-11-15T00:00:02Z' }
+        { role: 'assistant', text: 'Reply for ' + meta.id + replySuffix, ts: '2026-11-15T00:00:02Z' }
       ] }];
     }, clipboardWrite: text => copies.push(text) };
     ${refresh}
+    const refreshHistory = refreshThreadFlow, historyErrors = [];
+    refreshThreadFlow = (...args) => refreshHistory(...args).catch(error => { historyErrors.push(error); });
     const makeWs = () => { const el = document.createElement('div'); el.style.cssText = 'position:relative;width:400px;height:400px'; document.body.append(el); return { el, layout: {}, tabs: [] }; };
     const makeChat = (ws, id) => {
       const el = document.createElement('div'); el.className = 'term-slot'; el.style.cssText = 'position:relative;display:block;height:180px';
@@ -64,7 +71,11 @@ app.whenReady().then(async () => {
     document.body.append(threadList);
     const firstButton = threadList.firstElementChild, secondButton = threadList.lastElementChild;
     let current = a; a.activeTermId = first.id; b.activeTermId = other.id;
-    second.chat = { title: 'Second chat', segments: [{ harness: 'codex' }] };
+    const firstTurn = { harness: 'codex', model: 'gpt-6.2-sol', effort: 'low' };
+    second.chat = { title: 'Second chat', segments: [firstTurn], turnOptions: { '2026-11-15T00:00:00Z': firstTurn } };
+    _pendingMsgs.set(second.id, { at: Date.now(), text: 'New prompt', options: firstTurn });
+    check(pendingHtml(second).includes('New prompt') && !pendingHtml(second).includes('thr-seg'), 'Sending renders a temporary agent header');
+    _pendingMsgs.delete(second.id);
     const activeWs = () => current, getWorkspaceTerminals = ws => ws.tabs;
     const focusSlot = tab => { current.activeTermId = tab.id; };
     const findGroupContainingTerm = (_, id) => ({ activeTermId: id });
@@ -77,7 +88,9 @@ app.whenReady().then(async () => {
     check(initial && initial.offsetHeight > 0 && initial.querySelector('textarea'), 'Startup did not initialize the unfocused chat interface');
     check(getComputedStyle(second.el.querySelector('.term-wrap')).visibility === 'hidden', 'Startup sibling shows its shell');
     await new Promise(resolve => setTimeout(resolve, 30));
+    if (historyErrors.length) throw historyErrors[0];
     check(historyLoads.includes('second') && initial.textContent.includes('History for second'), 'Startup sibling did not load its own history');
+    check(initial.querySelectorAll('.thr-seg').length === 1, 'Session and turn metadata created duplicate agent headers');
     check(thrPage.parentElement === first.el && !thrPage.textContent.includes('History for second'), 'Startup history stole focus or overwrote the focused chat');
     const press = target => {
       target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
@@ -99,6 +112,9 @@ app.whenReady().then(async () => {
     press(second.el.querySelector('.thr-snapshot .thr-turn > summary span'));
     await winTick();
     check(thrPage.parentElement === second.el && thrPage.querySelector('.thr-turn').open, 'First click did not expand the history action');
+    replySuffix = ' updated';
+    await refreshThreadFlow(second);
+    check(thrPage.querySelector('.thr-turn').open && thrPage.textContent.includes('Reply for second updated'), 'A changed turn lost its expanded state');
     a.activeTermId = first.id; syncThreadPanel();
     thrInput.value = 'unfinished prompt'; _chatFiles = [{ name: 'screenshot.png' }]; renderChatFiles();
     const flow = thrPage.querySelector('.thr-flow'); flow.innerHTML = '<details data-key="turn" open><summary>Steps</summary>Saved chat</details>';
@@ -113,7 +129,7 @@ app.whenReady().then(async () => {
     check(getComputedStyle(snap).position === 'absolute', 'Chat is underneath the terminal layer');
     press(snap);
     check(thrPage.parentElement === first.el && !first.el.querySelector('.thr-snapshot'), 'Focusing snapshot did not restore the live chat');
-    check(thrInput.value === 'unfinished prompt' && _chatFiles[0].name === 'screenshot.png' && first._flowHtml.includes('Saved chat'), 'Restored chat lost its state');
+    check(thrInput.value === 'unfinished prompt' && _chatFiles[0].name === 'screenshot.png' && flow.textContent.includes('Saved chat'), 'Restored chat lost its state');
     // No visible chat: parking the shared page must still save its draft.
     thrInput.value = 'saved while parked'; current = empty; syncThreadPanel();
     check(first._draft === 'saved while parked', 'Parking lost the draft');
@@ -128,17 +144,18 @@ app.whenReady().then(async () => {
     // Different-length histories expose restoring scroll against the previous tab's markup.
     await winTick();
     first.chat = { title: 'First', segments: [{ harness: 'codex' }] };
-    let revision = '';
+    let revision = '', tailRevision = '';
     window.electronAPI.threadHistory = async meta => {
       await winTick();
       return [{ items: Array.from({ length: meta.id === 'first' ? 70 : 20 }, (_, i) => ({
-        role: 'user', text: meta.id + ' message ' + i + revision, ts: '2026-11-15T00:00:00Z'
+        role: 'user', text: meta.id + ' message ' + i + revision + (i === 69 ? tailRevision : ''), ts: '2026-11-15T00:00:00Z'
       })) }];
     };
     function winTick() { return new Promise(resolve => setTimeout(resolve, 30)); }
     flow.style.cssText = 'height:130px;flex:none;overflow:auto';
     _flowSig = ''; await refreshThreadFlow(first);
     check(flow.scrollHeight > 1000, 'Scroll test needs an overflowing history');
+    const firstMessage = flow.querySelector('.thr-msg');
     flow.scrollTop = 370;
     a.activeTermId = second.id; syncThreadPanel(); await winTick();
     check(first._scrollState.top === 370 && !first._scrollState.bottom, 'Switching failed to capture scroll before the scroll event');
@@ -146,6 +163,13 @@ app.whenReady().then(async () => {
     check(Math.abs(flow.scrollTop - 370) < 2, 'Tab switch jumps before history loads');
     await winTick();
     check(Math.abs(flow.scrollTop - 370) < 2, 'Async history redraw resets the scroll position');
+    check(flow.querySelector('.thr-msg') === firstMessage, 'Switching rebuilt unchanged history nodes');
+    const oldTail = flow.querySelector('.thr-msg[data-key="0:69"]');
+    tailRevision = ' streaming update';
+    await refreshThreadFlow(first);
+    check(flow.querySelector('.thr-msg') === firstMessage, 'A tail update rebuilt finished turns');
+    check(!oldTail.isConnected && flow.textContent.includes(tailRevision), 'The changed tail was not replaced');
+    check(Math.abs(flow.scrollTop - 370) < 2, 'A tail update moved the reading position');
     revision = ' updated'; _flowSig = ''; await refreshThreadFlow(first);
     check(Math.abs(flow.scrollTop - 370) < 2, 'History refresh jumps to top while reading');
     rememberThreadScroll(first);
@@ -162,6 +186,7 @@ app.whenReady().then(async () => {
       check(threadList.querySelectorAll('[aria-current="true"]').length === 1, 'Multiple thread buttons marked current');
     }
     check(threadList.firstElementChild === firstButton && threadList.lastElementChild === secondButton, 'Selection replaced the thread buttons');
+    if (historyErrors.length) throw historyErrors[0];
     clearInterval(_threadPoll);
     return 'Chat view regressions passed: immediate thread selection, rapid switching, first-click actions, startup, split focus, drafts, scroll restoration, hidden tabs, bottom position.';
   })()`));
