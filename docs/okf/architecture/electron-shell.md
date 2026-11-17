@@ -9,7 +9,7 @@ timestamp: 2026-08-15T00:00:00Z
 
 # Electron Shell Layer
 
-The Electron main process handles PTY management (node-pty), native WebContentsView browser tabs, settings/detached windows, and the `~/.terminalvibe/` config directory.
+The Electron main process handles PTY management (node-pty), native WebContentsView browser tabs, settings windows, and the `~/.terminalvibe/` config directory.
 
 ## Source Files
 
@@ -31,7 +31,6 @@ node-pty runs in the main process, keyed by terminal ID in a `Map`.
 | `terminal:write` | Writes bytes to PTY stdin |
 | `terminal:resize` | Resizes the PTY |
 | `terminal:close` | Kills child, cleans up session |
-| `terminal:detach` | Detaches a terminal into its own window (reuses the PTY) |
 | `terminal:kill-all` | Kills all PTYs on quit |
 
 ### Events

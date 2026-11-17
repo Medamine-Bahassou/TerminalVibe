@@ -1193,6 +1193,10 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 #sbr-thread .thr-tool-name { font-weight:500; flex-shrink:0; }
 #sbr-thread .thr-tool-sum { min-width:0; font:11.5px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #sbr-thread .thr-tool-err { color:var(--ui-error) !important; }
+#sbr-thread .thr-chat-error { display:flex; align-items:baseline; gap:8px; margin:12px 0; color:var(--ui-error); font:400 13px/1.6 var(--ui-font); white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
+#sbr-thread .thr-continue { display:inline-flex; align-items:center; align-self:flex-start; gap:6px; padding:6px 10px; margin:8px 0; border:1px solid var(--border); border-radius:6px !important; background:transparent; color:var(--fg); font:500 12px/1.4 var(--ui-font); cursor:pointer; }
+#sbr-thread .thr-continue:hover { background:var(--ui-hover); }
+#sbr-thread .thr-continue:disabled { opacity:.5; cursor:default; }
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-tools *, #sbr-thread .thr-actions, #sbr-thread .thr-copy { transition:none !important; } }
 /* ── Thread history: pasted images in user bubbles ── */
 #sbr-thread .thr-images { display:flex; flex-wrap:wrap; gap:6px; }
@@ -1429,7 +1433,6 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 /* ── Threads sidebar (right, T3-style): search, Working / Settled sections, thread cards ── */
 #threads-sidebar { flex:none; width:284px; display:flex; flex-direction:column; min-height:0; background:var(--ui-sidebar); border-left:1px solid var(--ui-line); font-family:var(--ui-font); color:var(--fg); }
 #threads-sidebar[hidden] { display:none; }
-body.detached #threads-sidebar { display:none; }
 #threads-sidebar .ts-head { display:flex; align-items:center; gap:6px; padding:10px 10px 6px; }
 #threads-sidebar .ts-search { flex:1; min-width:0; display:flex; align-items:center; gap:8px; height:32px; padding:0 10px; background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; color:var(--muted-text); transition:border-color 140ms, box-shadow 140ms; }
 #threads-sidebar .ts-search:hover { border-color:var(--muted-text); }
@@ -2335,3 +2338,17 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 .chat-bottom-header button:hover { background:var(--ui-hover); color:var(--fg); }
 .chat-bottom-header button:focus-visible { outline:2px solid var(--accent); }
 .chat-bottom-body { flex:1; min-height:0; padding:0 8px 6px; }
+
+/* File attachment cards share the image preview footprint. */
+#sbr-thread .thr-file.document { position:relative; flex:0 0 64px; width:64px; height:64px; max-width:64px; padding:0; display:flex; flex-direction:column; gap:0; overflow:hidden; border:1px solid var(--border); border-radius:8px !important; background:var(--bg); }
+#sbr-thread .thr-file-symbol { flex:1; min-height:0; width:100%; display:grid; place-items:center; }
+#sbr-thread .thr-file-symbol > i { font-size:26px; }
+#sbr-thread .thr-file.document .thr-file-name { display:block; flex-shrink:0; width:100%; box-sizing:border-box; padding:3px 5px 5px; font-size:10px; line-height:13px; text-align:center; }
+#sbr-thread .thr-file.document .thr-file-x { position:absolute; top:2px; right:2px; width:18px; height:18px; background:var(--ui-surface); border:1px solid var(--border); border-radius:5px !important; }
+#sbr-thread .thr-file.document .thr-file-x:hover { background:var(--ui-hover); }
+
+/* Match image and file attachment geometry, labels and remove controls. */
+#sbr-thread .thr-file.image { display:flex; flex-direction:column; gap:0; }
+#sbr-thread .thr-file.image .thr-file-open { flex:1; min-height:0; height:auto; }
+#sbr-thread .thr-file.image .thr-file-name { display:block; flex-shrink:0; width:100%; box-sizing:border-box; padding:3px 5px 5px; font-size:10px; line-height:13px; text-align:center; }
+#sbr-thread .thr-file.image .thr-file-x { top:2px; right:2px; width:18px; height:18px; border-radius:5px !important; }

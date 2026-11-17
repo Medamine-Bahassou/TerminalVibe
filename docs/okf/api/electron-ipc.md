@@ -49,14 +49,6 @@ Kill a terminal's process and clean up.
 electronAPI.terminalClose(id)
 ```
 
-### `terminal:detach`
-
-Detach a terminal into its own window (reuses the same running PTY).
-
-```js
-electronAPI.terminalDetach({ id, cols, rows, cwd })
-```
-
 ## Events
 
 ### `terminal:data`

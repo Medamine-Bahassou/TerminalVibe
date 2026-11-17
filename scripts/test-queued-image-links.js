@@ -20,4 +20,8 @@ assert(!ctx.chatImageLinkHtml({ ...image, name: '<img>', path: '" onclick="bad' 
 const multiple = ctx.queuedMessageTextHtml({ typed: '@note @image1 @image2', files: [{ mention: '@note', name: 'notes.txt' }, image, { ...image, mention: '@image2', name: 'other.png' }] });
 assert(multiple.includes('data-file-i="1"') && multiple.includes('data-file-i="2"'));
 assert(multiple.includes('notes.txt') && !multiple.includes('@note'));
+const document = { name: 'report.pdf', path: '/tmp/report.pdf', mention: '[File 1]', image: false, size: 4096 };
+const documentText = ctx.queuedMessageTextHtml({ typed: 'Read [File 1]', files: [document] });
+assert(documentText.includes('thr-image-ref') && documentText.includes('report.pdf') && documentText.includes('4KB'));
+assert(documentText.includes('ph-file') && documentText.includes('data-queue-act="preview"'), 'Queued documents retain a clickable file reference');
 console.log('Queued image link checks passed');

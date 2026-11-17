@@ -184,7 +184,7 @@ function refreshWindowsProcessTable() {
       }
     };
 
-    try {
+    const fallback = () => { try {
       if (_hasWmic) {
         execFile(
           'wmic',
@@ -204,13 +204,14 @@ function refreshWindowsProcessTable() {
       }
     } catch {
       done();
-    }
+    } };
+    require('./windows-process-snapshot').snapshot().then(onOutput, fallback);
   }).finally(() => { _winRefresh = null; });
 }
 
 // Guards that stop an agent or type into it need the processes as of now, not a table up to seconds old.
 async function runningProcessInfoFresh(pid) {
-  if (process.platform === 'win32') { await _winRefresh; await refreshWindowsProcessTable(); }
+  if (process.platform === 'win32') await refreshWindowsProcessTable();
   return runningProcessInfo(pid);
 }
 

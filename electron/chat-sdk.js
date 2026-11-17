@@ -90,7 +90,9 @@ function codexAccess(access) {
   if (access === 'read-only') return { approvalPolicy: 'on-request', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly', networkAccess: false } };
   if (access === 'workspace-write') return { approvalPolicy: 'on-request', sandbox: 'workspace-write',
     sandboxPolicy: { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeSlashTmp: false, excludeTmpdirEnvVar: false } };
-  return {}; // "Ask first": Codex's own configured defaults
+  // Ask first must override inherited config and previous full-access turns.
+  // Reads stay available; writes require explicit escalation/approval.
+  return { approvalPolicy: 'on-request', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly', networkAccess: false } };
 }
 // Per-turn settings for Codex (it takes them on every turn/start, no restart).
 function codexTurnParams(o = {}) {
@@ -569,7 +571,9 @@ if (require.main === module) {
   assert.deepStrictEqual(c.answer(1), { decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['ls'] } } });
   assert.deepStrictEqual(c.answer(-1), { decision: 'decline' });
   assert.deepStrictEqual(codexAccess('full'), { approvalPolicy: 'never', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' } });
-  assert.deepStrictEqual(codexTurnParams({ model: 'default', effort: 'low', access: 'default' }), { effort: 'low' });
+  assert.deepStrictEqual(codexTurnParams({ model: 'default', effort: 'low', access: 'default' }), { effort: 'low', approvalPolicy: 'on-request', sandboxPolicy: { type: 'readOnly', networkAccess: false } });
+  for (const access of ['default', undefined, 'unexpected']) assert.deepStrictEqual(codexAccess(access), codexAccess('read-only'));
+  assert.strictEqual(codexTurnParams({ access: 'default' }).sandboxPolicy.type, 'readOnly', 'Returning from full access must explicitly restore the read-only sandbox');
   assert.deepStrictEqual(codexTurnParams({ model: 'm', access: 'full' }), { model: 'm', approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } });
   assert.strictEqual(codexAsk('item/tool/call', {}), null);
   // ACP (Antigravity): models with their thinking levels from config options; permission choices in the agent's order.

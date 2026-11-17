@@ -38,5 +38,12 @@ const file = { name: 'image.png', type: 'image/png', size: 3, preview: 'data:ima
   current = other; context._chatFiles = []; input.value = ''; input.setSelectionRange(0, 0);
   await context.addChatFiles([file]);
   assert.equal(context._chatFiles.length, 1, 'deduplication stays local to each draft');
+  context._chatFiles = []; input.value = ''; input.setSelectionRange(0, 0);
+  context.localPathForFile = async () => '/tmp/report.pdf';
+  await context.addChatFiles([{ name: 'report.pdf', type: 'application/pdf', size: 42 }]);
+  assert.equal(context._chatFiles[0].mention, '[File 1]', 'Picked documents must insert an inline file mention');
+  assert(input.value.includes('[File 1]'));
+  await context.addChatFiles([{ name: 'report.pdf', type: 'application/pdf', size: 42 }]);
+  assert.equal(context._chatFiles.length, 1, 'Repeated document paths must not duplicate attachments');
   console.log('Chat image deduplication checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

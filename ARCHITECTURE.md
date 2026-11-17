@@ -16,7 +16,7 @@ The app has three distinct layers:
 │  Electron Shell (electron/main.js)          │
 │  - node-pty PTY sessions (main process)     │
 │  - WebContentsView browser tabs             │
-│  - Settings / detached windows, config dir  │
+│  - Settings windows, config dir  │
 └──────────────────┬──────────────────────────┘
                    │  (browser dev mode only)
 ┌──────────────────▼──────────────────────────┐
@@ -117,7 +117,6 @@ The frontend talks to PTY sessions through **one of two backends**, selected at 
 - Creates the frameless main window (1200×684, min 600×400) with `titleBarOverlay`.
 - Runs **node-pty in the main process**: `terminal:create/write/resize/close` IPC handlers keep a `Map<termId, IPty>`.
 - Owns native **WebContentsView** browser tabs (`browser:create/show/hide/resize/navigate/...`), placed by renderer-reported bounds. These paint above the window DOM, so the settings window is a separate always-on-top `BrowserWindow`.
-- Detach-to-window: `terminal:detach` spawns a child window that reuses the same running PTY; output is buffered (`detachedPending`) until the renderer attaches.
 - IPC for external links, clipboard, local file resolution, and the `~/.terminalvibe/` config directory.
 
 ### `preload.js`
