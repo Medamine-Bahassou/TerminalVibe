@@ -1724,7 +1724,7 @@
   let notificationSound = true;     // play sounds/notify.wav with those notifications
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
-  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent' };
+  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed' };
   const loadThreadSettings = s => { if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s }; };
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
@@ -8452,26 +8452,32 @@
     const limits = await api.usageLimits(fresh).catch(() => null);
     _usageLimits = limits;
     if (_usageModal) renderUsageModal();
+    renderUsageSidebar();
+    return limits;
+  }
+  const usageRemaining = () => threadSettings.usageDisplay === 'remaining';
+  const usagePercent = used => usageRemaining() ? 100 - Math.min(100, Math.max(0, used)) : Math.min(100, Math.max(0, used));
+  function renderUsageSidebar() {
     const left = document.getElementById('ts-usage');
-    if (!left) return limits;
-    const items = Object.entries(limits || {}).map(([id, u]) => {
+    if (!left) return;
+    const label = usageRemaining() ? 'remaining' : 'consumed';
+    left.setAttribute('aria-label', `Usage limits: ${label}`);
+    const items = Object.entries(_usageLimits || {}).map(([id, u]) => {
       const h = harnessOf(id);
       if (!h || !u.windows?.length) return '';
       const top = u.windows.reduce((a, b) => b.used > a.used ? b : a);
-      const rows = u.windows.map(w => ({ icon: 'ph-clock', text: `${w.label}: ${w.used}% used${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
+      const rows = u.windows.map(w => ({ icon: 'ph-clock', text: `${w.label}: ${usagePercent(w.used)}% ${label}${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
       const plan = u.plan ? ' · ' + u.plan[0].toUpperCase() + u.plan.slice(1) : '';
-      // A ring gauge (--p: % used) around the logo, the % under it; the reset times are in the tooltip.
-      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${Math.min(100, Math.max(0, top.used))}" data-tip="${escHtml(h.name + plan)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
+      // Gauge and percentage use the selected mode; warnings always reflect consumed quota.
+      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${usagePercent(top.used)}" data-tip="${escHtml(h.name + plan)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
         + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
-        + `<span class="sb-usage-pct">${top.used}%</span></span>`;
+        + `<span class="sb-usage-pct">${usagePercent(top.used)}%</span></span>`;
     }).join('');
     left.innerHTML = items ? `${items}<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>` : '';
     left.hidden = !items;
-    return limits;
   }
-  // ── Usage modal (threads sidebar footer): every limit window of every agent, T3 Code style —
-  // the % left, a bar (left solid, used striped) with the pace marker (where an even burn would be
-  // now) and the time to the reset, and a trend icon comparing the two. ──
+  // Usage modal: every agent's limit windows, shown in the selected display mode,
+  // with an even-pace marker, reset time, and trend based on the remaining quota.
   let _usageModal = null, _usageReturnFocus = null, _usageLoading = false;
   function renderUsageModal() {
     const body = _usageModal?.querySelector('.um-body');
@@ -8480,13 +8486,14 @@
       const h = harnessOf(id);
       if (!h || !u.windows?.length) return '';
       const cards = u.windows.map(w => {
-        const left = 100 - w.used;
+        const left = 100 - Math.min(100, Math.max(0, w.used));
+        const value = usagePercent(w.used), label = usageRemaining() ? 'remaining' : 'consumed';
         const pace = w.resetsAt && w.mins ? Math.max(0, Math.min(100, (w.resetsAt - Date.now()) / (w.mins * 60000) * 100)) : null;
         const [trend, trendTip] = pace == null ? ['ph-gauge', ''] : left < pace - 5 ? ['ph-trend-down', 'Using it faster than it resets'] : left > pace + 5 ? ['ph-trend-up', 'Under pace: it lasts until the reset'] : ['ph-gauge', 'On pace'];
         return `<div class="um-card"><div class="um-stat"><div class="um-label">${escHtml(w.label)}</div>`
-          + `<div class="um-big"><span class="um-num">${left}%</span><span class="um-left">left</span><i class="ph ${trend} um-trend" aria-hidden="true"${trendTip ? ` title="${trendTip}"` : ''}></i></div></div>`
-          + `<div class="um-bar" role="img" aria-label="${left}% left${w.resetsAt ? `, resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}"><div class="um-fill" style="width:${left}%"></div>`
-          + (pace != null ? `<div class="um-pace" style="left:${pace}%" title="Even pace: ${Math.round(pace)}% would be left now"></div>` : '')
+          + `<div class="um-big"><span class="um-num">${value}%</span><span class="um-left">${label}</span><i class="ph ${trend} um-trend" aria-hidden="true"${trendTip ? ` title="${trendTip}"` : ''}></i></div></div>`
+          + `<div class="um-bar" role="img" aria-label="${value}% ${label}${w.resetsAt ? `, resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}"><div class="um-fill" style="width:${value}%"></div>`
+          + (pace != null ? `<div class="um-pace" style="left:${usageRemaining() ? pace : 100 - pace}%" title="Even pace: ${Math.round(usageRemaining() ? pace : 100 - pace)}% ${label} now"></div>` : '')
           + (w.resetsAt ? `<span class="um-reset"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>${fmtLeft(w.resetsAt - Date.now())}</span>` : '') + '</div></div>';
       }).join('');
       const plan = u.plan ? `<span class="um-plan">${escHtml(u.plan[0].toUpperCase() + u.plan.slice(1))}</span>` : '';
@@ -13265,7 +13272,7 @@
 
     // Threads
     refreshThreadHarnessSetting();
-    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles']]) {
+    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay']]) {
       document.getElementById(id).value = threadSettings[key];
       const dd = document.querySelector(`.custom-dropdown[data-for="${id}"]`);
       if (dd) initCustomDropdown(dd);
@@ -13658,6 +13665,8 @@
       if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
       loadThreadSettings(state.threadSettings);
+      renderUsageSidebar();
+      renderUsageModal();
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
       if (state.backgroundOpacity !== undefined) backgroundOpacity = state.backgroundOpacity;
@@ -14703,8 +14712,12 @@
     terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';
     saveState();
   });
-  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles']])
-    document.getElementById(id).addEventListener('change', e => { threadSettings = { ...threadSettings, [key]: e.target.value }; saveState(); });
+  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay']])
+    document.getElementById(id).addEventListener('change', e => {
+      threadSettings = { ...threadSettings, [key]: e.target.value };
+      if (key === 'usageDisplay') { renderUsageSidebar(); renderUsageModal(); }
+      saveState();
+    });
 
   // Search engine
   document.getElementById('set-search-engine').addEventListener('change', e => {
