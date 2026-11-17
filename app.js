@@ -5547,11 +5547,17 @@
   const _closeLockConfirmed = new Set();  // locked termIds whose close was already confirmed
 
   // Close several tabs with one confirmation, only when one of them is busy (running, locked, or a page).
+  async function runningTabProcess(tab) {
+    if (tab?._sdk?.alive) return harnessOf(tab._sdk.harness)?.name || 'Agent';
+    if (tab && _chatStarting.has(tab.id)) return 'Starting agent';
+    if (isLiveTerminal(tab) && !tab._agentExited && _tabAgent.get(tab.id)) return harnessOf(_tabAgent.get(tab.id))?.name || 'Agent';
+    return isLiveTerminal(tab) ? checkTerminalRunning(tab.id, true) : null;
+  }
   async function closeTabs(wsId, ids) {
     const wsp = findWs(wsId);
     if (!wsp || !ids.length) return;
     const entries = getWorkspaceTerminals(wsp).filter(t => ids.includes(t.id));
-    const running = await Promise.all(entries.map(t => isLiveTerminal(t) ? checkTerminalRunning(t.id).catch(() => false) : false));
+    const running = await Promise.all(entries.map(t => runningTabProcess(t).catch(() => 'unknown')));
     const busy = entries.filter((t, i) => running[i] || t.locked || browserHasContent(t));
     const go = () => {
       // A workspace is never left without tabs: closing them all opens a fresh terminal first.
@@ -5608,16 +5614,12 @@
         return;
       }
 
-      if (isLiveTerminal(entry)) {
+      if (entry?._sdk?.alive || _chatStarting.has(termId) || isLiveTerminal(entry)) {
         if (_processCheckPending.has(termId)) return;
         _processCheckPending.add(termId);
-        checkTerminalRunning(termId).then(running => {
+        runningTabProcess(entry).then(running => {
           _processCheckPending.delete(termId);
           if (running) {
-            if (dontAskAgain('closeprocess')) {
-              removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true);
-              return;
-            }
             const closesWorkspace = getWorkspaceTerminals(wsp).length <= 1;
             showCloseConfirm(entry.label, closesWorkspace,
               () => removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true),
@@ -10696,6 +10698,18 @@
         editor._draftValue = null; syncChatInputLinks();
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
       };
+      editor._insertDroppedText = (text, event) => {
+        const caret = document.caretRangeFromPoint?.(event.clientX, event.clientY);
+        if (caret && editor.contains(caret.startContainer)) {
+          const reference = caret.startContainer.parentElement?.closest('[data-mention]');
+          if (reference) { caret.setStartAfter(reference); caret.collapse(true); }
+          const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(caret);
+          rememberChatEditorSelection(editor);
+        }
+        const start = thrInput.selectionStart, end = thrInput.selectionEnd;
+        applyDraft(thrInput.value.slice(0, start) + text + thrInput.value.slice(end), start + text.length);
+        thrInput.focus({ preventScroll: true });
+      };
       editor.addEventListener('keydown', e => {
         rememberChatEditorSelection(editor);
         // Lists, like GitHub's editor (Enter sends here, so Shift+Enter is the new line): Shift+Enter continues the
@@ -10871,13 +10885,27 @@
     }
   }
   const thrComposer = thrPage.querySelector('#sbr-thread-composer');
-  thrComposer?.addEventListener('dragover', e => { if (isFileDrag(e) || e.dataTransfer.types.includes(THREAD_DRAG)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; thrComposer.classList.add('drop'); } });
+  const isChatTextDrag = e => {
+    const types = e.dataTransfer?.types || [];
+    return !window.draggedTermId && !window.externalDragTermId && !window.draggedWsId
+      && !types.includes('Files') && !types.includes('application/x-terminalvibe-tab')
+      && (types.includes('text/plain') || types.includes('text/uri-list'));
+  };
+  thrComposer?.addEventListener('dragover', e => { if (!thrInput.disabled && (isFileDrag(e) || e.dataTransfer.types.includes(THREAD_DRAG) || isChatTextDrag(e))) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; thrComposer.classList.add('drop'); } });
   thrComposer?.addEventListener('dragleave', e => { if (!thrComposer.contains(e.relatedTarget)) thrComposer.classList.remove('drop'); });
   thrComposer?.addEventListener('drop', e => {
     thrComposer.classList.remove('drop');
+    if (thrInput.disabled) return;
     const threadId = e.dataTransfer.getData(THREAD_DRAG);
     if (threadId) { e.preventDefault(); e.stopPropagation(); void addChatThreadRef(threadId); return; }
-    if (!isFileDrag(e)) return;
+    if (!isFileDrag(e)) {
+      if (isChatTextDrag(e)) {
+        e.preventDefault(); e.stopPropagation();
+        const text = (e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text/uri-list')).replace(/\r\n?/g, '\n');
+        if (text) threadPart(thrPage, 'input-links')?._insertDroppedText?.(text, e);
+      }
+      return;
+    }
     e.preventDefault(); e.stopPropagation();
     addChatFiles([...e.dataTransfer.files]);
   });
@@ -13161,7 +13189,7 @@
     showDangerConfirm('Close tab?',
       `<span class="cc-label">${escHtml(label)}</span> is running a process.` +
       (closesWorkspace ? ' Closing it will terminate the process and remove the workspace.' : ' Closing it will terminate the process.'),
-      'Close Tab', callback, onCancel, 'closeprocess');
+      'Close Tab', callback, onCancel);
   }
 
   // Shared destructive-style confirmation (red warning icon + red button).
