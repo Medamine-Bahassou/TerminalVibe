@@ -4638,12 +4638,88 @@
     return entry;
   }
 
-  // Email addresses on screen are blurred (a top-layer decoration) until clicked;
-  // each occurrence is revealed on its own and stays shown while its cells hold it.
+  // Email addresses have a clickable blur overlay; each occurrence toggles independently.
   // ponytail: one row at a time, so an address soft-wrapped across two rows isn't blurred.
   const EMAIL_RE = /[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+  async function privateCopyToken(value, type) {
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+      return `[${type}-${[...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, '0')).join('').slice(0, 12)}]`;
+    } catch { return `[${type}-hidden]`; } // Never fall back to revealing a hidden value.
+  }
+  async function privateClipboardText(text, terminal = false) {
+    text = String(text ?? '');
+    const replacements = [];
+    if (threadSettings.usernames === 'blur') {
+      for (const m of text.matchAll(/(?:[A-Za-z]:[\\/]+Users[\\/]+|[\\/](?:home|Users)[\\/]+)([^\\/\s"'<>]+)/gi)) {
+        replacements.push({ at: m.index + m[0].length - m[1].length, length: m[1].length, value: m[1], type: 'user' });
+      }
+    }
+    if (terminal && hideEmails) for (const m of text.matchAll(new RegExp(EMAIL_RE.source, 'g'))) {
+      replacements.push({ at: m.index, length: m[0].length, value: m[0], type: 'email' });
+    }
+    // Resolve hashes first, then replace right-to-left so offsets stay stable.
+    const values = await Promise.all(replacements.map(async r => ({ ...r, token: await privateCopyToken(r.value, r.type) })));
+    let boundary = text.length;
+    for (const r of values.sort((a, b) => b.at - a.at)) {
+      if (r.at + r.length > boundary) continue;
+      text = text.slice(0, r.at) + r.token + text.slice(r.at + r.length); boundary = r.at;
+    }
+    return text;
+  }
+  async function copyPrivateText(text, terminal = false) {
+    const safe = await privateClipboardText(text, terminal);
+    if (window.electronAPI?.clipboardWrite) return window.electronAPI.clipboardWrite(safe);
+    return navigator.clipboard.writeText(safe);
+  }
+  async function copyPrivateTerminal(term) {
+    const text = term.getSelection();
+    return copyPrivateText(term._privateSelectionText ? await term._privateSelectionText(text) : text, true);
+  }
+  function copyPrivateWorkSelection(e) {
+    if (threadSettings.usernames !== 'blur') return;
+    if (e.target?.closest?.('.xterm') || e.target?.matches?.('input, textarea, [contenteditable="true"]')) return;
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || selection.isCollapsed) return;
+    const range = selection.getRangeAt(0), fragment = range.cloneContents();
+    const start = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+    const inside = start?.closest('.thr-work-username');
+    if (!inside && !fragment.querySelector('.thr-work-username')) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const text = selection.toString();
+    void (async () => {
+      if (inside && inside.contains(range.endContainer)) return copyPrivateText(await privateCopyToken(text, 'user'));
+      for (const span of fragment.querySelectorAll('.thr-work-username')) span.textContent = await privateCopyToken(span.textContent, 'user');
+      await copyPrivateText(fragment.textContent);
+    })().catch(() => {});
+  }
+  document.addEventListener('copy', copyPrivateWorkSelection, true);
   function blurTermEmails(term) {
+    const privateCopy = e => {
+      const text = term.getSelection();
+      if (!text || (!hideEmails && threadSettings.usernames !== 'blur')) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      void copyPrivateTerminal(term).catch(() => {});
+    };
+    let copyBound = false;
+    const bindPrivateCopy = () => {
+      if (!copyBound && term.element) { term.element.addEventListener('copy', privateCopy, true); copyBound = true; }
+    };
+    bindPrivateCopy(); term.onRender(bindPrivateCopy); // This terminal may not be opened yet.
     let decos = [], timer = false;
+    term._privateSelectionText = text => {
+      if (hideEmails) {
+        const position = term.getSelectionPosition?.();
+        if (position && decos.some(d => {
+          const y = d.marker.line;
+          return y >= position.start.y && y <= position.end.y
+            && (y !== position.start.y || position.start.x < d.x + d.w)
+            && (y !== position.end.y || position.end.x > d.x)
+            && !text.includes(d.text);
+        })) return privateCopyToken(text, 'email');
+      }
+      return text;
+    };
     const cellsText = (y, x, w) => {
       const line = term.buffer.active.getLine(y);
       if (!line) return '';
@@ -4691,10 +4767,11 @@
             if (el._emailBlur) return;
             el._emailBlur = true;
             el.classList.add('term-email-blur');
-            if (!d.shown) el.title = 'Click to show';
+            el.title = d.shown ? 'Click to hide' : 'Click to show';
             el.addEventListener('mousedown', e => {
               e.preventDefault(); e.stopPropagation();
-              d.shown = true; el.classList.add('shown'); el.removeAttribute('title');
+              d.shown = !d.shown; el.classList.toggle('shown', d.shown);
+              el.title = d.shown ? 'Click to hide' : 'Click to show';
             });
           });
           decos.push(d);
@@ -12151,7 +12228,7 @@
     });
     flow.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', () => {
       const text = texts.get(b.closest('.thr-msg').dataset.key) || '';
-      if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {});
+      void copyPrivateText(text).catch(() => {});
       b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
       b.setAttribute('aria-label', 'Copied');
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
@@ -12162,7 +12239,7 @@
       if (img.complete && !img.naturalWidth) fail(); else img.addEventListener('error', fail, { once: true });
     });
     flow.querySelectorAll('.thr-table-copy').forEach(b => b.addEventListener('click', () => {
-      if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(b.dataset.md); else navigator.clipboard?.writeText(b.dataset.md).catch(() => {});
+      void copyPrivateText(b.dataset.md).catch(() => {});
       b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
     }));
@@ -12530,7 +12607,7 @@
       ctxEl.append(list);
     } else if (type === 'chat-image') {
       const img = data, path = img.dataset.path, name = path.split(/[\\/]/).pop();
-      const copyText = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
+      const copyText = text => { void copyPrivateText(text).catch(() => {}); };
       item('<i class="ph ph-arrows-out"></i>', 'Open image', '', () => openClaudeRefViewer(null, { kind: 'file', path, label: name }, ''));
       item('<i class="ph ph-copy"></i>', 'Copy image', '', () => copyChatImage(img).catch(() => zoomBadge('Could not copy the image')));
       item('<i class="ph ph-file"></i>', 'Copy path', '', () => copyText(path));
@@ -12540,7 +12617,7 @@
       // message as markdown, and a reply's fork point.
       const msg = data, sel = window.getSelection(), raw = msg.closest('.thr-flow')?._texts?.get(msg.dataset.key) || '';
       const selected = sel && !sel.isCollapsed && msg.closest('.thr-flow')?.contains(sel.anchorNode) && sel.toString().trim();
-      const copyText = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
+      const copyText = text => { void copyPrivateText(text).catch(() => {}); };
       if (selected) {
         // Clicking the menu can drop the selection: put the one it opened on back before acting.
         const range = sel.getRangeAt(0).cloneRange(), restore = () => { const s2 = window.getSelection(); s2.removeAllRanges(); s2.addRange(range); };
@@ -12552,7 +12629,7 @@
       const fork = msg.querySelector('.thr-fork');
       if (fork) item('<i class="ph ph-git-fork"></i>', 'Fork from here', '', () => fork.click());
     } else if (type === 'chat-link') {
-      const copy = text => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(text); else navigator.clipboard?.writeText(text).catch(() => {}); };
+      const copy = text => { void copyPrivateText(text).catch(() => {}); };
       if (/^https?:/i.test(data)) {
         item('<i class="ph ph-arrow-square-out"></i>', 'Open link', '', () => openChatWebLink(data));
         item(`<i class="ph ${terminalLinkTarget === 'external' ? 'ph-browser' : 'ph-globe'}"></i>`, terminalLinkTarget === 'external' ? 'Open in a browser tab' : 'Open in system browser', '', () => openChatWebLink(data, true));
@@ -12697,12 +12774,7 @@
         item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+Shift+C', () => {
           const t = findTermById(termId);
           if (t && t.term.type !== 'browser' && t.term.term.hasSelection()) {
-            const text = t.term.term.getSelection();
-            if (isDesktop() && window.electronAPI) {
-              window.electronAPI.clipboardWrite(text);
-            } else {
-              navigator.clipboard.writeText(text);
-            }
+            void copyPrivateTerminal(t.term.term).catch(() => {});
           }
         });
       }
@@ -14639,8 +14711,7 @@
       const t = activeTerminal();
       if (t && t.type !== 'browser' && t.term.hasSelection()) {
         e.preventDefault(); e.stopPropagation();
-        const text = t.term.getSelection();
-        navigator.clipboard.writeText(text);
+        void copyPrivateTerminal(t.term).catch(() => {});
       }
       return;
     }
