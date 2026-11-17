@@ -8672,9 +8672,7 @@
       const r = refs[n], key = r.path.split(/[\\/]/).slice(-2, -1)[0] || '';
       return `<a href="#" class="thr-thread-mention" data-thread-key="${escHtml(key)}" title="Thread: ${escHtml(r.title)}"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(r.title)}</span></a>`;
     }).replace(/\u0000I(\d+)\u0000/g, (_, n) => {
-      const p = paths[n], size = _thrImgSize.get(p);
-      return `<button type="button" class="thr-img-link" data-path="${escHtml(p)}" title="${escHtml(p)}"><span class="thr-inline-image-icon"><i class="ph ph-image" aria-hidden="true"></i></span><span class="thr-img-link-name">${escHtml(p.split(/[\\/]/).pop())}</span>`
-        + `<span class="thr-img-size" data-size-path="${escHtml(p)}">${size ? fmtBytes(size) : ''}</span></button>`;
+      return `<span class="thr-inline-ref">${chatImageReferenceHtml({ path: paths[n] })}</span>`;
     }).trim();
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
   }
@@ -10238,6 +10236,16 @@
       open(text ? (o === c.data.length ? c.nextSibling : null) : c.childNodes[o]);
     }
   }
+  function chatImageReferenceHtml(file, tabIndex = 0) {
+    const path = file.path || '', name = file.name || path.split(/[\\/]/).pop();
+    if (file.preview) {
+      _thrImgCache.set(path, file.preview);
+      if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
+    }
+    if (file.size) _thrImgSize.set(path, file.size);
+    const preview = file.preview || _thrImgCache.get(path), size = file.size || _thrImgSize.get(path);
+    return `<a href="#" class="thr-image-ref thr-img-link" tabindex="${tabIndex}" data-path="${escHtml(path)}" title="${escHtml(name)}"><span class="thr-inline-image-icon">${preview ? `<img src="${escHtml(preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span class="thr-img-link-name">${escHtml(name)}</span><small class="thr-img-size" data-size-path="${escHtml(path)}">${size ? escHtml(fmtBytes(size).replace(' ', '')) : ''}</small></a>`;
+  }
   function syncChatInputLinks(surface = thrPage, files = _chatFiles) {
     const input = threadPart(surface, 'input'), editor = threadPart(surface, 'input-links');
     if (!input || !editor) return;
@@ -10265,7 +10273,7 @@
       const label = file.cite ? file.cite.replace(/\s+/g, ' ').slice(0, 42) + (file.cite.replace(/\s+/g, ' ').length > 42 ? '…' : '') : file.name;
       const link = file.cite
         ? `<a href="#" class="thr-cite-ref" tabindex="${tabIndex}" title="${escHtml(file.cite)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(label)}</span></a>`
-        : `<a href="#" class="thr-image-ref" tabindex="${tabIndex}" title="${escHtml(file.name)}"><span class="thr-inline-image-icon">${file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span>${escHtml(label)}</span>${file.size ? `<small>${escHtml(fmtBytes(file.size).replace(' ', ''))}</small>` : ''}</a>`;
+        : chatImageReferenceHtml(file, tabIndex);
       return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}">${link}</span>`;
     }).join('');
     editor._draftValue = input.value; editor._draftReferences = signature; editor._draftMd = md;
@@ -11874,7 +11882,11 @@
       }
       img.src = src;
       const size = _thrImgSize.get(p);
-      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size); });
+      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size).replace(' ', ''); });
+      flow.querySelectorAll('.thr-img-link').forEach(link => {
+        if (link.dataset.path !== p) return;
+        link.querySelector('.thr-inline-image-icon').innerHTML = `<img src="${escHtml(src)}" alt="">`;
+      });
     });
     // Image actions: open in the full viewer (zoom, pan, rotate, flip) or copy as PNG.
     flow.querySelectorAll('.thr-img-wrap').forEach(wrap => {
