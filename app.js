@@ -10557,16 +10557,18 @@
   // Enter steers an active turn; Ctrl+Enter queues for the next turn.
   function syncSendBtn() {
     const c = curChat(), typed = !!(thrInput.value.trim() || _chatFiles.length);
+    const editing = !!c?._editingQueued;
+    syncQueuedEditUI(c);
     const working = !!c && (!!chatWorking(c) || _chatStarting.has(c.id));
-    const queue = working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = working && !typed && !queue;
+    const queue = !editing && working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = !editing && working && !typed && !queue;
     thrSend.classList.toggle('stop', stop);
     thrSend.disabled = !stop && !typed;
-    const label = queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : 'Send';
+    const label = editing ? 'Save queued message' : queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : 'Send';
     if (thrSend.dataset.mode !== label) {
       thrSend.dataset.mode = label;
-      thrSend.innerHTML = queue ? queueIcon : `<i class="ph ${stop ? 'ph-stop' : 'ph-arrow-up'}" aria-hidden="true"></i>`;
+      thrSend.innerHTML = queue ? queueIcon : `<i class="ph ${editing ? 'ph-check' : stop ? 'ph-stop' : 'ph-arrow-up'}" aria-hidden="true"></i>`;
       thrSend.setAttribute('aria-label', label);
-      thrSend.dataset.tip = queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter)' : 'Send (Enter)';
+      thrSend.dataset.tip = editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter)' : 'Send (Enter)';
     }
   }
   function stopChatTurn(c) {
@@ -10595,7 +10597,8 @@
     autosizeThreadInput(); syncSendBtn();
     const c = curChat();
     if (!c?.chat) return;
-    c.chat.draft = thrInput.value; c._draft = thrInput.value;
+    if (!c._editingQueued) c.chat.draft = thrInput.value;
+    c._draft = thrInput.value;
     clearTimeout(_draftSave); _draftSave = setTimeout(saveState, 400);
     renderThreadsSidebar();
   });
@@ -10608,6 +10611,7 @@
     const ws = curChat(), typed = thrInput.value.trim(), files = _chatFiles;
     const text = chatMessageText(typed, files);
     if (!ws || !text) return;
+    if (ws._editingQueued) { finishQueuedEdit(ws, true); return; }
     ws.chat ||= { createdAt: Date.now() };
     const sideAsk = /^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(typed);
     if (sideAsk) { clearChatDraft(ws); void openSideChat(ws, (sideAsk[1] || '').trim(), files); return; }
@@ -10630,6 +10634,48 @@
     ws._draft = ''; ws._files = [];
     if (ws.chat?.draft) { ws.chat.draft = ''; renderThreadsSidebar(); }
     if (curChat() === ws) { thrInput.value = ''; _chatFiles = []; autosizeThreadInput(); renderChatFiles(); }
+  }
+  function syncQueuedEditUI(ws) {
+    const composer = thrPage.querySelector('#sbr-thread-composer');
+    if (!composer) return;
+    let bar = composer.querySelector('.thr-queue-edit');
+    if (!ws?._editingQueued) { bar?.remove(); return; }
+    if (!bar) {
+      bar = document.createElement('div'); bar.className = 'thr-queue-edit';
+      bar.innerHTML = '<span role="status">Editing queued message</span><button type="button">Cancel</button>';
+      bar.querySelector('button').addEventListener('click', () => { const tab = curChat(); if (tab?._editingQueued) finishQueuedEdit(tab, false); });
+      composer.prepend(bar);
+    }
+  }
+  function beginQueuedEdit(ws, message) {
+    if (curChat() !== ws || _queueDraining.has(ws.id) || _chatSending.has(ws.id)) return;
+    if (ws._editingQueued === message.id) { thrInput.focus(); return; }
+    if (ws._editingQueued) finishQueuedEdit(ws, false);
+    ws._queueEditDraft = { text: thrInput.value, files: _chatFiles };
+    ws._editingQueued = message.id;
+    thrInput.value = message.typed || '';
+    _chatFiles = (message.files || []).map(file => ({ ...file }));
+    ws._draft = thrInput.value; ws._files = _chatFiles;
+    renderChatFiles(); autosizeThreadInput(); syncSendBtn();
+    thrInput.focus({ preventScroll: true });
+  }
+  function finishQueuedEdit(ws, save) {
+    const message = ws.chat?.queuedMessages?.find(m => m.id === ws._editingQueued);
+    if (save) {
+      if (!message || curChat() !== ws) return;
+      const typed = thrInput.value.trim(), files = _chatFiles, text = chatMessageText(typed, files);
+      if (!text) return;
+      Object.assign(message, { typed, files, text });
+    }
+    const draft = ws._queueEditDraft || { text: '', files: [] };
+    delete ws._editingQueued; delete ws._queueEditDraft;
+    ws._draft = draft.text; ws._files = draft.files;
+    if (ws.chat) ws.chat.draft = draft.text;
+    if (curChat() === ws) {
+      thrInput.value = draft.text; _chatFiles = draft.files;
+      renderChatFiles(); autosizeThreadInput(); syncSendBtn(); thrInput.focus({ preventScroll: true });
+    }
+    updateChatQueue(ws); saveState();
   }
   // The first-message title shows at once; the agent's small model replaces it with a short one, unless renamed meanwhile.
   function autoTitleChat(ws, text, force) {
@@ -10802,18 +10848,13 @@
       return;
     }
     if (button.dataset.queueAct === 'edit' && message) {
-      if (_queueDraining.has(ws.id) || _chatSending.has(ws.id)) return;
-      ws._editingQueued = id;
-      showPrompt('Edit queued message', message.typed || '', { onClose: () => { ws._editingQueued = null; } }, value => {
-        if (!ws.chat.queuedMessages.includes(message)) return;
-        const text = chatMessageText(value.trim(), message.files || []);
-        if (!text) return;
-        message.typed = value.trim(); message.text = text;
-        updateChatQueue(ws); saveState();
-      });
+      beginQueuedEdit(ws, message);
       return;
     }
-    if (button.dataset.queueAct === 'remove') ws.chat.queuedMessages = ws.chat.queuedMessages.filter(m => m.id !== id);
+    if (button.dataset.queueAct === 'remove') {
+      if (ws._editingQueued === id) finishQueuedEdit(ws, false);
+      ws.chat.queuedMessages = ws.chat.queuedMessages.filter(m => m.id !== id);
+    }
     else ws.chat.queuePaused = !ws.chat.queuePaused;
     updateChatQueue(ws); saveState();
   });
