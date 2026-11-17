@@ -10304,6 +10304,22 @@
     }
     return text;
   }
+  function copyChatInputSelection(event, editor) {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || selection.isCollapsed) return;
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return;
+    const selected = range.cloneRange();
+    // References are atomic: copy their source, not thumbnail/name/size decoration.
+    const startRef = (selected.startContainer.parentElement)?.closest('[data-mention]');
+    const endRef = (selected.endContainer.parentElement)?.closest('[data-mention]');
+    if (startRef && editor.contains(startRef)) selected.setStartBefore(startRef);
+    if (endRef && editor.contains(endRef)) selected.setEndAfter(endRef);
+    const typed = chatEditorText(selected.cloneContents());
+    const files = _chatFiles.filter(file => file.mention && typed.includes(file.mention));
+    event.preventDefault();
+    event.clipboardData.setData('text/plain', chatMessageText(typed, files));
+  }
   function rememberChatEditorSelection(editor, input = thrInput) {
     const selection = window.getSelection();
     if (!selection?.rangeCount) return;
@@ -10544,6 +10560,9 @@
         const attachment = { name: file.name || path.split(/[\\/]/).pop(), path, image, preview, size: file.size || 0 };
         const attached = curChat() === tab ? _chatFiles : (tab._files ||= tab.chat?.draftFiles || []);
         const duplicate = await findChatImageDuplicate(attached, attachment);
+        if (curChat() === tab && (!duplicate || !duplicate.mention || !thrInput.value.includes(duplicate.mention))) {
+          threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
+        }
         if (duplicate) {
           duplicate.preview ||= preview;
           duplicate.size ||= attachment.size;
@@ -10582,6 +10601,7 @@
   thrFiles?.addEventListener('click', e => {
     const remove = e.target.closest('.thr-file-x');
     if (remove) {
+      threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
       const [file] = _chatFiles.splice(+remove.dataset.i, 1);
       if (file?.mention) {
         const caret = thrInput.value.slice(0, thrInput.selectionStart).split(file.mention).join('').length;
@@ -10620,12 +10640,20 @@
       document.addEventListener('selectionchange', () => { rememberChatEditorSelection(editor); openMdTokens(editor); });
       // Live markdown re-renders the editor, which drops the browser's undo: keep our own (typing bursts).
       const hist = { undo: [], redo: [], at: 0, chat: null };
-      const snap = () => ({ v: thrInput.value, s: thrInput.selectionStart, e: thrInput.selectionEnd });
+      const snap = () => ({ v: thrInput.value, s: thrInput.selectionStart, e: thrInput.selectionEnd, files: _chatFiles.map(file => ({ ...file })) });
+      editor._recordDraftUndo = () => {
+        if (hist.chat !== curChat()) Object.assign(hist, { undo: [], redo: [], at: 0, chat: curChat() });
+        rememberChatEditorSelection(editor);
+        hist.undo.push(snap()); if (hist.undo.length > 200) hist.undo.shift();
+        hist.redo.length = 0; hist.at = 0;
+      };
       const restore = (from, to) => {
         const state = from.pop();
         if (!state) return;
         to.push(snap());
         thrInput.value = state.v; thrInput.setSelectionRange(state.s, state.e);
+        _chatFiles = (state.files || []).map(file => ({ ...file }));
+        renderChatFiles();
         editor._draftValue = null; syncChatInputLinks();
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
       };
@@ -10663,7 +10691,7 @@
       });
       // A programmatic edit of the draft (list keys below), undoable like typing.
       const applyDraft = (value, caret, caretEnd = caret) => {
-        hist.undo.push(snap()); hist.redo.length = 0; hist.at = 0;
+        editor._recordDraftUndo();
         thrInput.value = value; thrInput.setSelectionRange(caret, caretEnd);
         editor._draftValue = null; syncChatInputLinks();
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -10697,6 +10725,11 @@
         const forwarded = new KeyboardEvent('keydown', { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, cancelable: true });
         thrInput.dispatchEvent(forwarded);
         if (forwarded.defaultPrevented) { e.preventDefault(); e.stopPropagation(); }
+      });
+      editor.addEventListener('copy', e => copyChatInputSelection(e, editor));
+      editor.addEventListener('cut', e => {
+        copyChatInputSelection(e, editor);
+        if (e.defaultPrevented) document.execCommand('delete');
       });
       editor.addEventListener('paste', e => {
         e.preventDefault();
@@ -12063,6 +12096,7 @@
     const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 32;
     const scrollTop = flow.scrollTop;
     const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
+    const outputScroll = new Map([...flow.querySelectorAll('.thr-tool-output')].map(el => [el.closest('[data-key]')?.dataset.key, { top: el.scrollTop, left: el.scrollLeft }]));
     if (ws._open) { ws._open.forEach(k => open.add(k)); ws._open = null; } // its state from before a chat switch
     if (!segs.length || note) {
       flow.innerHTML = pendingHtml(ws) || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
@@ -12137,18 +12171,18 @@
       // A turn's steps in order: thoughts, interim replies, runs of tool calls.
       const stepsHtml = (list, base) => {
         let out = '', run = [];
-        const flush = key => { if (run.length) out += toolsHtml(run, key); run = []; };
+        const flush = () => { if (run.length) out += toolsHtml(run.map(x => x.m), base + ':tools:' + run[0].j); run = []; };
         for (const { m, j } of list) {
           // The agent's question and your answer (a question still open shows in the answer tray instead).
           if (m.role === 'tool' && m.qa) {
-            if (m.qa.some(x => x.answer != null) || m.error) { flush(base + ':' + j + 't'); out += qaHtml(m, i + ':' + j); }
+            if (m.qa.some(x => x.answer != null) || m.error) { flush(); out += qaHtml(m, i + ':' + j); }
             continue;
           }
-          if (m.role === 'tool') { run.push(m); continue; }
-          flush(base + ':' + j + 't');
+          if (m.role === 'tool') { run.push({ m, j }); continue; }
+          flush();
           out += m.role === 'thinking' ? thoughtHtml(m, i + ':' + j) : msgHtml(m, i + ':' + j, false);
         }
-        flush(base + ':end');
+        flush();
         return out;
       };
       // The files a turn changed (from its edit tools' diffs): a card with +/- counts; each file,
@@ -12210,6 +12244,10 @@
       }
     });
     flow.innerHTML = html + pendingHtml(ws, lastHead);
+    flow.querySelectorAll('.thr-tool-output').forEach(el => {
+      const saved = outputScroll.get(el.closest('[data-key]')?.dataset.key);
+      if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
+    });
     decorateWorkUsernames(flow);
     flow._texts = texts;
     // A selection across messages copies them as a transcript of their original markdown.

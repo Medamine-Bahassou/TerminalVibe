@@ -9,6 +9,7 @@ const input = {
 };
 const context = vm.createContext({
   curChat: () => current, _chatFiles: [], thrInput: input,
+  threadPart: () => null, thrPage: {},
   localPathForFile: async () => '/tmp/paste-' + ++saved + '.png',
   FileReader: class { readAsDataURL(file) { Promise.resolve().then(() => { this.result = file.preview; this.onload(); }); } },
   renderChatFiles() {}, autosizeThreadInput() {}, saveState() {}, zoomBadge: message => { throw Error(message); },

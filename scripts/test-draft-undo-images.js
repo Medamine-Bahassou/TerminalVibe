@@ -1,0 +1,23 @@
+const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
+const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'app.js'), 'utf8');
+const image = { image: true, mention: '[Image 1]', name: 'image.png', path: '/tmp/image.png', preview: 'data:image/png;base64,abc' };
+const input = { value: 'Review [Image 1]', selectionStart: 16, selectionEnd: 16, setSelectionRange(s, e) { this.selectionStart = s; this.selectionEnd = e; }, dispatchEvent() {} };
+const editor = {}, tab = {};
+let rendered;
+const ctx = vm.createContext({ _chatFiles: [image], thrInput: input, editor, curChat: () => tab,
+  rememberChatEditorSelection() {}, renderChatFiles() { rendered = ctx._chatFiles; }, syncChatInputLinks() {}, Event, Date });
+const start = source.indexOf('      const hist = { undo:');
+vm.runInContext(source.slice(start, source.indexOf('      // Like VS Code', start)) + '\nthis.undoDraft=()=>restore(hist.undo,hist.redo);this.redoDraft=()=>restore(hist.redo,hist.undo);', ctx);
+editor._recordDraftUndo();
+input.value = ''; ctx._chatFiles = [];
+ctx.undoDraft();
+assert.equal(input.value, 'Review [Image 1]');
+assert.equal(ctx._chatFiles[0].path, '/tmp/image.png');
+assert.equal(rendered[0].preview, image.preview, 'undo restores both preview and inline image metadata');
+ctx.redoDraft();
+assert.equal(input.value, ''); assert.equal(ctx._chatFiles.length, 0);
+ctx.undoDraft();
+editor._recordDraftUndo(); ctx._chatFiles[0].mention = '[Image 2]'; input.value = 'Review [Image 2]';
+ctx.undoDraft();
+assert.equal(ctx._chatFiles[0].mention, '[Image 1]', 'attachment changes must not mutate saved undo states');
+console.log('PASS: draft undo/redo restores image references, attachments, previews and independent snapshots');
