@@ -1487,16 +1487,16 @@ body .ctx-item.disabled { color:var(--dim-text); cursor:default; pointer-events:
    the terminal theme's palette (--ansi-*, set in applyTheme) ── */
 #sbr-thread .thr-tool-detail, #sbr-thread .thr-code { border:0; background:color-mix(in srgb,var(--fg) 5%,var(--bg)); color:var(--fg); }
 #sbr-thread .thr-tool-detail { padding:10px 12px; }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-c { color:var(--ansi-blue, #7aa2f7); }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-f { color:var(--ansi-yellow, #e0af68); }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-s { color:var(--ansi-green, #9ece6a); }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-v { color:var(--ansi-magenta, #bb9af7); }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-o { color:var(--ansi-red, #f7768e); }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-cm { color:var(--dim-text); font-style:italic; }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-h { color:var(--muted-text); }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-k { color:var(--ansi-cyan, #7dcfff); }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-n { color:var(--ansi-yellow, #e0af68); }
-#sbr-thread :is(.thr-tool-detail,.thr-code) .tk-b { color:var(--ansi-magenta, #bb9af7); }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-c { color:var(--ansi-blue, #7aa2f7); }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-f { color:var(--ansi-yellow, #e0af68); }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-s { color:var(--ansi-green, #9ece6a); }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-v { color:var(--ansi-magenta, #bb9af7); }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-o { color:var(--ansi-red, #f7768e); }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-cm { color:var(--dim-text); font-style:italic; }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-h { color:var(--muted-text); }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-k { color:var(--ansi-cyan, #7dcfff); }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-n { color:var(--ansi-yellow, #e0af68); }
+#sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-b { color:var(--ansi-magenta, #bb9af7); }
 
 /* ── Threads sidebar search: no fill and no border at rest; slate on hover; slate + border on focus (no ring) ── */
 #threads-sidebar .ts-search { background:transparent; border-color:transparent; box-shadow:none; transition:background-color 140ms, border-color 140ms; }
@@ -1712,6 +1712,16 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread .thr-complete-item { display:flex; align-items:center; gap:8px; min-height:32px; padding:6px 8px; border-radius:6px !important; cursor:pointer; font:400 13px/1.3 var(--ui-font); color:var(--fg); }
 #sbr-thread .thr-complete-item[aria-selected="true"], #sbr-thread .thr-complete-item:hover { background:var(--ui-hover); }
 #sbr-thread .thr-complete-item > i { flex-shrink:0; font-size:15px; color:var(--muted-text); }
+/* The completion menu and changed files share type icons and their palette. */
+#sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-js, .ph-file-csv) { color:#d9b94b; }
+#sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-ts, .ph-file-py, .ph-file-sql) { color:#65a9ed; }
+#sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-jsx, .ph-file-tsx, .ph-file-css) { color:#65cbe0; }
+#sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-html, .ph-file-rs) { color:#e58b61; }
+#sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-c, .ph-file-cpp, .ph-file-md) { color:#8daee5; }
+#sbr-thread :is(.thr-complete-item, .thr-change > summary) > i.ph-file-vue { color:#65bf95; }
+#sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-svg, .ph-file-archive, .ph-file-ini) { color:#d7b775; }
+#sbr-thread :is(.thr-complete-item, .thr-change > summary) > i:is(.ph-file-png, .ph-file-jpg, .ph-file-image) { color:#7dbf9d; }
+#sbr-thread :is(.thr-complete-item, .thr-change > summary) > i.ph-file-pdf { color:#ec8585; }
 #sbr-thread .thr-complete-name { flex-shrink:0; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
 #sbr-thread .thr-complete-meta { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--dim-text); }
 #sbr-thread .thr-at-ref > i { font-size:13px; align-self:center; }

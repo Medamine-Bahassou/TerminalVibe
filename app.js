@@ -8718,7 +8718,15 @@
     renderChatQueue(ws, surface);
   }
   const pendingMessages = ws => { const p = _pendingMsgs.get(ws.id); return p ? (Array.isArray(p) ? p : [p]) : []; };
-  const pendingHtml = ws => pendingMessages(ws).map(p => `<div class="thr-msg user thr-pending">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}<div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(p.text).html}</div></div></div>`).join('');
+  const pendingHtml = (ws, previousHead = '') => {
+    const pending = pendingMessages(ws);
+    if (!pending.length) return '';
+    const o = pending[0].options || chatOpts(ws), h = harnessOf(o.harness), name = h?.name || o.harness;
+    const meta = [o.model && o.model !== 'default' ? o.model : '', o.effort && o.effort !== 'default' ? o.effort : ''].filter(Boolean).join(' · ');
+    const head = name + '|' + meta;
+    const header = head === previousHead ? '' : `<div class="thr-seg thr-pending" data-head="${escHtml(head)}"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(pending[0].at)}</span></div>`;
+    return header + pending.map(p => `<div class="thr-msg user thr-pending">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}<div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(p.text).html}</div></div></div>`).join('');
+  };
   const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
   // A chat is a tab (its history + a message box); a workspace can hold any number of them.
   // ponytail: it is a terminal tab whose shell sits under the page until the chat starts its agent
@@ -9379,7 +9387,7 @@
     surface.classList.toggle('thr-new', fresh);
     cwdEl.disabled = !fresh;
     const folderName = chatFolderName(cwd);
-    cwdEl.innerHTML = `<i class="ph ${folderName === 'No project' ? 'ph-selection' : 'ph-folder'}" aria-hidden="true"></i><span>${escHtml(folderName)}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
+    cwdEl.innerHTML = `${folderName === 'No project' ? '<i class="ph ph-selection" aria-hidden="true"></i>' : chatFolderIcon(cwd)}<span>${escHtml(folderName)}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
     cwdEl.title = fresh ? `Working folder: ${cwd || 'a new scratch folder'}` : cwd;
     // Above the composer: a thread's side chats, or (in a side chat) the thread it belongs to.
     const sidesEl = thrChip('sides');
@@ -9465,6 +9473,13 @@
     if (!r.ok) zoomBadge(r.error || 'Could not switch branch');
     _gitBranch.delete(cwd);
     syncThreadComposer(tab); renderThreadsSidebar();
+  }
+  function chatFolderIcon(path, open = false) {
+    // Both Windows UNC spellings identify WSL folders; ordinary Linux paths do not.
+    if (/^[\\/]{2}wsl(?:\.localhost|\$)[\\/]/i.test(path || '')) {
+      return '<i class="ph ph-linux-logo" aria-hidden="true"></i>';
+    }
+    return `<i class="ph ph-folder${open ? '-open' : ''}" aria-hidden="true"></i>`;
   }
   function setChatCwd(tab, dir, scratch = false) {
     if (!tab || (!dir && !scratch) || threadHasMessages(tab)) return;
@@ -10662,13 +10677,13 @@
       if (!ws.chat.title && typed) { ws.chat.title = typed.split('\n')[0].slice(0, 80); setChatTabLabel(ws); autoTitleChat(ws, typed); }
       ws.chat.updatedAt = Date.now();
       const flow = thrPage.querySelector('#sbr-thread-flow');
-      _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, at: Date.now(), steer }]);
+      _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, at: Date.now(), steer, options: { ...(steer ? liveThreadAgent(ws)?._chatCfg || chatOpts(ws) : chatOpts(ws)) } }]);
       const newTurn = !steer || !_turns.has(ws.id);
       if (newTurn) _turns.set(ws.id, { since: Date.now() });
       if (curChat() === ws) {
         flow.querySelector('.thr-empty')?.remove();
         flow.querySelectorAll('.thr-pending').forEach(el => el.remove());
-        flow.insertAdjacentHTML('beforeend', pendingHtml(ws));
+        flow.insertAdjacentHTML('beforeend', pendingHtml(ws, [...flow.querySelectorAll('.thr-seg')].at(-1)?.dataset.head || ''));
         flow.scrollTop = flow.scrollHeight;
         syncWorking(ws);
       }
@@ -10983,6 +10998,36 @@
     return out + escHtml(text.slice(last));
   }
   const hlCode = (text, lang) => lang === 'sh' ? hlShell(text) : lang === 'json' ? hlJson(text) : escHtml(text);
+  // Diff prefixes and hunk coordinates are metadata, not source code.
+  function hlDiffLine(line, file) {
+    const cls = line.startsWith('@@') ? ' hunk' : line[0] === '+' ? ' add' : line[0] === '-' ? ' del' : '';
+    const ext = file.split('.').pop().toLowerCase();
+    const supported = /^(?:[cm]?[jt]sx?|css|scss|less|html?|xml|svg|vue|svelte|py|rs|c|h|cpp|hpp|cc|java|go|rb|php|sql|ya?ml|toml|ini|jsonc?|sh|bash|zsh)$/;
+    let content = escHtml(line) || ' ';
+    if (!line.startsWith('@@') && /^[ +\-]/.test(line) && supported.test(ext)) {
+      const source = line.slice(1);
+      content = escHtml(line[0]) + (/^(sh|bash|zsh)$/.test(ext) ? hlShell(source) : /^jsonc?$/.test(ext) ? hlJson(source) : hlSourceLine(source, ext));
+    }
+    return `<span class="dl${cls}">${content}</span>`;
+  }
+  function hlSourceLine(text, lang) {
+    const hashComments = /^(py|rb|ya?ml|toml|ini)$/.test(lang);
+    const re = /\/\/[^\n]*|\/\*.*?(?:\*\/|$)|<!--.*?(?:-->|$)|#[^\n]*|"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|`(?:\\.|[^`\\])*`?|\b(?:0x[\da-f]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\b|[A-Za-z_$][\w$-]*|[{}()[\];:=<>!+*%&|?~^/-]/gi;
+    const keywords = /^(?:async|await|break|case|catch|class|const|continue|def|delete|do|elif|else|enum|except|export|extends|finally|fn|for|from|function|if|impl|import|in|interface|let|match|new|of|pub|raise|return|self|static|struct|super|switch|this|throw|try|type|typeof|use|var|void|while|with|yield|select|where|insert|update|into|as)$/i;
+    let out = '', last = 0;
+    for (const m of text.matchAll(re)) {
+      out += escHtml(text.slice(last, m.index));
+      const token = m[0], after = text.slice(m.index + token.length);
+      const cls = /^(\/\/|\/\*|<!--)/.test(token) || (hashComments && token[0] === '#') ? 'cm'
+        : /^["'`]/.test(token) ? 's' : /^\d/.test(token) ? 'n'
+        : /^(true|false|null|none|undefined)$/i.test(token) ? 'b'
+        : keywords.test(token) ? 'k' : /^\s*\(/.test(after) ? 'c'
+        : /^\s*:/.test(after) ? 'v' : /^[{}()[\];:=<>!+*%&|?~^/-]$/.test(token) ? 'o' : '';
+      out += cls ? tk(cls, token) : escHtml(token);
+      last = m.index + token.length;
+    }
+    return out + escHtml(text.slice(last));
+  }
   // A file link's type icon, from its extension.
   const FILE_ICONS = { js: 'js', mjs: 'js', cjs: 'js', jsx: 'jsx', ts: 'ts', mts: 'ts', cts: 'ts', tsx: 'tsx', html: 'html', htm: 'html', css: 'css', scss: 'css',
     py: 'py', rs: 'rs', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp', md: 'md', csv: 'csv', sql: 'sql', svg: 'svg', vue: 'vue', pdf: 'pdf', txt: 'txt',
@@ -11109,7 +11154,7 @@
       const meta = [seg.model && seg.model !== 'default' ? seg.model : '', seg.effort && seg.effort !== 'default' ? seg.effort : ''].filter(Boolean).join(' · ');
       // The agent header shows only where the agent or its model changes, not at every session.
       const head = name + '|' + meta;
-      if (head !== lastHead) html += `<div class="thr-seg"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
+      if (head !== lastHead) html += `<div class="thr-seg" data-head="${escHtml(head)}"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
       lastHead = head;
       if (seg.handoff) html += `<div class="thr-note"><i class="ph ph-arrows-left-right" aria-hidden="true"></i>Started with the full history of the ${i} earlier session${i > 1 ? 's' : ''}</div>`;
       if (res.trimmed) html += `<div class="thr-note">${res.trimmed} earlier items not shown</div>`;
@@ -11185,14 +11230,13 @@
         if (!files.size) return '';
         const all = [...files.values()];
         const rel = p => seg.cwd && p.startsWith(seg.cwd.replace(/[\\/]$/, '') + '/') ? p.slice(seg.cwd.replace(/[\\/]$/, '').length + 1) : p;
-        const line = l => `<span class="dl${l[0] === '+' ? ' add' : l[0] === '-' ? ' del' : l.startsWith('@@') ? ' hunk' : ''}">${escHtml(l) || ' '}</span>`;
         const sum = k => all.reduce((s, f) => s + f[k], 0);
         return `<div class="thr-changes"><div class="thr-changes-head"><span class="thr-changes-count">${all.length} changed file${all.length > 1 ? 's' : ''}</span>`
           + `<span class="thr-add">+${sum('add')}</span><span class="thr-del">-${sum('del')}</span>`
           + `<button type="button" class="thr-diff-btn"><i class="ph ph-file-text" aria-hidden="true"></i>Open diff</button></div>`
-          + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ph-file-code" aria-hidden="true"></i>`
+          + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ${linkFileIcon(f.path)}" aria-hidden="true"></i>`
             + `<span class="thr-change-path" title="${escHtml(f.path)}">${escHtml(rel(f.path))}</span><span class="thr-add">+${f.add}</span><span class="thr-del">-${f.del}</span></summary>`
-            + `<pre class="thr-diff">${f.patches.map(p => p.split('\n').map(line).join('')).join('<span class="dl sep"></span>')}</pre></details>`).join('')
+            + `<pre class="thr-diff">${f.patches.map(p => p.split('\n').map(l => hlDiffLine(l, f.path)).join('')).join('<span class="dl sep"></span>')}</pre></details>`).join('')
           + '</div>';
       };
       // T3-style turns: the prompt; for a finished turn a collapsible "Worked for 16s" holding its
@@ -11231,7 +11275,7 @@
         u = e;
       }
     });
-    flow.innerHTML = html + pendingHtml(ws);
+    flow.innerHTML = html + pendingHtml(ws, lastHead);
     syncWorking(ws, surface);
     if (surface === thrPage && thrFind.q) thrFindRun(true); // the re-render dropped the old match ranges
     flow.querySelectorAll('img.thr-img').forEach(async img => {
@@ -11568,7 +11612,7 @@
       const dirs = [...new Set([cur, ...workspaces.map(w => w.cwd), ...chatThreads().map(t => chatCwd(t))].filter(d => d && !isScratchDir(d)))].slice(0, 12);
       item('<i class="ph ph-selection"></i>', 'No project', '', () => setChatCwd(tab, null, true));
       if (dirs.length) sep();
-      dirs.forEach(d => item(`<i class="ph ph-folder${d === cur ? '-open' : ''}"></i>`, escHtml(d.replace(/^\/home\/[^/]+/, '~')), '', () => setChatCwd(tab, d)));
+      dirs.forEach(d => item(chatFolderIcon(d, d === cur), escHtml(d.replace(/^\/home\/[^/]+/, '~')), '', () => setChatCwd(tab, d)));
       if (window.electronAPI?.selectDirectory) {
         if (dirs.length) sep();
         item('<i class="ph ph-folder-plus"></i>', 'Choose folder…', '', async () => setChatCwd(tab, await window.electronAPI.selectDirectory(cur || undefined)));
@@ -12901,7 +12945,17 @@
     dd.append(btn, menu);
     const label = btn.querySelector('.custom-dropdown-label');
     const arrow = btn.querySelector('.dropdown-arrow');
-    function appendIcon(host, pathData) {
+    function appendIcon(host, pathData, agentId) {
+      if (agentId) {
+        const h = harnessOf(agentId);
+        if (!h) return;
+        const icon = document.createElement('span');
+        icon.className = 'dropdown-icon dropdown-agent-icon';
+        icon.style.color = h.color || 'var(--fg)';
+        icon.innerHTML = procIconHtml(h.bin, 'ph-robot');
+        host.append(icon);
+        return;
+      }
       if (!pathData) return;
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       svg.classList.add('dropdown-icon'); svg.setAttribute('viewBox', '0 0 24 24');
@@ -12911,7 +12965,7 @@
     }
     function refresh() {
       label.replaceChildren();
-      appendIcon(label, select.selectedOptions[0]?.dataset.icon);
+      appendIcon(label, select.selectedOptions[0]?.dataset.icon, select.selectedOptions[0]?.dataset.agent);
       label.append(document.createTextNode(select.selectedOptions[0]?.textContent || ''));
       btn.disabled = select.disabled;
       for (const option of menu.children) {
@@ -12947,7 +13001,7 @@
           }
           item.append(swatches);
         }
-        appendIcon(item, option.dataset.icon);
+        appendIcon(item, option.dataset.icon, option.dataset.agent);
         const text = document.createElement('span'); text.textContent = option.textContent; item.append(text);
         item.addEventListener('click', () => {
           if (option.disabled) return;
@@ -13073,6 +13127,25 @@
     if (focusedTheme) [...grid.children].find(card => card.dataset.theme === focusedTheme)?.focus({ preventScroll: true });
   }
 
+  function refreshThreadHarnessSetting() {
+    const select = document.getElementById('set-thread-harness');
+    if (!select) return;
+    const render = found => {
+      select.replaceChildren(new Option('Last used', ''));
+      for (const h of THREAD_HARNESSES) {
+        if (!CHAT_AGENTS[h.id] || !found[h.bin]) continue;
+        const option = new Option(h.name, h.id);
+        option.dataset.agent = h.id;
+        select.add(option);
+      }
+      select.value = [...select.options].some(o => o.value === threadSettings.harness) ? threadSettings.harness : '';
+      const dd = document.querySelector('.custom-dropdown[data-for="set-thread-harness"]');
+      if (dd) initCustomDropdown(dd);
+    };
+    render(_chatAgentsFound || {});
+    loadChatAgents().then(r => render(r?.found || {}));
+  }
+
   function openSettings(cat) {
     // Populate theme select
     const themeSelect = document.getElementById('set-theme');
@@ -13191,8 +13264,7 @@
     if (linkDD) initCustomDropdown(linkDD);
 
     // Threads
-    const thHarness = document.getElementById('set-thread-harness');
-    if (thHarness.options.length < 2) for (const h of THREAD_HARNESSES) if (CHAT_AGENTS[h.id]) thHarness.add(new Option(h.name, h.id));
+    refreshThreadHarnessSetting();
     for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles']]) {
       document.getElementById(id).value = threadSettings[key];
       const dd = document.querySelector(`.custom-dropdown[data-for="${id}"]`);
