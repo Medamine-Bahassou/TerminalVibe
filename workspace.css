@@ -1480,11 +1480,6 @@ body.detached #threads-sidebar { display:none; }
 /* ── Chat prompts: images above the bubble; image paths in the text as link chips (both open the viewer) ── */
 #sbr-thread .thr-msg.user > .thr-images { justify-content:flex-end; max-width:85%; }
 #sbr-thread .thr-msg.user .thr-img { max-height:220px; cursor:zoom-in; }
-#sbr-thread .thr-img-link { display:inline-flex; align-items:baseline; gap:6px; max-width:100%; padding:0; background:none; border:0; color:var(--accent); font:inherit; text-align:left; cursor:pointer; vertical-align:baseline; }
-#sbr-thread .thr-img-link-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent); text-underline-offset:3px; }
-#sbr-thread .thr-img-link:hover .thr-img-link-name { text-decoration-color:var(--accent); }
-#sbr-thread .thr-img-link:focus-visible { outline:none; border-radius:4px !important; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
-#sbr-thread .thr-img-size { flex-shrink:0; font:400 11px var(--mono-font); color:var(--dim-text); }
 #sbr-thread .thr-img-size:empty { display:none; }
 
 /* ── Tab bar menu: Chat › agents (brand logos), and a disabled row when none is installed ── */
@@ -2308,3 +2303,14 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 #sbr-thread .thr-tool-image .thr-img { max-height:200px; }
 /* The image file is gone (the loader dropped it): show its path, like before. */
 #sbr-thread .thr-tool-image:empty::before { content:attr(data-path); font:12px/1.5 var(--mono-font); color:var(--muted-text); }
+
+/* A chat's auxiliary shell is a split within the pane, without a tab. */
+#pane-area .term-slot.chat-bottom-open:not(.chat-cli) > #sbr-thread,
+.term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { bottom:var(--chat-terminal-height, 35%); height:auto; }
+.chat-bottom-terminal { position:absolute; bottom:0; left:0; right:0; height:var(--chat-terminal-height, 35%); z-index:3; display:flex; flex-direction:column; border-top:1px solid var(--border); background:var(--bg); }
+.chat-bottom-terminal[hidden], .chat-cli > .chat-bottom-terminal { display:none; }
+.chat-bottom-header { display:flex; align-items:center; justify-content:space-between; flex:none; padding:4px 10px; color:var(--muted-text); font-size:12px; }
+.chat-bottom-header button { display:grid; place-items:center; width:24px; height:24px; border:0; background:transparent; color:inherit; cursor:pointer; border-radius:4px; }
+.chat-bottom-header button:hover { background:var(--ui-hover); color:var(--fg); }
+.chat-bottom-header button:focus-visible { outline:2px solid var(--accent); }
+.chat-bottom-body { flex:1; min-height:0; padding:0 8px 6px; }

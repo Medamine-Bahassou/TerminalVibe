@@ -2380,6 +2380,8 @@
       const terms = getWorkspaceTerminals(ws);
       const t = terms.find(x => x.id === id);
       if (t) return { ws, term: t };
+      const child = terms.find(x => x._bottomTerminal?.id === id)?._bottomTerminal;
+      if (child) return { ws, term: child };
     }
     return null;
   }
@@ -4890,6 +4892,27 @@
     return entry;
   }
 
+  function syncBrowserTabIcon(entry, tab) {
+    const icon = tab.querySelector('.tg-tab-icon');
+    if (!icon) return;
+    icon.innerHTML = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg>';
+    if (!entry._favicon) return;
+    const src = entry._favicon, img = document.createElement('img');
+    img.className = 'tg-tab-favicon'; img.alt = ''; img.draggable = false;
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', () => {
+      if (entry._favicon === src) setBrowserTabFavicon(entry, []);
+    }, { once: true });
+    icon.replaceChildren(img);
+    img.src = src;
+  }
+  function setBrowserTabFavicon(entry, favicons) {
+    entry._favicon = (Array.isArray(favicons) ? favicons : []).find(url =>
+      typeof url === 'string' && /^(https?:\/\/|data:image\/)/i.test(url)) || null;
+    document.querySelectorAll('.tg-tab[data-termid]').forEach(tab => {
+      if (tab.dataset.termid === entry.id) syncBrowserTabIcon(entry, tab);
+    });
+  }
   function addBrowserTab(wsId, targetGroupId, url) {
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
@@ -4934,6 +4957,7 @@
             tab.className = 'tg-tab active';
             tab.dataset.termid = entry.id;
             tab.innerHTML = `<span class="tg-tab-dot tg-tab-icon"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
+            syncBrowserTabIcon(entry, tab);
             tab.title = entry.label;
             applyTabColor(tab, entry.color);
             tab.draggable = true;
@@ -5547,6 +5571,7 @@
     if (idx === -1) return;
 
     const entry = group.terminals[idx];
+    disposeChatBottomTerminal(entry);
     if (!skipPtyClose) rememberClosedThread(entry, wsp);
     if (entry.type !== 'browser') {
       if (!skipPtyClose) {
@@ -5771,6 +5796,7 @@
     if (!result) return;
     const { ws, term: t } = result;
     t.dead = true;
+    if (t._chatOwner) { disposeChatBottomTerminal(t._chatOwner); return; }
     pluginEmit('terminal:exit', { termId: id, code });
     // Other agent panes returned to a shell when the agent ended, so this exit is the user's: close like any tab.
     if (t.agentManaged && t.keepOnExit) {
@@ -6368,6 +6394,7 @@
         <span class="tg-tab-close" title="Close">✕</span>
         `;
         tab.title = t.label;
+        if (t.type === 'browser') syncBrowserTabIcon(t, tab);
         syncTabAgentIcon(t, tab);
         applyTabColor(tab, t.color);
 
@@ -7053,8 +7080,9 @@
                 showLoading(false);
                 resumeBrowserTab(entry);
               });
-              surface.addEventListener('did-navigate', e => syncUrl(e.url));
+              surface.addEventListener('did-navigate', e => { setBrowserTabFavicon(entry, []); syncUrl(e.url); });
               surface.addEventListener('did-navigate-in-page', e => syncUrl(e.url));
+              surface.addEventListener('page-favicon-updated', e => setBrowserTabFavicon(entry, e.favicons));
               surface.addEventListener('page-title-updated', e => setBrowserHistoryTitle(entry.url, e.title));
               surface.addEventListener('did-fail-load', (e, errorCode) => {
                 if (errorCode === -3) return; // ERR_ABORTED = redirect, not real error
@@ -7074,6 +7102,7 @@
                 clearTimeout(entry._loadTimer);
                 showLoading(false);
                 resumeBrowserTab(entry);
+                try { setBrowserTabFavicon(entry, [new URL('/favicon.ico', entry.url).href]); } catch {}
               });
               surface.addEventListener('error', () => {
                 clearTimeout(entry._loadTimer);
@@ -7161,6 +7190,7 @@
 
           showLoading(true);
           urlInput.value = url;
+          setBrowserTabFavicon(entry, []);
           entry.url = url;
 
           if (entry._history[entry._historyIdx] !== url) {
@@ -8634,17 +8664,15 @@
     const paths = [];
     const marked = String(text).replace(new RegExp(IMAGE_PATH_RE.source, 'gi'), (m, q, quoted, bare) => {
       paths.push(quoted || bare);
-      return `\u0000${paths.length - 1}\u0000`;
+      return `\u0000I${paths.length - 1}\u0000`;
     });
     // Each “title” of a dropped thread shows as a link to it (its history file sits in the thread's folder).
     const markedRefs = refs.reduce((out, r, n) => out.split(`“${r.title}”`).join(`\u0000T${n}\u0000`), marked);
     const html = mdLite(markedRefs).replace(/\u0000T(\d+)\u0000/g, (_, n) => {
       const r = refs[n], key = r.path.split(/[\\/]/).slice(-2, -1)[0] || '';
       return `<a href="#" class="thr-thread-mention" data-thread-key="${escHtml(key)}" title="Thread: ${escHtml(r.title)}"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(r.title)}</span></a>`;
-    }).replace(/\u0000(\d+)\u0000/g, (_, n) => {
-      const p = paths[n], size = _thrImgSize.get(p);
-      return `<button type="button" class="thr-img-link" data-path="${escHtml(p)}" title="${escHtml(p)}"><span class="thr-img-link-name">${escHtml(p.split(/[\\/]/).pop())}</span>`
-        + `<span class="thr-img-size" data-size-path="${escHtml(p)}">${size ? fmtBytes(size) : ''}</span></button>`;
+    }).replace(/\u0000I(\d+)\u0000/g, (_, n) => {
+      return `<span class="thr-inline-ref">${chatImageReferenceHtml({ path: paths[n] })}</span>`;
     }).trim();
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
   }
@@ -8700,6 +8728,58 @@
     }
     else { _flowSig = ''; if (curChat() === tab) { restoreThreadScroll(tab); refreshThreadFlow(tab); syncThreadComposer(tab); } thrInput.focus(); }
   }
+  function disposeChatBottomTerminal(owner) {
+    const entry = owner?._bottomTerminal;
+    if (!entry) return;
+    delete owner._bottomTerminal;
+    sendControl({ type: 'close', id: entry.id });
+    clearTimeout(entry._resizeTimeout);
+    _termFitObserver.unobserve(entry.el);
+    _disposeTermRenderers(entry.term);
+    entry.term.dispose();
+    entry.el.remove();
+    owner.el?.classList.remove('chat-bottom-open');
+  }
+  function toggleChatBottomTerminal(owner) {
+    if (!owner?.threadHistory || owner._cliView || !wsReady) return;
+    let entry = owner._bottomTerminal;
+    if (!entry) {
+      const wsp = findTermById(owner.id)?.ws;
+      if (!wsp) return;
+      entry = _createTermEntry(wsp, uuid(), 'Terminal');
+      entry._chatOwner = owner;
+      entry.cwd = chatCwd(owner) || null;
+      owner._bottomTerminal = entry;
+      const panel = document.createElement('section');
+      panel.className = 'chat-bottom-terminal';
+      panel.id = 'slot-' + entry.id;
+      panel.setAttribute('aria-label', 'Project terminal');
+      panel.innerHTML = '<div class="chat-bottom-header"><span>Terminal</span><button type="button" aria-label="Hide terminal (Ctrl+J)" title="Hide terminal (Ctrl+J)"><i class="ph ph-x" aria-hidden="true"></i></button></div><div class="chat-bottom-body"></div>';
+      owner.el.append(panel);
+      entry.el = panel;
+      entry.term.open(panel.querySelector('.chat-bottom-body'));
+      entry.opened = true;
+      // Keep the chat as the active tab when its shell receives focus.
+      panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); });
+      panel.querySelector('button').addEventListener('click', () => toggleChatBottomTerminal(owner));
+      owner.el.classList.add('chat-bottom-open');
+      _termFitObserver.observe(panel);
+      fitTerm(entry, true);
+      sendControl({ type: 'create', id: entry.id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd });
+    } else {
+      entry.el.hidden = !entry.el.hidden;
+      owner.el.classList.toggle('chat-bottom-open', !entry.el.hidden);
+    }
+    if (entry.el.hidden) { owner.term.focus(); return; }
+    requestAnimationFrame(() => { fitTerm(entry, true); entry.term.focus(); });
+  }
+  document.addEventListener('keydown', e => {
+    if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.key.toLowerCase() !== 'j') return;
+    const owner = activeTerminal();
+    if (!owner?.threadHistory || owner._cliView || !owner.el?.offsetParent) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (!e.repeat) toggleChatBottomTerminal(owner);
+  }, true);
   // An agent finished its turn: update the chat now, not on the next poll.
   function chatAgentIdle(entry) {
     void refreshUsageLimits();
@@ -10156,6 +10236,16 @@
       open(text ? (o === c.data.length ? c.nextSibling : null) : c.childNodes[o]);
     }
   }
+  function chatImageReferenceHtml(file, tabIndex = 0) {
+    const path = file.path || '', name = file.name || path.split(/[\\/]/).pop();
+    if (file.preview) {
+      _thrImgCache.set(path, file.preview);
+      if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
+    }
+    if (file.size) _thrImgSize.set(path, file.size);
+    const preview = file.preview || _thrImgCache.get(path), size = file.size || _thrImgSize.get(path);
+    return `<a href="#" class="thr-image-ref thr-img-link" tabindex="${tabIndex}" data-path="${escHtml(path)}" title="${escHtml(name)}"><span class="thr-inline-image-icon">${preview ? `<img src="${escHtml(preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span class="thr-img-link-name">${escHtml(name)}</span><small class="thr-img-size" data-size-path="${escHtml(path)}">${size ? escHtml(fmtBytes(size).replace(' ', '')) : ''}</small></a>`;
+  }
   function syncChatInputLinks(surface = thrPage, files = _chatFiles) {
     const input = threadPart(surface, 'input'), editor = threadPart(surface, 'input-links');
     if (!input || !editor) return;
@@ -10183,7 +10273,7 @@
       const label = file.cite ? file.cite.replace(/\s+/g, ' ').slice(0, 42) + (file.cite.replace(/\s+/g, ' ').length > 42 ? '…' : '') : file.name;
       const link = file.cite
         ? `<a href="#" class="thr-cite-ref" tabindex="${tabIndex}" title="${escHtml(file.cite)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(label)}</span></a>`
-        : `<a href="#" class="thr-image-ref" tabindex="${tabIndex}" title="${escHtml(file.name)}"><span class="thr-inline-image-icon">${file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span>${escHtml(label)}</span>${file.size ? `<small>${escHtml(fmtBytes(file.size).replace(' ', ''))}</small>` : ''}</a>`;
+        : chatImageReferenceHtml(file, tabIndex);
       return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}">${link}</span>`;
     }).join('');
     editor._draftValue = input.value; editor._draftReferences = signature; editor._draftMd = md;
@@ -11402,6 +11492,19 @@
     }
     return kids(el);
   }
+  function mdFromRange(range, scope) {
+    let fragment = range.cloneContents();
+    // cloneContents omits shared ancestors, including a link when only its label is selected.
+    let ancestor = range.commonAncestorContainer;
+    if (ancestor.nodeType !== Node.ELEMENT_NODE) ancestor = ancestor.parentElement;
+    while (ancestor && ancestor !== scope && scope.contains(ancestor)) {
+      const wrapper = ancestor.cloneNode(false);
+      wrapper.append(fragment);
+      fragment = wrapper;
+      ancestor = ancestor.parentElement;
+    }
+    return mdFromDom(fragment);
+  }
   // Escape first, then the markdown agents use: fences (highlighted by their language tag), `code`, **bold**,
   // *italic*, ~~strike~~, links, headings, lists, > quotes, tables and --- rules.
   function mdLite(text) {
@@ -11758,7 +11861,7 @@
         const msgs = [...flow.querySelectorAll('.thr-msg[data-key]')].filter(covers);
         if (!msgs.length) return; // tool output etc.: the browser's own copy
         // Inside one message: the selected part as markdown source.
-        const text = msgs.length === 1 ? mdFromDom(within(msgs[0]).cloneContents()) // only that message, not the chrome after it.replace(/\n{3,}/g, '\n\n').trim()
+        const text = msgs.length === 1 ? mdFromRange(within(msgs[0]), msgs[0])
           : msgs.map(m => `${m.classList.contains('user') ? 'User' : 'AI'}: ${flow._texts.get(m.dataset.key) || ''}`).join('\n\n');
         e.clipboardData.setData('text/plain', text);
         e.preventDefault();
@@ -11779,7 +11882,11 @@
       }
       img.src = src;
       const size = _thrImgSize.get(p);
-      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size); });
+      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size).replace(' ', ''); });
+      flow.querySelectorAll('.thr-img-link').forEach(link => {
+        if (link.dataset.path !== p) return;
+        link.querySelector('.thr-inline-image-icon').innerHTML = `<img src="${escHtml(src)}" alt="">`;
+      });
     });
     // Image actions: open in the full viewer (zoom, pan, rotate, flip) or copy as PNG.
     flow.querySelectorAll('.thr-img-wrap').forEach(wrap => {
