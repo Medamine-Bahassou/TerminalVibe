@@ -8664,16 +8664,16 @@
     const paths = [];
     const marked = String(text).replace(new RegExp(IMAGE_PATH_RE.source, 'gi'), (m, q, quoted, bare) => {
       paths.push(quoted || bare);
-      return `\u0000${paths.length - 1}\u0000`;
+      return `\u0000I${paths.length - 1}\u0000`;
     });
     // Each “title” of a dropped thread shows as a link to it (its history file sits in the thread's folder).
     const markedRefs = refs.reduce((out, r, n) => out.split(`“${r.title}”`).join(`\u0000T${n}\u0000`), marked);
     const html = mdLite(markedRefs).replace(/\u0000T(\d+)\u0000/g, (_, n) => {
       const r = refs[n], key = r.path.split(/[\\/]/).slice(-2, -1)[0] || '';
       return `<a href="#" class="thr-thread-mention" data-thread-key="${escHtml(key)}" title="Thread: ${escHtml(r.title)}"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(r.title)}</span></a>`;
-    }).replace(/\u0000(\d+)\u0000/g, (_, n) => {
+    }).replace(/\u0000I(\d+)\u0000/g, (_, n) => {
       const p = paths[n], size = _thrImgSize.get(p);
-      return `<button type="button" class="thr-img-link" data-path="${escHtml(p)}" title="${escHtml(p)}"><span class="thr-img-link-name">${escHtml(p.split(/[\\/]/).pop())}</span>`
+      return `<button type="button" class="thr-img-link" data-path="${escHtml(p)}" title="${escHtml(p)}"><span class="thr-inline-image-icon"><i class="ph ph-image" aria-hidden="true"></i></span><span class="thr-img-link-name">${escHtml(p.split(/[\\/]/).pop())}</span>`
         + `<span class="thr-img-size" data-size-path="${escHtml(p)}">${size ? fmtBytes(size) : ''}</span></button>`;
     }).trim();
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
