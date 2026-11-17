@@ -10,7 +10,7 @@ app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false }); await win.loadURL('about:blank');
   await win.webContents.insertCSS(fs.readFileSync(path.join(root, 'workspace.css'), 'utf8'));
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
-  const start = source.indexOf('  function decorateWorkUsernames(');
+  const start = source.indexOf('  function applyWorkUsernamePrivacy(');
   const helper = source.slice(start, source.indexOf('  async function refreshThreadFlow(', start));
   const settingsStart = source.indexOf('  const loadThreadSettings =');
   const settings = source.slice(settingsStart, source.indexOf('\n  };', settingsStart) + 5);
@@ -18,6 +18,7 @@ app.whenReady().then(async () => {
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     let threadSettings = { usernames: 'show' };
+    const _workUsernameRecords = new Map(), _workUsernameMarkup = new WeakMap();
     const hideEmails = false, copied = [];
     window.electronAPI = { clipboardWrite: text => copied.push(text) };
     ${privacy}
@@ -39,13 +40,22 @@ app.whenReady().then(async () => {
     check(getComputedStyle(users[0]).filter === 'none', 'Usernames must be shown by default');
     loadThreadSettings({ usernames: 'blur' });
     check(getComputedStyle(users[0]).filter === 'blur(4px)', 'Setting must blur existing work immediately');
+    check(users.every(span => /^[a-f0-9]{12}$/.test(span.textContent)), 'Hidden text must be random fixed-length content, not the original username');
+    check(!summary.textContent.includes('MOHAME~1') && !summary.textContent.includes('/home/med/'), 'Rendered work text must not retain actual usernames');
+    check(users[0].getBoundingClientRect().width === users[1].getBoundingClientRect().width, 'Different username lengths must occupy the same width');
+    check(!users[0].outerHTML.includes('MOHAME~1'), 'Username markup must not contain the original value in text or attributes');
+    const snapshot = document.createElement('div'); snapshot.innerHTML = summary.outerHTML; document.body.append(snapshot);
     decorateWorkUsernames(document);
-    check(document.querySelectorAll('.thr-work-username').length === 6, 'Repeated rendering must not nest username spans');
+    check(document.querySelectorAll('#sbr-thread .thr-work-username').length === 6, 'Repeated rendering must not nest username spans');
     const saved = JSON.parse(JSON.stringify(threadSettings));
     loadThreadSettings({ usernames: 'show' });
     check(getComputedStyle(users[0]).filter === 'none', 'Show must remove blur immediately');
+    check(document.getElementById('sbr-thread').textContent === original, 'Show must restore original usernames');
+    check(detail.querySelector('.tk-s'), 'Show must restore syntax markup');
+    check(snapshot.textContent.includes('MOHAME~1'), 'Cloned split panes must restore usernames when shown');
     loadThreadSettings(saved);
     check(getComputedStyle(users[0]).filter === 'blur(4px)', 'Restored settings must reapply blur');
+    check(!snapshot.textContent.includes('MOHAME~1'), 'Cloned panes must also replace actual usernames when hidden');
     const selection = window.getSelection(), range = document.createRange();
     range.setStart(users[0].firstChild, 1); range.setEnd(users[0].firstChild, 4);
     selection.removeAllRanges(); selection.addRange(range);
@@ -57,7 +67,7 @@ app.whenReady().then(async () => {
     summary.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true }));
     await new Promise(resolve => setTimeout(resolve, 50));
     check(copied[1] && !copied[1].includes('MOHAME~1') && !copied[1].includes('/home/med/'), 'Whole paths must sanitize every hidden username');
-    return 'PASS: username blur, show/blur settings, native and partial selection copying without hidden values, and unchanged file paths';
+    return 'PASS: fixed-width random username substitution, show/blur settings, cloned panes, and sanitized selection copying';
   })()`));
   clearTimeout(timer); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });

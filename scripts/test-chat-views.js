@@ -29,6 +29,7 @@ app.whenReady().then(async () => {
     const syncThreadComposer = () => {}, fitTerm = () => {}, syncWorking = () => {};
     const ensureChatTerminalSession = async () => true;
     const clearCitationFlash = () => {};
+    const applyWorkUsernamePrivacy = () => {}; // Privacy rendering is covered by test-work-usernames.
     const threadSegments = tab => tab.chat?.segments || [], threadMeta = tab => ({ id: tab.id });
     const pendingHtml = () => '', chatWorking = () => false, saveState = () => {}, setChatTabLabel = () => {};
     const pendingMessages = () => [];
