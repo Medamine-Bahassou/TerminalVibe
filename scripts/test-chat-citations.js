@@ -15,6 +15,8 @@ app.whenReady().then(async () => {
   for (const file of ['style.css', 'workspace.css']) await win.webContents.insertCSS(fs.readFileSync(path.join(root, file), 'utf8'));
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
   const copyHelpers = source.slice(source.indexOf('  function mdFromDom('), source.indexOf('  // Escape first, then the markdown agents use:'));
+  const copyBinding = source.slice(source.indexOf('    if (!flow._copyBound) {'), source.indexOf('    syncWorking(ws, surface);', source.indexOf('    if (!flow._copyBound) {')));
+  const privacyCopy = source.slice(source.indexOf('  function copyPrivateWorkSelection('), source.indexOf("  document.addEventListener('copy', copyPrivateWorkSelection"));
   const citations = source.slice(source.indexOf('  let _citationFlash = null;'), source.indexOf('  let _chatCtrl = false;'));
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
@@ -31,6 +33,38 @@ app.whenReady().then(async () => {
     check(mdFromRange(copyRange, copyScope) === '**bold text**', 'Selected formatted text lost its markdown');
     copyRange.selectNodeContents(copyScope);
     check(mdFromRange(copyRange, copyScope) === '[View the latest screenshot](/tmp/source.png) and **bold text**', 'Mixed selection changed markdown');
+    {
+      const flow = document.createElement('div'); document.body.append(flow);
+      flow.innerHTML = '<div class="thr-msg assistant" data-key="a"><div class="thr-msg-text">First reply.</div></div><div class="thr-msg user" data-key="b"><div class="thr-msg-text">test</div></div><div class="thr-msg assistant" data-key="c"><div class="thr-msg-text">Last reply.</div></div>';
+      ${copyBinding}
+      const range = document.createRange();
+      range.setStart(flow.querySelector('[data-key="a"] .thr-msg-text').firstChild, 11);
+      range.setEnd(flow.querySelector('[data-key="c"] .thr-msg-text').firstChild, 4);
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      const event = new Event('copy', { bubbles: true, cancelable: true });
+      let copied; event.clipboardData = { setData: (_type, value) => copied = value };
+      flow.dispatchEvent(event);
+      check(copied === ['.', 'test', 'Last'].join(String.fromCharCode(10, 10)), 'Cross-message copy must clip boundary messages and exclude role labels');
+      selection.removeAllRanges(); flow.remove();
+    }
+    {
+      const section = document.createElement('div'); document.body.append(section);
+      section.innerHTML = '<div class="thr-msg-text">First paragraph</div><div class="thr-actions">15:10 Copy</div><div class="thr-seg">Codex medium</div><details class="thr-tool" open><summary>duplicate command</summary><pre class="thr-tool-detail">echo hello</pre><pre class="thr-tool-output">C:/Users/<span class="thr-work-username">Alice</span>/project</pre></details><div class="thr-msg-text">Last paragraph</div>';
+      const range = document.createRange(); range.selectNodeContents(section);
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      const threadSettings = { usernames: 'blur' };
+      let result = '', prevented = false;
+      const privateCopyToken = async () => '[user-hidden]';
+      const copyPrivateText = async text => { result = text; };
+      ${privacyCopy}
+      copyPrivateWorkSelection({ target: section, preventDefault() { prevented = true; }, stopImmediatePropagation() {} });
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      check(prevented && result.includes('First paragraph') && result.includes('Last paragraph'), 'Privacy copy must include selected paragraphs');
+      check(result.includes('[user-hidden]') && !result.includes('Alice'), 'Privacy copy must mask usernames');
+      check(!result.includes('15:10') && !result.includes('Codex medium') && !result.includes('duplicate command'), 'Privacy copy must omit chrome and repeated tool summaries');
+      check(result.includes(String.fromCharCode(10, 10)) && result.includes('echo hello'), 'Privacy copy must preserve paragraph and command structure');
+      selection.removeAllRanges(); section.remove();
+    }
     const tick = ms => new Promise(resolve => setTimeout(resolve, ms || 30));
     document.body.classList.add('ui-animations');
     document.body.innerHTML = '<div id="sbr-thread" style="position:relative;display:flex;width:500px;height:400px"><div class="thr-flow" id="sbr-thread-flow" tabindex="-1" style="height:300px;flex:none;overflow:auto"></div><div class="thr-composer-wrap" style="height:80px"></div><textarea id="draft"></textarea></div><div id="neighbor" style="height:100px;overflow:auto"><div style="height:500px">Other pane</div></div>';

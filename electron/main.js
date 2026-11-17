@@ -559,6 +559,7 @@ const IMAGE_SNIFF = [
   ['image/webp', b => b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP'],
   ['image/bmp', b => b.toString('latin1', 0, 2) === 'BM'],
 ];
+ipcMain.handle('fs:attachment-preview', (_e, file) => require('./attachment-preview').readAttachmentPreview(file));
 ipcMain.handle('fs:attachment-info', async (_e, p) => {
   if (typeof p !== 'string' || p.length > 4096) return null;
   const fp = expandHome(p);
@@ -1441,22 +1442,9 @@ ipcMain.on('terminal:close', (_e, id) => {
 });
 // Is this process still alive? Instant, unlike the cached Windows process table.
 ipcMain.handle('process:alive', (_e, pid) => { try { return Number.isInteger(pid) && pid > 1 && process.kill(pid, 0); } catch (err) { return err.code === 'EPERM'; } });
-// Chat "Take over": stop other agent processes resuming this session (an orphan from an earlier run
-// holds Codex's conversation lock), never the requesting tab's own process tree. Not on Windows (no ps).
-ipcMain.handle('agent:release-session', (_e, sessionId, tabId) => new Promise(resolve => {
-  if (process.platform === 'win32' || !/^[\w-]{8,}$/.test(String(sessionId || ''))) return resolve(0);
-  require('child_process').execFile('ps', ['-eo', 'pid=,ppid=,args='], { timeout: 4000 }, (err, out) => {
-    if (err) return resolve(0);
-    const procs = out.split('\n').map(l => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean).map(m => ({ pid: +m[1], ppid: +m[2], args: m[3] }));
-    const parent = new Map(procs.map(p => [p.pid, p.ppid])), own = ptys.get(tabId)?.pid;
-    if (!own) return resolve(0);
-    const inOwnTree = pid => { for (let p = pid, i = 0; p > 1 && i < 64; p = parent.get(p), i++) if (p === own) return true; return false; };
-    const holds = new RegExp(`(^|\\s)(resume|--resume|--session-id)\\s+${sessionId}(\\s|$)`);
-    let killed = 0;
-    for (const p of procs) if (holds.test(p.args) && !inOwnTree(p.pid)) { try { process.kill(p.pid, 'SIGTERM'); killed++; } catch {} }
-    resolve(killed);
-  });
-}));
+// Take over only an identified agent holding this exact session; preserve this tab.
+ipcMain.handle('agent:release-session', (_e, sessionId, tabId) =>
+  require('./release-session').releaseSession(sessionId, ptys.get(tabId)?.pid));
 // Chat input suggestions: the chat folder's files/folders (@) and the agent's slash commands (/).
 ipcMain.handle('chat:files', (_e, cwd) => require('./chat-complete').listFiles(cwd));
 ipcMain.handle('chat:commands', (_e, harness, cwd) => require('./chat-complete').listCommands(harness, cwd));

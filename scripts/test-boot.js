@@ -31,11 +31,12 @@ setTimeout(async () => {
   // dist/index.html, or the dev server when one is running (main.js prefers it in development).
   const win = BrowserWindow.getAllWindows().find(w => /index\.html|^http:\/\/127\.0\.0\.1:\d+\/?$/.test(w.webContents.getURL()) && !/[?&](mode|detached)=/.test(w.webContents.getURL()));
   if (!win) return finish(false, `no main window (windows: ${JSON.stringify(BrowserWindow.getAllWindows().map(w => w.webContents.getURL()))}; errors: ${errors.join(' | ')})`);
-  const s = await win.webContents.executeJavaScript(`({ ran: !!window.__tvAppJsRan, splash: document.getElementById('splash')?.className || 'gone' })`).catch(e => ({ err: e.message }));
+  const s = await win.webContents.executeJavaScript(`({ terminals: document.querySelectorAll('.term-slot .xterm').length, ran: !!window.__tvAppJsRan, splash: document.getElementById('splash')?.className || 'gone' })`).catch(e => ({ err: e.message }));
   // Startup noise that isn't the app's (GPU, network) is not a boot failure.
   const real = errors.filter(m => !/GPU|gpu_|Autofill|dbus|net::ERR|DevTools/i.test(m));
   if (s.err) return finish(false, `window: ${s.err}`);
   if (real.length) return finish(false, `renderer errors during boot:\n  ${real.join('\n  ')}`);
   if (!s.ran || !/hide|gone/.test(s.splash)) return finish(false, `splash still up (app.js ran: ${s.ran}, splash: "${s.splash}")`);
+  if (!s.terminals) return finish(false, 'no workspace terminal was created');
   finish(true, 'the app boots past its splash with no renderer errors');
 }, 12000);
