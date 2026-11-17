@@ -8594,6 +8594,22 @@
   // the images themselves show above the bubble. Both open the image viewer.
   const _thrImgSize = new Map(); // path -> bytes, known once the image was read
   const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+  function chatImageLinkHtml(file, attrs = '', extraClass = '') {
+    return `<a href="#" class="thr-image-ref ${extraClass}" ${attrs} title="${escHtml(file.path || file.name)}"><span class="thr-inline-image-icon">${file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span>${escHtml(file.name)}</span><small class="thr-img-size" data-size-path="${escHtml(file.path || '')}">${file.size ? escHtml(fmtBytes(file.size).replace(' ', '')) : ''}</small></a>`;
+  }
+  function queuedMessageTextHtml(message) {
+    let text = message.typed || '';
+    const links = [];
+    for (const [i, file] of (message.files || []).entries()) {
+      const image = file.image && !file.cite && !file.at && !file.thread;
+      const replacement = image ? `\u0000I${links.length}\u0000` : file.cite ? '“' + file.cite.replace(/\s+/g, ' ').slice(0, 80) + '”' : file.name;
+      if (image) links.push(chatImageLinkHtml(file, `data-queue-act="preview" data-file-i="${i}"`));
+      if (file.mention && text.includes(file.mention)) text = text.split(file.mention).join(replacement);
+      else if (image) text += (text ? ' ' : '') + replacement;
+    }
+    if (!text) text = message.files?.map(f => f.name || f.cite).join(', ') || message.text || '';
+    return escHtml(text).replace(/\u0000I(\d+)\u0000/g, (_, i) => links[i] || '');
+  }
   function userTextHtml(text, threads = []) {
     // Threads dropped in as context: from the transcript (threads) or a pending message's own notes.
     const refs = [...threads, ...[...String(text).matchAll(/<terminalvibe_context thread="([^"]*)">“([^”]*)”/g)].map(m => ({ path: m[1], title: m[2] }))];
@@ -8620,8 +8636,7 @@
       return `<a href="#" class="thr-thread-mention" data-thread-key="${escHtml(key)}" title="Thread: ${escHtml(r.title)}"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(r.title)}</span></a>`;
     }).replace(/\u0000(\d+)\u0000/g, (_, n) => {
       const p = paths[n], size = _thrImgSize.get(p);
-      return `<button type="button" class="thr-img-link" data-path="${escHtml(p)}" title="${escHtml(p)}"><span class="thr-img-link-name">${escHtml(p.split(/[\\/]/).pop())}</span>`
-        + `<span class="thr-img-size" data-size-path="${escHtml(p)}">${size ? fmtBytes(size) : ''}</span></button>`;
+      return chatImageLinkHtml({ path: p, name: p.split(/[\\/]/).pop(), size }, `data-path="${escHtml(p)}"`, 'thr-img-link');
     }).trim();
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
   }
@@ -9338,7 +9353,10 @@
       return;
     }
     const b = e.target.closest('.thr-img-link');
-    if (b) openClaudeRefViewer(null, { kind: 'file', path: b.dataset.path, label: b.dataset.path.split(/[\\/]/).pop() }, '');
+    if (b) {
+      e.preventDefault();
+      openClaudeRefViewer(null, { kind: 'file', path: b.dataset.path, label: b.dataset.path.split(/[\\/]/).pop() }, '');
+    }
     const href = e.target.closest('button.thr-link')?.dataset.href;
     if (!href) return;
     if (/^https?:/i.test(href)) { openExternalUrl(href); return; }
@@ -10066,7 +10084,7 @@
       const label = file.cite ? file.cite.replace(/\s+/g, ' ').slice(0, 42) + (file.cite.replace(/\s+/g, ' ').length > 42 ? '…' : '') : file.name;
       const link = file.cite
         ? `<a href="#" class="thr-cite-ref" tabindex="${tabIndex}" title="${escHtml(file.cite)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(label)}</span></a>`
-        : `<a href="#" class="thr-image-ref" tabindex="${tabIndex}" title="${escHtml(file.name)}"><span class="thr-inline-image-icon">${file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span>${escHtml(label)}</span>${file.size ? `<small>${escHtml(fmtBytes(file.size).replace(' ', ''))}</small>` : ''}</a>`;
+        : chatImageLinkHtml(file, `tabindex="${tabIndex}"`);
       return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}">${link}</span>`;
     }).join('');
     editor._draftValue = input.value; editor._draftReferences = signature;
@@ -10742,11 +10760,9 @@
     box.hidden = !queue.length;
     const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
     const html = header + queue.map(m => {
-      let label = m.typed || '';
-      for (const file of m.files || []) if (file.mention) label = label.split(file.mention).join(file.cite ? '“' + file.cite.replace(/\s+/g, ' ').slice(0, 80) + '”' : file.name);
-      if (!label) label = m.files?.map(f => f.name || f.cite).join(', ') || m.text;
+      const label = queuedMessageTextHtml(m);
       const previews = (m.files || []).map((file, i) => !file.image ? '' : `<button type="button" class="thr-queued-preview" data-queue-act="preview" data-file-i="${i}" aria-label="Preview ${escHtml(file.name)}">${file.preview ? `<img src="${escHtml(file.preview)}" alt="${escHtml(file.name)}">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</button>`).join('');
-      return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"><div class="thr-queued-bubble">${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${escHtml(label)}</div></div>`
+      return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"><div class="thr-queued-bubble">${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${label}</div></div>`
         + '<div class="thr-queued-actions"><button type="button" data-queue-act="send" aria-label="Send queued message now"><i class="ph ph-arrow-up" aria-hidden="true"></i><span>Send now</span></button><button type="button" data-queue-act="edit" aria-label="Edit queued message"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button><button type="button" data-queue-act="remove" aria-label="Remove queued message"><i class="ph ph-x" aria-hidden="true"></i></button></div></div>';
     }).join('');
     if (box.innerHTML !== html) box.innerHTML = html;
@@ -10780,6 +10796,7 @@
     if (button.dataset.queueAct === 'send') { sendQueuedMessage(ws, id); return; }
     const message = ws.chat.queuedMessages?.find(m => m.id === id);
     if (button.dataset.queueAct === 'preview') {
+      e.preventDefault();
       const file = message?.files?.[+button.dataset.fileI];
       if (file) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name }, '', file.preview);
       return;
