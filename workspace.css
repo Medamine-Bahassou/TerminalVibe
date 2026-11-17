@@ -1496,7 +1496,7 @@ body .ctx-item.disabled { color:var(--dim-text); cursor:default; pointer-events:
 #sbr-thread .thr-tool-detail { padding:10px 12px; }
 #sbr-thread .thr-tool-output { box-sizing:border-box; height:180px; overflow:auto; margin:0 0 8px 19px; padding:8px 12px; border:0; background:transparent; color:var(--fg); font:400 11.5px/1.5 var(--mono-font); white-space:pre; user-select:text; }
 #sbr-thread .thr-tool-output:focus-visible { outline:1px solid var(--accent); outline-offset:-1px; }
-body.blur-work-usernames #sbr-thread .thr-work-username { display:inline-block; filter:blur(4px); }
+body.blur-work-usernames #sbr-thread .thr-work-username { display:inline-block; width:12ch; overflow:hidden; white-space:nowrap; vertical-align:bottom; font-family:var(--mono-font); filter:blur(4px); }
 #sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-c { color:var(--ansi-blue, #7aa2f7); }
 #sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-f { color:var(--ansi-yellow, #e0af68); }
 #sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-s { color:var(--ansi-green, #9ece6a); }

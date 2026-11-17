@@ -9,8 +9,10 @@ const ctx = vm.createContext({ crypto: webcrypto, TextEncoder, Uint8Array, threa
 vm.runInContext(helpers, ctx);
 const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 12);
 (async () => {
-  assert.equal(await ctx.privateClipboardText('C:\\Users\\Alice\\repo'), 'C:\\Users\\[user-' + hash('Alice') + ']\\repo');
-  assert.equal(await ctx.privateClipboardText('\\\\wsl.localhost\\Ubuntu\\home\\med\\repo'), '\\\\wsl.localhost\\Ubuntu\\home\\[user-' + hash('med') + ']\\repo');
+  const first = await ctx.privateClipboardText('C:\\Users\\Alice\\repo');
+  assert.match(first, /^C:\\Users\\\[user-[a-f0-9]{12}\]\\repo$/);
+  assert.notEqual(await ctx.privateClipboardText('C:\\Users\\Alice\\repo'), first, 'Username copy tokens must be random rather than derived from the original');
+  assert.match(await ctx.privateClipboardText('\\\\wsl.localhost\\Ubuntu\\home\\med\\repo'), /\\home\\\[user-[a-f0-9]{12}\]\\repo$/);
   assert.equal(await ctx.privateClipboardText('Contact alice@example.com', true), 'Contact [email-' + hash('alice@example.com') + ']');
   assert.equal(await ctx.privateClipboardText('alice@example.com'), 'alice@example.com', 'email privacy is scoped to terminal copies');
   await ctx.copyPrivateText('/home/med/repo alice@example.com', true);
@@ -18,6 +20,6 @@ const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 
   settings.usernames = 'show'; ctx.hideEmails = false;
   assert.equal(await ctx.privateClipboardText('/home/med/repo alice@example.com', true), '/home/med/repo alice@example.com');
   ctx.crypto = {};
-  assert.equal(await ctx.privateCopyToken('secret', 'user'), '[user-hidden]', 'hash failure must not expose originals');
-  console.log('PASS: SHA-256 clipboard tokens, username and email privacy settings, and safe failure');
+  assert.equal(await ctx.privateCopyToken('secret', 'user'), '[user-xxxxxxxxxxxx]', 'Unavailable randomness must not expose originals');
+  console.log('PASS: randomized fixed-length usernames, SHA-256 email tokens, privacy settings, and safe failure');
 })().catch(error => { console.error(error); process.exitCode = 1; });

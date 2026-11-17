@@ -1732,9 +1732,11 @@
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
   let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed', markdown: 'on', usernames: 'show' };
+  const _workUsernameRecords = new Map(), _workUsernameMarkup = new WeakMap();
   const loadThreadSettings = s => {
     if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s };
     document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
+    applyWorkUsernamePrivacy(document);
   };
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
@@ -4641,7 +4643,13 @@
   // Email addresses have a clickable blur overlay; each occurrence toggles independently.
   // ponytail: one row at a time, so an address soft-wrapped across two rows isn't blurred.
   const EMAIL_RE = /[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+  function randomPrivateUsername() {
+    const bytes = new Uint8Array(6);
+    try { crypto.getRandomValues(bytes); } catch { return 'xxxxxxxxxxxx'; }
+    return [...bytes].map(n => n.toString(16).padStart(2, '0')).join('');
+  }
   async function privateCopyToken(value, type) {
+    if (type === 'user') return `[user-${randomPrivateUsername()}]`;
     try {
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
       return `[${type}-${[...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, '0')).join('').slice(0, 12)}]`;
@@ -9192,6 +9200,7 @@
         const flow = page.querySelector('#sbr-thread-flow');
         // Its last view shows at once (no blank frame while its history loads); the refresh then redraws it.
         flow.innerHTML = tab._flowHtml || '';
+        applyWorkUsernamePrivacy(flow);
         if (tab._flowHtml) flow.dataset.seen = '1'; else delete flow.dataset.seen;
       }
     }
@@ -11920,6 +11929,29 @@
     return command + (shell && tool.output !== undefined
       ? `<pre class="thr-tool-output" tabindex="0" role="region" aria-label="Command output">${escHtml(tool.output || 'No output')}</pre>` : '');
   }
+  function applyWorkUsernamePrivacy(root) {
+    const hidden = threadSettings.usernames === 'blur';
+    for (const span of root.querySelectorAll('.thr-work-username')) {
+      const record = [..._workUsernameRecords.values()].find(r => r.mask === span.dataset.usernameMask);
+      if (!record || span.dataset.usernameHidden === String(hidden)) continue;
+      span.dataset.usernameHidden = String(hidden);
+      if (hidden) span.textContent = record.mask;
+      else if (_workUsernameMarkup.has(span)) span.replaceChildren(_workUsernameMarkup.get(span).cloneNode(true));
+      else span.textContent = record.value; // A cloned split-pane snapshot retains only the random identifier.
+    }
+    // Native and custom path tooltips must use the same substituted usernames.
+    for (const element of root.querySelectorAll('.thr-change-path, .thr-tool-image-path, .thr-tool-detail, .thr-tool-sum')) {
+      for (const attribute of ['title', 'data-tip']) {
+        const text = element.getAttribute(attribute);
+        if (!text) continue;
+        let safe = text;
+        if (hidden) safe = text.replace(/((?:[A-Za-z]:[\\/]+Users[\\/]+|[\\/](?:home|Users)[\\/]+))([^\\/\s"'<>]+)/gi,
+          (_, prefix, value) => prefix + (_workUsernameRecords.get(value)?.mask || value));
+        else for (const record of _workUsernameRecords.values()) safe = safe.split(record.mask).join(record.value);
+        if (safe !== text) element.setAttribute(attribute, safe);
+      }
+    }
+  }
   function decorateWorkUsernames(root) {
     for (const element of root.querySelectorAll('.thr-tools-text, .thr-tool-sum, .thr-tool-detail, .thr-tool-output, .thr-change-path, .thr-tool-image-path')) {
       if (element.dataset.usernamesDecorated) continue;
@@ -11940,8 +11972,15 @@
         const range = document.createRange(); range.setStart(startNode, startOffset); range.setEnd(endNode, endOffset);
         const span = document.createElement('span'); span.className = 'thr-work-username';
         span.append(range.extractContents()); range.insertNode(span);
+        const value = span.textContent;
+        let record = _workUsernameRecords.get(value);
+        if (!record) { record = { value, mask: randomPrivateUsername() }; _workUsernameRecords.set(value, record); }
+        span.dataset.usernameMask = record.mask;
+        const original = document.createDocumentFragment(); original.append(...[...span.childNodes].map(n => n.cloneNode(true)));
+        _workUsernameMarkup.set(span, original);
       }
     }
+    applyWorkUsernamePrivacy(root);
   }
 
   async function refreshThreadFlow(ws, surface = thrPage) {
@@ -15708,7 +15747,10 @@
   for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown'], ['set-thread-usernames', 'usernames']])
     document.getElementById(id).addEventListener('change', e => {
       threadSettings = { ...threadSettings, [key]: e.target.value };
-      if (key === 'usernames') document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
+      if (key === 'usernames') {
+        document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
+        applyWorkUsernamePrivacy(document);
+      }
       if (key === 'usageDisplay') { renderUsageSidebar(); renderUsageModal(); }
       if (key === 'markdown') syncChatInputLinks();
       saveState();
