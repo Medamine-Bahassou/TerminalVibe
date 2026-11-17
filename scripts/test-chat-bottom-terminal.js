@@ -18,7 +18,7 @@ app.whenReady().then(async () => {
     document.body.append(owner.el);
     let focused, created = 0, disposed = 0, fits = 0, wsReady = true;
     const controls = [], wsp = {}, uuid = () => 'shell', chatCwd = () => '/project/chat';
-    const activeTerminal = () => owner, focusSlot = () => {};
+    const activeTerminal = () => owner, focusSlot = () => {}, setupTerminalWheel = () => {};
     const findTermById = () => ({ ws: wsp });
     const sendControl = msg => controls.push(msg), fitTerm = () => { fits++; };
     const _termFitObserver = { observe() {}, unobserve() {} }, _disposeTermRenderers = () => {};

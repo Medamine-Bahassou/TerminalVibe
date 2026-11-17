@@ -84,6 +84,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   releaseAgentSession: (sessionId, tabId) => ipcRenderer.invoke('agent:release-session', sessionId, tabId),
   claudeImage: (query) => ipcRenderer.invoke('history:claude-image', query),
   claudePaste: (query) => ipcRenderer.invoke('history:claude-paste', query),
+  readAttachmentPreview: file => ipcRenderer.invoke('fs:attachment-preview', file),
   readImageFile: (file, opts) => ipcRenderer.invoke('fs:read-image', file, opts),
   attachmentInfo: (file) => ipcRenderer.invoke('fs:attachment-info', file),
   codexImage: (query) => ipcRenderer.invoke('history:codex-image', query),

@@ -4139,6 +4139,7 @@
     invalid: 'Only absolute or ~/ paths can be previewed' };
   async function loadClaudeRef(entry, ref, prompt) {
     if (ref.kind === 'citation') return { text: ref.text };
+    if (ref.kind === 'text-file') return window.electronAPI.readAttachmentPreview(ref.path);
     if (ref.kind === 'file') {
       // Read on every hover, no cache: screenshots get overwritten at the same path.
       const r = await window.electronAPI.readImageFile(ref.path);
@@ -4229,7 +4230,7 @@
   async function openClaudeRefViewer(entry, ref, prompt, previewSrc) {
     hideClaudeRefPop();
     const found = previewSrc ? { src: previewSrc } : await loadClaudeRef(entry, ref, prompt).catch(() => null);
-    if (!found?.src && found?.text == null) return;
+    if (!found?.src && found?.text == null) { zoomBadge(found?.error || 'Preview unavailable'); return; }
     const previousFocus = document.activeElement;
     const overlay = document.createElement('div'); overlay.className = 'claude-image-viewer';
     overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-label', ref.label); overlay.tabIndex = -1;
@@ -4453,6 +4454,26 @@
   const IMAGE_PATH_RE = /(['"])((?:~|[A-Za-z]:)?[\\/][^'"\n]*?\.(?:png|jpe?g|gif|webp|bmp))\1|(?<![\w.:/~\\-])((?:~|[A-Za-z]:)?[\\/][^\s'"`()<>[\]{}|]*\.(?:png|jpe?g|gif|webp|bmp))(?=[.,:;!?]?(?:$|[\s'"`)\]}>]))/dgi;
   const ATTACHMENT_PATH_RE = /(['"])((?:~|[A-Za-z]:)?[\\/][^'"\n]+)\1|(?<![\w.:/~\\-])((?:~|[A-Za-z]:)?[\\/][^\s'"`()<>[\]{}|]*\.[a-z0-9]+)(?=[.,:;!?]?(?:$|[\s'"`)\]}>]))/gi;
 
+  function setupTerminalWheel(entry) {
+    let remainder = 0;
+    const handleWheel = event => {
+      const term = entry.term;
+      if (event.ctrlKey || event.metaKey || !event.deltaY || (entry.threadHistory && !entry._cliView)) return true;
+      // TUIs with mouse tracking own their wheel reports; alternate screens have no scrollback.
+      if (term.modes.mouseTrackingMode !== 'none' || term.buffer.active.type !== 'normal') return true;
+      const pixelsPerLine = (term.options.fontSize || currentFontSize) * (term.options.lineHeight || 1);
+      const lines = event.deltaMode === 1 ? event.deltaY : event.deltaMode === 2 ? event.deltaY * term.rows : event.deltaY / pixelsPerLine;
+      remainder += lines;
+      const whole = Math.trunc(remainder);
+      if (whole) { remainder -= whole; term.scrollLines(whole); }
+      event.preventDefault();
+      return false;
+    };
+    entry.term.element.addEventListener('wheel', event => {
+      if (!handleWheel(event)) event.stopImmediatePropagation();
+    }, { capture: true, passive: false });
+  }
+
   function _createTermEntry(wsp, id, label) {
     const term = new Terminal({
       theme: makeXtermTheme(currentTheme),
@@ -4613,7 +4634,7 @@
     void (async () => {
       if (inside && inside.contains(range.endContainer)) return copyPrivateText(await privateCopyToken(text, 'user'));
       for (const span of fragment.querySelectorAll('.thr-work-username')) span.textContent = await privateCopyToken(span.textContent, 'user');
-      await copyPrivateText(fragment.textContent);
+      await copyPrivateText(mdFromDom(fragment).trim());
     })().catch(() => {});
   }
   document.addEventListener('copy', copyPrivateWorkSelection, true);
@@ -6897,6 +6918,7 @@
 
     entry.el = slot;
     entry.term.open(wrap);
+    setupTerminalWheel(entry);
     entry.opened = true;
     if (entry.threadHistory) queueMicrotask(() => syncThreadPanel()); // the history page moves into its tab
     try { _termFitObserver.observe(slot); } catch { }
@@ -8344,7 +8366,7 @@
     tab.el?.classList.toggle('chat-cli', !!cli);
     if (thrPage.parentElement === tab.el) thrPage.style.display = cli ? 'none' : 'flex';
     if (cli) {
-      requestAnimationFrame(() => { fitTerm(tab); tab.term.focus(); });
+      requestAnimationFrame(() => { fitTerm(tab); tab.term.refresh(0, tab.term.rows - 1); tab.term.focus(); });
       void ensureChatTerminalSession(tab);
     }
     else { if (curChat() === tab) { restoreThreadScroll(tab); refreshThreadFlow(tab); syncThreadComposer(tab); } thrInput.focus(); }
@@ -8462,6 +8484,7 @@
       entry.el = panel;
       bindChatBottomResize(owner, entry);
       entry.term.open(panel.querySelector('.chat-bottom-screen'));
+      setupTerminalWheel(entry);
       entry.opened = true;
       // Keep the chat as the active tab when its shell receives focus.
       panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); });
@@ -8531,7 +8554,7 @@
     el.classList.toggle('wait', !!w.wait);
     el.classList.toggle('lock', !!w.lock);
     const html = w.lock ? `<i class="ph ph-lock-simple" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
-        + `<span class="thr-lock-actions">${window.electronAPI?.releaseAgentSession && window.electronAPI.platform !== 'win32' ? '<button type="button" class="thr-lock-btn primary" data-lock-act="take">Take over</button>' : ''}`
+        + `<span class="thr-lock-actions">${window.electronAPI?.releaseAgentSession ? '<button type="button" class="thr-lock-btn primary" data-lock-act="take">Take over</button>' : ''}`
         + `<button type="button" class="thr-lock-btn" data-lock-act="retry">Retry</button></span>`
       : w.wait ? `<i class="ph ph-hand-pointing" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
       : `<span class="thr-shimmer">${escHtml(w.label)}</span><span class="thr-working-time">${fmtSecs(Math.max(0, Math.round((Date.now() - w.since) / 1000)))}</span>`;
@@ -9713,16 +9736,16 @@
     if (!agentLocked(t) || t._takingOverSession) return;
     const segment = t._chatSeg;
     const sid = segment?.sessionId;
-    if (!sid) { zoomBadge('Could not identify the locked Codex conversation'); return; }
     t._takingOverSession = true;
     try {
-      const released = await window.electronAPI.releaseAgentSession(sid, t.id).catch(() => false);
+      const released = await window.electronAPI.releaseAgentSession(sid, t.id);
       if (findTermById(t.id)?.term !== t || t._chatSeg !== segment || !agentLocked(t)) return;
-      if (released) {
-        sendStdin(t.id, new TextEncoder().encode('r'));
-        if (await waitUnlocked(t, 5000) || !agentLocked(t)) return;
-      }
-      zoomBadge('Codex still has this conversation open. Close it in the other app, then retry.');
+      sendStdin(t.id, new TextEncoder().encode('r'));
+      if (await waitUnlocked(t, 5000) || !agentLocked(t)) return;
+      zoomBadge(released ? 'Codex still has this conversation open. Close it in the other app, then retry.'
+        : 'Could not identify the session owner safely. Close this conversation in the other app, then retry.');
+    } catch (error) {
+      zoomBadge(error.message || 'Could not release the conversation');
     } finally {
       delete t._takingOverSession;
     }
@@ -10109,7 +10132,7 @@
     if (!file?.path) return;
     const image = file.image ?? /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.path);
     if (image) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name || file.path.split(/[\\/]/).pop() }, '', file.preview);
-    else window.electronAPI?.showInFolder?.(file.path);
+    else openClaudeRefViewer(null, { kind: 'text-file', path: file.path, label: file.name || file.path }, '');
   }
   function hydrateChatAttachmentSizes(surface) {
     if (!window.electronAPI?.attachmentInfo) return;
@@ -10234,7 +10257,7 @@
       return `<span class="thr-file${f.cite ? ' cite' : preview ? ' image' : ' document'}" title="${escHtml(f.cite || f.path)}">`
         + (f.cite ? `<i class="ph ph-quotes" aria-hidden="true"></i><button type="button" class="thr-cite-link" data-i="${i}" aria-label="View citation">${escHtml(f.cite.replace(/\s+/g, ' '))}</button>`
           : preview ? `<button type="button" class="thr-file-open" data-i="${i}" aria-label="Open ${escHtml(f.name)} fullscreen"><img class="thr-file-preview" src="${escHtml(f.preview)}" alt="${escHtml(f.name)}" decoding="async"></button><span class="thr-file-name">${escHtml(f.name)}</span>`
-          : `<span class="thr-file-symbol"><i class="ph ${f.image ? 'ph-image ft-image' : linkFileIcon(f.name || f.path || '')}" aria-hidden="true"></i></span><span class="thr-file-name">${escHtml(f.name)}</span>`)
+          : `<button type="button" class="thr-file-open thr-document-open" data-i="${i}" aria-label="Preview ${escHtml(f.name)}"><span class="thr-file-symbol"><i class="ph ${f.image ? 'ph-image ft-image' : linkFileIcon(f.name || f.path || '')}" aria-hidden="true"></i></span><span class="thr-file-name">${escHtml(f.name)}</span></button>`)
         + `<button type="button" class="thr-file-x" data-i="${i}" aria-label="Remove ${escHtml(f.cite ? 'citation' : f.name)}"><i class="ph ph-x" aria-hidden="true"></i></button></span>`;
     }).join('');
     syncChatInputLinks(surface, files);
@@ -10330,7 +10353,7 @@
     const cite = e.target.closest('.thr-cite-link'), citation = cite && _chatFiles[+cite.dataset.i];
     if (citation?.cite) { jumpToCitation(citation); return; }
     const open = e.target.closest('.thr-file-open'), file = open && _chatFiles[+open.dataset.i];
-    if (file?.preview) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name }, '', file.preview);
+    if (file) openChatAttachment(file);
   });
   const thrFileInput = thrPage.querySelector('#sbr-thread-file');
   thrPage.querySelector('#sbr-thread-attach')?.addEventListener('click', () => thrFileInput.click());
@@ -11593,13 +11616,16 @@
   };
   // mdLite's output (or a copied slice of it) back to markdown source, for copying a selection.
   function mdFromDom(node) {
-    const kids = n => [...n.childNodes].map(mdFromDom).join('');
+    const kids = n => [...n.childNodes].map(mdFromDom).reduce((text, part) => /\n\n$/.test(text) && /^\n\n/.test(part) ? text + part.slice(2) : text + part, '');
     const block = s => `\n\n${s}\n\n`;
     if (node.nodeType === Node.TEXT_NODE) return node.data;
     if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) return kids(node);
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const el = node, tag = el.nodeName;
-    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-pending-kind, button[data-act]')) return ''; // icons, chrome
+    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-pending-kind, .thr-seg, .thr-worked, .thr-tools > summary, .thr-tool > summary, .thr-turn > summary, button[data-act]')) return ''; // icons, chrome
+    if (el.matches('.thr-msg-text, .thr-queued-text') || tag === 'P') return block(kids(el).trim());
+    if (tag === 'BR') return '\n';
+    if (tag === 'PRE') return block('```' + (el.matches('.thr-tool-detail') ? 'sh' : el.dataset.lang || '') + '\n' + el.textContent.replace(/\n$/, '') + '\n```');
     if (el.matches('.thr-image-ref[data-path]')) return shellQuote(el.dataset.path);
     if (tag === 'STRONG') return `**${kids(el)}**`;
     if (tag === 'EM') return `*${kids(el)}*`;
@@ -11636,7 +11662,7 @@
       fragment = wrapper;
       ancestor = ancestor.parentElement;
     }
-    return mdFromDom(fragment);
+    return mdFromDom(fragment).trim();
   }
   // Escape first, then the markdown agents use: fences (highlighted by their language tag), `code`, **bold**,
   // *italic*, ~~strike~~, links, headings, lists, > quotes, tables and --- rules.
@@ -12262,8 +12288,7 @@
           return; // tool output etc.: the browser's own copy
         }
         // Inside one message: the selected part as markdown source.
-        const text = msgs.length === 1 ? mdFromRange(within(msgs[0]), msgs[0])
-          : msgs.map(m => `${m.classList.contains('user') ? 'User' : 'AI'}: ${flow._texts.get(m.dataset.key) || ''}`).join('\n\n');
+        const text = mdFromRange(r, flow).trim();
         e.clipboardData.setData('text/plain', text);
         e.preventDefault();
       });

@@ -34,7 +34,7 @@ async function releaseCodexLock(sessionId, ownPid, isCurrent) {
   const file = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'thread-writer-locks', sessionId + '.lock');
   const pid = await writerPid(file);
   if (pid === null) return true;
-  if (pid <= 1 || await isInTree(pid, ownPid)) return false;
+  if (pid <= 1 || await isInTree(pid, ownPid) || await isInTree(ownPid, pid)) return false;
   const exe = await fs.readlink(`/proc/${pid}/exe`);
   const { uid } = await fs.stat(`/proc/${pid}`);
   if (path.basename(exe.replace(/ \(deleted\)$/, '')) !== 'codex' || uid !== process.getuid()) return false;

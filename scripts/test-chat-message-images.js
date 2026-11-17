@@ -65,7 +65,7 @@ app.whenReady().then(async () => {
     openChatAttachment({ path: '/tmp/report final.pdf' });
     openChatAttachment({ path: '/tmp/notes.txt' });
     openChatAttachment({ path: '/tmp/one/image.png' });
-    check(revealed.length === 2 && previews.length === 1, 'Document links must reveal files while images retain their viewer');
+    check(revealed.length === 0 && previews.length === 3 && previews[0][1].kind === 'text-file' && previews[2][1].kind === 'file', 'Documents must open text previews while images retain their image viewer');
     document.body.append(scope);
     hydrateChatAttachmentSizes(scope); hydrateChatAttachmentSizes(scope);
     await new Promise(resolve => setTimeout(resolve, 0));
