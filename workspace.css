@@ -1205,15 +1205,17 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 #sbr-thread .thr-tools-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #sbr-thread .thr-tools-count { font-size:11px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
 #sbr-thread .thr-tools-time { font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
-#sbr-thread .thr-tools > summary > :is(.thr-tools-count, .thr-tools-time) { flex:none; white-space:nowrap; opacity:0; transition:opacity 140ms ease; }
-#sbr-thread .thr-tools > summary:is(:hover, :focus-visible) > :is(.thr-tools-count, .thr-tools-time) { opacity:1; }
+#sbr-thread .thr-tools > summary > :is(.thr-tools-count, .thr-tools-time),
+#sbr-thread .thr-tool > summary > .thr-tools-time { flex:none; white-space:nowrap; opacity:0; transition:opacity 140ms ease; }
+#sbr-thread .thr-tools > summary:is(:hover, :focus-visible) > :is(.thr-tools-count, .thr-tools-time),
+#sbr-thread .thr-tool > summary:is(:hover, :focus-visible) > .thr-tools-time { opacity:1; }
 #sbr-thread .thr-tools-caret { color:var(--dim-text); transition:transform 140ms; }
 #sbr-thread .thr-tools[open] .thr-tools-caret { transform:rotate(90deg); }
 #sbr-thread .thr-tool-list { display:flex; flex-direction:column; gap:2px; margin:2px 0 0 22px; }
 #sbr-thread .thr-tool { display:flex; align-items:center; gap:6px; min-height:24px; font-size:12px; color:var(--muted-text); }
 #sbr-thread .thr-tool > i { font-size:13px; color:var(--dim-text); flex-shrink:0; }
 #sbr-thread .thr-tool-name { font-weight:500; flex-shrink:0; }
-#sbr-thread .thr-tool-sum { min-width:0; font:11.5px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sbr-thread .thr-tool-sum { flex:1; min-width:0; font:11.5px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #sbr-thread .thr-tool-err { color:var(--ui-error) !important; }
 #sbr-thread .thr-chat-error { display:flex; align-items:baseline; gap:8px; margin:12px 0; color:var(--ui-error); font:400 13px/1.6 var(--ui-font); white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
 #sbr-thread .thr-continue { display:inline-flex; align-items:center; align-self:flex-start; gap:6px; padding:6px 10px; margin:8px 0; border:1px solid var(--border); border-radius:6px !important; background:transparent; color:var(--fg); font:500 12px/1.4 var(--ui-font); cursor:pointer; }
@@ -1430,9 +1432,10 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-thought-text { padding:2px 8px 8px 31px; font-size:13px; line-height:1.6; color:var(--muted-text); white-space:pre-wrap; overflow-wrap:anywhere; }
 
 #sbr-thread .thr-changes { position:relative; margin:4px 0 6px; padding:4px; background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--ui-line); border-radius:10px !important; }
-#sbr-thread .thr-changes-head { display:flex; align-items:center; flex-wrap:wrap; gap:2px 8px; min-height:32px; margin-right:104px; padding:4px 8px; list-style:none; border-radius:6px !important; font-size:12.5px; cursor:pointer; }
+#sbr-thread .thr-changes-head { display:flex; align-items:center; flex-wrap:wrap; gap:2px 8px; min-height:32px; padding:4px 104px 4px 8px; list-style:none; border-radius:6px !important; font-size:12.5px; cursor:pointer; }
 #sbr-thread .thr-changes-head::-webkit-details-marker { display:none; }
-#sbr-thread .thr-changes-head:hover { background:var(--ui-hover); }
+#sbr-thread .thr-changes-head:hover,
+#sbr-thread .thr-changes:has(.thr-diff-btn:is(:hover,:focus-visible)) .thr-changes-head { background:var(--ui-hover); }
 #sbr-thread .thr-changes-caret { font-size:11px; color:var(--dim-text); }
 #sbr-thread .thr-changes-list[open] > summary .thr-changes-caret { transform:rotate(90deg); }
 #sbr-thread .thr-changes-count { font-weight:500; color:var(--fg); }
@@ -1440,6 +1443,9 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-add { color:var(--ui-success); }
 #sbr-thread .thr-del { color:var(--ui-error); }
 #sbr-thread .thr-diff-btn { position:absolute; top:7px; right:8px; display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 8px; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:400 12px var(--ui-font); cursor:pointer; transition:background-color 140ms, color 140ms; }
+@media (hover: hover) {
+  #sbr-thread .thr-changes:not(:hover) .thr-diff-btn:not(:focus-visible) { opacity:0; pointer-events:none; }
+}
 #sbr-thread .thr-diff-btn:hover { background:var(--ui-hover); color:var(--fg); }
 #sbr-thread .thr-diff-btn:focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #sbr-thread .thr-diff-btn i { font-size:13px; }
@@ -1729,7 +1735,18 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread .thr-foot-branch { font-family:var(--mono-font); font-size:11.5px; } /* after the button reset above */
 
 /* Tab bar: the agent a tab runs, as its logo before the name. */
-.tg-tab .tg-tab-agent { display:inline-grid; place-items:center; flex-shrink:0; width:14px; height:14px; margin-right:6px; color:var(--muted-text); }
+.tg-tab .tg-tab-agent { position:relative; display:inline-grid; place-items:center; flex-shrink:0; width:18px; height:18px; margin-right:4px; color:var(--muted-text); }
+.tg-tab .tg-tab-agent.working::after {
+  content:"";
+  position:absolute;
+  inset:-1px;
+  border:1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color:currentColor;
+  border-radius:50% !important; /* Keep the spinner circular in roundless mode. */
+  animation:ts-spin 850ms linear infinite;
+  pointer-events:none;
+}
+@media (prefers-reduced-motion: reduce) { .tg-tab .tg-tab-agent.working::after { animation:none; } }
 .tg-tab .tg-tab-agent .ws-proc-icon { width:13px; height:13px; font-size:13px; fill:currentColor; }
 
 /* A plain terminal running an agent: the chat button (chat icon) opens it as a Chat tab. */

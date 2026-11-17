@@ -502,15 +502,67 @@ async function acpProbeModels(bin, env, cwd) {
     return r.models || [];
   } finally { setTimeout(() => s.stop(), 300); }
 }
+// Use the detected executable and TerminalVibe's agent environment for the SDK's local server.
+async function openCodeModels(bin, env, cwd) {
+  const launch = resolveLaunch(bin, ['serve', '--hostname=127.0.0.1', '--port=0']);
+  if (!launch) throw Error('Could not launch OpenCode');
+  const { createOpencodeClient } = await import('@opencode-ai/sdk/v2/client');
+  const password = require('crypto').randomBytes(32).toString('hex');
+  const signal = AbortSignal.timeout(12000);
+  const child = spawn(launch.file, launch.args, {
+    cwd,
+    env: { ...env, OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_SERVER_PASSWORD: password },
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  });
+  try {
+    const baseUrl = await new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      child.once('error', reject);
+      child.once('exit', () => reject(Error('OpenCode server exited')));
+      let output = '';
+      child.stdout.setEncoding('utf8').on('data', chunk => {
+        output = (output + chunk).slice(-8192);
+        const address = /^opencode server listening on (http:\/\/127\.0\.0\.1:\d+)\s*$/m.exec(output);
+        if (address) {
+          signal.removeEventListener('abort', abort);
+          resolve(address[1]);
+        }
+      });
+    });
+    const client = createOpencodeClient({
+      baseUrl, throwOnError: true,
+      headers: { Authorization: 'Basic ' + Buffer.from('opencode:' + password).toString('base64') },
+    });
+    const { data } = await client.provider.list({ directory: cwd }, { signal });
+    const connected = new Set(data.connected);
+    return data.all.filter(provider => connected.has(provider.id)).flatMap(provider =>
+      Object.values(provider.models).map(model => ({
+        id: `${provider.id}/${model.id}`, name: `${model.name} · ${provider.name}`,
+        efforts: ['default'], defaultEffort: 'default',
+      }))).sort((a, b) => a.name.localeCompare(b.name));
+  } finally {
+    child.kill();
+  }
+}
 const toolSummaryOf = input => { try { return require('./threads').toolSummary(input); } catch { return ''; } };
 
 const SESSIONS = { claude: ClaudeSession, codex: CodexSession, antigravity: AcpSession };
 const sessions = new Map();
 
 function register(ipcMain, { send, env: makeEnv, version, dataDir }) {
-  // The model list of an agent whose models come from a live session (Antigravity), once per app run.
+  // Cache Antigravity's catalog and coalesce concurrent OpenCode probes for the same project.
   const modelCache = new Map();
-  ipcMain.handle('chat-sdk:models', async (_e, harness, bin) => {
+  ipcMain.handle('chat-sdk:models', async (_e, harness, bin, cwd) => {
+    if (harness === 'opencode' && typeof bin === 'string') {
+      const home = require('os').homedir();
+      const directory = typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : home;
+      const key = JSON.stringify([bin, directory]);
+      if (!modelCache.has(key)) modelCache.set(key, openCodeModels(bin, makeEnv('models-probe'), directory)
+        .catch(() => null).finally(() => modelCache.delete(key)));
+      return modelCache.get(key);
+    }
     if (harness !== 'antigravity' || typeof bin !== 'string') return [];
     if (!modelCache.has(bin)) modelCache.set(bin, acpProbeModels(bin, makeEnv('models-probe'), require('os').tmpdir()).catch(() => { modelCache.delete(bin); return []; }));
     return modelCache.get(bin);
@@ -545,7 +597,7 @@ function register(ipcMain, { send, env: makeEnv, version, dataDir }) {
 function stopAll() { for (const s of sessions.values()) s.stop(); sessions.clear(); }
 function stop(key) { sessions.get(key)?.stop(); sessions.delete(key); }
 
-module.exports = { register, stopAll, stop, resolveLaunch, claudePermissionAsk, claudeQuestionAsk, codexAsk, codexAccess, codexTurnParams, acpModels, acpPermissionAsk, AcpSession };
+module.exports = { register, stopAll, stop, resolveLaunch, claudePermissionAsk, claudeQuestionAsk, codexAsk, codexAccess, codexTurnParams, acpModels, acpPermissionAsk, AcpSession, openCodeModels };
 
 if (require.main === module) {
   const assert = require('assert');

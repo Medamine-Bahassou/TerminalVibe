@@ -7972,7 +7972,7 @@
     // color: the brand color of the logo; none = a black/white logo, drawn in the text color.
     { id: 'claude', name: 'Claude Code', bin: 'claude', color: '#D97757' },
     { id: 'codex', name: 'Codex', bin: 'codex' },
-    { id: 'gemini', name: 'Gemini CLI', bin: 'gemini', color: '#8E75B2' },
+    { id: 'gemini', name: 'Gemini CLI', bin: 'gemini', color: '#8E75B2', retired: true },
     { id: 'antigravity', name: 'Antigravity CLI', bin: 'agy' },
     { id: 'opencode', name: 'OpenCode', bin: 'opencode' },
     { id: 'cursor-agent', name: 'Cursor Agent', bin: 'cursor-agent' },
@@ -8579,7 +8579,7 @@
     if (!tab) return;
     tab._chatShellUnused = true;
     tab.chat = { createdAt: Date.now(), ...(threadSettings.folder !== 'workspace' ? { scratch: true } : {}) };
-    harness ||= CHAT_AGENTS[threadSettings.harness] ? threadSettings.harness : '';
+    harness ||= CHAT_AGENTS[threadSettings.harness] && !harnessOf(threadSettings.harness)?.retired ? threadSettings.harness : '';
     if (harness) setChatOpts(tab, { harness });
     _preferChat = tab;
     syncThreadPanel(true);
@@ -8726,6 +8726,10 @@
     }
     // Gray until the agent is actually running in the tab (a new chat, or one not resumed yet).
     icon?.classList.toggle('idle', !(isLiveTerminal(t) && harnessOf(_tabAgent.get(t.id))));
+    if (icon) {
+      const status = t.threadHistory ? chatWorking(t) : t._agentWorking && !agentQuestion(t) && !agentLocked(t);
+      icon.classList.toggle('working', !!status && !status.wait);
+    }
   }
   function setChatTabLabel(tab) {
     const label = (tab.chat?.title || 'Chat').replace(/\s+/g, ' ').slice(0, 28);
@@ -9035,6 +9039,11 @@
       argv: (o, sid, resume) => [...(o.model !== 'default' ? ['--model', o.model] : []), ...(o.effort !== 'default' ? ['--effort', o.effort] : []),
         ...(o.access === 'full' ? ['--dangerously-skip-permissions'] : o.access !== 'default' ? ['--mode', o.access] : []), ...(resume && sid ? ['--conversation', sid] : [])],
     },
+    opencode: {
+      models: [],
+      access: [['default', 'OpenCode settings', 'ph-shield']],
+      argv: o => o.model !== 'default' ? ['--model', o.model] : [],
+    },
   };
   const setAgyModels = models => {
     if (!models?.length) return;
@@ -9045,10 +9054,17 @@
   // their transcripts aren't read yet, so their chats show the messages sent, not a history.
   for (const h of THREAD_HARNESSES) CHAT_AGENTS[h.id] ||= { models: [], efforts: ['default'], access: [['default', 'Default', 'ph-shield']], argv: () => [] };
   // An agent with no known models still gets one row: its own default.
-  const chatModels = harness => CHAT_AGENTS[harness].models.length ? CHAT_AGENTS[harness].models
+  const openCodeCatalogs = new Map();
+  const chatModels = (harness, ws) => harness === 'opencode'
+    ? [{ id: 'default', name: 'OpenCode default', efforts: ['default'], defaultEffort: 'default' },
+      ...(openCodeCatalogs.get(chatCwd(ws)) || [])]
+    : CHAT_AGENTS[harness].models.length ? CHAT_AGENTS[harness].models
     : [{ id: 'default', name: harnessOf(harness).name, efforts: CHAT_AGENTS[harness].efforts || ['default', 'low', 'medium', 'high'], defaultEffort: 'default' }];
-  // Agents to offer: the installed ones (all of them until the PATH check answers).
-  const chatAgentIds = () => Object.keys(CHAT_AGENTS).filter(id => !_chatAgentsFound || _chatAgentsFound[harnessOf(id).bin]);
+  // Offer supported agents until the PATH check narrows the list to installed agents.
+  const chatAgentIds = () => Object.keys(CHAT_AGENTS).filter(id => {
+    const h = harnessOf(id);
+    return !h.retired && (!_chatAgentsFound || _chatAgentsFound[h.bin]);
+  });
   window.electronAPI?.chatModels?.().then(r => { if (r?.codex?.length) CHAT_AGENTS.codex.models = r.codex; syncThreadComposer(curChat()); }).catch(() => {});
   let _chatAgents = null; // { found: {bin: path|null} }
   let _chatAgentsFound = null; // the resolved `found`, for synchronous menus
@@ -9066,16 +9082,22 @@
   if (!SETTINGS_ONLY && window.electronAPI?.chatSdkModels) loadChatAgents().then(({ found = {} }) => found.agy
     && window.electronAPI.chatSdkModels('antigravity', found.agy).then(m => { setAgyModels(m); syncThreadComposer(curChat()); })).catch(() => {});
   // A workspace keeps its own picks; one that has none starts from the last picks made anywhere.
-  const lastChatOpts = () => { try { return JSON.parse(localStorage.getItem('tv-chat-opts')) || {}; } catch { return {}; } };
+  const lastChatOpts = () => {
+    try {
+      const opts = JSON.parse(localStorage.getItem('tv-chat-opts'));
+      return harnessOf(opts?.harness)?.retired ? {} : opts || {};
+    } catch { return {}; }
+  };
   const chatOpts = ws => {
     const seg = threadSegments(ws || {}).findLast(x => x.used);
     const own = ws?.chat?.opts || (seg ? { harness: seg.harness, model: seg.model, effort: seg.effort } : lastChatOpts());
     const o = { harness: 'claude', model: 'default', effort: 'default', access: 'default', ...Object.fromEntries(Object.entries(own).filter(([, v]) => v != null)) };
     if (!CHAT_AGENTS[o.harness]) o.harness = 'claude';
-    const models = chatModels(o.harness);
+    const models = chatModels(o.harness, ws);
     // Always a real model when the agent lists some (shown on the chip, ticked in the picker, passed on start):
     // an unset or unknown pick takes its first one.
-    if (!models.some(x => x.id === o.model)) o.model = models[0].id;
+    // Keep an explicit OpenCode model across app restarts and while the project catalog loads.
+    if (!models.some(x => x.id === o.model) && !(o.harness === 'opencode' && /^[^/]+\/.+$/.test(o.model))) o.model = models[0].id;
     const m = models.find(x => x.id === o.model);
     // A model with a known default effort lists real levels only; an unknown one has a "Default" row.
     const mm = m || models[0];
@@ -9149,12 +9171,13 @@
       if (ev.midTurn) { t.chat ||= {}; t.chat.interruptedAt = Date.now(); saveState(); _turns.delete(t.id); _pendingMsgs.delete(t.id); _flowSig = ''; if (curChat() === t) refreshThreadFlow(t); }
     }
     if (curChat() === t) { syncWorking(t); syncThreadComposer(t); syncSendBtn(); }
+    else syncTabAgentIcon(t);
     renderThreadsSidebar();
   });
   // Display names: "Opus" for the chip, "Claude Opus" in the list.
-  const modelName = (o, short) => {
-    const m = chatModels(o.harness).find(x => x.id === o.model);
-    const name = m && o.model !== 'default' ? m.name : harnessOf(o.harness).name;
+  const modelName = (o, short, ws) => {
+    const m = chatModels(o.harness, ws).find(x => x.id === o.model);
+    const name = m && o.model !== 'default' ? m.name : o.harness === 'opencode' && o.model !== 'default' ? o.model : harnessOf(o.harness).name;
     return short && o.harness === 'claude' && o.model !== 'default' ? name.replace(/^Claude /, '') : name;
   };
   // The floating composer covers the bottom of the history: pad the history by its height so
@@ -9301,7 +9324,7 @@
     const chip = thrChip('model');
     if (chip.dataset.sig !== sig) {
       chip.dataset.sig = sig;
-      chip.innerHTML = `<span class="thr-chip-logo"${ho.color ? ` style="color:${ho.color}"` : ''}>${procIconHtml(ho.bin, 'ph-robot')}</span><span>${escHtml(modelName(o, true))}</span>${effort ? `<span class="thr-chip-sub">${escHtml(effort)}</span>` : ''}`
+      chip.innerHTML = `<span class="thr-chip-logo"${ho.color ? ` style="color:${ho.color}"` : ''}>${procIconHtml(ho.bin, 'ph-robot')}</span><span>${escHtml(modelName(o, true, ws))}</span>${effort ? `<span class="thr-chip-sub">${escHtml(effort)}</span>` : ''}`
         + (o.fast ? '<i class="ph ph-lightning thr-chip-mode" aria-label="Fast"></i>' : '') + (o.ultra ? '<i class="ph ph-infinity thr-chip-mode" aria-label="Ultracode"></i>' : '');
     }
     // The permission mode, beside the model picker (the same choices as the picker's mode menu).
@@ -9461,7 +9484,11 @@
     const { found = {} } = await loadChatAgents();
     const favs = new Set((() => { try { return JSON.parse(localStorage.getItem('tv-model-favs')) || []; } catch { return []; } })());
     const favKey = (h, m) => `${h}:${m}`;
-    let filter = favs.size ? 'fav' : chatOpts(ws).harness, query = '';
+    const currentHarness = chatOpts(ws).harness;
+    let filter = favs.size || !chatAgentIds().includes(currentHarness) ? 'fav' : currentHarness, query = '';
+    const openCodeCwd = chatCwd(ws);
+    const canLoadOpenCode = found.opencode && window.electronAPI?.chatSdkModels;
+    let openCodeStatus = canLoadOpenCode ? 'Loading OpenCode models…' : '';
     const pop = document.createElement('div');
     pop.className = 'tv-model-picker';
     pop.setAttribute('role', 'dialog');
@@ -9477,7 +9504,7 @@
     const rail = pop.querySelector('.mp-rail'), list = pop.querySelector('.mp-list'), side = pop.querySelector('.mp-efforts'), search = pop.querySelector('input');
     const STAR_FILLED = '<svg class="mp-star-fill" viewBox="0 0 256 256" aria-hidden="true"><path fill="currentColor" d="M234.3 114.1l-45.1 39.4 13.5 58.6a16 16 0 0 1-23.8 17.3L128 198.3l-50.8 30.8a16 16 0 0 1-23.9-17.3l13.5-58.5-45.1-39.4a16 16 0 0 1 9.1-28.1l59.5-5.1 23.2-55.3a16 16 0 0 1 29.5 0l23.3 55.3 59.4 5.1a16 16 0 0 1 9.1 28.1z"/></svg>';
     // Favorites in list order; the first nine get Ctrl+1…9 while the picker is open.
-    const favList = () => chatAgentIds().flatMap(id => chatModels(id).filter(m => favs.has(favKey(id, m.id))).map(m => ({ h: harnessOf(id), m })));
+    const favList = () => chatAgentIds().flatMap(id => chatModels(id, ws).filter(m => favs.has(favKey(id, m.id))).map(m => ({ h: harnessOf(id), m })));
     const render = () => {
       const o = chatOpts(ws), favOrder = favList().map(x => favKey(x.h.id, x.m.id));
       rail.innerHTML = [['fav', filter === 'fav' ? STAR_FILLED : '<i class="ph ph-star" aria-hidden="true"></i>', 'Favorites'],
@@ -9485,7 +9512,7 @@
         .map(([id, icon, label]) => `<button type="button" role="tab" class="mp-rail-btn${(filter || '') === id ? ' active' : ''}" data-f="${id}" title="${escHtml(label)}" aria-label="${escHtml(label)}" aria-selected="${(filter || '') === id}">${icon}</button>`).join('');
       const q = query.toLowerCase();
       // Search looks through every agent; otherwise the rail picks favorites or one agent.
-      const rows = chatAgentIds().filter(id => q || filter === 'fav' || id === filter).flatMap(id => chatModels(id).map(m => ({ h: harnessOf(id), m })))
+      const rows = chatAgentIds().filter(id => q || filter === 'fav' || id === filter).flatMap(id => chatModels(id, ws).map(m => ({ h: harnessOf(id), m })))
         .filter(({ h, m }) => q ? `${m.name} ${h.name} ${m.id}`.toLowerCase().includes(q) : filter !== 'fav' || favs.has(favKey(h.id, m.id)));
       list.innerHTML = rows.map(({ h, m }) => {
         const n = favOrder.indexOf(favKey(h.id, m.id));
@@ -9496,8 +9523,15 @@
           + `<span class="mp-fav${favs.has(favKey(h.id, m.id)) ? ' on' : ''}" title="${favs.has(favKey(h.id, m.id)) ? 'Remove from favorites' : 'Add to favorites'}">${favs.has(favKey(h.id, m.id)) ? STAR_FILLED : '<i class="ph ph-star" aria-hidden="true"></i>'}</span>`
           + (n >= 0 && n < 9 ? `<kbd class="mp-kbd">Ctrl+${n + 1}</kbd>` : '') + '</button>';
       }).join('') || `<div class="mp-empty">${!q && filter === 'fav' ? 'Star a model to add it here' : 'No models match'}</div>`;
-      const cur = chatModels(o.harness).find(x => x.id === o.model) || chatModels(o.harness)[0];
-      pop.querySelector('.mp-side-model').textContent = modelName(o, true);
+      if (!q && filter === 'opencode' && openCodeStatus) {
+        const status = document.createElement('div');
+        status.className = 'mp-empty';
+        status.setAttribute('role', 'status');
+        status.textContent = openCodeStatus;
+        list.appendChild(status);
+      }
+      const cur = chatModels(o.harness, ws).find(x => x.id === o.model) || chatModels(o.harness, ws)[0];
+      pop.querySelector('.mp-side-model').textContent = modelName(o, true, ws);
       side.innerHTML = cur.efforts.map(e => `<button type="button" role="option" class="mp-row mp-effort${o.effort === e ? ' selected' : ''}" data-e="${e}" aria-selected="${o.effort === e}">`
         + `<span class="mp-name">${escHtml(EFFORT_NAMES[e] || e)}</span>${e !== 'default' && e === cur.defaultEffort ? '<span class="mp-hint">Default</span>' : ''}`
         + (o.effort === e ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + '</button>').join('');
@@ -9551,6 +9585,18 @@
     _modelPicker = pop;
     trigger.setAttribute('aria-expanded', 'true');
     search.focus();
+    if (canLoadOpenCode) {
+      window.electronAPI.chatSdkModels('opencode', found.opencode, openCodeCwd).catch(() => null).then(models => {
+        if (Array.isArray(models)) {
+          openCodeCatalogs.set(openCodeCwd, models);
+          openCodeStatus = models.length ? '' : 'No models from connected OpenCode providers';
+          if (curChat() === ws) syncThreadComposer(ws);
+        } else {
+          openCodeStatus = 'Could not load OpenCode models';
+        }
+        if (_modelPicker === pop) render();
+      });
+    }
   }
   thrChip('model')?.addEventListener('click', openModelPicker);
   document.addEventListener('mousedown', e => { if (_modelPicker && !_modelPicker.contains(e.target) && !thrChip('model').contains(e.target) && !e.target.closest?.('.tv-pick-menu')) closeModelPicker(false); }, true);
@@ -9882,7 +9928,7 @@
     // The PTY spawn falls back to ~ for a missing folder: never run a thread's agent somewhere else.
     if (cwd && !cwd.startsWith('~') && window.electronAPI?.resolveLocalPath && !await window.electronAPI.resolveLocalPath(cwd))
       throw Error(`The project folder no longer exists: ${cwd}`);
-    _chatStarting.set(ws.id, { text: `${resumeSid ? 'Resuming' : 'Starting'} ${modelName(o, false)}` }); syncThreadComposer(ws);
+    _chatStarting.set(ws.id, { text: `${resumeSid ? 'Resuming' : 'Starting'} ${modelName(o, false, ws)}` }); syncThreadComposer(ws);
     try {
       // The agent runs in the Chat tab's own terminal (the chat page sits over it; the footer
       // button shows it). Whatever agent runs there now quits first: one agent per Chat tab.
@@ -11680,14 +11726,13 @@
         .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
         // [label](target): web links open in the browser, images in the viewer, other paths in the file manager.
         // A bare http(s) URL is a link too (labelled with itself); one pass, so a [label](url)'s URL isn't linked twice.
-        // A link to a local image (or ![alt](path)) also shows the image itself below, like a pasted one (viewer, copy).
+        // A link to a local image (or ![alt](path)) also shows a clickable image preview below.
         .replace(/(!?)\[([^\]\n]*)\]\(([^()\s\u0000]+)\)|(?<![="'\w/])(https?:\/\/[^\s<>"'`)\]\u0000]*[^\s<>"'`)\].,;:!?\u0000])/g, (_, bang, label, href, bare) => {
           if (bare) { href = label = bare; }
           const link = label ? `<button type="button" class="thr-link" data-href="${href}" title="${href}">${linkIconHtml(href)}${label}</button>` : '';
           const raw = href.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
           if (bare || /^[a-z]+:/i.test(raw) || !/\.(png|jpe?g|gif|webp|bmp)$/i.test(raw.replace(/[?#].*$/, ''))) return link || href;
-          const img = `<span class="thr-img-wrap thr-md-img"><img class="thr-img" data-path="${escHtml(chatLinkPath(raw).path)}" alt="${label}">`
-            + '<span class="thr-img-actions"><button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></span></span>';
+          const img = `<span class="thr-img-wrap thr-md-img"><img class="thr-img" data-path="${escHtml(chatLinkPath(raw).path)}" alt="${label}"></span>`;
           return (bang ? '' : link) + img;
         })
         .replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${escHtml(codes[i])}</code>`);
@@ -11763,7 +11808,7 @@
     : /edit|write|patch|update|create/i.test(n) ? 'ph-pencil-simple' : /grep|glob|search|find|list/i.test(n) ? 'ph-magnifying-glass'
     : /web|fetch|url|browser/i.test(n) ? 'ph-globe' : /task|agent/i.test(n) ? 'ph-robot' : 'ph-wrench';
   // A tool that looks at an image (Codex view_image, Claude's Read of a .png…): its expanded row shows the image
-  // (same block as a pasted one: viewer on click, copy button) instead of just the path.
+  // with a viewer and copy action alongside the path.
   const toolImageHtml = x => {
     if (!/image|^read$|read_?file|view|screenshot/i.test(x.name || '')) return '';
     const m = `${x.summary || ''}\n${x.detail || ''}`.match(/(?:^|["'\s])((?:[A-Za-z]:)?[^\s"'<>]*\.(?:png|jpe?g|gif|webp|bmp))(?=$|["'\s,}])/im);
@@ -11776,6 +11821,19 @@
     if (!ts) return '';
     const date = new Date(ts);
     return Number.isNaN(date.getTime()) ? '' : threadClock.format(date);
+  };
+  const toolDateTime = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const toolTimestampHtml = ts => {
+    if (!ts) return '';
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) return '';
+    const now = new Date();
+    const today = now.toDateString();
+    now.setDate(now.getDate() - 1);
+    const day = date.toDateString();
+    const label = day === today ? `today at ${clockTime(ts)}`
+      : day === now.toDateString() ? `yesterday at ${clockTime(ts)}` : toolDateTime.format(date);
+    return `<time class="thr-tools-time" datetime="${date.toISOString()}" title="${escHtml(toolDateTime.format(date))}">${escHtml(label)}</time>`;
   };
   function toolDetailsHtml(tool) {
     const image = toolImageHtml(tool);
@@ -12044,15 +12102,23 @@
       if (seg.handoff) html += `<div class="thr-note"><i class="ph ph-arrows-left-right" aria-hidden="true"></i>Started with the full history of the ${i} earlier session${i > 1 ? 's' : ''}</div>`;
       if (res.trimmed) html += `<div class="thr-note">${res.trimmed} earlier items not shown</div>`;
       if (res.unsupported) html += `<div class="thr-note">${escHtml(name)} keeps no history TerminalVibe can read yet.</div>`;
-      // A run of tool calls: one row (the last call) that opens to every call and its full command.
-      const toolsHtml = (tools, key) => {
-        const failed = tools.filter(x => x.error).length;
+      // A run of tool calls opens to every call and its full command or arguments.
+      const toolsHtml = (tools, key, completed, changedFiles) => {
         const last = tools[tools.length - 1];
-        return `<details class="thr-tools" data-key="${key}"><summary><i class="ph ${toolIcon(last.name)}" aria-hidden="true"></i>`
-          + `<span class="thr-tools-text">${escHtml(last.name)} ${escHtml(last.summary)}</span>${tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
-          + `<span class="thr-tools-time">${clockTime(last.ts)}</span>${failed ? `<i class="ph ph-warning-circle thr-tool-err" aria-label="${failed} failed"></i>` : ''}<i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
+        const commands = tools.filter(x => /(?:^|[._])(?:bash|shell|exec(?:_command)?|run_command|terminal)(?:$|[._])/i.test(x.name)).length;
+        const other = tools.length - commands;
+        const files = new Set((changedFiles || tools.flatMap(x => x.files || [])).map(f => f.path)).size;
+        const label = [
+          commands && `Ran ${commands} command${commands === 1 ? '' : 's'}`,
+          other && `${commands ? 'used' : 'Used'} ${other} tool${other === 1 ? '' : 's'}`,
+          files && `changed ${files} file${files === 1 ? '' : 's'}`,
+        ].filter(Boolean).join(' and ');
+        const title = completed ? label : `${last.name} ${last.summary}`;
+        return `<details class="thr-tools" data-key="${key}"><summary><i class="ph ${completed ? 'ph-hammer' : toolIcon(last.name)}" aria-hidden="true"></i>`
+          + `<span class="thr-tools-text">${escHtml(title)}</span>${!completed && tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
+          + `${completed ? '' : `<span class="thr-tools-time">${clockTime(last.ts)}</span>`}<i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
           // Each call expands to its full command or arguments (older saved history has only the summary).
-          + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
+          + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${toolTimestampHtml(x.ts)}${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
             + toolDetailsHtml(x) + '</details>').join('')
           + '</div></details>';
       };
@@ -12068,9 +12134,8 @@
           + `<span class="thr-time">${clockTime(m.ts)}</span></div>` : '';
         const user = m.role === 'user' ? userTextHtml(m.text, m.threads) : null;
         const shown = user ? [...new Set([...(m.images || []), ...user.paths])] : m.images || [];
-        const imgs = shown.length ? `<div class="thr-images">${shown.map(p => `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(p)}" alt="Pasted image">`
-          + '<div class="thr-img-actions">'
-          + '<button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></div></div>').join('')}</div>` : '';
+        const imgs = shown.length ? `<div class="thr-images">${shown.map(p =>
+          `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(p)}" alt="Pasted image"></div>`).join('')}</div>` : '';
         return m.role === 'user'
           ? `<div class="${cls}" data-key="${key}" data-ts="${Date.parse(m.ts) || 0}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : (m.steered || t?.steered?.includes(m.ts)) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
           : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${extra}${actions}</div>`;
@@ -12086,9 +12151,15 @@
         + (x.answer != null ? `<div class="thr-qa-a"><i class="ph ph-arrow-bend-down-right" aria-hidden="true"></i><span>${escHtml(x.answer)}</span></div>`
           : '<div class="thr-qa-a none">Not answered</div>') + '</details>').join('');
       // A turn's steps in order: thoughts, interim replies, runs of tool calls.
-      const stepsHtml = (list, base) => {
+      const stepsHtml = (list, base, completed = false, changedFiles) => {
         let out = '', run = [];
-        const flush = () => { if (run.length) out += toolsHtml(run.map(x => x.m), base + ':tools:' + run[0].j); run = []; };
+        const totalTools = list.filter(({ m }) => m.role === 'tool' && !m.qa).length;
+        const flush = () => {
+          // A single run can use the whole turn's diff, including files changed by shell commands.
+          if (run.length) out += toolsHtml(run.map(x => x.m), base + ':tools:' + run[0].j, completed,
+            run.length === totalTools ? changedFiles : undefined);
+          run = [];
+        };
         for (const { m, j } of list) {
           // The agent's question and your answer (a question still open shows in the answer tray instead).
           if (m.role === 'tool' && m.qa) {
@@ -12105,10 +12176,9 @@
       // The files a turn changed (from its edit tools' diffs): a card with +/- counts; each file,
       // or "Open diff" for all of them, opens to its diff.
       // In a git repo the turn's real changes (turnGitFiles) win, so shell edits show too.
-      const changesHtml = (list, key, promptTs, nextTs) => {
-        const files = new Map(), git = turnGitFiles(ws, promptTs, nextTs);
-        if (git === 'later') return ''; // a message sent mid-turn: the turn's card comes after its last prompt
-        for (const f of git?.length ? git : list.flatMap(({ m }) => m.files || [])) {
+      const changesHtml = (changedFiles, key) => {
+        const files = new Map();
+        for (const f of changedFiles) {
           const cur = files.get(f.path) || { path: f.path, add: 0, del: 0, patches: [] };
           cur.add += f.add; cur.del += f.del; cur.patches.push(f.patch); files.set(f.path, cur);
         }
@@ -12128,7 +12198,7 @@
       // steps, then the final reply and the files it changed. The turn in progress shows its steps live.
       const list = res.items.map((m, j) => ({ m, j }));
       const firstPrompt = list.findIndex(x => x.m.role === 'user');
-      if (firstPrompt !== 0) html += stepsHtml(firstPrompt < 0 ? list : list.slice(0, firstPrompt), i + ':pre'); // a resumed session's start
+      if (firstPrompt !== 0) html += stepsHtml(firstPrompt < 0 ? list : list.slice(0, firstPrompt), i + ':pre', !working || i < segs.length - 1 || firstPrompt > 0); // a resumed session's start
       finishChunk();
       for (let u = firstPrompt; u >= 0 && u < list.length;) {
         let e = u + 1;
@@ -12143,19 +12213,20 @@
         const steps = rest.filter((_, x) => x !== fin);
         const secs = Math.round((Date.parse(rest[rest.length - 1]?.m.ts) - Date.parse(prompt.m.ts)) / 1000);
         const took = rest.length && secs >= 0 ? `Worked for ${fmtSecs(secs)}` : '';
+        // Resolve the turn's files once for both the tool summary and the diff card.
+        // A prompt sent mid-turn shares its snapshot, so only the last prompt shows the diff.
+        const turnPromptTs = Date.parse(_turns.get(ws.id)?.promptTs);
+        const running = working && !awaitingTurnPrompt && i === segs.length - 1
+          && (e === list.length || (turnPromptTs && Date.parse(prompt.m.ts) >= turnPromptTs));
+        const git = !live && !running ? turnGitFiles(ws, prompt.m.ts, list[e]?.m.ts) : 'later';
+        const changedFiles = git === 'later' ? [] : git?.length ? git : rest.flatMap(({ m }) => m.files || []);
         if (live) html += stepsHtml(steps, i + ':' + prompt.j);
         else if (steps.length) {
           const tk = 'turn:' + i + ':' + prompt.j;
           html += `<details class="thr-turn" data-key="${tk}"><summary><span>${took || 'Steps'}</span><i class="ph ph-caret-right thr-turn-caret" aria-hidden="true"></i></summary>`
-            + `<div class="thr-turn-steps">${stepsHtml(steps, i + ':' + prompt.j)}</div></details>`;
+            + `<div class="thr-turn-steps">${stepsHtml(steps, i + ':' + prompt.j, !running, changedFiles)}</div></details>`;
         } else if (took) html += `<div class="thr-worked">${took}</div>`;
-        // The changed-files card closes a response: none while its turn runs (a message sent mid-turn
-        // splits it, so every prompt since the turn started counts), and only on the last prompt of a turn.
-        // It sits inside the final reply so the reply's copy + time row comes after it.
-        const turnPromptTs = Date.parse(_turns.get(ws.id)?.promptTs);
-        const running = working && !awaitingTurnPrompt && i === segs.length - 1
-          && (e === list.length || (turnPromptTs && Date.parse(prompt.m.ts) >= turnPromptTs));
-        const changes = !live && !running ? changesHtml(rest, 'chg:' + i + ':' + prompt.j, prompt.m.ts, list[e]?.m.ts) : '';
+        const changes = changesHtml(changedFiles, 'chg:' + i + ':' + prompt.j);
         html += fin >= 0 ? msgHtml(rest[fin].m, i + ':' + rest[fin].j, true, changes) : changes;
         // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
         const stopped = !live && (prompt.m.interrupted || rest.find(x => x.m.interrupted)?.m.interrupted);
@@ -12215,7 +12286,7 @@
       const open = () => openClaudeRefViewer(null, { kind: 'file', path: img.dataset.path, label: img.dataset.path.split(/[\\/]/).pop() }, '');
       img.addEventListener('click', open);
       const copy = wrap.querySelector('[data-act="copy"]');
-      copy.addEventListener('click', async () => {
+      copy?.addEventListener('click', async () => {
         try {
           await copyChatImage(img);
           copy.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
@@ -12555,15 +12626,11 @@
         const el = item(`<i class="ph ${icon}" aria-hidden="true"></i>`, label,
           '<i class="ph ph-check" aria-hidden="true"></i>', () => {
             threadSettings = { ...threadSettings, [key]: value };
-            for (const sibling of ctxEl.querySelectorAll(`[data-usage-setting="${key}"]`)) {
-              sibling.setAttribute('aria-checked', String(sibling === el));
-            }
-            el.focus({ preventScroll: true });
             if (key === 'usageDisplay') document.getElementById('set-thread-usage').value = value;
             renderUsageSidebar(true);
             renderUsageModal();
             saveState();
-          }, false, ctxEl, true);
+          });
         el.dataset.usageSetting = key;
         el.setAttribute('role', 'menuitemradio');
         el.setAttribute('aria-checked', String(threadSettings[key] === value));
@@ -12661,7 +12728,7 @@
       {
         const sub = document.createElement('div');
         sub.className = 'ctx-sub';
-        const agents = Object.keys(CHAT_AGENTS).map(harnessOf).filter(h => !_chatAgentsFound || _chatAgentsFound[h.bin]);
+        const agents = chatAgentIds().map(harnessOf);
         for (const h of agents) {
           const el = document.createElement('div');
           el.className = 'ctx-item';
@@ -12966,6 +13033,11 @@
     if (restoreFocus && ctxPreviousFocus?.isConnected) ctxPreviousFocus.focus({ preventScroll: true });
   }
   document.addEventListener('contextmenu', e => { if (!ctxEl.contains(e.target)) hideCtxMenu(); }, true);
+  // Terminal mouse handling can consume the gesture before a click bubbles.
+  window.addEventListener('pointerdown', e => {
+    if (!ctxEl.classList.contains('open') || ctxEl.contains(e.target) || ctxEl._owner?.contains(e.target)) return;
+    hideCtxMenu();
+  }, true);
   document.addEventListener('click', e => { if (!e.target.closest('#ctx')) hideCtxMenu(); });
   // Clicks inside a browser pane (webview / iframe / native view) never reach
   // this document: close when focus moves into one or the window loses focus.
@@ -14273,7 +14345,7 @@
     const render = found => {
       select.replaceChildren(new Option('Last used', ''));
       for (const h of THREAD_HARNESSES) {
-        if (!CHAT_AGENTS[h.id] || !found[h.bin]) continue;
+        if (h.retired || !CHAT_AGENTS[h.id] || !found[h.bin]) continue;
         const option = new Option(h.name, h.id);
         option.dataset.agent = h.id;
         select.add(option);

@@ -40,7 +40,7 @@ In the desktop app, **Claude Code** and **Codex** chats run through the agents' 
 
 Nothing is typed into or read from a screen. Permission prompts ("Allow Bash?", Codex's "Run this command?", Antigravity's "Allow this command?") and the agent's questions (Claude's `AskUserQuestion`, Codex's `requestUserInput`) arrive as events and show as a card above the message box; your pick goes back over the protocol. **Stop** interrupts the turn. A permission change applies right away: Claude Code switches mode live, Codex and Antigravity take it (with model and effort) on their next turn. There is no trust screen. Claude Code and Codex history is read from their own transcripts; Antigravity's own history isn't readable, so TerminalVibe records each session's messages, thoughts and tool calls from the protocol in `~/.terminalvibe/acp/<session id>.jsonl`. Antigravity has no mid-turn steering: a message sent while it works runs right after the turn.
 
-Other agents (Gemini CLI, OpenCode, …), and browser mode, still run in the terminal under the chat.
+OpenCode runs in the terminal under the chat. In the desktop app, its official SDK lists models from the project’s connected providers, and TerminalVibe passes the selected model to the CLI. Other agents and browser mode also use the terminal.
 
 Clicking the agent in the footer shows the terminal and resumes the same session in the real CLI (`claude --resume`, `codex resume`), to type to it directly. The structured session hands the conversation over first; while it is mid-turn the terminal view waits (stop it or let it finish). The next message from the chat takes the session back. One agent runs in a Chat tab at a time.
 

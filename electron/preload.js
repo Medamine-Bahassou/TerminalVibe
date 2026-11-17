@@ -119,7 +119,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatSdkRespond: (key, id, answer) => ipcRenderer.invoke('chat-sdk:respond', key, id, answer),
   chatSdkSetAccess: (key, access) => ipcRenderer.invoke('chat-sdk:set-access', key, access),
   chatSdkStop: (key) => ipcRenderer.invoke('chat-sdk:stop', key),
-  chatSdkModels: (harness, bin) => ipcRenderer.invoke('chat-sdk:models', harness, bin),
+  chatSdkModels: (harness, bin, cwd) => ipcRenderer.invoke('chat-sdk:models', harness, bin, cwd),
   onChatSdkEvent: (cb) => {
     const l = (_e, d) => cb(d);
     ipcRenderer.on('chat-sdk:event', l);
