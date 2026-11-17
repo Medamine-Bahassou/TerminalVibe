@@ -127,6 +127,28 @@ function setup(segments, picks = { harness: 'claude', model: 'sonnet', effort: '
   assert(await cx.context.startChatAgent(cx.tab, cx.tab, 'hi'));
   assert.equal(cxStarts[0].resume, 'thread-1');
   assert.equal(cxStarts[0].options.access, 'full', 'Full access reaches Codex');
+  // An untouched composer inherits the last picks until its first session becomes used.
+  const inherited = setup([], { harness: 'codex', model: 'gpt-x', effort: 'low', access: 'full' });
+  const optsSource = source.slice(source.indexOf('  const chatOpts ='), source.indexOf('  // Fast: every Claude model'));
+  const sendSource = source.slice(source.indexOf('  function sendToAgent('), source.indexOf('  // A permission mode picked'));
+  const turnAccess = [];
+  Object.assign(inherited.context, {
+    lastChatOpts: () => ({ harness: 'codex', model: 'gpt-x', effort: 'low', access: 'full' }),
+    chatModels: () => [{ id: 'gpt-x', efforts: ['low'], defaultEffort: 'low' }],
+    chatCaps: () => ({}), sdkHarness: () => true, _turns: new Map(),
+  });
+  Object.assign(inherited.context.window.electronAPI, {
+    chatSdkStart: async () => ({ ok: true, sessionId: 'new-thread' }),
+    chatSdkSetAccess: (_, access) => turnAccess.push(access),
+    chatSdkSend: async (_, text, { options }) => ({ ok: options.access === 'full' }),
+  });
+  delete inherited.context.chatOpts;
+  vm.runInContext(optsSource + sendSource, inherited.context);
+  assert(await inherited.context.startChatAgent(inherited.tab, inherited.tab, 'first message'));
+  assert(inherited.tab.chat.segments[0].used);
+  assert.equal(vm.runInContext('chatOpts', inherited.context)(inherited.tab).access, 'full', 'composer keeps Full access after first send');
+  assert(await inherited.context.sendToAgent(inherited.tab, 'follow-up'));
+  assert.deepEqual(turnAccess, ['full', 'full']);
   // Antigravity resumes its ACP session by id; the terminal view resumes it with --conversation.
   const agyHarnesses = [...harnesses, { id: 'antigravity', name: 'Antigravity CLI', bin: 'agy' }];
   const agy = setup([{ harness: 'antigravity', sessionId: 'conv-1', cwd: '/tmp/agy', used: true }], { harness: 'antigravity', model: 'gemini-3.8-flash', effort: 'low', access: 'auto' });

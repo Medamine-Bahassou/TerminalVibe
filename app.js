@@ -7340,7 +7340,7 @@
   // Move a tab (terminal or browser) from its current workspace into another
   // workspace (sidebar drag-and-drop). The entry object itself is moved, so the
   // PTY / browser session is preserved. Returns true on success.
-  function moveTabToWorkspace(termId, targetWsId) {
+  function moveTabToWorkspace(termId, targetWsId, { keepSource = false } = {}) {
     if (!termId || !targetWsId) return false;
     const found = findTermById(termId);
     if (!found) return false;
@@ -7437,7 +7437,7 @@
     try { syncBrowserSlots(); } catch { }
     // Moved the last tab out: drop the now-empty source workspace, same as
     // closing its last tab. Follow the tab if the source was active.
-    if (!getWorkspaceTerminals(srcWs).length) {
+    if (!keepSource && !getWorkspaceTerminals(srcWs).length) {
       if (srcWs.id === activeWsId) activateWorkspace(targetWs.id);
       _removeWorkspace(srcWs.id);
       return true;
@@ -7672,6 +7672,14 @@
         stopResizing();
       });
       btn.addEventListener('dragover', e => {
+        if (e.dataTransfer.types.includes(THREAD_DRAG)) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'move';
+          clearDropMarks();
+          btn.classList.add('drop-into');
+          return;
+        }
         // ── Tab drop: dragging a tab onto a workspace button moves it there ──
         const tabDragId = getSidebarTabDragId();
         if (tabDragId) {
@@ -7709,6 +7717,14 @@
         }
       });
       btn.addEventListener('drop', e => {
+        if (e.dataTransfer.types.includes(THREAD_DRAG)) {
+          e.preventDefault();
+          e.stopPropagation();
+          clearDropMarks();
+          const tab = findChatThread(e.dataTransfer.getData(THREAD_DRAG));
+          if (tab) openChatTab(tab, wsp);
+          return;
+        }
         // ── Tab drop: include the dragged tab in this workspace ──
         const tabDragId = getSidebarTabDragId();
         if (tabDragId) {
@@ -8587,9 +8603,9 @@
     return tab;
   }
   // A thread belongs to no workspace: it opens in the current one (an open tab moves here, agent and all).
-  function openChatTab(tab) {
+  function openChatTab(tab, destination) {
     if (tab?._closed) {
-      const ws = activeWs() || findWs(tab.workspaceId) || workspaces.find(w => w.cwd && w.cwd === tab.cwd);
+      const ws = destination || activeWs() || findWs(tab.workspaceId) || workspaces.find(w => w.cwd && w.cwd === tab.cwd);
       if (!ws) return;
       if (activeWsId !== ws.id) activateWorkspace(ws.id);
       const reopened = addTerminal(ws.id, null, { label: tab.label || 'Chat', cwd: tab.cwd, threadHistory: true });
@@ -8598,7 +8614,7 @@
       reopened._draft = tab._draft ?? tab.chat?.draft ?? ''; reopened._files = tab._files || tab.chat?.draftFiles || [];
       reopened._scrollState = tab._scrollState;
       closedThreads = closedThreads.filter(t => t !== tab);
-      openChatTab(reopened);
+      openChatTab(reopened, destination);
       thrInput.value = reopened._draft; _chatFiles = reopened._files;
       autosizeThreadInput(); renderChatFiles(); restoreThreadScroll(reopened);
       saveState();
@@ -8607,8 +8623,8 @@
     }
     let ws = wsOf(tab);
     if (!ws) return;
-    const here = activeWs();
-    if (here && here.id !== ws.id && moveTabToWorkspace(tab.id, here.id)) ws = here;
+    const here = destination || activeWs();
+    if (here && here.id !== ws.id && moveTabToWorkspace(tab.id, here.id, { keepSource: !!destination })) ws = here;
     if (activeWsId !== ws.id) activateWorkspace(ws.id);
     activateTerminal(ws.id, tab.id);
     if (tab._cliView) setChatView(tab, false); // opened from the threads list: show the chat, not its shell
@@ -8624,7 +8640,7 @@
       tab._draft = thrInput.value; tab._files = _chatFiles;
     }
     tab.chat.storeId ||= tab.id;
-    if (tab.chat.queuedMessages?.length) tab.chat.queuePaused = true;
+    if (tab.chat.queuedMessages?.some(message => !message.sendAt)) tab.chat.queuePaused = true;
     const saved = { id: tab.id, label: tab.label, cwd: tab.cwd || ws.cwd, workspaceId: ws.id, workspaceLabel: ws.label,
       threadHistory: true, _closed: true, chat: tab.chat, _draft: tab._draft || '',
       _files: tab._files || [], _scrollState: tab._scrollState };
@@ -9967,6 +9983,8 @@
       entry._agentSince = Date.now();
       syncTabAgentIcon(entry);
       ws.chat ||= { createdAt: Date.now() };
+      // Keep inherited picks once the first message makes a session segment the history fallback.
+      if (!launch.terminalOnly) ws.chat.opts ??= o;
       ws.chat.agentTermId = entry.id;
       if (resumeSid) { entry._chatSeg = resumeSeg; Object.assign(resumeSeg, { model: o.model, effort: o.effort, used: true }); entry._chatSent = true; }
       else {
@@ -10302,7 +10320,7 @@
       const preview = f.image && f.preview;
       return `<span class="thr-file${f.cite ? ' cite' : preview ? ' image' : ' document'}" title="${escHtml(f.cite || f.path)}">`
         + (f.cite ? `<i class="ph ph-quotes" aria-hidden="true"></i><button type="button" class="thr-cite-link" data-i="${i}" aria-label="View citation">${escHtml(f.cite.replace(/\s+/g, ' '))}</button>`
-          : preview ? `<button type="button" class="thr-file-open" data-i="${i}" aria-label="Open ${escHtml(f.name)} fullscreen"><img class="thr-file-preview" src="${escHtml(f.preview)}" alt="${escHtml(f.name)}" decoding="async"></button><span class="thr-file-name">${escHtml(f.name)}</span>`
+          : preview ? `<button type="button" class="thr-file-open" data-i="${i}" aria-label="Open ${escHtml(f.name)} fullscreen"><img class="thr-file-preview" src="${escHtml(f.preview)}" alt="${escHtml(f.name)}" decoding="async"><span class="thr-file-name">${escHtml(f.name)}</span></button>`
           : `<button type="button" class="thr-file-open thr-document-open" data-i="${i}" aria-label="Preview ${escHtml(f.name)}"><span class="thr-file-symbol"><i class="ph ${f.image ? 'ph-image ft-image' : linkFileIcon(f.name || f.path || '')}" aria-hidden="true"></i></span><span class="thr-file-name">${escHtml(f.name)}</span></button>`)
         + `<button type="button" class="thr-file-x" data-i="${i}" aria-label="Remove ${escHtml(f.cite ? 'citation' : f.name)}"><i class="ph ph-x" aria-hidden="true"></i></button></span>`;
     }).join('');
@@ -10668,7 +10686,7 @@
       document.addEventListener('selectionchange', () => { if (document.activeElement === editor && _complete) updateChatComplete(); });
       // Capture: runs before the editor's Enter-to-send handler.
       editor.addEventListener('keydown', e => {
-        if (!_complete || e.isComposing) return;
+        if (!_complete || e.isComposing || (e.altKey && e.key === 'Enter')) return;
         const n = _complete.items.length;
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') _complete.index = (_complete.index + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
         else if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') acceptChatComplete();
@@ -10905,28 +10923,86 @@
     scheduleScrollEnd();
   }, { passive: true });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCite(); });
-  let _chatCtrl = false;
+  let _chatCtrl = false, _chatAlt = false;
+  const scheduleDialog = document.getElementById('chat-schedule');
+  const scheduleForm = scheduleDialog?.querySelector('form');
+  let scheduleTab = null;
+  function syncScheduleFields() {
+    const { mode, delay, unit, date } = scheduleForm.elements;
+    const absolute = mode.value === 'date';
+    delay.closest('.chat-schedule-delay').hidden = delay.disabled = unit.disabled = absolute;
+    date.parentElement.hidden = date.disabled = !absolute;
+  }
+  function openChatSchedule(ws) {
+    if (!ws || ws._editingQueued || !chatMessageText(thrInput.value.trim(), _chatFiles) || !scheduleDialog || scheduleDialog.open) return;
+    scheduleTab = ws;
+    scheduleForm.reset();
+    scheduleForm.querySelectorAll('input').forEach(field => field.setCustomValidity(''));
+    syncScheduleFields();
+    scheduleDialog.showModal();
+    syncSendBtn();
+  }
+  scheduleForm?.elements.mode.addEventListener('change', syncScheduleFields);
+  scheduleForm?.addEventListener('input', e => e.target.setCustomValidity?.(''));
+  scheduleForm?.querySelector('[type="button"]').addEventListener('click', () => scheduleDialog.close());
+  scheduleDialog?.addEventListener('close', () => {
+    scheduleTab = null;
+    _chatAlt = false;
+    syncSendBtn();
+  });
+  scheduleForm?.addEventListener('submit', e => {
+    e.preventDefault();
+    const ws = scheduleTab;
+    if (!ws || curChat() !== ws) { scheduleDialog.close(); return; }
+    const { mode, delay, unit, date } = scheduleForm.elements;
+    const field = mode.value === 'date' ? date : delay;
+    const now = Date.now();
+    const sendAt = field === date ? new Date(date.value).getTime() : now + delay.valueAsNumber * Number(unit.value);
+    if (!Number.isFinite(new Date(sendAt).getTime()) || sendAt <= now) {
+      field.setCustomValidity('Choose a time in the future.');
+      field.reportValidity();
+      return;
+    }
+    const typed = thrInput.value.trim(), files = _chatFiles, text = chatMessageText(typed, files);
+    if (!text) { scheduleDialog.close(); return; }
+    ws.chat ||= { createdAt: now };
+    ws.chat.opts ??= chatOpts(ws);
+    (ws.chat.queuedMessages ||= []).push({ id: uuid(), typed, files, text, sendAt });
+    scheduleDialog.close();
+    clearChatDraft(ws);
+    updateChatQueue(ws);
+    syncThreadComposer(ws);
+    renderThreadsSidebar();
+    saveState();
+  });
   const queueIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h8M4 12h6M4 17h10m4-13 1.2 3.8L23 9l-3.8 1.2L18 14l-1.2-3.8L13 9l3.8-1.2Z"/></svg>';
-  const syncChatModifier = e => { const held = !!e.ctrlKey; if (_chatCtrl !== held) { _chatCtrl = held; syncSendBtn(); } };
+  const syncChatModifier = e => {
+    if (_chatCtrl === e.ctrlKey && _chatAlt === e.altKey) return;
+    _chatCtrl = e.ctrlKey;
+    _chatAlt = e.altKey;
+    syncSendBtn();
+  };
   window.addEventListener('keydown', syncChatModifier, true);
   window.addEventListener('keyup', syncChatModifier, true);
-  window.addEventListener('blur', () => { _chatCtrl = false; syncSendBtn(); });
+  window.addEventListener('blur', () => { _chatCtrl = _chatAlt = false; syncSendBtn(); });
   // Enter steers an active turn; Ctrl+Enter queues for the next turn.
   function syncSendBtn() {
     const c = curChat(), typed = !!(thrInput.value.trim() || _chatFiles.length);
     const editing = !!c?._editingQueued;
     syncQueuedEditUI(c);
     const working = !!c && (!!chatWorking(c) || _chatStarting.has(c.id));
-    const queue = !editing && working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = !editing && working && !typed && !queue;
+    const scheduling = !editing && typed && (_chatAlt || scheduleDialog?.open);
+    const queue = !scheduling && !editing && working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = !editing && working && !typed && !queue;
     thrSend.classList.toggle('stop', stop);
     const resume = !editing && !working && !typed && !!c?.chat?.interruptedAt && !c._resuming && !_chatSending.has(c.id);
     thrSend.disabled = !stop && !typed && !resume;
-    const label = editing ? 'Save queued message' : queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : resume ? 'Continue' : 'Send';
+    const scheduled = !editing && !typed && !working && !resume && c?.chat?.queuedMessages?.some(message => message.sendAt);
+    const label = scheduling ? 'Schedule message' : scheduled ? 'Message scheduled' : editing ? 'Save queued message' : queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : resume ? 'Continue' : 'Send';
     if (thrSend.dataset.mode !== label) {
       thrSend.dataset.mode = label;
-      setSendIcon(queue ? queueIcon : `<i class="ph ${editing ? 'ph-check' : stop ? 'ph-stop' : working ? 'ph-arrow-elbow-up-right' : resume ? 'ph-play' : 'ph-arrow-up'}" aria-hidden="true"></i>`);
+      setSendIcon(queue ? queueIcon : `<i class="ph ${scheduling || scheduled ? 'ph-clock' : editing ? 'ph-check' : stop ? 'ph-stop' : working ? 'ph-arrow-elbow-up-right' : resume ? 'ph-play' : 'ph-arrow-up'}" aria-hidden="true"></i>`);
       thrSend.setAttribute('aria-label', label);
-      thrSend.dataset.tip = editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter)' : resume ? 'Continue (Enter)' : 'Send (Enter)';
+      thrSend.dataset.tip = scheduling ? 'Schedule message (Alt+Enter)' : scheduled ? 'Message scheduled' : editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter) · Schedule (Alt+Enter)' : resume ? 'Continue (Enter)' : 'Send (Enter) · Schedule (Alt+Enter)';
     }
   }
   function setSendIcon(html) {
@@ -10981,10 +11057,14 @@
     renderThreadsSidebar();
   });
   thrInput?.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); e.stopPropagation(); _chatCtrl = e.ctrlKey; syncSendBtn(); thrInput.form.requestSubmit(); }
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.altKey) { openChatSchedule(curChat()); return; }
+    _chatCtrl = e.ctrlKey; syncSendBtn(); thrInput.form.requestSubmit();
   });
   thrPage.querySelector('#sbr-thread-composer')?.addEventListener('submit', async e => {
     e.preventDefault();
+    if (thrSend.dataset.mode === 'Schedule message') { openChatSchedule(curChat()); return; }
     if (thrSend.dataset.mode === 'Continue' && !thrInput.value.trim() && !_chatFiles.length) { void continueInterruptedChat(curChat()); return; }
     if (e.submitter === thrSend && thrSend.classList.contains('stop')) { if (curChat()) stopChatTurn(curChat()); return; }
     const ws = curChat(), typed = thrInput.value.trim(), files = _chatFiles;
@@ -11197,15 +11277,16 @@
     const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
     const html = header + queue.map(m => {
       const label = queuedMessageTextHtml(m);
+      const schedule = m.sendAt ? `<div class="thr-queued-schedule"><i class="ph ph-clock" aria-hidden="true"></i><span>Scheduled for ${escHtml(new Date(m.sendAt).toLocaleString())}</span></div>` : '';
       const previews = (m.files || []).map((file, i) => !file.image ? '' : `<button type="button" class="thr-queued-preview" data-queue-act="preview" data-file-i="${i}" aria-label="Preview ${escHtml(file.name)}">${file.preview ? `<img src="${escHtml(file.preview)}" alt="${escHtml(file.name)}">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</button>`).join('');
-      return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"><div class="thr-queued-bubble">${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${label}</div></div>`
+      return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"><div class="thr-queued-bubble">${schedule}${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${label}</div></div>`
         + '<div class="thr-queued-actions"><button type="button" data-queue-act="send" aria-label="Send queued message now"><i class="ph ph-arrow-up" aria-hidden="true"></i><span>Send now</span></button><button type="button" data-queue-act="edit" aria-label="Edit queued message"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button><button type="button" data-queue-act="remove" aria-label="Remove queued message"><i class="ph ph-x" aria-hidden="true"></i></button></div></div>';
     }).join('');
     if (box.innerHTML !== html) box.innerHTML = html;
     if (atBottom) flow.scrollTop = flow.scrollHeight;
   }
   function updateChatQueue(ws) {
-    if (curChat() === ws) renderChatQueue(ws);
+    if (curChat() === ws) { renderChatQueue(ws); syncSendBtn(); }
     const snapshot = ws.el?.querySelector(':scope > .thr-snapshot');
     if (snapshot) renderChatQueue(ws, snapshot);
   }
@@ -11220,7 +11301,7 @@
         if (completionAt) ws._queueCompletionAt = completionAt;
         ws.chat.queuedMessages = ws.chat.queuedMessages.filter(m => m.id !== id);
         // Each remaining message waits for the newly dispatched turn, not an old completion.
-        ws.chat.queuedMessages.forEach(m => { m.after = Math.max(m.after, nextAfter + 1); });
+        ws.chat.queuedMessages.forEach(m => { if (!m.sendAt) m.after = Math.max(m.after, nextAfter + 1); });
       } else ws.chat.queuePaused = true;
       updateChatQueue(ws); saveState();
     } finally { _queueDraining.delete(ws.id); }
@@ -11244,13 +11325,20 @@
     if (button.dataset.queueAct === 'remove') {
       if (ws._editingQueued === id) finishQueuedEdit(ws, false);
       ws.chat.queuedMessages = ws.chat.queuedMessages.filter(m => m.id !== id);
+      if (message?.sendAt) { syncThreadComposer(ws); renderThreadsSidebar(); }
     }
     else ws.chat.queuePaused = !ws.chat.queuePaused;
     updateChatQueue(ws); saveState();
   });
   async function drainChatQueue(ws) {
-    const first = ws.chat?.queuedMessages?.[0];
-    if (!first || ws.chat.queuePaused || ws._editingQueued || _queueDraining.has(ws.id) || _chatSending.has(ws.id) || _chatStarting.has(ws.id)) return;
+    const queue = ws.chat?.queuedMessages;
+    if (!queue?.length || ws.chat.queuePaused || ws._editingQueued || _queueDraining.has(ws.id) || _chatSending.has(ws.id) || _chatStarting.has(ws.id)) return;
+    const now = Date.now();
+    const due = queue.reduce((earliest, message) =>
+      message.sendAt > 0 && message.sendAt <= now && (!earliest || message.sendAt < earliest.sendAt) ? message : earliest, null);
+    if (due && !ws._resuming && !ws._cliView && !chatWorking(ws)) { await sendQueuedMessage(ws, due.id, false); return; }
+    const first = queue.find(message => !message.sendAt);
+    if (!first) return;
     const t = liveThreadAgent(ws);
     if (!t) return; // Never send a queued prompt to a shell or restart a closed agent automatically.
     const harness = _tabAgent.get(t.id);
@@ -11267,7 +11355,7 @@
       } catch { /* Leave the queue intact until a completion can be confirmed. */ }
       finally { _queueDraining.delete(ws.id); }
     }
-    if (completedAt >= first.after && completedAt > (ws._queueCompletionAt || 0) && ws.chat.queuedMessages?.[0] === first && !ws.chat.queuePaused && !ws._editingQueued && findTermById(ws.id)) await sendQueuedMessage(ws, first.id, false, completedAt);
+    if (completedAt >= first.after && completedAt > (ws._queueCompletionAt || 0) && ws.chat.queuedMessages?.find(message => !message.sendAt) === first && !ws.chat.queuePaused && !ws._editingQueued && findTermById(ws.id)) await sendQueuedMessage(ws, first.id, false, completedAt);
   }
   setInterval(() => {
     for (const ws of workspaces) for (const tab of getWorkspaceTerminals(ws)) {
@@ -11340,7 +11428,7 @@
   const ago = t => { const m = (Date.now() - t) / 6e4;
     return !t ? '' : m < 1 ? 'now' : m < 60 ? `${m | 0}m` : m < 1440 ? `${m / 60 | 0}h` : m < 10080 ? `${m / 1440 | 0}d` : new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' }); };
   // A thread shows once it has messages (or one is on its way); before that only as a draft, if text is typed.
-  function threadHasMessages(t) { return !!t.chat?.title || !!t.chat?.stopped?.length || threadSegments(t).some(s => s.used) || _pendingMsgs.has(t.id) || !!chatWorking(t); }
+  function threadHasMessages(t) { return !!t.chat?.title || !!t.chat?.stopped?.length || !!t.chat?.queuedMessages?.length || threadSegments(t).some(s => s.used) || _pendingMsgs.has(t.id) || !!chatWorking(t); }
   function threadDraft(t) { return threadHasMessages(t) ? '' : (t.chat?.draft || '').trim(); }
   const allChatTabs = () => [...workspaces.flatMap(ws => getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.chat)), ...closedThreads];
   // Side chats live inside their thread (its chat lists them), never as threads of their own.
@@ -11466,7 +11554,7 @@
     const c = e.target.closest?.('.ts-card:not(.draft)');
     if (!c) return;
     e.dataTransfer.setData(THREAD_DRAG, c.dataset.tab);
-    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.effectAllowed = 'copyMove';
     // The drag preview: a small link-like chip (the card's own snapshot showed square dark corners).
     const ghost = document.createElement('div');
     ghost.className = 'ts-drag-ghost';

@@ -196,6 +196,27 @@
 
   <!-- Context menu -->
   <div id="ctx"></div>
+  <dialog id="chat-schedule" aria-labelledby="chat-schedule-title">
+    <form>
+      <h2 id="chat-schedule-title"><i class="ph ph-clock" aria-hidden="true"></i> Schedule message</h2>
+      <label>Send
+        <select name="mode" autofocus>
+          <option value="delay">After a delay</option>
+          <option value="date">At a date and time</option>
+        </select>
+      </label>
+      <div class="chat-schedule-delay">
+        <label>Delay <input name="delay" type="number" min="1" step="1" value="50" required></label>
+        <label>Unit <select name="unit"><option value="1000">Seconds</option><option value="60000">Minutes</option><option value="3600000">Hours</option><option value="86400000">Days</option></select></label>
+      </div>
+      <label hidden>Date and time (local) <input name="date" type="datetime-local" required disabled></label>
+      <div class="prompt-actions">
+        <button type="button">Cancel</button>
+        <button type="submit"><i class="ph ph-clock" aria-hidden="true"></i> Schedule</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Prompt modal -->
   <div id="prompt-overlay">
     <div id="prompt-modal">

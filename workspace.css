@@ -2395,9 +2395,30 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 
 /* Match image and file attachment geometry, labels and remove controls. */
 #sbr-thread .thr-file.image { display:flex; flex-direction:column; gap:0; }
-#sbr-thread .thr-file.image .thr-file-open { flex:1; min-height:0; height:auto; }
+#sbr-thread .thr-file.image .thr-file-open { display:flex; flex-direction:column; color:inherit; font:inherit; }
+#sbr-thread .thr-file.image .thr-file-preview { flex:1; min-height:0; }
 #sbr-thread .thr-file.image .thr-file-name { display:block; flex-shrink:0; width:100%; box-sizing:border-box; padding:3px 5px 5px; font-size:10px; line-height:13px; text-align:center; }
 #sbr-thread .thr-file.image .thr-file-x { top:2px; right:2px; width:18px; height:18px; border-radius:5px !important; }
 
 #sbr-thread .thr-document-open { display:flex; flex-direction:column; cursor:pointer; color:inherit; font:inherit; }
 #sbr-thread .thr-document-open:hover { background:var(--ui-hover); }
+
+#chat-schedule {
+  width:min(360px, calc(100% - 32px)); margin:auto; padding:20px;
+  background:var(--ui-surface); color:var(--fg); border:1px solid var(--border);
+  border-radius:12px; box-shadow:0 16px 48px #0008; font:13px/1.4 var(--ui-font);
+}
+#chat-schedule::backdrop { background:#0008; }
+#chat-schedule form, #chat-schedule label { display:grid; gap:6px; }
+#chat-schedule form { gap:14px; }
+#chat-schedule h2 { margin:0; font-size:15px; }
+#chat-schedule h2 i { margin-right:4px; }
+#chat-schedule input, #chat-schedule select {
+  min-width:0; width:100%; box-sizing:border-box; padding:7px 9px; font:inherit;
+  color:inherit; background:var(--bg); border:1px solid var(--border); border-radius:6px;
+}
+#chat-schedule .chat-schedule-delay { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+#chat-schedule [hidden] { display:none; }
+#chat-schedule .prompt-actions { margin-top:2px; }
+#chat-schedule button[type="submit"] { background:var(--accent); border-color:var(--accent); color:#11111b; }
+#sbr-thread .thr-queued-schedule { display:flex; align-items:center; gap:5px; color:var(--muted-text); font-size:11px; }
