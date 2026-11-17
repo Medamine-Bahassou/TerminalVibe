@@ -6,7 +6,7 @@ function verifyPackage(archive) {
   asar.uncache(archive);
   const visit = (directory, prefix = '') => {
     for (const [name, entry] of Object.entries(directory.files || {})) {
-      const file = prefix ? `${prefix}/${name}` : name;
+      const file = path.join(prefix, name);
       if (entry.files) visit(entry, file);
       else if (!entry.link && entry.integrity) {
         const bytes = asar.extractFile(archive, file);
@@ -17,7 +17,7 @@ function verifyPackage(archive) {
   };
   visit(asar.getRawHeader(archive).header);
   const manifest = JSON.parse(asar.extractFile(archive, 'package.json').toString());
-  if (!manifest.main || !asar.extractFile(archive, manifest.main).length) throw new Error('Packaged startup script is missing');
+  if (!manifest.main || !asar.extractFile(archive, path.normalize(manifest.main)).length) throw new Error('Packaged startup script is missing');
   console.log('[build] packaged archive integrity verified');
 }
 

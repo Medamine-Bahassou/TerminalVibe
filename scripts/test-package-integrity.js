@@ -4,7 +4,9 @@ const {verifyPackage}=require('../scripts/verify-package');
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'tv-archive-test-'));
  try {
  const src=path.join(root,'src');fs.mkdirSync(src);
- fs.writeFileSync(path.join(src,'package.json'),JSON.stringify({main:'main.js'})); fs.writeFileSync(path.join(src,'main.js'),'console.log(1);');
+ fs.mkdirSync(path.join(src,'electron'));
+ fs.writeFileSync(path.join(src,'package.json'),JSON.stringify({main:'electron/main.js'}));
+ fs.writeFileSync(path.join(src,'electron','main.js'),'console.log(1);');
  const archive=path.join(root,'app.asar');await asar.createPackage(src,archive);verifyPackage(archive);
  const data=fs.readFileSync(archive);data[data.length-1]^=1;fs.writeFileSync(archive,data);
  assert.throws(()=>verifyPackage(archive),/Corrupt packaged file/);
