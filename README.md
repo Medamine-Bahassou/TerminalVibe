@@ -46,7 +46,7 @@ opening them.
 - **Workspaces** with names, icons, colors and folders. Drag to reorder, pin the ones you use most, and jump with `Alt+1` … `Alt+9`. Your last workspace is restored on launch.
 - **Recursive split panes**, horizontal and vertical. Drag tabs between panes, or onto the sidebar to move them to another workspace.
 - **Tab groups** in every pane. Each group holds any mix of terminals and browser tabs. Close other tabs, tabs to the right or all tabs from the tab menu.
-- **Maximize** any tab (`Ctrl+Shift+M`), **lock** a tab to block accidental typing, or **detach** a tab into its own window and attach it back later.
+- **Maximize** any tab (`Ctrl+Shift+M`), **lock** a tab to block accidental typing.
 - **Live process list** for every workspace in the sidebar, with brand icons for `nvim`, `node`, `python`, `claude`, `codex` and more.
 - **Sidebar modes**: always visible, expand on hover, or hidden behind a toggle (`Ctrl+Shift+S`).
 

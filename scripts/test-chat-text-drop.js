@@ -20,6 +20,7 @@ app.whenReady().then(async () => {
     document.body.addEventListener('drop', () => terminalDrops++);
     document.querySelector('form').addEventListener('submit', e => { e.preventDefault(); sends++; });
     const applyDraft = (value, caret) => { edits++; thrInput.value = value; thrInput.setSelectionRange(caret, caret); };
+    const prepareChatPastedText = text => ({ text, files: [] });
     const rememberChatEditorSelection = () => {};
     document.caretRangeFromPoint = () => null;
     const addChatFiles = () => attached++, addChatThreadRef = () => threads++;

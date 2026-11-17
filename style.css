@@ -998,15 +998,6 @@ isolation: isolate;
   height: 0 !important;
 }
 
-/* Drop-target highlight while a detached window's tab is dragged over the
-   main window (re-attach gesture). */
-.term-group-tabs.reattach-target {
-  outline: 1px dashed var(--accent, #89b4fa);
-  outline-offset: -2px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--accent, #89b4fa) 12%, transparent);
-}
-
 /* Overflow chevrons (VSCode-style edge paging). Shown only when the bar
    overflows, disabled per-side at the scroll edges. */
 .tg-chevron {
@@ -1805,16 +1796,6 @@ body.settings-only #settings-overlay {
   transition: none;
 }
 
-/* Detached-terminal mode (index.html?mode=detached): terminal-only window */
-body.detached #sidebar { display: none !important; }
-body.detached #tabbar { display: none !important; }
-body.detached #btn-sidebar-toggle { display: none; }
-#btn-attach-main { display: none; }
-body.detached #btn-attach-main { display: flex; }
-body.detached #main { width: 100% !important; flex: 1 !important; }
-body.detached #pane-area { width: 100%; height: 100%; }
-body.detached #pane-area .term-slot { width: 100%; height: 100%; }
-body.detached #pane-area .term-slot .xterm { width: 100%; height: 100%; }
 /* full-page settings view — top strip is the drag handle */
 .settings-header { -webkit-app-region: drag; }
 .settings-header .no-drag { -webkit-app-region: no-drag; }
@@ -2580,3 +2561,5 @@ body.roundless .slider::-moz-range-thumb {
 
 /* Tab drag: let drops reach the group body (and its split highlight) beneath the browser overlay */
 body.tab-dragging .browser-slot { pointer-events: none !important; }
+/* Pending process checks must not delay the visible tab close. */
+.tg-tab.tab-close-pending, .term-slot.tab-close-pending { display:none !important; }

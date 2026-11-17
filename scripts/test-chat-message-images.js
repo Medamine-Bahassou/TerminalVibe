@@ -14,12 +14,14 @@ app.whenReady().then(async () => {
   const composerImages = source.slice(source.indexOf('  function syncChatInputLinks('), source.indexOf('  function insertChatMention('));
   const userHtml = source.slice(source.indexOf('  function userTextHtml('), source.indexOf('  const _pendingMsgs ='));
   const markdown = source.slice(source.indexOf('  function mdLite('), source.indexOf('  const toolIcon ='));
-  const imageRegex = source.split('\n').find(line => line.startsWith('  const IMAGE_PATH_RE ='));
-  console.log(await win.webContents.executeJavaScript(`(() => {
+  const imageRegex = source.split('\n').filter(line => /^  const (IMAGE|ATTACHMENT)_PATH_RE =/.test(line)).join('\n');
+  console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, msg) => { if (!ok) throw Error(msg); };
     const escHtml = s => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
     const _thrImgCache = new Map();
+    const _chatAttachmentStats = new Map();
     const _thrImgSize = new Map([['/tmp/one/image.png', 83968]]), fmtBytes = n => Math.round(n / 1024) + ' KB';
+    const linkFileIcon = () => 'ph-file';
     const hlCode = escHtml, codeLang = s => s, linkIconHtml = () => '', chatLinkPath = path => ({ path });
     ${imageRegex}
     ${markdown}
@@ -52,6 +54,24 @@ app.whenReady().then(async () => {
     check(scope.querySelectorAll('.thr-img-link').length === 2 && scope.querySelector('.thr-img-link').dataset.path === '/tmp/folder with spaces/image.png', 'Quoted image path lost');
     render('> quoted context\\n\\nSee /tmp/one/image.png');
     check(scope.querySelector('.thr-cite') && scope.querySelector('.thr-img-link'), 'Citation and image references interfere');
+    const docs = render("Review '/tmp/report final.pdf' /tmp/notes.txt '/tmp/README'");
+    check(scope.querySelectorAll('.thr-img-link').length === 3 && docs.paths.length === 0, 'Documents must render as links without image previews');
+    check(scope.querySelector('.thr-img-link-name').textContent === 'report final.pdf', 'Document filename missing');
+    check(!scope.querySelector('img'), 'Documents must use a file icon');
+    const revealed = [], previews = [];
+    let statReads = 0;
+    window.electronAPI = { showInFolder: path => revealed.push(path), attachmentInfo: async path => { statReads++; return { size: 2048 }; } };
+    const openClaudeRefViewer = (...args) => previews.push(args);
+    openChatAttachment({ path: '/tmp/report final.pdf' });
+    openChatAttachment({ path: '/tmp/notes.txt' });
+    openChatAttachment({ path: '/tmp/one/image.png' });
+    check(revealed.length === 2 && previews.length === 1, 'Document links must reveal files while images retain their viewer');
+    document.body.append(scope);
+    hydrateChatAttachmentSizes(scope); hydrateChatAttachmentSizes(scope);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    check(statReads === 3 && [...scope.querySelectorAll('.thr-img-size')].every(label => label.textContent === '2KB'), 'Document sizes must load from file metadata without duplicate reads');
+    render('Use https://example.com/report.pdf');
+    check(!scope.querySelector('.thr-img-link'), 'Web URLs must not become local attachments');
     return 'PASS: sent image links, shared composer/message thumbnail, filename, size, original paths, inline code, spaces and citations';
   })()`));
   clearTimeout(timeout); app.exit(0);

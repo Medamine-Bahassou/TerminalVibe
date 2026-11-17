@@ -14,6 +14,7 @@ const ctx = vm.createContext({
   dontAskAgain: key => key === 'closeprocess', // Legacy saved opt-out must never bypass a busy-tab confirmation.
   showCloseConfirm: (_name, _last, accept, cancel) => { confirm = { accept, cancel }; },
   findGroupContainingTerm: () => { closures++; return null; },
+  beginTabClose: () => () => {},
 });
 vm.runInContext(source.slice(source.indexOf('  async function runningTabProcess('), source.indexOf('  async function closeTabs('))
   + source.slice(source.indexOf('  function removeTerminal('), source.indexOf('  function applyTabColor(')), ctx);
@@ -40,6 +41,27 @@ const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve();
     assert(confirm, harness + ' must confirm even when backend process lookup reports idle');
     confirm.cancel();
   }
+  agents.clear(); agent.threadHistory = true; agent._chatShellUnused = true;
+  agent.dead = false; agent._sdk.alive = false; confirm = null;
+  const beforeClose = closures;
+  ctx.checkTerminalRunning = () => { throw Error('untouched chat must not wait for a process scan'); };
+  ctx.removeTerminal('ws', 'agent'); await flush();
+  assert.equal(closures, beforeClose + 1, 'untouched chats close without a backend process scan');
+  assert.equal(confirm, null, 'untouched chats do not need a process confirmation');
+  agent._sdk.alive = true;
+  ctx.removeTerminal('ws', 'agent'); await flush();
+  assert(confirm, 'live SDK sessions still confirm in an untouched chat');
+  confirm.cancel(); agent._sdk.alive = false;
+  agent._cliView = true; confirm = null;
+  let scanned = false;
+  ctx.checkTerminalRunning = async () => { scanned = true; return 'node'; };
+  ctx.removeTerminal('ws', 'agent'); await flush();
+  assert(scanned && confirm, 'exposed chat terminals still check and confirm running processes');
+  confirm.cancel();
+  agent._cliView = false; delete agent._chatShellUnused; scanned = false; confirm = null;
+  ctx.removeTerminal('ws', 'agent'); await flush();
+  assert(scanned && confirm, 'returning to chat after using the terminal must retain process checks');
+  confirm.cancel();
   let modalKey;
   ctx.showDangerConfirm = (_title, _message, _ok, _accept, _cancel, key) => { modalKey = key; };
   ctx.escHtml = String;

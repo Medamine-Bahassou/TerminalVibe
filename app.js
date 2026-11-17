@@ -27,7 +27,7 @@
     syncBrowserSlots();
   }
 
-  // Permanently remove native tooltip sources before any settings/detached boot.
+  // Permanently remove native tooltip sources before any settings boot.
   function setupAppTooltips() {
     const DELAY = 700, SKIP_DELAY = 100, SKIP_WINDOW = 300;
     const tip = document.createElement('div');
@@ -167,7 +167,6 @@
     window.addEventListener('blur', release);
   }
 
-
   window.addEventListener('error', e => console.error('[UNCAUGHT]', e.error || e.message, e.filename, e.lineno));
   window.addEventListener('unhandledrejection', e => console.error('[UNHANDLED-REJECTION]', e.reason));
 
@@ -175,8 +174,6 @@
   // so it renders above native browser views. In that window only the settings
   // page boots — the whole terminal/browser/sidebar layer is skipped.
   const SETTINGS_ONLY = new URLSearchParams(window.location.search).get('mode') === 'settings';
-  const DETACHED_ONLY = new URLSearchParams(window.location.search).get('mode') === 'detached';
-  const DETACHED_PARAMS = DETACHED_ONLY ? new URLSearchParams(window.location.search) : null;
 
   // App version — single source of truth, shared across the whole app
   const APP_VERSION = '0.5.10';
@@ -206,7 +203,6 @@
   // Desktop bridge (Electron preload, exposed as window.electronAPI)
   function electronBridge() { return window.electronAPI || null; }
   function isDesktop() { return !!window.electronAPI; }
-
 
   /* ═══════════════════════════════════════════════════════════════
    K E*YBOARD SHORTCUTS
@@ -514,7 +510,7 @@
   // Terminal links open with Ctrl/Cmd+click, like the image previews; a plain click stays a
   // terminal click (selection). They follow Settings → General: a browser tab beside the
   // terminal they were clicked in, or the system browser. Ctrl+Shift+click picks the other
-  // one. Non-web URLs and detached panes always go external.
+  // one. Non-web URLs and unavailable panes always go external.
   function openTerminalLink(termId, uri, event) {
     if (!event?.ctrlKey && !event?.metaKey) return;
     let url = null;
@@ -632,7 +628,7 @@
         if (!window.draggedFolderId && !types.includes('application/x-terminalvibe-folder') &&
             types.includes('application/x-terminalvibe-workspace') && e.target.closest?.('.term-group-body')) return;
         // Workspace/folder reordering belongs to the sidebar. Never let these
-        // payloads reach terminal split, reattach, browser or native paste paths.
+        // payloads reach terminal split, browser or native paste paths.
         e.stopPropagation();
         if (type === 'drop') e.preventDefault();
         if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
@@ -1744,8 +1740,6 @@
   let focusedSlotId = null;  // DOM id of focused .term-slot
   let _multiSelected = new Set(); // terminal IDs selected via Ctrl+Alt+RightClick
   // Tab double-click detection state. Declared here (IIFE scope) because the
-  // old declaration lived after the detached-mode early return, leaving it
-  // uninitialized there and breaking every tab click in detached windows.
   let _lastTabClickTime = 0;
   let _lastTabClickTermId = null;
   function isInMultiMode() { return _multiSelected.size > 0; }
@@ -2238,88 +2232,6 @@
       });
       api.onTerminalExit(({ id, code }) => handleExit(id, code));
       if (api.onTerminalFinished) api.onTerminalFinished(onTerminalFinished);
-      if (api.onTerminalDetachedClosed) {
-        api.onTerminalDetachedClosed(({ id }) => {
-          const result = findTermById(id);
-          if (result) {
-            result.term = null;
-            result.dead = false;
-          }
-          renderPaneArea();
-          syncBrowserSlots();
-        });
-      }
-      // A tab dragged out of a detached window and dropped over this window:
-      // re-create the tab here attached to the same running PTY.
-      if (api.onTerminalReattach) {
-        api.onTerminalReattach(({ id, cols, rows, cwd, placement }) => {
-          try { reattachTerminal(id, cols, rows, cwd, placement); } catch (e) { console.error('[reattach] failed:', e); }
-        });
-      }
-      if (api.onTerminalReattachLayout) {
-        api.onTerminalReattachLayout(({ layout, focusId }) => {
-          try { reattachLayout(layout, focusId); } catch (e) { console.error('[reattach-layout] failed:', e); }
-        });
-      }
-      // While such a tab is being dragged, highlight the tab bars as a drop target.
-      if (api.onTabDragOver) {
-        api.onTabDragOver(({ over }) => {
-          document.querySelectorAll('.term-group-tabs.reattach-target').forEach(el => el.classList.remove('reattach-target'));
-          if (over) document.querySelectorAll('.term-group-tabs').forEach(el => el.classList.add('reattach-target'));
-        });
-      }
-      // The main process accepted a cross-window move for a tab living HERE —
-      // snapshot its buffer, remove it without killing the PTY, and report
-      // how many tabs remain so main can decide whether to close a window.
-      if (api.onTabDragComplete) {
-        api.onTabDragComplete(({ id }) => {
-          window._tabMovedAway = window._tabMovedAway || new Set();
-          window._tabMovedAway.add(id);
-          let ready = { id, remaining: 0 };
-          try {
-            for (const wsp of workspaces) {
-              const group = findGroupContainingTerm(wsp.layout, id);
-              if (!group) continue;
-              const entry = group.terminals.find(x => x.id === id);
-              if (entry && entry.term) {
-                const payload = serializeTermBuffer(entry);
-                if (payload) localStorage.setItem(DETACH_BUFFER_KEY(id), JSON.stringify(payload));
-                ready = { id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd, label: entry.label, remaining: 0 };
-              }
-              removeTerminal(wsp.id, id, false, true);
-              ready.remaining = getWorkspaceTerminals(wsp).length;
-              break;
-            }
-          } catch { }
-          if (api.tabDragReady) api.tabDragReady(ready);
-        });
-      }
-      // The main process broadcasts which detached terminal is being dragged —
-      // drag data set in another window's renderer is unreadable here, so this
-      // id is how the main window recognizes the cross-window drop.
-      if (api.onTabDragActive) {
-        api.onTabDragActive(({ id }) => {
-          if (id) {
-            window.externalDragTermId = id;
-            window.lastExternalDragTermId = id;
-            startResizing(true);
-            if (window._clearExternalDragTimer) {
-              clearTimeout(window._clearExternalDragTimer);
-              window._clearExternalDragTimer = null;
-            }
-          } else {
-            window.externalDragTermId = null;
-            // tab-drag:start broadcasts {id:null} to every window (incl. this one)
-            // right after our own dragstart — don't tear down a local drag's shield.
-            if (!window.draggedTermId) stopResizing();
-            if (window._clearExternalDragTimer) clearTimeout(window._clearExternalDragTimer);
-            window._clearExternalDragTimer = setTimeout(() => {
-              window.lastExternalDragTermId = null;
-            }, 1500);
-          }
-        });
-      }
-
       restoreOrCreateInitial();
       return;
     }
@@ -2783,13 +2695,6 @@
    ═══════════════════════════════════════════════════════════════ */
   // Per-profile suffix appended once the active profile is known (desktop only).
   let STATE_KEY = 'ghostterm-state-v2';
-  // Per-window key: each detached window gets a unique winId from the main
-  // process (electron/main.js terminal:detach), so multiple detached windows
-  // never clobber each other's saved state and never restore stale workspaces
-  // from a previous detached session.
-  const DETACHED_WIN_ID = DETACHED_ONLY ? DETACHED_PARAMS.get('winId') : null;
-  const DETACHED_STATE_KEY = 'ghostterm-state-detached-' + (DETACHED_WIN_ID || 'default');
-
   function serializeChat(chat) {
     const files = list => (list || []).map(({ preview, ...file }) => file);
     return { ...chat,
@@ -3005,7 +2910,7 @@
     // (or reload) right after saving can await it — otherwise the write is
     // routed by _activeProfileId and a deferred commit lands on the NEW profile.
     const commit = () => {
-      const write = (!DETACHED_ONLY && api && api.configWriteState)
+      const write = (api && api.configWriteState)
         ? api.configWriteState(state)
         : Promise.resolve();
       try {
@@ -3072,9 +2977,8 @@
       });
     }
 
-
     syncBrowserShortcuts();
-    const key = DETACHED_ONLY ? DETACHED_STATE_KEY : STATE_KEY;
+    const key = STATE_KEY;
     const state = {
       theme: currentThemeName,
       colorScheme: currentColorScheme,
@@ -3134,9 +3038,9 @@
 
   async function restoreState() {
     try {
-      const key = DETACHED_ONLY ? DETACHED_STATE_KEY : STATE_KEY;
+      const key = STATE_KEY;
       let raw = null;
-      if (!DETACHED_ONLY) {
+      {
         const api = configApi();
         if (api && api.configReadState) {
           const diskState = await api.configReadState();
@@ -3846,7 +3750,7 @@
     syncThreadPanel();
     // A workspace is never left empty: it gets a fresh terminal tab (main window only,
     // and not while a profile switch is tearing workspaces down).
-    if (wsp && !wsp.layout && !DETACHED_ONLY && !SETTINGS_ONLY && !_profileSwitching && (nativePtyReady || wsReady)) { addTerminal(wsp.id); return; }
+    if (wsp && !wsp.layout && !SETTINGS_ONLY && !_profileSwitching && (nativePtyReady || wsReady)) { addTerminal(wsp.id); return; }
     if (!wsp || !wsp.layout) return;
 
     let container = _wsDomCache[wsp.id];
@@ -4019,7 +3923,6 @@
       renderSidebar();
     }
     saveState();
-    if (DETACHED_ONLY) window.close();
   }
 
   // Strip "user@host:" prefix and turn "/a/b/c" into "c" (~ stays "~")
@@ -4537,6 +4440,7 @@
   // Quoted (may contain spaces) or bare. A bare path must not continue a word or URL
   // ("https://x/a.png", "a~/b.png"); trailing sentence punctuation is not part of it.
   const IMAGE_PATH_RE = /(['"])((?:~|[A-Za-z]:)?[\\/][^'"\n]*?\.(?:png|jpe?g|gif|webp|bmp))\1|(?<![\w.:/~\\-])((?:~|[A-Za-z]:)?[\\/][^\s'"`()<>[\]{}|]*\.(?:png|jpe?g|gif|webp|bmp))(?=[.,:;!?]?(?:$|[\s'"`)\]}>]))/dgi;
+  const ATTACHMENT_PATH_RE = /(['"])((?:~|[A-Za-z]:)?[\\/][^'"\n]+)\1|(?<![\w.:/~\\-])((?:~|[A-Za-z]:)?[\\/][^\s'"`()<>[\]{}|]*\.[a-z0-9]+)(?=[.,:;!?]?(?:$|[\s'"`)\]}>]))/gi;
 
   function _createTermEntry(wsp, id, label) {
     const term = new Terminal({
@@ -4869,8 +4773,8 @@
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
             // Drag & drop
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
-            tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); });
+            tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
             tab.addEventListener('dragover', e => {
               e.preventDefault();
               e.dataTransfer.dropEffect = 'move';
@@ -4878,45 +4782,13 @@
               const r = tab.getBoundingClientRect();
               const isLeft = e.clientX < r.left + r.width / 2;
               tab.classList.add(isLeft ? 'drop-left' : 'drop-right');
-              const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
-              if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
-                let beforeTabId = null;
-                if (isLeft) {
-                  beforeTabId = entry.id;
-                } else {
-                  const curIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
-                  beforeTabId = (curIdx !== -1 && curIdx + 1 < targetGroup.terminals.length) ? targetGroup.terminals[curIdx + 1].id : null;
-                }
-                window.electronAPI.tabDragHover({
-                  id: activeDragId,
-                  targetGroupId: targetGroup.id,
-                  zone: 'center',
-                  beforeTabId,
-                });
-              }
+
             });
             tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
             tab.addEventListener('drop', e => {
               e.preventDefault();
-              const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
-              if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) {
-                const api = window.electronAPI;
-                if (api && api.tabDragDrop) {
-                  const r = tab.getBoundingClientRect();
-                  const isLeft = e.clientX < r.left + r.width / 2;
-                  let beforeTabId = null;
-                  if (isLeft) {
-                    beforeTabId = entry.id;
-                  } else {
-                    const curIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
-                    beforeTabId = (curIdx !== -1 && curIdx + 1 < targetGroup.terminals.length) ? targetGroup.terminals[curIdx + 1].id : null;
-                  }
-                  api.tabDragDrop({ id: draggedId, targetGroupId: targetGroup.id, zone: 'center', beforeTabId });
-                }
-                window.externalDragTermId = null;
-                tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
-                return;
-              }
+              const draggedId = window.draggedTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
+
               if (draggedId && draggedId !== entry.id) {
                 const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId);
                 let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
@@ -5063,8 +4935,8 @@
               }
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); if (window.electronAPI && window.electronAPI.tabDragStart) window.electronAPI.tabDragStart({ id: entry.id, cols: entry.term ? entry.term.cols : 80, rows: entry.term ? entry.term.rows : 24, cwd: entry.cwd, label: entry.label }); });
-            tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); if (!DETACHED_ONLY && entry.term && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) detachTerminal(wsp.id, entry.id); if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) window.electronAPI.tabDragEnd({ id: entry.id, cancelled: true }); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); });
+            tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
             tab.addEventListener('dragover', e => {
               e.preventDefault();
               e.dataTransfer.dropEffect = 'move';
@@ -5072,45 +4944,13 @@
               const r = tab.getBoundingClientRect();
               const isLeft = e.clientX < r.left + r.width / 2;
               tab.classList.add(isLeft ? 'drop-left' : 'drop-right');
-              const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
-              if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
-                let beforeTabId = null;
-                if (isLeft) {
-                  beforeTabId = entry.id;
-                } else {
-                  const curIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
-                  beforeTabId = (curIdx !== -1 && curIdx + 1 < targetGroup.terminals.length) ? targetGroup.terminals[curIdx + 1].id : null;
-                }
-                window.electronAPI.tabDragHover({
-                  id: activeDragId,
-                  targetGroupId: targetGroup.id,
-                  zone: 'center',
-                  beforeTabId,
-                });
-              }
+
             });
             tab.addEventListener('dragleave', (e) => { if (!e.relatedTarget || !tab.contains(e.relatedTarget)) { tab.classList.remove('drop-left', 'drop-right'); } });
             tab.addEventListener('drop', e => {
               e.preventDefault();
-              const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
-              if (!window.draggedTermId && draggedId && !findGroupContainingTerm(wsp.layout, draggedId)) {
-                const api = window.electronAPI;
-                if (api && api.tabDragDrop) {
-                  const r = tab.getBoundingClientRect();
-                  const isLeft = e.clientX < r.left + r.width / 2;
-                  let beforeTabId = null;
-                  if (isLeft) {
-                    beforeTabId = entry.id;
-                  } else {
-                    const curIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
-                    beforeTabId = (curIdx !== -1 && curIdx + 1 < targetGroup.terminals.length) ? targetGroup.terminals[curIdx + 1].id : null;
-                  }
-                  api.tabDragDrop({ id: draggedId, targetGroupId: targetGroup.id, zone: 'center', beforeTabId });
-                }
-                window.externalDragTermId = null;
-                tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
-                return;
-              }
+              const draggedId = window.draggedTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
+
               if (draggedId && draggedId !== entry.id) {
                 const fromIdx = targetGroup.terminals.findIndex(x => x.id === draggedId);
                 let toIdx = targetGroup.terminals.findIndex(x => x.id === entry.id);
@@ -5191,6 +5031,7 @@
   function activateTerminal(wsId, termId) {
     const wsp = findWs(wsId);
     if (!wsp) return;
+    if (getWorkspaceTerminals(wsp).find(t => t.id === termId)?._closePending) return;
     wsp.activeTermId = termId;
     pluginEmit('terminal:activate', { wsId, termId });
     const chatEntry = getWorkspaceTerminals(wsp).find(x => x.id === termId && x.threadHistory);
@@ -5298,259 +5139,37 @@
     activateTerminal._saveTimer = setTimeout(saveState, 500);
   }
 
-  function detachTerminal(wsId, termId) {
-    const wsp = findWs(wsId);
-    if (!wsp || !wsp.layout) return;
-    const entry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
-    if (!entry || entry.type === 'browser') return;
-    if (!isDesktop() || !window.electronAPI?.terminalDetach) return;
-
-    const slot = getSlotDimensions(entry);
-    const cwd = entry.cwd || undefined;
-
-    // Stash the terminal's current screen + scrollback so the detached window
-    // can show the same session. The PTY keeps running (no fresh shell is
-    // spawned), so the content is transferred, not recreated.
-    try {
-      const payload = serializeTermBuffer(entry);
-      if (payload) localStorage.setItem(DETACH_BUFFER_KEY(termId), JSON.stringify(payload));
-    } catch { }
-
-    window.electronAPI.terminalDetach({ id: termId, cols: slot.cols, rows: slot.rows, cwd }).then(ok => {
-      if (!ok) { try { localStorage.removeItem(DETACH_BUFFER_KEY(termId)); } catch { } return; }
-      // Detach succeeded — remove the terminal from this workspace without
-      // killing the PTY. The detached window attaches to the SAME running PTY.
-      removeTerminal(wsId, termId, false, true);
-    });
-  }
-
-  // Per-terminal key holding the serialized xterm buffer while a detach is in flight.
-  const DETACH_BUFFER_KEY = (termId) => 'ghostterm-detach-buffer-' + termId;
-
-  function serializeTermBuffer(entry) {
-    try {
-      const term = entry.term;
-      const buf = term.buffer.active;
-      const lines = [];
-      for (let y = 0; y < buf.length; y++) {
-        const line = buf.getLine(y);
-        lines.push(line ? line.translateToString(true) : '');
-      }
-      return {
-        label: entry.label,
-        cols: term.cols,
-        rows: term.rows,
-        cursorX: buf.cursorX,
-        cursorY: buf.cursorY,
-        viewportY: buf.viewportY,
-        lines,
-      };
-    } catch { return null; }
-  }
-
-  function restoreTermBuffer(entry, payload) {
-    try {
-      const term = entry.term;
-      if (!payload || !Array.isArray(payload.lines) || !payload.lines.length) return;
-      // Replay the captured lines as plain text.
-      term.write(payload.lines.join('\r\n'));
-      // Move the cursor back to its saved position: up to the saved row, then
-      // to column 0, then right to the saved column.
-      const lastIdx = payload.lines.length - 1;
-      const up = Math.max(0, lastIdx - (payload.cursorY || 0));
-      if (up > 0) term.write(`\x1b[${up}A`);
-      term.write('\x1b[G');
-      const right = Math.max(0, payload.cursorX || 0);
-      if (right > 0) term.write(`\x1b[${right}C`);
-      // Restore the scroll offset (0 = top of the buffer).
-      const buf = term.buffer.active;
-      const maxViewport = Math.max(0, buf.length - term.rows);
-      const target = Math.min(maxViewport, payload.viewportY ?? maxViewport);
-      if (target < maxViewport) term.scrollLines(target - maxViewport);
-    } catch { }
-  }
-
-  // Reverse of detachTerminal: the detached window was closed by dragging its
-  // tab over this window; re-create the tab here attached to the SAME PTY
-  // (no terminal:create — that would kill the session and spawn a new shell).
-  // `placement` ({ targetGroupId, zone }) drops it into a specific group,
-  // splitting the pane like a normal tab drag-and-drop.
-  function reattachTerminal(termId, cols, rows, cwd, placement) {
-    // A sidebar drop reports the target workspace's group directly, which may
-    // live in an inactive workspace — resolve the owning workspace first so a
-    // detached tab can land there instead of always using the active one.
-    let wsp = null;
-    if (placement && placement.targetGroupId) {
-      for (const ws of workspaces) {
-        if (ws.layout && findGroupById(ws.layout, placement.targetGroupId)) { wsp = ws; break; }
-      }
-    }
-    if (!wsp) wsp = _attachTargetWorkspace();
-
-    // Read the stashed buffer first so the tab can keep its name; the PTY is
-    // re-attached, the content replayed from this snapshot.
-    const stash = _takeDetachStash(termId);
-
-    const entry = _createTermEntry(wsp, termId, (stash && stash.label) || 'terminal');
-    entry.cwd = cwd;
-
-    if (!wsp.layout) {
-      wsp.layout = { type: 'group', id: 'group-' + uuid(), terminals: [entry], activeTermId: termId };
-    } else {
-      const targetGroup = (placement && placement.targetGroupId && findGroupById(wsp.layout, placement.targetGroupId))
-        || (activeTerminal() && findGroupContainingTerm(wsp.layout, activeTerminal().id))
-        || findFirstGroup(wsp.layout);
-      if (!targetGroup) return;
-
-      if (placement && placement.zone && placement.zone !== 'center' && targetGroup.terminals.length > 0) {
-        // Direct split placement: create new group and split the layout tree directly
-        const newGroup = {
-          type: 'group',
-          id: 'group-' + uuid(),
-          terminals: [entry],
-          activeTermId: termId
-        };
-        const direction = (placement.zone === 'left' || placement.zone === 'right') ? 'row' : 'column';
-        const isFirst = (placement.zone === 'left' || placement.zone === 'top');
-        if (wsp._maximizedGroupId) wsp._maximizedGroupId = null;
-        wsp.layout = splitGroupNodeInTree(wsp.layout, targetGroup.id, newGroup, direction, isFirst);
-        wsp.layout = removeEmptyGroups(wsp.layout);
-      } else {
-        targetGroup.terminals.push(entry);
-        if (!targetGroup._history) targetGroup._history = [];
-        if (targetGroup.activeTermId) targetGroup._history.push(targetGroup.activeTermId);
-        targetGroup.activeTermId = termId;
-        // Dropped on a specific tab — place it at that position in the bar.
-        if (placement && placement.beforeTabId) {
-          const idx = targetGroup.terminals.findIndex(x => x.id === placement.beforeTabId);
-          if (idx !== -1) {
-            targetGroup.terminals.splice(targetGroup.terminals.indexOf(entry), 1);
-            targetGroup.terminals.splice(idx, 0, entry);
-          }
-        }
-      }
-    }
-    wsp.activeTermId = termId;
-    renderPaneArea();
-    activateTerminal(wsp.id, termId);
-    _finishReattach(entry, termId, cols, rows, stash, true);
-
-    renderSidebar();
-    saveState();
-  }
-
-  // Workspace a re-attached terminal lands in: the active one, or a fresh
-  // empty one when all were closed while the tab was detached
-  // (createWorkspace would spawn a new terminal/PTY).
-  function _attachTargetWorkspace() {
-    let wsp = workspaces.find(w => w.id === activeWsId) || workspaces[0];
-    if (wsp) return wsp;
-    wsp = { id: uuid(), label: 'Workspace 1', layout: null, activeTermId: null };
-    workspaces.push(wsp);
-    sideOrder.push({ type: 'ws', id: wsp.id });
-    activeWsId = wsp.id;
-    return wsp;
-  }
-
-  function _takeDetachStash(termId) {
-    try {
-      const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
-      localStorage.removeItem(DETACH_BUFFER_KEY(termId));
-      return raw ? JSON.parse(raw) : null;
-    } catch { return null; }
-  }
-
-  // Open at the size the PTY is running at so replayed lines don't wrap,
-  // replay the stashed screen/scrollback, then announce the attach so main
-  // flushes output buffered while the source window was closing. Finally fit
-  // to the new layout and sync the PTY to the fitted size.
-  function _finishReattach(entry, termId, cols, rows, stash, focus) {
-    try { entry.term.resize(cols || 80, rows || 24); } catch { }
-    if (stash) { try { restoreTermBuffer(entry, stash); } catch { } }
-    if (window.electronAPI && window.electronAPI.terminalAttached) {
-      window.electronAPI.terminalAttached(termId);
-    }
-    setTimeout(() => {
-      try {
-        fitTerm(entry);
-        if (entry.term && window.electronAPI && window.electronAPI.terminalResize) {
-          window.electronAPI.terminalResize({ id: termId, cols: entry.term.cols, rows: entry.term.rows });
-        }
-      } catch { }
-      if (focus) { try { entry.term && entry.term.focus(); } catch { } }
-    }, 80);
-  }
-
-  // A whole detached window was attached back: rebuild its split layout here
-  // with fresh xterm entries bound to the same live PTYs, docked to the right
-  // of the active pane (or as the whole layout of an empty workspace).
-  function reattachLayout(layout, focusId) {
-    const wsp = _attachTargetWorkspace();
-    const moved = [];
-    const build = node => {
-      if (node.type === 'split') {
-        return { type: 'split', id: 'split-' + uuid(), direction: node.direction, sizes: node.sizes, children: node.children.map(build) };
-      }
-      const terminals = node.terminals.map(t => {
-        const stash = _takeDetachStash(t.id);
-        const entry = _createTermEntry(wsp, t.id, (stash && stash.label) || t.label || 'terminal');
-        entry.cwd = t.cwd;
-        moved.push({ entry, t, stash });
-        return entry;
-      });
-      const activeTermId = terminals.some(e => e.id === node.activeTermId) ? node.activeTermId : terminals[0]?.id || null;
-      return { type: 'group', id: 'group-' + uuid(), terminals, activeTermId };
-    };
-    const tree = removeEmptyGroups(build(layout));
-    if (!tree || !moved.length) return;
-
-    const cur = wsp.layout && activeTerminal();
-    const anchor = wsp.layout && ((cur && findGroupContainingTerm(wsp.layout, cur.id)) || findFirstGroup(wsp.layout));
-    if (wsp._maximizedGroupId) wsp._maximizedGroupId = null;
-    wsp.layout = anchor ? splitGroupNodeInTree(wsp.layout, anchor.id, tree, 'row', false) : tree;
-
-    const focus = moved.some(m => m.t.id === focusId) ? focusId : moved[0].t.id;
-    wsp.activeTermId = focus;
-    renderPaneArea();
-    activateTerminal(wsp.id, focus);
-    for (const { entry, t, stash } of moved) _finishReattach(entry, t.id, t.cols, t.rows, stash, t.id === focus);
-    renderSidebar();
-    saveState();
-  }
-
-  // Detached window → send every live terminal (with the split layout) back
-  // to the main window. Buffers are stashed like a single-tab move.
-  function attachWindowToMain() {
-    const wsp = activeWs();
-    const api = window.electronAPI;
-    if (!wsp || !wsp.layout || !api || !api.attachWindow) return;
-    const ids = [];
-    const strip = node => {
-      if (node.type === 'split') {
-        return { type: 'split', direction: node.direction, sizes: node.sizes, children: node.children.map(strip) };
-      }
-      const terminals = node.terminals.filter(t => t.term && t.type !== 'browser' && !t.dead).map(t => {
-        const payload = serializeTermBuffer(t);
-        try { if (payload) localStorage.setItem(DETACH_BUFFER_KEY(t.id), JSON.stringify(payload)); } catch { }
-        ids.push(t.id);
-        return { id: t.id, label: t.label, cwd: t.cwd, cols: t.term.cols, rows: t.term.rows };
-      });
-      return { type: 'group', terminals, activeTermId: node.activeTermId };
-    };
-    const layout = strip(wsp.layout);
-    if (!ids.length) return;
-    const cur = activeTerminal();
-    api.attachWindow({ layout, ids, focusId: cur && ids.includes(cur.id) ? cur.id : ids[0] });
-  }
-
   const _processCheckPending = new Set(); // termIds with an in-flight running-process check
   const _closeLockConfirmed = new Set();  // locked termIds whose close was already confirmed
+
+  // Keep the tab and selection intact until all close confirmations succeed.
+  // Pending state only prevents duplicate requests while the process scan runs.
+  function beginTabClose(wsp, entry) {
+    entry._closePending = true;
+    const restore = () => {
+      delete entry._closePending;
+      delete entry._cancelClose;
+    };
+    entry._cancelClose = restore;
+    return restore;
+  }
+
+  // Yield a frame before disposing canvases/WebGL and other expensive resources.
+  function afterTabClosePaint(cleanup) {
+    let done = false;
+    const run = () => { if (done) return; done = true; clearTimeout(fallback); cleanup(); };
+    const fallback = setTimeout(run, 100);
+    requestAnimationFrame(() => setTimeout(run, 0));
+  }
 
   // Close several tabs with one confirmation, only when one of them is busy (running, locked, or a page).
   async function runningTabProcess(tab) {
     if (tab?._sdk?.alive) return harnessOf(tab._sdk.harness)?.name || 'Agent';
     if (tab && _chatStarting.has(tab.id)) return 'Starting agent';
     if (isLiveTerminal(tab) && !tab._agentExited && _tabAgent.get(tab.id)) return harnessOf(_tabAgent.get(tab.id))?.name || 'Agent';
+    // A new chat's hidden shell has never accepted terminal input. Avoid a
+    // fresh system process scan (slow on Windows) just to close that chat.
+    if (tab?.threadHistory && tab._chatShellUnused && !tab._cliView) return null;
     return isLiveTerminal(tab) ? checkTerminalRunning(tab.id, true) : null;
   }
   async function closeTabs(wsId, ids) {
@@ -5577,10 +5196,11 @@
 
     // Confirm before closing a tab that has a process running inside it
     // (something other than the idle shell), or a browser tab showing content.
-    // Skipped for dead terminals, blank browser tabs, detaches and internal
+    // Skipped for dead terminals, blank browser tabs and internal
     // teardowns.
     if (!confirmed && !checked && !skipRender && !skipPtyClose) {
       const entry = getWorkspaceTerminals(wsp).find(t => t.id === termId);
+      if (!entry || entry._closePending) return;
       if (browserHasContent(entry)) {
         if (dontAskAgain('closebrowser')) {
           removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true);
@@ -5617,13 +5237,15 @@
       if (entry?._sdk?.alive || _chatStarting.has(termId) || isLiveTerminal(entry)) {
         if (_processCheckPending.has(termId)) return;
         _processCheckPending.add(termId);
-        runningTabProcess(entry).then(running => {
+        const restore = beginTabClose(wsp, entry);
+        runningTabProcess(entry).catch(() => 'unknown').then(running => {
           _processCheckPending.delete(termId);
+          if (!getWorkspaceTerminals(wsp).includes(entry)) { restore(); return; }
           if (running) {
             const closesWorkspace = getWorkspaceTerminals(wsp).length <= 1;
             showCloseConfirm(entry.label, closesWorkspace,
               () => removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true),
-              () => _closeLockConfirmed.delete(termId));
+              () => { restore(); _closeLockConfirmed.delete(termId); });
           } else {
             removeTerminal(wsId, termId, skipRender, skipPtyClose, false, true);
           }
@@ -5633,7 +5255,7 @@
     }
 
     // Last tab in workspace — remove the workspace with confirmation
-    // Skip confirmation when detaching (skipPtyClose) — just remove silently
+    // Skip confirmation when preserving the PTY (skipPtyClose) — just remove silently
     if (!skipRender && !skipPtyClose && getWorkspaceTerminals(wsp).length <= 1) {
       {
         // Closing the last tab closes the workspace. The app never has zero workspaces,
@@ -5645,7 +5267,7 @@
         const label = wsp.label;
         showConfirm(`Close "${label}"?`,
           () => { try { closeWs(); } finally { _closingWs.delete(wsId); } },
-          () => _closingWs.delete(wsId));
+          () => { _closingWs.delete(wsId); getWorkspaceTerminals(wsp).find(t => t.id === termId)?._cancelClose?.(); });
         return;
       }
     }
@@ -5662,17 +5284,18 @@
     if (idx === -1) return;
 
     const entry = group.terminals[idx];
-    disposeChatBottomTerminal(entry);
+    delete entry._cancelClose;
+    entry._closePending = true;
     if (!skipPtyClose) rememberClosedThread(entry, wsp);
+    afterTabClosePaint(() => disposeChatBottomTerminal(entry));
     if (entry.type !== 'browser') {
       if (!skipPtyClose) {
         sendControl({ type: 'close', id: termId });
-        try {
-          if (entry.term) {
-            _disposeTermRenderers(entry.term);
-            entry.term.dispose();
-          }
-        } catch { }
+        afterTabClosePaint(() => {
+          try {
+            if (entry.term) { _disposeTermRenderers(entry.term); entry.term.dispose(); }
+          } catch { }
+        });
       }
     } else {
       if (entry._msgCleanup) entry._msgCleanup();
@@ -5782,16 +5405,17 @@
         }
       }
     }
-    renderSidebar();
-    saveState();
-
-    // If this was the last terminal (detach case), remove the now-empty workspace —
+    // If this was the last terminal (PTY-preserving move), remove the now-empty workspace —
     // unless it is the last workspace, which must always be kept.
     if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0 && workspaces.length > 1) {
       _removeWorkspace(wsId);
     }
     pluginEmit('terminal:remove', { wsId, termId, type: entry?.type });
-    if (!skipRender) { syncThreadPanel(); renderThreadsSidebar(); }
+    if (!skipRender) {
+      syncThreadPanel();
+      afterTabClosePaint(() => { renderSidebar(); renderThreadsSidebar(); saveState(); });
+    }
+    // Workspace teardown renders and saves once after all its tabs are removed.
   }
 
   function applyTabColor(tabEl, color) {
@@ -5898,10 +5522,6 @@
       return;
     }
     if (getWorkspaceTerminals(ws).length <= 1) {
-      if (DETACHED_ONLY) {
-        window.close();
-        return;
-      }
       // Last workspace: close the dead tab but keep the workspace itself.
       if (workspaces.length <= 1) {
         removeTerminal(ws.id, id);
@@ -6335,7 +5955,7 @@
       };
 
       const handleTabBarDragOver = (e) => {
-        const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
+        const hasExternal = (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
         if (!window.draggedTermId && !hasExternal) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
@@ -6352,46 +5972,13 @@
             beforeTabId = (curIdx !== -1 && curIdx + 1 < node.terminals.length) ? node.terminals[curIdx + 1].id : null;
           }
         }
-        const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
-        if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
-          window.electronAPI.tabDragHover({
-            id: activeDragId,
-            targetGroupId: node.id,
-            zone: 'center',
-            beforeTabId,
-          });
-        }
+
       };
 
       const handleTabBarDrop = (e) => {
         tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right'));
-        const extId = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
 
-        // Cross-window drag (tab from a detached window): attach into this group
-        if (!window.draggedTermId) {
-          if (!extId) return;
-          e.preventDefault();
-          e.stopPropagation();
-          let beforeTabId = null;
-          const hit = getTabBarDropTarget(e.clientX);
-          if (hit && hit.closest) {
-            const targetId = hit.closest.dataset.termid;
-            if (hit.insertBefore) {
-              beforeTabId = targetId;
-            } else {
-              const curIdx = node.terminals.findIndex(x => x.id === targetId);
-              beforeTabId = (curIdx !== -1 && curIdx + 1 < node.terminals.length) ? node.terminals[curIdx + 1].id : null;
-            }
-          }
-          if (!findGroupContainingTerm(wsp.layout, extId)) {
-            const api = window.electronAPI;
-            if (api && api.tabDragDrop) {
-              api.tabDragDrop({ id: extId, targetGroupId: node.id, zone: 'center', beforeTabId });
-            }
-          }
-          window.externalDragTermId = null;
-          return;
-        }
+        if (!window.draggedTermId) return;
 
         // Local drag
         e.preventDefault();
@@ -6475,7 +6062,7 @@
       node.terminals.forEach(t => {
         const tab = document.createElement('div');
         const isActive = t.id === node.activeTermId;
-        tab.className = 'tg-tab' + (isActive ? ' active' : '') + (t.dead ? ' dead' : '');
+        tab.className = 'tg-tab' + (isActive ? ' active' : '') + (t.dead ? ' dead' : '') + (t._closePending ? ' tab-close-pending' : '');
         tab.dataset.termid = t.id;
         tab.draggable = true;
 
@@ -6517,12 +6104,7 @@
           window.dragSourceGroupId = node.id;
           tab.classList.add('dragging');
           startResizing(true);
-          // Announce the drag to the main process so every OTHER window can
-          // recognize this tab if it's dropped there (drag data is unreadable
-          // across renderers).
-          if (window.electronAPI && window.electronAPI.tabDragStart) {
-            window.electronAPI.tabDragStart({ id: t.id, cols: t.term ? t.term.cols : 80, rows: t.term ? t.term.rows : 24, cwd: t.cwd, label: t.label });
-          }
+
         });
         tab.addEventListener('dragend', e => {
           tab.classList.remove('dragging');
@@ -6534,77 +6116,10 @@
             el.classList.remove('drop-left', 'drop-right');
           });
           stopResizing();
-          // Main window: releasing a terminal tab where no window accepted the drop
-          // detaches it into its own window.
-          if (!DETACHED_ONLY && t.type !== 'browser' && t.term
-            && (!e.dataTransfer || e.dataTransfer.dropEffect === 'none')) {
-            setTimeout(() => {
-              if (window._tabMovedAway && window._tabMovedAway.has(t.id)) {
-                window._tabMovedAway.delete(t.id);
-                return;
-              }
-              const g = findGroupContainingTerm(wsp.layout, t.id);
-              if (!g) return;
-              detachTerminal(wsp.id, t.id);
-            }, 80);
-          }
-          if (!DETACHED_ONLY && window.electronAPI && window.electronAPI.tabDragEnd) {
-            window.electronAPI.tabDragEnd({ id: t.id, cancelled: true });
-          }
         });
 
-        // Detached window: the tab uses the same HTML5 drag technique as the
-        // main window's tabs (draggable + dragstart/dragend, reorder still
-        // works locally). On top of that, dragend reports the release
-        // position to the main process — releasing outside this window
-        // re-attaches the tab to the main window.
-        if (DETACHED_ONLY) {
-          // Track pointer presence during the drag: dragenter/dragover mean
-          // the pointer is over THIS window; a dragleave with no
-          // relatedTarget means it left the window entirely. At dragend this
-          // state (not a timing heuristic) decides local-drop vs drag-out.
-          if (!window._detachDragTrackInit) {
-            window._detachDragTrackInit = true;
-            window._detachDragInside = false;
-            document.addEventListener('dragenter', () => { window._detachDragInside = true; }, true);
-            document.addEventListener('dragover', () => { window._detachDragInside = true; }, true);
-            document.addEventListener('dragleave', e => { if (!e.relatedTarget) window._detachDragInside = false; }, true);
-          }
-          tab.addEventListener('dragstart', () => {
-            window._detachDragInside = true;
-            try {
-              const payload = serializeTermBuffer(t);
-              if (payload) localStorage.setItem(DETACH_BUFFER_KEY(t.id), JSON.stringify(payload));
-            } catch { }
-          });
-          tab.addEventListener('dragend', e => {
-            const api = window.electronAPI;
-            if (!api || !api.tabDragEnd) return;
-            // dropEffect === 'none' means no local target accepted the drop —
-            // the drag ended outside this window's handlers (the re-attach
-            // case). Coordinates on dragend are often stale/clamped once the
-            // pointer has left the window, so they're only a secondary signal.
-            const unhandled = !e.dataTransfer || e.dataTransfer.dropEffect === 'none';
-            const outside = e && (e.clientX < 0 || e.clientX > window.innerWidth || e.clientY < 0 || e.clientY > window.innerHeight);
-            // Tracked dragenter/dragleave state: was the pointer still over
-            // this window when the button was released?
-            const insideAtEnd = !!window._detachDragInside;
-            api.tabDragEnd({
-              id: t.id,
-              unhandled: !!unhandled,
-              insideAtEnd,
-              clientX: e ? e.clientX : null,
-              clientY: e ? e.clientY : null,
-              screenX: e ? e.screenX : null,
-              screenY: e ? e.screenY : null,
-              outside: !!outside,
-              cols: t.term.cols, rows: t.term.rows, cwd: t.cwd,
-            });
-          });
-        }
-
         tab.addEventListener('dragover', e => {
-          const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
+          const hasExternal = (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
           if (!window.draggedTermId && !hasExternal) return;
           e.preventDefault();
           e.stopPropagation();
@@ -6620,22 +6135,7 @@
           } else {
             tab.classList.add('drop-right');
           }
-          const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
-          if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
-            let beforeTabId = null;
-            if (isLeft) {
-              beforeTabId = t.id;
-            } else {
-              const curIdx = node.terminals.findIndex(x => x.id === t.id);
-              beforeTabId = (curIdx !== -1 && curIdx + 1 < node.terminals.length) ? node.terminals[curIdx + 1].id : null;
-            }
-            window.electronAPI.tabDragHover({
-              id: activeDragId,
-              targetGroupId: node.id,
-              zone: 'center',
-              beforeTabId,
-            });
-          }
+
         });
         tab.addEventListener('dragleave', (e) => {
           if (!e.relatedTarget || !tab.contains(e.relatedTarget)) {
@@ -6648,31 +6148,7 @@
           tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => {
             el.classList.remove('drop-left', 'drop-right');
           });
-          // Cross-window drag (tab from a detached window): attach it into
-          // this group, at the release position relative to this tab.
-          if (!window.draggedTermId) {
-            const extId = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
-            if (extId && !findGroupContainingTerm(wsp.layout, extId)) {
-              const api = window.electronAPI;
-              if (api && api.tabDragDrop) {
-                const rect0 = tab.getBoundingClientRect();
-                const isLeft = e.clientX < rect0.left + rect0.width / 2;
-                let beforeTabId = null;
-                if (isLeft) {
-                  beforeTabId = t.id;
-                } else {
-                  const curIdx = node.terminals.findIndex(x => x.id === t.id);
-                  beforeTabId = (curIdx !== -1 && curIdx + 1 < node.terminals.length) ? node.terminals[curIdx + 1].id : null;
-                }
-                api.tabDragDrop({
-                  id: extId, targetGroupId: node.id, zone: 'center',
-                  beforeTabId,
-                });
-              }
-            }
-            window.externalDragTermId = null;
-            return;
-          }
+        if (!window.draggedTermId) return;
           const draggedId = window.draggedTermId;
           if (!draggedId || draggedId === t.id) return;
           const rect = tab.getBoundingClientRect();
@@ -7673,14 +7149,14 @@
     // Plain text dragged in (a selection from the history panel, a page, another app): pasted like Ctrl+V, no Enter.
     const isTextDrag = e => {
       const t = e.dataTransfer?.types || [];
-      return !window.draggedTermId && !window.externalDragTermId && !t.includes('Files') && !t.includes('application/x-terminalvibe-tab')
+      return !window.draggedTermId && !t.includes('Files') && !t.includes('application/x-terminalvibe-tab')
         && (t.includes('text/plain') || t.includes('text/uri-list'));
     };
     const textTarget = () => { const t = dropTarget(); return t?.term && t.type !== 'browser' && !t.locked && !t.dead ? t : null; };
     bodyEl.addEventListener('dragenter', e => {
       if (isFileDrag(e)) { e.preventDefault(); return; }
       if (isTextDrag(e)) { if (textTarget()) e.preventDefault(); return; }
-      const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
+      const hasExternal = (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
       if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
       dragDepth++;
@@ -7694,7 +7170,7 @@
         return;
       }
       if (isTextDrag(e)) { if (textTarget()) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } return; }
-      const hasExternal = window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
+      const hasExternal = (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('application/x-terminalvibe-tab'));
       if (!window.draggedTermId && !hasExternal) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
@@ -7716,15 +7192,6 @@
         overlay.style.width = '100%'; overlay.style.height = '50%';
       }
 
-      const activeDragId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId;
-      if (activeDragId && window.electronAPI && window.electronAPI.tabDragHover) {
-        window.electronAPI.tabDragHover({
-          id: activeDragId,
-          targetGroupId: groupNode.id,
-          zone,
-          beforeTabId: null,
-        });
-      }
     });
 
     bodyEl.addEventListener('dragleave', (e) => {
@@ -7732,9 +7199,7 @@
       if (dragDepth <= 0 || !e.relatedTarget || !bodyEl.contains(e.relatedTarget)) {
         dragDepth = 0;
         overlay.classList.remove('active');
-        if (window.electronAPI && window.electronAPI.tabDragHover) {
-          window.electronAPI.tabDragHover({ id: null });
-        }
+
       }
     });
 
@@ -7753,26 +7218,11 @@
       }
       dragDepth = 0;
       overlay.classList.remove('active');
-      if (window.electronAPI && window.electronAPI.tabDragHover) {
-        window.electronAPI.tabDragHover({ id: null });
-      }
 
-      const draggedId = window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
+      const draggedId = window.draggedTermId || (e.dataTransfer?.types.includes('application/x-terminalvibe-tab') && (e.dataTransfer.getData('application/x-terminalvibe-tab') || e.dataTransfer.getData('text/plain')));
       if (!draggedId) return;
 
       const zone = getZoneFromPoint(e.clientX, e.clientY);
-
-      // Cross-window drag: the terminal lives in a detached window, not in
-      // this layout — ask main to re-attach it here (splitting per zone)
-      // instead of running the local move/split handler.
-      if (!window.draggedTermId && !findGroupContainingTerm(wsp.layout, draggedId)) {
-        const api = window.electronAPI;
-        if (api && api.tabDragDrop) {
-          api.tabDragDrop({ id: draggedId, targetGroupId: groupNode.id, zone });
-        }
-        window.externalDragTermId = null;
-        return;
-      }
 
       handleTerminalDrop(draggedId, groupNode.id, zone, wsp);
     });
@@ -7986,12 +7436,12 @@
       sb.querySelectorAll('.ws-folder-row.drop-into, .ws-folder-row.drop-above, .ws-folder-row.drop-below').forEach(el => el.classList.remove('drop-into', 'drop-above', 'drop-below'));
     };
 
-    // Tab being dragged (local tab or detached-window tab announced via IPC).
+    // Tab being dragged.
     // Workspace/folder drags set draggedWsId/draggedFolderId instead, so those
     // are excluded here — this helper only reports tab drags.
     const getSidebarTabDragId = () => {
       if (window.draggedWsId || window.draggedFolderId) return null;
-      return window.draggedTermId || window.externalDragTermId || window.lastExternalDragTermId || null;
+      return window.draggedTermId || null;
     };
 
     // Container-level drop handling for gaps between and around sidebar items
@@ -8196,12 +7646,6 @@
           try { e.dataTransfer.dropEffect = 'move'; } catch { }
           clearDropMarks();
           btn.classList.add('drop-into');
-          const api = window.electronAPI;
-          if (api && api.tabDragHover && !window.draggedTermId) {
-            const tws = findWs(wsp.id);
-            const tg = tws ? ((tws.activeTermId && findGroupContainingTerm(tws.layout, tws.activeTermId)) || findFirstGroup(tws.layout)) : null;
-            if (tg) { try { api.tabDragHover({ id: tabDragId, targetGroupId: tg.id, zone: 'center', beforeTabId: null }); } catch { } }
-          }
           return;
         }
         const dw = window.draggedWsId;
@@ -8243,21 +7687,6 @@
             } else {
               moveTabToWorkspace(termId, wsp.id);
             }
-          } else {
-            // Detached-window tab: ask main to re-attach it into this workspace's group.
-            const extId = window.externalDragTermId || window.lastExternalDragTermId || tabDragId;
-            const tws = findWs(wsp.id);
-            let tg = tws ? ((tws.activeTermId && findGroupContainingTerm(tws.layout, tws.activeTermId)) || findFirstGroup(tws.layout)) : null;
-            if (!tg && tws && !tws.layout) {
-              tg = { type: 'group', id: 'group-' + uuid(), terminals: [], activeTermId: null };
-              tws.layout = tg;
-            }
-            const api = window.electronAPI;
-            if (api && api.tabDragDrop && tg) {
-              try { if (api.tabDragHover) api.tabDragHover({ id: null }); } catch { }
-              api.tabDragDrop({ id: extId, targetGroupId: tg.id, zone: 'center' });
-            }
-            window.externalDragTermId = null;
           }
           return;
         }
@@ -8554,7 +7983,7 @@
       }
     } finally { _watching = false; }
   }
-  setInterval(() => { if (!DETACHED_ONLY && !SETTINGS_ONLY) watchThreadAgents(); }, 1500);
+  setInterval(() => { if (!SETTINGS_ONLY) watchThreadAgents(); }, 1500);
   // Claude Code's permission mode, read from its footer: "⏵⏵ auto mode on", "⏸ plan mode on", "⏸ manual mode on"
   // (asks first). The footer is the last mode line on the screen: it sits mid-screen while the conversation is
   // short, so the whole screen is read. null when no footer is showing (a dialog covers it).
@@ -8569,15 +7998,17 @@
     return null;
   }
 
-  // ── Threads sidebar footer: each agent's plan usage — its most-used window and the time left to its reset;
+  // ── Threads sidebar footer: each agent's weekly usage (most-used model when no weekly window exists);
   // the tooltip lists every window. Read through the agents' own CLIs (main process, cached 1 min). ──
   const fmtLeft = ms => { const m = Math.max(0, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`; };
-  let _usageAt = 0, _usageLimits = null;
+  let _usageAt = 0, _usageLimits = null, _usageRequestId = 0;
   async function refreshUsageLimits(force = false, fresh = false) {
     const api = window.electronAPI;
-    if (!api?.usageLimits || DETACHED_ONLY || SETTINGS_ONLY || (!force && Date.now() - _usageAt < 60000)) return _usageLimits;
-    _usageAt = Date.now();
+    if (!api?.usageLimits || SETTINGS_ONLY || (!force && Date.now() - _usageAt < 60000)) return _usageLimits;
+    const requestId = ++_usageRequestId;
     const limits = await api.usageLimits(fresh).catch(() => null);
+    if (requestId !== _usageRequestId) return _usageLimits;
+    _usageAt = limits ? Date.now() : 0;
     _usageLimits = limits;
     if (_usageModal) renderUsageModal();
     renderUsageSidebar();
@@ -8589,7 +8020,7 @@
     const left = document.getElementById('ts-usage');
     if (!left) return;
     const label = usageRemaining() ? 'remaining' : 'consumed';
-    left.setAttribute('aria-label', `Usage limits: ${label}`);
+    left.setAttribute('aria-label', `Weekly usage limits: ${label}`);
     const ids = Object.entries(_usageLimits || {}).filter(([id, u]) => harnessOf(id) && u.windows?.length).map(([id]) => id);
     if (_usageLimits) try { localStorage.setItem('tv-usage-agents', JSON.stringify(ids)); } catch {}
     // The first reading after the startup placeholders fades in (rings sweep from empty); later refreshes don't.
@@ -8599,11 +8030,15 @@
     const items = Object.entries(_usageLimits || {}).map(([id, u]) => {
       const h = harnessOf(id);
       if (!h || !u.windows?.length) return '';
-      const top = u.windows.reduce((a, b) => b.used > a.used ? b : a);
+      // Prefer the shared weekly quota over session or per-model limits.
+      const top = u.windows.find(w => w.mins === 10080 && /^weekly$/i.test(w.label))
+        || u.windows.find(w => /^weekly$/i.test(w.label))
+        || u.windows.find(w => w.mins === 10080 || /^weekly\b/i.test(w.label))
+        || u.windows.reduce((a, b) => b.used > a.used ? b : a);
       const rows = u.windows.map(w => ({ icon: 'ph-clock', text: `${w.label}: ${usagePercent(w.used)}% ${label}${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
       const plan = u.plan ? ' · ' + u.plan[0].toUpperCase() + u.plan.slice(1) : '';
       // Gauge and percentage use the selected mode; warnings always reflect consumed quota.
-      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${usagePercent(top.used)}" data-tip="${escHtml(h.name + plan)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
+      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${usagePercent(top.used)}" data-tip="${escHtml(h.name + plan + ' · ' + top.label + ': ' + usagePercent(top.used) + '% ' + label)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
         + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
         + `<span class="sb-usage-pct">${usagePercent(top.used)}%</span></span>`;
     }).join('');
@@ -8671,11 +8106,11 @@
     document.body.appendChild(overlay);
     _usageModal = overlay;
     overlay.querySelector('[data-act="close"]').focus();
-    void loadUsageModal(false); // the last reading (≤ 1 min old) at once, else a new one
+    void loadUsageModal(true); // opening the details always checks the providers again
   }
   document.getElementById('ts-usage')?.addEventListener('click', openUsageModal);
   // From startup: the agents seen last time, as logos in empty rings, until the first reading arrives.
-  if (!DETACHED_ONLY && !SETTINGS_ONLY && window.electronAPI?.usageLimits) {
+  if (!SETTINGS_ONLY && window.electronAPI?.usageLimits) {
     const left = document.getElementById('ts-usage');
     let ids = null;
     try { ids = JSON.parse(localStorage.getItem('tv-usage-agents')); } catch {}
@@ -8688,7 +8123,7 @@
       left.hidden = false;
     }
   }
-  if (!DETACHED_ONLY && !SETTINGS_ONLY) { setTimeout(() => refreshUsageLimits(true), 3000); setInterval(() => refreshUsageLimits(true), 5 * 60000); }
+  if (!SETTINGS_ONLY) { setTimeout(() => refreshUsageLimits(true), 3000); setInterval(() => refreshUsageLimits(false), 60000); }
 
   // A terminal running an agent becomes a Chat tab over that agent (the chat button in its tab bar).
   function openTerminalAsChat(t) {
@@ -8743,20 +8178,22 @@
   let _threadPoll = null, _flowSig = '';
   // A prompt's image paths (attached or pasted) become link chips "image.png 18 KB" in its text;
   // the images themselves show above the bubble. Both open the image viewer.
-  const _thrImgSize = new Map(); // path -> bytes, known once the image was read
+  const _thrImgSize = new Map(); // attachment path -> bytes
+  const _chatAttachmentStats = new Map();
   const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
   function chatImageLinkHtml(file, attrs = '', extraClass = '') {
-    return `<a href="#" class="thr-image-ref ${extraClass}" ${attrs} title="${escHtml(file.path || file.name)}"><span class="thr-inline-image-icon">${file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span>${escHtml(file.name)}</span><small class="thr-img-size" data-size-path="${escHtml(file.path || '')}">${file.size ? escHtml(fmtBytes(file.size).replace(' ', '')) : ''}</small></a>`;
+    const icon = file.image ? 'ph-image' : typeof linkFileIcon === 'function' ? linkFileIcon(file.name || file.path || '') : 'ph-file';
+    return `<a href="#" class="thr-image-ref ${extraClass}" data-path="${escHtml(file.path || '')}" ${attrs} title="${escHtml(file.path || file.name)}"><span class="thr-inline-image-icon">${file.image && file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : `<i class="ph ${icon}" aria-hidden="true"></i>`}</span><span>${escHtml(file.name)}</span><small class="thr-img-size" data-size-path="${escHtml(file.path || '')}">${file.size ? escHtml(fmtBytes(file.size).replace(' ', '')) : ''}</small></a>`;
   }
   function queuedMessageTextHtml(message) {
     let text = message.typed || '';
     const links = [];
     for (const [i, file] of (message.files || []).entries()) {
-      const image = file.image && !file.cite && !file.at && !file.thread;
-      const replacement = image ? `\u0000I${links.length}\u0000` : file.cite ? '“' + file.cite.replace(/\s+/g, ' ').slice(0, 80) + '”' : file.name;
-      if (image) links.push(chatImageLinkHtml(file, `data-queue-act="preview" data-file-i="${i}"`));
+      const attachment = !!file.path && !file.cite && !file.at && !file.thread;
+      const replacement = attachment ? `\u0000I${links.length}\u0000` : file.cite ? '“' + file.cite.replace(/\s+/g, ' ').slice(0, 80) + '”' : file.name;
+      if (attachment) links.push(chatImageLinkHtml(file, `data-queue-act="preview" data-file-i="${i}"`));
       if (file.mention && text.includes(file.mention)) text = text.split(file.mention).join(replacement);
-      else if (image) text += (text ? ' ' : '') + replacement;
+      else if (attachment) text += (text ? ' ' : '') + replacement;
     }
     if (!text) text = message.files?.map(f => f.name || f.cite).join(', ') || message.text || '';
     return escHtml(text).replace(/\u0000I(\d+)\u0000/g, (_, i) => links[i] || '');
@@ -8775,10 +8212,12 @@
     }
     text = lines.join('\n');
     const cites = quotes.map(q => `<span class="thr-cite" title="${escHtml(q)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(q.replace(/\s+/g, ' '))}</span></span>`).join('');
-    const paths = [];
-    const marked = String(text).replace(new RegExp(IMAGE_PATH_RE.source, 'gi'), (m, q, quoted, bare) => {
-      paths.push(quoted || bare);
-      return `\u0000I${paths.length - 1}\u0000`;
+    const paths = [], attachments = [];
+    const marked = String(text).replace(new RegExp(ATTACHMENT_PATH_RE.source, 'gi'), (m, q, quoted, bare) => {
+      const path = quoted || bare;
+      attachments.push(path);
+      if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(path)) paths.push(path);
+      return `\u0000I${attachments.length - 1}\u0000`;
     });
     // Each “title” of a dropped thread shows as a link to it (its history file sits in the thread's folder).
     const markedRefs = refs.reduce((out, r, n) => out.split(`“${r.title}”`).join(`\u0000T${n}\u0000`), marked);
@@ -8786,7 +8225,7 @@
       const r = refs[n], key = r.path.split(/[\\/]/).slice(-2, -1)[0] || '';
       return `<a href="#" class="thr-thread-mention" data-thread-key="${escHtml(key)}" title="Thread: ${escHtml(r.title)}"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(r.title)}</span></a>`;
     }).replace(/\u0000I(\d+)\u0000/g, (_, n) => {
-      return `<span class="thr-inline-ref">${chatImageReferenceHtml({ path: paths[n] })}</span>`;
+      return `<span class="thr-inline-ref">${chatImageReferenceHtml({ path: attachments[n] })}</span>`;
     }).trim();
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
   }
@@ -8832,6 +8271,7 @@
   // The tab bar's chat button brings the chat back.
   function setChatView(tab, cli) {
     if (!tab?.threadHistory) return;
+    if (cli) delete tab._chatShellUnused;
     if (cli && curChat() === tab) rememberThreadScroll(tab);
     tab._cliView = !!cli;
     tab.el?.classList.toggle('chat-cli', !!cli);
@@ -8931,8 +8371,8 @@
       if (askEl._html !== askHtml && !typing) { askEl._html = askHtml; askEl._q = a?.question; askEl.innerHTML = askHtml; }
     }
     let el = flow.querySelector('.thr-working');
-    if (!w) { el?.remove(); renderChatQueue(ws, surface); return; }
-    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 48;
+    if (!w) { el?.remove(); renderChatQueue(ws, surface); renderChatResume(ws, surface); return; }
+    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     if (!el) { el = document.createElement('div'); el.className = 'thr-working'; el.setAttribute('role', 'status'); }
     const queue = threadPart(surface, 'queue');
     if (queue) { if (el.nextElementSibling !== queue) flow.insertBefore(el, queue); }
@@ -8947,6 +8387,7 @@
     if (el._html !== html) { el._html = html; el.innerHTML = html; }
     if (atBottom) flow.scrollTop = flow.scrollHeight;
     renderChatQueue(ws, surface);
+    renderChatResume(ws, surface);
   }
   const pendingMessages = ws => { const p = _pendingMsgs.get(ws.id); return p ? (Array.isArray(p) ? p : [p]) : []; };
   const pendingHtml = (ws, previousHead = '') => {
@@ -8956,7 +8397,7 @@
     const meta = [o.model && o.model !== 'default' ? o.model : '', o.effort && o.effort !== 'default' ? o.effort : ''].filter(Boolean).join(' · ');
     const head = name + '|' + meta;
     const header = head === previousHead ? '' : `<div class="thr-seg thr-pending" data-head="${escHtml(head)}"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(pending[0].at)}</span></div>`;
-    return header + pending.map(p => `<div class="thr-msg user thr-pending">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}<div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(p.text).html}</div></div></div>`).join('');
+    return header + pending.map(p => `<div class="thr-msg user thr-pending" data-ts="${p.at}">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}<div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(p.text).html}</div></div></div>`).join('');
   };
   const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
   // A chat is a tab (its history + a message box); a workspace can hold any number of them.
@@ -8967,6 +8408,7 @@
     if (activeWsId !== ws.id) activateWorkspace(ws.id);
     const tab = addTerminal(ws.id, groupId, { label: 'Chat', threadHistory: true });
     if (!tab) return;
+    tab._chatShellUnused = true;
     tab.chat = { createdAt: Date.now(), ...(threadSettings.folder !== 'workspace' ? { scratch: true } : {}) };
     harness ||= CHAT_AGENTS[threadSettings.harness] ? threadSettings.harness : '';
     if (harness) setChatOpts(tab, { harness });
@@ -9136,7 +8578,7 @@
   // that doesn't hold the page gets it.
   setInterval(() => {
     const ws = activeWs();
-    if (!ws?.layout || DETACHED_ONLY || SETTINGS_ONLY) return;
+    if (!ws?.layout || SETTINGS_ONLY) return;
     const shown = getWorkspaceTerminals(ws).find(t => t.threadHistory && t.el?.offsetParent && findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id);
     if (shown && thrPage.parentElement !== shown.el && !(_curChat && thrPage.parentElement === _curChat.el && _curChat.el.offsetParent)) { _preferChat = shown; syncThreadPanel(); }
   }, 500);
@@ -9159,7 +8601,7 @@
         if (!page.contains(document.activeElement)) thrInput.focus({ preventScroll: true });
       };
     }
-    const shown = chats.filter(t => findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id);
+    const shown = chats.filter(t => !t._closePending && findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id);
     const tab = shown.find(t => t === _preferChat) || shown.find(t => t.id === ws.activeTermId) || shown.find(t => t === _curChat) || shown[0];
     _preferChat = null;
     const prev = _curChat;
@@ -9169,11 +8611,11 @@
       prev._draft = thrInput.value; prev._files = _chatFiles;
       const flow = page.querySelector('#sbr-thread-flow');
       prev._open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
-      prev._flowHtml = flow.innerHTML;
+      if (!prev._closePending) prev._flowHtml = flow.innerHTML;
     }
     // Keep a chat surface even when its workspace was hidden before this call. Its slot may
     // become visible again without taking focus (for example, above a terminal in a split).
-    if (prev && prev !== tab && page.parentElement === prev.el && !prev._cliView) {
+    if (prev && prev !== tab && !prev._closePending && page.parentElement === prev.el && !prev._cliView) {
       const snap = createThreadSnapshot(prev);
       restoreThreadScroll(prev, snap);
     }
@@ -9242,7 +8684,7 @@
     const flow = surface.querySelector('.thr-flow');
     // Hiding or detaching a tab can report zero geometry; keep its last visible position.
     if (!tab || !flow.dataset.seen || !flow.clientHeight || !flow.getClientRects().length) return;
-    tab._scrollState = { top: flow.scrollTop, bottom: flow.scrollHeight - flow.scrollTop - flow.clientHeight < 32 };
+    tab._scrollState = { top: flow.scrollTop, bottom: flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1 };
   }
   function restoreThreadScroll(tab, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow'), state = tab._scrollState;
@@ -9371,7 +8813,7 @@
       // No update prompt at startup: the chat's first Enter would answer it ("Update now") instead of sending.
       argv: (o, sid, resume, fork) => [...(resume && sid ? ['resume', sid] : fork ? ['fork', fork] : []), '-c', 'check_for_update_on_startup=false', ...(o.model !== 'default' ? ['-m', o.model] : []),
         ...(o.effort !== 'default' ? ['-c', `model_reasoning_effort="${o.effort}"`] : []),
-        ...(o.access === 'full' ? ['--dangerously-bypass-approvals-and-sandbox'] : o.access !== 'default' ? ['-s', o.access] : []),
+        ...(o.access === 'full' ? ['--dangerously-bypass-approvals-and-sandbox'] : ['-a', 'on-request', '-s', o.access === 'workspace-write' ? 'workspace-write' : 'read-only']),
         ...(o.fast && CHAT_AGENTS.codex.models.find(m => m.id === o.model)?.fastTier ? ['-c', `service_tier="${CHAT_AGENTS.codex.models.find(m => m.id === o.model).fastTier}"`] : [])],
     },
     // Antigravity CLI: chats run over its Agent Client Protocol server (`agy acp`, electron/chat-sdk.js), which
@@ -9408,10 +8850,10 @@
     _chatAgents.then(r => { _chatAgentsFound = r?.found || {}; });
     return _chatAgents;
   }
-  if (!DETACHED_ONLY && !SETTINGS_ONLY) loadChatAgents();
+  if (!SETTINGS_ONLY) loadChatAgents();
   // Antigravity's models come from a session (opened and closed at once in the background): fresh once per run.
   // (After loadChatAgents' state above: calling it earlier throws during startup and the app never leaves its splash.)
-  if (!DETACHED_ONLY && !SETTINGS_ONLY && window.electronAPI?.chatSdkModels) loadChatAgents().then(({ found = {} }) => found.agy
+  if (!SETTINGS_ONLY && window.electronAPI?.chatSdkModels) loadChatAgents().then(({ found = {} }) => found.agy
     && window.electronAPI.chatSdkModels('antigravity', found.agy).then(m => { setAgyModels(m); syncThreadComposer(curChat()); })).catch(() => {});
   // A workspace keeps its own picks; one that has none starts from the last picks made anywhere.
   const lastChatOpts = () => { try { return JSON.parse(localStorage.getItem('tv-chat-opts')) || {}; } catch { return {}; } };
@@ -9464,7 +8906,7 @@
   const sdkTrayAsk = a => ({ sdk: true, id: a.id, question: a.question, detail: a.detail || [], multi: !!a.multi,
     options: a.options.map((o, i) => ({ key: o.submit ? '' : String(i + 1), label: o.label, desc: o.desc || '', selected: false, submit: !!o.submit, input: !!o.input,
       ...(a.multi && !o.submit && !o.input ? { checked: false } : {}) })) });
-  if (!DETACHED_ONLY && !SETTINGS_ONLY) window.electronAPI?.onChatSdkEvent?.(ev => {
+  if (!SETTINGS_ONLY) window.electronAPI?.onChatSdkEvent?.(ev => {
     const t = findTermById(ev.key)?.term, s = t?._sdk;
     if (!s?.alive) return;
     const name = harnessOf(s.harness)?.name || 'The agent';
@@ -9474,7 +8916,7 @@
     } else if (ev.type === 'busy') { s.busy = true; t._agentWorking = true; }
     else if (ev.type === 'idle') {
       s.busy = false; s.idleAt = t._idleAt = Date.now(); t._agentWorking = false;
-      if (ev.error) zoomBadge(`${name}: ${ev.error}`);
+      if (ev.error) noteChatError(t, `${name}: ${ev.error}`);
       onTerminalFinished({ id: t.id, kind: 'agent', name: s.harness });
       chatAgentIdle(t);
     } else if (ev.type === 'ask') s.ask = sdkTrayAsk(ev.ask);
@@ -9485,10 +8927,10 @@
       s.alive = s.busy = false; s.ask = null; t._agentWorking = false;
       _tabAgent.set(t.id, null);
       refreshWorkspaceProcsSoon();
-      if (ev.error) zoomBadge(`${name} stopped: ${ev.error}`);
+      if (ev.error) noteChatError(t, `${name}: ${ev.error}`);
       syncTabAgentIcon(t);
       // Died mid-turn (a crash): the turn is over; redraw so its "Interrupted" line shows, and the next message restarts it.
-      if (ev.midTurn) { _turns.delete(t.id); _pendingMsgs.delete(t.id); _flowSig = ''; if (curChat() === t) refreshThreadFlow(t); }
+      if (ev.midTurn) { t.chat ||= {}; t.chat.interruptedAt = Date.now(); saveState(); _turns.delete(t.id); _pendingMsgs.delete(t.id); _flowSig = ''; if (curChat() === t) refreshThreadFlow(t); }
     }
     if (curChat() === t) { syncWorking(t); syncThreadComposer(t); syncSendBtn(); }
     renderThreadsSidebar();
@@ -9504,9 +8946,10 @@
   {
     const wrap = thrPage.querySelector('.thr-composer-wrap'), flow = thrPage.querySelector('#sbr-thread-flow');
     new ResizeObserver(() => {
-      const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 48;
+      const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
       flow.style.paddingBottom = wrap.offsetHeight + 12 + 'px';
       if (atBottom) flow.scrollTop = flow.scrollHeight;
+      syncScrollEnd();
     }).observe(wrap);
   }
   thrPage.querySelector('#sbr-thread-ask').addEventListener('click', e => {
@@ -9570,7 +9013,7 @@
     const b = e.target.closest('.thr-img-link');
     if (b) {
       e.preventDefault();
-      openClaudeRefViewer(null, { kind: 'file', path: b.dataset.path, label: b.dataset.path.split(/[\\/]/).pop() }, '');
+      openChatAttachment({ path: b.dataset.path });
     }
     const href = e.target.closest('button.thr-link')?.dataset.href;
     if (!href) return;
@@ -9614,6 +9057,20 @@
   const thrChip = id => thrPage.querySelector('#sbr-thread-' + id);
   const _chatStarting = new Map(); // chat tab id -> { text, wait } while its agent boots (shown in the working row)
   const _gitBranch = new Map(); // cwd -> branch | null
+  const _gitBranchChecked = new Map(), _gitBranchPending = new Map();
+  function refreshChatGitBranch(cwd) {
+    if (!cwd || !window.electronAPI?.gitBranch) return Promise.resolve();
+    if (_gitBranchPending.has(cwd)) return _gitBranchPending.get(cwd);
+    if (_gitBranch.has(cwd) && Date.now() - (_gitBranchChecked.get(cwd) ?? -Infinity) < 2000) return Promise.resolve();
+    _gitBranchChecked.set(cwd, Date.now());
+    const request = Promise.resolve().then(() => window.electronAPI.gitBranch(cwd)).then(value => {
+      const branch = value || null, changed = _gitBranch.get(cwd) !== branch;
+      _gitBranch.set(cwd, branch);
+      if (changed) { syncThreadComposer(curChat()); renderThreadsSidebar(); }
+    }).catch(() => {}).finally(() => _gitBranchPending.delete(cwd));
+    _gitBranchPending.set(cwd, request);
+    return request;
+  }
   // A "No project" thread (chat.scratch) has no folder until its agent first starts in its own scratch folder.
   const chatCwd = tab => tab?.chat?.scratch ? tab.chat.cwd || '' : tab?.chat?.cwd || tab?.cwd || wsOf(tab)?.cwd || getWorkspaceTerminals(wsOf(tab) || {}).find(t => t.cwd)?.cwd || '';
   const isScratchDir = d => /[\\/]\.terminalvibe[\\/]scratch[\\/][^\\/]+[\\/]?$/.test(d || '');
@@ -9684,10 +9141,7 @@
       back.title = parent ? `Give “${parent.chat?.title || parent.label}” this side chat with your next message there` : '';
     }
     const branch = thrChip('branch');
-    if (cwd && window.electronAPI?.gitBranch && !_gitBranch.has(cwd)) {
-      _gitBranch.set(cwd, null);
-      window.electronAPI.gitBranch(cwd).then(b => { _gitBranch.set(cwd, b || null); syncThreadComposer(curChat()); }, () => {});
-    }
+    void refreshChatGitBranch(cwd);
     const b = _gitBranch.get(cwd);
     branch.hidden = !b;
     if (b) branch.innerHTML = `<i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(b)}</span>`;
@@ -10117,6 +9571,7 @@
   //    being replaced, or with nothing running, the chat's latest conversation if it was this agent's;
   //  - otherwise a new session starts and gets the whole chat so far as a handoff file.
   function ensureChatTerminalSession(tab) {
+    delete tab._chatShellUnused;
     if (tab._terminalSessionOpening) return tab._terminalSessionOpening;
     tab._terminalSessionOpening = (async () => {
       try {
@@ -10214,7 +9669,7 @@
         entry.term.reset(); // the agent draws on a clean screen (and readiness never reads the old one)
         const started = await createAgentTerminal({ id: entry.id, ...getSlotDimensions(entry), cwd, executable: found[h.bin],
           argv: CHAT_AGENTS[o.harness].argv(o, sid, !!resumeSid, forkSid, threadsDir), returnToShell: true, replaceIdle: true });
-        if (!started) { zoomBadge(`Could not start ${h.name}`); return false; }
+        if (!started) { noteChatError(chatTab, `Could not start ${h.name}`); return false; }
         entry.dead = false;
         entry.term.options.disableStdin = false;
       }
@@ -10272,7 +9727,7 @@
       if (!isLiveTerminal(entry) || !await agentRunning(entry, h)) { zoomBadge(`${h.name} exited before the message was sent`); return false; }
       if (text == null) return true; // a restart with new flags only: the notes ride on the next message
       return await sendToAgent(entry, text);
-    } catch (err) { zoomBadge(err.message || `Could not start ${h.name}`); return false; }
+    } catch (err) { noteChatError(chatTab, err.message || `Could not start ${h.name}`); return false; }
     finally { _chatStarting.delete(ws.id); if (curChat() === ws) syncThreadPanel(true); }
   }
   // ── Attachments: picked (paperclip), dropped on the box or pasted. Each becomes a path in the
@@ -10288,6 +9743,7 @@
       window.electronAPI.readImageFile(file.path).then(result => {
         if (!result?.data) return;
         file.preview = `data:${result.mediaType};base64,${result.data}`;
+        file.size ||= result.size || Math.floor(result.data.length * 3 / 4) - (result.data.endsWith('==') ? 2 : result.data.endsWith('=') ? 1 : 0);
         refresh();
       }).catch(() => {});
     }
@@ -10305,6 +9761,24 @@
       text += chatEditorText(child);
     }
     return text;
+  }
+  function prepareChatPastedText(text) {
+    const files = _chatFiles.map(file => ({ ...file }));
+    const allocator = document.createElement('textarea'); allocator.value = thrInput.value;
+    const value = text.replace(new RegExp(ATTACHMENT_PATH_RE.source, 'gi'), (match, quote, quoted, bare) => {
+      const path = quoted || bare;
+      let file = files.find(file => !file.cite && !file.at && !file.thread && file.path === path);
+      if (!file) {
+        file = { path, name: path.split(/[\\/]/).pop(), image: /\.(png|jpe?g|gif|webp|bmp)$/i.test(path), size: _thrImgSize.get(path) || 0 };
+        files.push(file);
+      }
+      if (!file.mention) {
+        allocator.setSelectionRange(allocator.value.length, allocator.value.length);
+        insertChatMention(file, allocator, files);
+      }
+      return file.mention;
+    });
+    return { text: value, files };
   }
   function copyChatInputSelection(event, editor) {
     const selection = window.getSelection();
@@ -10405,13 +9879,38 @@
   }
   function chatImageReferenceHtml(file, tabIndex = 0) {
     const path = file.path || '', name = file.name || path.split(/[\\/]/).pop();
+    const image = file.image ?? /\.(png|jpe?g|gif|webp|bmp)$/i.test(path);
     if (file.preview) {
       _thrImgCache.set(path, file.preview);
       if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
     }
     if (file.size) _thrImgSize.set(path, file.size);
     const preview = file.preview || _thrImgCache.get(path), size = file.size || _thrImgSize.get(path);
-    return `<a href="#" class="thr-image-ref thr-img-link" tabindex="${tabIndex}" data-path="${escHtml(path)}" title="${escHtml(name)}"><span class="thr-inline-image-icon">${preview ? `<img src="${escHtml(preview)}" alt="">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</span><span class="thr-img-link-name">${escHtml(name)}</span><small class="thr-img-size" data-size-path="${escHtml(path)}">${size ? escHtml(fmtBytes(size).replace(' ', '')) : ''}</small></a>`;
+    const icon = image ? 'ph-image' : linkFileIcon(path);
+    return `<a href="#" class="thr-image-ref thr-img-link" tabindex="${tabIndex}" data-path="${escHtml(path)}" title="${escHtml(path)}"><span class="thr-inline-image-icon">${image && preview ? `<img src="${escHtml(preview)}" alt="">` : `<i class="ph ${icon}" aria-hidden="true"></i>`}</span><span class="thr-img-link-name">${escHtml(name)}</span><small class="thr-img-size" data-size-path="${escHtml(path)}">${size ? escHtml(fmtBytes(size).replace(' ', '')) : ''}</small></a>`;
+  }
+  function openChatAttachment(file) {
+    if (!file?.path) return;
+    const image = file.image ?? /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.path);
+    if (image) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name || file.path.split(/[\\/]/).pop() }, '', file.preview);
+    else window.electronAPI?.showInFolder?.(file.path);
+  }
+  function hydrateChatAttachmentSizes(surface) {
+    if (!window.electronAPI?.attachmentInfo) return;
+    for (const label of surface.querySelectorAll('.thr-img-size[data-size-path]')) {
+      const path = label.dataset.sizePath;
+      if (!path) continue;
+      if (_thrImgSize.has(path)) { label.textContent = fmtBytes(_thrImgSize.get(path)).replace(' ', ''); continue; }
+      if (!_chatAttachmentStats.has(path)) {
+        const request = window.electronAPI.attachmentInfo(path).then(info => {
+          if (info && Number.isFinite(info.size) && info.size >= 0) _thrImgSize.set(path, info.size);
+          return info;
+        }).catch(() => null);
+        _chatAttachmentStats.set(path, request);
+        if (_chatAttachmentStats.size > 200) _chatAttachmentStats.delete(_chatAttachmentStats.keys().next().value);
+      }
+      _chatAttachmentStats.get(path).then(info => { if (info && label.isConnected) label.textContent = fmtBytes(info.size).replace(' ', ''); });
+    }
   }
   function syncChatInputLinks(surface = thrPage, files = _chatFiles) {
     const input = threadPart(surface, 'input'), editor = threadPart(surface, 'input-links');
@@ -10448,7 +9947,7 @@
     openMdTokens(editor); // now, not on the async selectionchange: no frame with the caret's markers hidden
   }
   function insertChatMention(file, input = thrInput, files = _chatFiles) {
-    const kind = file.cite ? 'Citation' : file.thread ? 'Thread' : 'Image';
+    const kind = file.cite ? 'Citation' : file.thread ? 'Thread' : file.image === false ? 'File' : 'Image';
     const expression = new RegExp('\\[' + kind + ' (\\d+)\\]', 'g');
     const used = [...input.value.matchAll(expression)].map(m => +m[1]);
     file.mention = `[${kind} ${Math.max(0, ...used, ...files.filter(f => f.mention?.startsWith(`[${kind} `)).map(f => +(f.mention?.match(/\d+/)?.[0] || 0))) + 1}]`;
@@ -10514,13 +10013,14 @@
     thrFiles.innerHTML = files.map((f, i) => {
       if (f.cite || f.at || f.thread) return '';
       const preview = f.image && f.preview;
-      return `<span class="thr-file${f.cite ? ' cite' : preview ? ' image' : ''}" title="${escHtml(f.cite || f.path)}">`
+      return `<span class="thr-file${f.cite ? ' cite' : preview ? ' image' : ' document'}" title="${escHtml(f.cite || f.path)}">`
         + (f.cite ? `<i class="ph ph-quotes" aria-hidden="true"></i><button type="button" class="thr-cite-link" data-i="${i}" aria-label="View citation">${escHtml(f.cite.replace(/\s+/g, ' '))}</button>`
-          : preview ? `<button type="button" class="thr-file-open" data-i="${i}" aria-label="Open ${escHtml(f.name)} fullscreen"><img class="thr-file-preview" src="${escHtml(f.preview)}" alt="${escHtml(f.name)}" decoding="async"></button>`
-          : `<i class="ph ${f.cite ? 'ph-quotes' : f.image ? 'ph-image' : 'ph-file'}" aria-hidden="true"></i><span class="thr-file-name">${escHtml(f.cite ? f.cite.replace(/\s+/g, ' ') : f.name)}</span>`)
+          : preview ? `<button type="button" class="thr-file-open" data-i="${i}" aria-label="Open ${escHtml(f.name)} fullscreen"><img class="thr-file-preview" src="${escHtml(f.preview)}" alt="${escHtml(f.name)}" decoding="async"></button><span class="thr-file-name">${escHtml(f.name)}</span>`
+          : `<span class="thr-file-symbol"><i class="ph ${f.image ? 'ph-image ft-image' : linkFileIcon(f.name || f.path || '')}" aria-hidden="true"></i></span><span class="thr-file-name">${escHtml(f.name)}</span>`)
         + `<button type="button" class="thr-file-x" data-i="${i}" aria-label="Remove ${escHtml(f.cite ? 'citation' : f.name)}"><i class="ph ph-x" aria-hidden="true"></i></button></span>`;
     }).join('');
     syncChatInputLinks(surface, files);
+    hydrateChatAttachmentSizes(surface);
     if (surface === thrPage) syncSendBtn();
   }
   const _chatFileAdds = new WeakMap();
@@ -10532,7 +10032,7 @@
     return pending;
   }
   async function findChatImageDuplicate(files, attachment) {
-    if (!attachment.image) return null;
+    if (!attachment.image) return files.find(file => !file.image && !file.cite && !file.at && !file.thread && file.path === attachment.path) || null;
     const data = attachment.preview?.split(',')[1];
     for (const file of files) {
       if (!file.image) continue;
@@ -10552,7 +10052,7 @@
       try {
         const path = await localPathForFile(tab, file);
         if (!path) throw new Error('Could not read ' + file.name);
-        const image = /^image\//.test(file.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(path);
+        const image = /^image\/(png|jpeg|gif|webp|bmp)$/i.test(file.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(path);
         const preview = image ? await new Promise(resolve => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result);
@@ -10581,15 +10081,13 @@
           continue;
         }
         if (curChat() === tab) {
-          if (image) insertChatMention(attachment);
+          insertChatMention(attachment);
           _chatFiles.push(attachment);
         } else {
           (tab._files ||= []).push(attachment);
           // The user switched away while the file was loading; keep it in its original draft.
-          if (image) {
-            const input = document.createElement('textarea'); input.value = tab._draft || ''; input.setSelectionRange(input.value.length, input.value.length);
-            insertChatMention(attachment, input, tab._files); tab._draft = input.value;
-          }
+          const input = document.createElement('textarea'); input.value = tab._draft || ''; input.setSelectionRange(input.value.length, input.value.length);
+          insertChatMention(attachment, input, tab._files); tab._draft = input.value;
           tab.chat ||= { createdAt: Date.now() };
           if (!tab._editingQueued) { tab.chat.draft = tab._draft || ''; tab.chat.draftFiles = tab._files; }
         }
@@ -10630,7 +10128,7 @@
     const file = _chatFiles.find(f => f.mention === reference.dataset.mention);
     if (file?.cite) jumpToCitation(file);
     else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
-    else if (file && !file.at) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name }, '', file.preview);
+    else if (file && !file.at) openChatAttachment(file);
   });
   {
     const editor = threadPart(thrPage, 'input-links');
@@ -10692,9 +10190,10 @@
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
       });
       // A programmatic edit of the draft (list keys below), undoable like typing.
-      const applyDraft = (value, caret, caretEnd = caret) => {
+      const applyDraft = (value, caret, caretEnd = caret, files) => {
         editor._recordDraftUndo();
         thrInput.value = value; thrInput.setSelectionRange(caret, caretEnd);
+        if (files) { _chatFiles = files; renderChatFiles(); }
         editor._draftValue = null; syncChatInputLinks();
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
       };
@@ -10707,7 +10206,8 @@
           rememberChatEditorSelection(editor);
         }
         const start = thrInput.selectionStart, end = thrInput.selectionEnd;
-        applyDraft(thrInput.value.slice(0, start) + text + thrInput.value.slice(end), start + text.length);
+        const pasted = prepareChatPastedText(text);
+        applyDraft(thrInput.value.slice(0, start) + pasted.text + thrInput.value.slice(end), start + pasted.text.length, start + pasted.text.length, pasted.files);
         thrInput.focus({ preventScroll: true });
       };
       editor.addEventListener('keydown', e => {
@@ -10756,7 +10256,8 @@
           const text = (e.clipboardData?.getData('text/plain') || '').replace(/\r\n?/g, '\n');
           if (!text) return;
           const v = thrInput.value, s = thrInput.selectionStart, end = thrInput.selectionEnd;
-          applyDraft(v.slice(0, s) + text + v.slice(end), s + text.length);
+          const pasted = prepareChatPastedText(text);
+          applyDraft(v.slice(0, s) + pasted.text + v.slice(end), s + pasted.text.length, s + pasted.text.length, pasted.files);
           updateChatComplete();
         }
       });
@@ -10887,7 +10388,7 @@
   const thrComposer = thrPage.querySelector('#sbr-thread-composer');
   const isChatTextDrag = e => {
     const types = e.dataTransfer?.types || [];
-    return !window.draggedTermId && !window.externalDragTermId && !window.draggedWsId
+    return !window.draggedTermId && !window.draggedWsId
       && !types.includes('Files') && !types.includes('application/x-terminalvibe-tab')
       && (types.includes('text/plain') || types.includes('text/uri-list'));
   };
@@ -10921,7 +10422,7 @@
     e.preventDefault(); e.stopPropagation();
     const next = Math.round(Math.max(0.7, Math.min(1.6, _chatZoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1))) * 100) / 100;
     if (next === _chatZoom) return;
-    const flow = page.querySelector('.thr-flow'), atBottom = flow && flow.scrollHeight - flow.scrollTop - flow.clientHeight < 48;
+    const flow = page.querySelector('.thr-flow'), atBottom = flow && flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     _chatZoom = next;
     document.documentElement.style.setProperty('--thr-zoom', String(_chatZoom));
     try { localStorage.setItem('tv-chat-zoom', String(_chatZoom)); } catch {}
@@ -11074,8 +10575,22 @@
   // "Scroll to end": a pill over the composer while the chat is scrolled up from its latest message.
   const scrollEndBtn = threadPart(thrPage, 'scroll-end');
   function syncScrollEnd() {
-    if (scrollEndBtn) scrollEndBtn.hidden = flowEl.scrollHeight - flowEl.scrollTop - flowEl.clientHeight < 160;
+    if (!scrollEndBtn) return;
+    const last = [...flowEl.children].reverse().find(el => !el.hidden && el.getClientRects().length);
+    const composer = thrPage.querySelector('.thr-composer-wrap');
+    const bottom = Math.min(flowEl.getBoundingClientRect().bottom,
+      composer?.getClientRects().length ? composer.getBoundingClientRect().top : Infinity);
+    const contentVisible = !last || last.getBoundingClientRect().bottom <= bottom + 1;
+    scrollEndBtn.hidden = contentVisible || flowEl.scrollHeight - flowEl.scrollTop - flowEl.clientHeight <= 1;
   }
+  let scrollEndFrame = 0;
+  const scheduleScrollEnd = () => {
+    if (!scrollEndFrame) scrollEndFrame = requestAnimationFrame(() => { scrollEndFrame = 0; syncScrollEnd(); });
+  };
+  new MutationObserver(scheduleScrollEnd).observe(flowEl, { childList: true, subtree: true, characterData: true });
+  new ResizeObserver(scheduleScrollEnd).observe(flowEl);
+  flowEl.addEventListener('load', scheduleScrollEnd, true);
+  flowEl.addEventListener('toggle', scheduleScrollEnd, true);
   scrollEndBtn?.addEventListener('click', () => {
     const smooth = document.body.classList.contains('ui-animations') && !matchMedia('(prefers-reduced-motion: reduce)').matches;
     flowEl.scrollTo({ top: flowEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
@@ -11100,13 +10615,14 @@
     const working = !!c && (!!chatWorking(c) || _chatStarting.has(c.id));
     const queue = !editing && working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = !editing && working && !typed && !queue;
     thrSend.classList.toggle('stop', stop);
-    thrSend.disabled = !stop && !typed;
-    const label = editing ? 'Save queued message' : queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : 'Send';
+    const resume = !editing && !working && !typed && !!c?.chat?.interruptedAt && !c._resuming && !_chatSending.has(c.id);
+    thrSend.disabled = !stop && !typed && !resume;
+    const label = editing ? 'Save queued message' : queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : resume ? 'Continue' : 'Send';
     if (thrSend.dataset.mode !== label) {
       thrSend.dataset.mode = label;
-      setSendIcon(queue ? queueIcon : `<i class="ph ${editing ? 'ph-check' : stop ? 'ph-stop' : working ? 'ph-arrow-elbow-up-right' : 'ph-arrow-up'}" aria-hidden="true"></i>`);
+      setSendIcon(queue ? queueIcon : `<i class="ph ${editing ? 'ph-check' : stop ? 'ph-stop' : working ? 'ph-arrow-elbow-up-right' : resume ? 'ph-play' : 'ph-arrow-up'}" aria-hidden="true"></i>`);
       thrSend.setAttribute('aria-label', label);
-      thrSend.dataset.tip = editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter)' : 'Send (Enter)';
+      thrSend.dataset.tip = editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter)' : resume ? 'Continue (Enter)' : 'Send (Enter)';
     }
   }
   function setSendIcon(html) {
@@ -11126,6 +10642,10 @@
     next.animate([{ opacity: 0, transform: 'translateY(3px) scale(.8)' }, { opacity: 1, transform: 'translateY(0) scale(1)' }], options);
   }
   function stopChatTurn(c) {
+    c.chat ||= { createdAt: Date.now() };
+    c.chat.interruptedAt = Date.now();
+    (c.chat.interruptions ||= []).push({ at: c.chat.interruptedAt });
+    saveState();
     if (c.chat?.queuedMessages?.length) { c.chat.queuePaused = true; renderChatQueue(c); saveState(); }
     const t = liveThreadAgent(c);
     if (_chatStarting.has(c.id)) { if (c._sdk) { c._sdk.alive = false; window.electronAPI.chatSdkStop(c.id); } stopTabAgent(c); }
@@ -11161,6 +10681,7 @@
   });
   thrPage.querySelector('#sbr-thread-composer')?.addEventListener('submit', async e => {
     e.preventDefault();
+    if (thrSend.dataset.mode === 'Continue' && !thrInput.value.trim() && !_chatFiles.length) { void continueInterruptedChat(curChat()); return; }
     if (e.submitter === thrSend && thrSend.classList.contains('stop')) { if (curChat()) stopChatTurn(curChat()); return; }
     const ws = curChat(), typed = thrInput.value.trim(), files = _chatFiles;
     const text = chatMessageText(typed, files);
@@ -11271,10 +10792,16 @@
     const snaps = ws.chat?.snaps, ts = Date.parse(promptTs);
     if (!snaps?.length || !ts || !window.electronAPI?.gitTurnDiff) return null;
     // The prompt lands in the transcript just after its snapshot.
-    const snapOf = t => snaps.findLastIndex(s => s.at <= t + 5000);
+    const snapOf = t => {
+      const known = snaps.findIndex(s => s.promptTs === t);
+      if (known >= 0) return known;
+      const preceding = snaps.findLastIndex(s => s.at <= t);
+      return preceding >= 0 ? preceding : snaps.findIndex(s => s.at <= t + 5000);
+    };
     const k = snapOf(ts);
     const s = snaps[k];
     if (!s || s.at < ts - 60000) return null;
+    s.promptTs ??= ts;
     if (nextTs && snapOf(Date.parse(nextTs)) === k) return 'later'; // the next prompt is a mid-turn message of the same turn
     const rerender = () => { _flowSig = ''; if (curChat() === ws) refreshThreadFlow(ws); };
     const to = s.to || snaps[k + 1]?.from;
@@ -11303,14 +10830,15 @@
       if (!ws.chat.title && typed) { ws.chat.title = typed.split('\n')[0].slice(0, 80); setChatTabLabel(ws); autoTitleChat(ws, typed); }
       ws.chat.updatedAt = Date.now();
       const flow = thrPage.querySelector('#sbr-thread-flow');
-      _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, at: Date.now(), steer, options: { ...(steer ? liveThreadAgent(ws)?._chatCfg || chatOpts(ws) : chatOpts(ws)) } }]);
+      _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, at: Date.now(), afterTs: ws._lastUserTs || 0, steer, options: { ...(steer ? liveThreadAgent(ws)?._chatCfg || chatOpts(ws) : chatOpts(ws)) } }]);
       const newTurn = !steer || !_turns.has(ws.id);
-      if (newTurn) _turns.set(ws.id, { since: Date.now() });
+      if (newTurn) _turns.set(ws.id, { since: Date.now(), awaitingPrompt: true });
       if (curChat() === ws) {
+        const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
         flow.querySelector('.thr-empty')?.remove();
         flow.querySelectorAll('.thr-pending').forEach(el => el.remove());
         flow.insertAdjacentHTML('beforeend', pendingHtml(ws, [...flow.querySelectorAll('.thr-seg')].at(-1)?.dataset.head || ''));
-        flow.scrollTop = flow.scrollHeight;
+        if (atBottom) flow.scrollTop = flow.scrollHeight;
         syncWorking(ws);
       }
       _flowSig = '';
@@ -11332,6 +10860,8 @@
       if (same) { if (!await sendToAgent(t, text + back, steer)) throw Error('The agent closed before the message was sent'); }
       else if (!await startChatAgent(ws, ws, text + back, cfg && cfg.harness === o.harness ? t : null)) throw Object.assign(Error('Could not start the agent'), { shown: true });
       if (back) { delete ws.chat.bringBack; saveState(); }
+      if (ws.chat.interruptedAt && !(ws.chat.interruptions || []).some(item => item.at === ws.chat.interruptedAt)) (ws.chat.interruptions ||= []).push({ at: ws.chat.interruptedAt });
+      delete ws.chat.interruptedAt; ws.chat.lastContinueAt = Date.now(); saveState();
       if (curChat() === ws) syncThreadComposer(ws);
       for (const ms of [400, 1200]) setTimeout(() => { if (curChat() === ws) refreshThreadFlow(ws); }, ms);
       return true;
@@ -11341,7 +10871,7 @@
       if (!steer) _turns.delete(ws.id);
       _flowSig = '';
       if (curChat() === ws) refreshThreadFlow(ws);
-      if (!err.shown) zoomBadge(err.message || 'Could not send message'); // startChatAgent already said why
+      if (!err.shown) noteChatError(ws, err.message || 'Could not send message');
       return false;
     } finally { _chatSending.delete(ws.id); }
   }
@@ -11349,7 +10879,7 @@
     if (surface === thrPage && curChat() !== ws) return;
     const flow = threadPart(surface, 'flow');
     if (!flow) return;
-    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 48;
+    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     let box = threadPart(surface, 'queue');
     if (!box) {
       box = document.createElement('div'); box.className = 'thr-queue';
@@ -11400,7 +10930,7 @@
     if (button.dataset.queueAct === 'preview') {
       e.preventDefault();
       const file = message?.files?.[+button.dataset.fileI];
-      if (file) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name }, '', file.preview);
+      if (file) openChatAttachment(file);
       return;
     }
     if (button.dataset.queueAct === 'edit' && message) {
@@ -11521,10 +11051,7 @@
   function threadInfo(w) {
     const segs = threadSegments(w), last = segs[segs.length - 1], h = harnessOf(last?.harness);
     const cwd = chatCwd(w);
-    if (cwd && window.electronAPI?.gitBranch && !_gitBranch.has(cwd)) {
-      _gitBranch.set(cwd, null);
-      window.electronAPI.gitBranch(cwd).then(b => { _gitBranch.set(cwd, b || null); renderThreadsSidebar(); }, () => {});
-    }
+    void refreshChatGitBranch(cwd);
     // "Claude Haiku · Low": a session's model and effort (the agent's name when it ran its default).
     const modelLabel = seg => [seg?.model && seg.model !== 'default' ? modelName({ harness: seg.harness, model: seg.model }, false) : harnessOf(seg?.harness)?.name || '',
       seg?.effort && seg.effort !== 'default' ? EFFORT_NAMES[seg.effort] || seg.effort : ''].filter(Boolean).join(' · ');
@@ -11582,10 +11109,11 @@
       + `<button type="button" class="ts-section-head" aria-expanded="${!tsCollapsed.has(id)}"><span>${label}</span><span class="ts-count">${list.length}</span><i class="ph ph-caret-down ts-caret" aria-hidden="true"></i></button>`
       + `<div class="ts-cards">${tsCollapsed.has(id) ? '' : list.slice(0, more || undefined).map(x => row(x, id)).join('')
         + (more && list.length > more ? `<button type="button" class="ts-more">Show more <span class="ts-count">${list.length - more}</span></button>` : '')}</div></div>`;
-    const pinned = all.filter(x => x.w.chat.pinned);
-    const rest = all.filter(x => !x.w.chat.pinned);
+    const drafts = all.filter(x => x.draft);
+    const pinned = all.filter(x => !x.draft && x.w.chat.pinned);
+    const rest = all.filter(x => !x.draft && !x.w.chat.pinned);
     const html = all.length
-      ? section('pinned', 'Pinned', pinned) + section('working', 'Working', rest.filter(x => x.work))
+      ? section('drafts', 'Drafts', drafts) + section('pinned', 'Pinned', pinned) + section('working', 'Working', rest.filter(x => x.work))
         + section('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
         + section('settled', 'Settled', rest.filter(settled).sort((a, b) => b.w.chat.settledAt - a.w.chat.settledAt), tsSettledShown)
       : `<div class="ts-empty">${q ? 'No threads match' : tsProject != null ? `No threads in ${escHtml(tsProject === '' ? 'No project' : chatFolderName(tsProject))}` : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
@@ -11693,7 +11221,7 @@
     sash.addEventListener('pointermove', move); sash.addEventListener('pointerup', up);
   });
   document.getElementById('btn-threads')?.addEventListener('click', () => setThreadsSidebar(!tsOpen));
-  try { if (!DETACHED_ONLY && !SETTINGS_ONLY && localStorage.getItem('tv-threads-sidebar')) setThreadsSidebar(true); } catch {}
+  try { if (!SETTINGS_ONLY && localStorage.getItem('tv-threads-sidebar')) setThreadsSidebar(true); } catch {}
   setInterval(renderThreadsSidebar, 1000); // working timers and statuses; selection updates on activation
 
   // ── Syntax highlighting (shell, JSON) for tool calls and code blocks: escaped spans, colors from the terminal theme ──
@@ -11837,6 +11365,7 @@
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const el = node, tag = el.nodeName;
     if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-pending-kind, button[data-act]')) return ''; // icons, chrome
+    if (el.matches('.thr-image-ref[data-path]')) return shellQuote(el.dataset.path);
     if (tag === 'STRONG') return `**${kids(el)}**`;
     if (tag === 'EM') return `*${kids(el)}*`;
     if (tag === 'DEL') return `~~${kids(el)}~~`;
@@ -12044,6 +11573,71 @@
     applyWorkUsernamePrivacy(root);
   }
 
+  function syncChatInterruption(tab, history) {
+    const latest = history.at(-1);
+    if (!latest) return;
+    const items = latest.items || [], start = items.findLastIndex(item => item.role === 'user');
+    const times = items.slice(Math.max(0, start)).filter(item => item.interrupted).map(item => Date.parse(item.interruptedAt || item.ts) || 0);
+    if (latest.turnState?.status === 'aborted') times.push(latest.turnState.at || 0);
+    const at = Math.max(0, ...times);
+    if (at > (tab.chat?.lastContinueAt || 0)) { tab.chat ||= {}; tab.chat.interruptedAt ||= at; }
+  }
+  async function continueInterruptedChat(tab) {
+    if (!tab?.chat?.interruptedAt || tab._resuming || chatWorking(tab) || _chatStarting.has(tab.id) || _chatSending.has(tab.id)) return;
+    tab._resuming = true;
+    const text = 'continue from where you left';
+    try {
+      await deliverChatMessage(tab, { id: uuid(), text, typed: text, files: [], after: Date.now() });
+    } finally {
+      delete tab._resuming;
+      if (curChat() === tab) syncWorking(tab);
+    }
+  }
+  function renderChatResume(tab, surface = thrPage) {
+    const flow = surface.querySelector('.thr-flow');
+    if (!flow) return;
+    flow.querySelector('.thr-continue')?.remove();
+    flow.querySelectorAll('.thr-interruption-status').forEach(el => el.remove());
+    // Keep locally stopped turns even after the active Continue state is cleared.
+    const interruptions = [...(tab.chat?.interruptions || [])];
+    if (tab.chat?.interruptedAt && !interruptions.some(item => item.at === tab.chat.interruptedAt)) interruptions.push({ at: tab.chat.interruptedAt });
+    for (const { at } of interruptions.sort((a, b) => a.at - b.at)) {
+      const next = [...flow.querySelectorAll('.thr-msg.user[data-ts]')].find(el => Number(el.dataset.ts) > at);
+      const previous = next ? next.previousElementSibling : [...flow.children].filter(el => !el.matches('.thr-queue, .thr-working')).at(-1);
+      if (previous?.matches('.thr-status-line')) continue;
+      const status = document.createElement('div');
+      status.className = 'thr-status-line thr-interruption-status';
+      status.setAttribute('role', 'status');
+      status.dataset.interruptedAt = at;
+      status.innerHTML = '<i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span><span class="thr-status-detail">? Generation stopped</span>';
+      if (next) next.before(status); else flow.insertBefore(status, flow.querySelector('.thr-queue'));
+    }
+    if (surface === thrPage && curChat() === tab) syncSendBtn();
+  }
+
+  function renderChatErrors(tab, flow) {
+    flow.querySelectorAll('.thr-chat-error').forEach(el => el.remove());
+    for (const error of tab.chat?.errors || []) {
+      flow.querySelector('.thr-empty')?.remove();
+      const row = document.createElement('div'); row.className = 'thr-chat-error'; row.setAttribute('role', 'alert');
+      row.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i><span></span>';
+      row.querySelector('span').textContent = error.message;
+      const next = [...flow.querySelectorAll('.thr-msg.user[data-ts]')].find(el => Number(el.dataset.ts) > error.at);
+      if (next) next.before(row); else flow.insertBefore(row, flow.querySelector('.thr-queue'));
+    }
+  }
+  function noteChatError(tab, message) {
+    if (!tab) return;
+    tab.chat ||= { createdAt: Date.now() };
+    tab.chat.interruptedAt = Date.now();
+    const errors = tab.chat.errors ||= [], last = errors.at(-1), at = Date.now();
+    if (!last || last.message !== message || at - last.at > 2000) errors.push({ at, message: String(message) });
+    _flowSig = '';
+    const surface = curChat() === tab ? thrPage : tab.el?.querySelector('.thr-snapshot');
+    const flow = surface?.querySelector('.thr-flow');
+    if (flow) { const bottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1; renderChatErrors(tab, flow); if (bottom) flow.scrollTop = flow.scrollHeight; }
+    saveState();
+  }
   async function refreshThreadFlow(ws, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow');
     const t = ws.chat;
@@ -12081,10 +11675,11 @@
       saveState();
     });
     // A sent message is in the transcript: the user message at or after it was sent, starting with its text.
-    const inTranscript = (text, at) => {
+    const inTranscript = (text, at, afterTs = 0) => {
       // (Hidden notes, e.g. a dropped thread's, never reach the transcript's text.)
       const head = text.replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
       return hist.flatMap(h => h.items).find(m => m.role === 'user' && !m.stopped && (Date.parse(m.ts) || Infinity) >= at - 5000
+        && (!afterTs || Date.parse(m.ts) > afterTs)
         && String(m.text || '').replace(/\s+/g, ' ').includes(head));
     };
     // Stopped prompts the transcript doesn't have go into the history where they were sent.
@@ -12106,34 +11701,49 @@
         }
       }
     }
+    syncChatInterruption(ws, hist);
+    renderChatResume(ws, surface);
     const sig = note + '|' + segs.length + '|' + hist.map(h => { const l = h.items[h.items.length - 1]; return `${h.items.length}:${l?.text?.length || 0}:${l?.error ? 1 : 0}`; }).join(',')
       + '|' + JSON.stringify(hist.map(h => h.items.filter(m => m.role === 'tool').map(m => m.output)));
     // The sent message shows until the transcript has it (or 60s pass).
     const pending = pendingMessages(ws);
     const remaining = pending.filter(pend => {
-      const got = inTranscript(pend.text, pend.at);
+      const got = inTranscript(pend.text, pend.at, pend.afterTs);
+      if (got && !pend.steer) {
+        const turn = _turns.get(ws.id);
+        if (turn && pend.at >= turn.since - 1000) { turn.promptTs = got.ts; turn.awaitingPrompt = false; }
+      }
+      if (got && pend.options) {
+        ws.chat ||= {};
+        const options = ws.chat.turnOptions ||= {};
+        if (!options[got.ts]) { options[got.ts] = { ...pend.options }; saveState(); }
+      }
       // A steer keeps its label once the transcript has it.
       if (got && pend.steer && t && !t.steered?.includes(got.ts)) { (t.steered ||= []).push(got.ts); saveState(); }
       return !(got || Date.now() - pend.at > 60000);
     });
     if (remaining.length) _pendingMsgs.set(ws.id, remaining); else _pendingMsgs.delete(ws.id);
+    ws._lastUserTs = Math.max(ws._lastUserTs || 0, ...hist.flatMap(h => h.items).filter(m => m.role === 'user').map(m => Date.parse(m.ts) || 0));
     const working = !!chatWorking(ws);
-    const sigP = sig + '|p' + remaining.length + (working ? '|w' : '');
+    const awaitingTurnPrompt = !!_turns.get(ws.id)?.awaitingPrompt || remaining.some(p => !p.steer);
+    const sigP = sig + '|p' + remaining.length + (working ? '|w' : '') + (awaitingTurnPrompt ? '|awaiting-prompt' : '');
     if (sigP === (surface === thrPage ? _flowSig : flow.dataset.signature)) return;
     if (surface === thrPage) _flowSig = sigP; else flow.dataset.signature = sigP;
-    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight < 32;
+    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     const scrollTop = flow.scrollTop;
     const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
     const outputScroll = new Map([...flow.querySelectorAll('.thr-tool-output')].map(el => [el.closest('[data-key]')?.dataset.key, { top: el.scrollTop, left: el.scrollLeft }]));
     if (ws._open) { ws._open.forEach(k => open.add(k)); ws._open = null; } // its state from before a chat switch
     if (!segs.length || note) {
       flow.innerHTML = pendingHtml(ws) || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
+      renderChatErrors(ws, flow);
       syncWorking(ws, surface);
       return;
     }
     // An agent is running but nothing was said yet: the same empty state, not a lone session header.
     if (!segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
       flow.innerHTML = pendingHtml(ws) || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
+      renderChatErrors(ws, flow);
       syncWorking(ws, surface);
       return;
     }
@@ -12183,7 +11793,7 @@
           + '<div class="thr-img-actions">'
           + '<button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></div></div>').join('')}</div>` : '';
         return m.role === 'user'
-          ? `<div class="${cls}" data-key="${key}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : (m.steered || t?.steered?.includes(m.ts)) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
+          ? `<div class="${cls}" data-key="${key}" data-ts="${Date.parse(m.ts) || 0}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : (m.steered || t?.steered?.includes(m.ts)) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
           : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${extra}${actions}</div>`;
       };
       // The agent's thinking: "Thought" with a one-line peek, opening to the whole text.
@@ -12244,7 +11854,15 @@
         let e = u + 1;
         while (e < list.length && list[e].m.role !== 'user') e++;
         const prompt = list[u], rest = list.slice(u + 1, e);
-        const live = working && i === segs.length - 1 && e === list.length;
+        const live = working && !awaitingTurnPrompt && i === segs.length - 1 && e === list.length;
+        const options = ws.chat?.turnOptions?.[prompt.m.ts];
+        if (options) {
+          const agent = harnessOf(options.harness || seg.harness), agentName = agent?.name || options.harness || name;
+          const turnMeta = [options.model && options.model !== 'default' ? options.model : '', options.effort && options.effort !== 'default' ? options.effort : ''].filter(Boolean).join(' ? ');
+          const turnHead = agentName + '|' + turnMeta;
+          if (turnHead !== lastHead) html += `<div class="thr-seg" data-head="${escHtml(turnHead)}">${procIconHtml(agent?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(agentName)}</span><span class="thr-seg-meta">${escHtml(turnMeta)}</span><span class="thr-seg-time">${clockTime(prompt.m.ts)}</span></div>`;
+          lastHead = turnHead;
+        }
         html += msgHtml(prompt.m, i + ':' + prompt.j);
         let fin = -1;
         if (!live) for (let x = rest.length - 1; x >= 0; x--) if (rest[x].m.role === 'assistant') { fin = x; break; }
@@ -12260,24 +11878,32 @@
         // The changed-files card closes a response: none while its turn runs (a message sent mid-turn
         // splits it, so every prompt since the turn started counts), and only on the last prompt of a turn.
         // It sits inside the final reply so the reply's copy + time row comes after it.
-        const turnSince = _turns.get(ws.id)?.since;
-        const running = working && i === segs.length - 1 && (e === list.length || (turnSince && Date.parse(prompt.m.ts) >= turnSince - 5000));
+        const turnPromptTs = Date.parse(_turns.get(ws.id)?.promptTs);
+        const running = working && !awaitingTurnPrompt && i === segs.length - 1
+          && (e === list.length || (turnPromptTs && Date.parse(prompt.m.ts) >= turnPromptTs));
         const changes = !live && !running ? changesHtml(rest, 'chg:' + i + ':' + prompt.j, prompt.m.ts, list[e]?.m.ts) : '';
         html += fin >= 0 ? msgHtml(rest[fin].m, i + ':' + rest[fin].j, true, changes) : changes;
         // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
         const stopped = !live && (prompt.m.interrupted || rest.find(x => x.m.interrupted)?.m.interrupted);
+        if (stopped && i === segs.length - 1 && e === list.length) {
+          const at = Math.max(Date.parse(prompt.m.ts) || 0, ...rest.map(x => Date.parse(x.m.interruptedAt || x.m.ts) || 0));
+          if (at > (ws.chat.lastContinueAt || 0)) ws.chat.interruptedAt ||= at;
+        }
         if (stopped) html += `<div class="thr-status-line" role="status"><i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span>`
           + `<span class="thr-status-detail">· ${stopped === 'crash' ? 'The agent exited unexpectedly. Send a message to continue' : stopped === 'tool' ? 'Stopped by you during a tool call' : 'Stopped by you'}</span></div>`;
         u = e;
       }
     });
     flow.innerHTML = html + pendingHtml(ws, lastHead);
+    renderChatErrors(ws, flow);
+    renderChatResume(ws, surface);
     flow.querySelectorAll('.thr-tool-output').forEach(el => {
       const saved = outputScroll.get(el.closest('[data-key]')?.dataset.key);
       if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
     });
     decorateWorkUsernames(flow);
     flow._texts = texts;
+    hydrateChatAttachmentSizes(flow);
     // A selection across messages copies them as a transcript of their original markdown.
     if (!flow._copyBound) {
       flow._copyBound = true;
@@ -12295,7 +11921,15 @@
         };
         const covers = m => { if (!r.intersectsNode(m)) return false; const part = within(m); return !part.collapsed && part.toString().trim() !== ''; };
         const msgs = [...flow.querySelectorAll('.thr-msg[data-key]')].filter(covers);
-        if (!msgs.length) return; // tool output etc.: the browser's own copy
+        if (!msgs.length) {
+          const start = r.startContainer.nodeType === Node.ELEMENT_NODE ? r.startContainer : r.startContainer.parentElement;
+          const queued = start?.closest('.thr-queued-text');
+          if (queued && queued.contains(r.endContainer)) {
+            e.clipboardData.setData('text/plain', mdFromRange(r, queued));
+            e.preventDefault();
+          }
+          return; // tool output etc.: the browser's own copy
+        }
         // Inside one message: the selected part as markdown source.
         const text = msgs.length === 1 ? mdFromRange(within(msgs[0]), msgs[0])
           : msgs.map(m => `${m.classList.contains('user') ? 'User' : 'AI'}: ${flow._texts.get(m.dataset.key) || ''}`).join('\n\n');
@@ -12436,7 +12070,6 @@
   thrFindEl('-prev')?.addEventListener('click', () => thrFindStep(-1));
   thrFindEl('-next')?.addEventListener('click', () => thrFindStep(1));
   thrFindEl('-close')?.addEventListener('click', closeThreadFind);
-
 
   /* ── Workspace sidebar: live processes per workspace ──
      Show up to three processes and a count of any remaining processes.
@@ -12743,11 +12376,11 @@
         const range = sel.getRangeAt(0).cloneRange(), restore = () => { const s2 = window.getSelection(); s2.removeAllRanges(); s2.addRange(range); };
         item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+C', () => { restore(); document.execCommand('copy'); });
         item('<i class="ph ph-quotes"></i>', 'Cite selection', '', () => { restore(); citeBtn.click(); });
-        sep();
+      } else {
+        item('<i class="ph ph-text-aa"></i>', 'Copy message', '', () => copyText(raw));
+        const fork = msg.querySelector('.thr-fork');
+        if (fork) item('<i class="ph ph-git-fork"></i>', 'Fork from here', '', () => fork.click());
       }
-      item('<i class="ph ph-text-aa"></i>', 'Copy message', '', () => copyText(raw));
-      const fork = msg.querySelector('.thr-fork');
-      if (fork) item('<i class="ph ph-git-fork"></i>', 'Fork from here', '', () => fork.click());
     } else if (type === 'chat-link') {
       const copy = text => { void copyPrivateText(text).catch(() => {}); };
       if (/^https?:/i.test(data)) {
@@ -12899,9 +12532,6 @@
         });
       }
       sep();
-      if (isDesktop() && !DETACHED_ONLY && window.electronAPI?.terminalDetach) {
-        item('<i class="ph ph-export"></i>', 'Detach to window', '', () => detachTerminal(wsId, termId));
-      }
       // Bulk close, scoped to this tab bar; closing this one stays last.
       const tabs = (wsp && findGroupContainingTerm(wsp.layout, termId)?.terminals.map(t => t.id)) || [];
       const at = tabs.indexOf(termId);
@@ -13556,7 +13186,6 @@
       ['Maximize / restore tab', 'maximizeTab', 'ph-arrows-out', () => { const w = wsp(); if (w && w.activeTermId) toggleMaximizeTerminal(w.id, w.activeTermId); }],
       ['Toggle sidebar', 'toggleSidebar', 'ph-sidebar-simple', () => toggleSidebar()],
       ['Switch profile…', 'profiles', 'ph-user-switch', () => openProfilePicker()],
-      ['Detach terminal to window', null, 'ph-arrow-square-out', () => { const w = wsp(); if (w && w.activeTermId) detachTerminal(w.id, w.activeTermId); }],
       ['New workspace', null, 'ph-folder-plus', () => createWorkspace()],
       ['Open settings', null, 'ph-gear', () => openSettingsGlobal()],
     ].map(([label, sc, icon, run]) => ({ label, meta: sc ? key(sc) : '', icon, run }));
@@ -14949,205 +14578,7 @@
     openSettings();
   }
 
-  async function detachedOnlyBoot() {
-    await document.fonts.load('14px "Geist Mono"');
-    await loadCustomThemes();
-    // Restore only theme/font settings (not workspaces) for the detached window
-    try {
-      let raw = null;
-      const api = configApi();
-      if (api && api.configReadState) {
-        const diskState = await api.configReadState();
-        if (diskState) raw = JSON.stringify(diskState);
-      }
-      if (!raw) raw = localStorage.getItem(STATE_KEY);
-      if (raw) {
-        const state = JSON.parse(raw);
-        if (['system', 'light', 'dark'].includes(state.colorScheme)) currentColorScheme = state.colorScheme;
-        if (state.theme && THEMES[state.theme]) { currentThemeName = state.theme; currentTheme = resolveAppearanceTheme(THEMES[currentThemeName], resolvedDarkScheme()); }
-        if (state.fontSize) currentFontSize = state.fontSize;
-        if (state.fontFamily) currentFontFamily = state.fontFamily;
-        if (state.customFonts) {
-          customFonts = {};
-          for (const [k, v] of Object.entries(state.customFonts)) {
-            if (v && v.dataUrl) customFonts[k] = { name: v.name || k, dataUrl: v.dataUrl, format: v.format || 'truetype' };
-          }
-          injectCustomFonts();
-        }
-        if (state.lineHeight) currentLineHeight = state.lineHeight;
-        if (state.cursorBlink !== undefined) currentCursorBlink = state.cursorBlink;
-        if (state.cursorStyle) currentCursorStyle = state.cursorStyle;
-        if (state.scrollback !== undefined) currentScrollback = state.scrollback;
-        if (state.notifyOnCommandFinish !== undefined) notifyOnCommandFinish = !!state.notifyOnCommandFinish;
-        if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
-      }
-    } catch { }
-    applyTheme(currentThemeName);
-    document.body.classList.add('detached');
-
-    // Hide splash screen (normal init hides it at line ~6017, after the detached return)
-    const splash = document.getElementById('splash');
-    if (splash) splash.classList.add('hide');
-
-    // Show the titlebar so the window is draggable
-    const tb = document.getElementById('titlebar');
-    if (tb) tb.classList.add('active');
-    document.getElementById('btn-attach-main')?.addEventListener('click', attachWindowToMain);
-
-    // Hide sidebar
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar) sidebar.style.display = 'none';
-
-    // Wire up Electron PTY bridge (same as normal init)
-    if (isDesktop() && window.electronAPI) {
-      const api = window.electronAPI;
-      wsReady = true;
-      nativePtyReady = true;
-      api.onTerminalData(({ id, data }) => writePtyData(findTermById(id), id, data));
-      // A split's shell exiting removes just that tab; handleExit closes
-      // the window only when it was the last one.
-      api.onTerminalExit(({ id, code }) => handleExit(id, code));
-      if (api.onTerminalFinished) api.onTerminalFinished(onTerminalFinished);
-      // Main process accepted a cross-window move for a tab living in
-      // THIS window — snapshot its buffer, remove the tab locally, and
-      // report how many tabs remain (main closes this window at 0).
-      if (api.onTabDragComplete) {
-        api.onTabDragComplete(({ id }) => {
-          let ready = { id, remaining: 0 };
-          try {
-            const wsp = workspaces[0];
-            const group = wsp && findGroupContainingTerm(wsp.layout, id);
-            const entry = group && group.terminals.find(x => x.id === id);
-            if (entry && entry.term) {
-              const payload = serializeTermBuffer(entry);
-              if (payload) localStorage.setItem(DETACH_BUFFER_KEY(id), JSON.stringify(payload));
-              ready = { id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd, label: entry.label, remaining: 0 };
-            }
-            if (group) {
-              group.terminals = group.terminals.filter(x => x.id !== id);
-              if (group.activeTermId === id) group.activeTermId = group.terminals[0]?.id || null;
-              wsp.layout = removeEmptyGroups(wsp.layout);
-              ready.remaining = getWorkspaceTerminals(wsp).length;
-              if (ready.remaining > 0) {
-                renderPaneArea();
-                const nt = activeTerminal();
-                if (nt) activateTerminal(wsp.id, nt.id);
-                saveState();
-              }
-            }
-          } catch { }
-          if (api.tabDragReady) api.tabDragReady(ready);
-        });
-      }
-      // A terminal dragged from another window (main or a sibling
-      // detached window) and dropped here — re-create the tab attached
-      // to the same PTY, placed like a normal tab drop.
-      if (api.onTerminalReattach) {
-        api.onTerminalReattach(({ id, cols, rows, cwd, placement }) => {
-          try { reattachTerminal(id, cols, rows, cwd, placement); } catch (e) { console.error('[reattach] failed:', e); }
-        });
-      }
-      // Which terminal another window is currently dragging — used by the
-      // shared tab-bar/pane drop handlers to route the cross-window drop.
-      if (api.onTabDragActive) {
-        api.onTabDragActive(({ id }) => {
-          if (id) {
-            window.externalDragTermId = id;
-            window.lastExternalDragTermId = id;
-            startResizing();
-            if (window._clearExternalDragTimer) {
-              clearTimeout(window._clearExternalDragTimer);
-              window._clearExternalDragTimer = null;
-            }
-          } else {
-            window.externalDragTermId = null;
-            // tab-drag:start broadcasts {id:null} to every window (incl. this one)
-            // right after our own dragstart — don't tear down a local drag's shield.
-            if (!window.draggedTermId) stopResizing();
-            if (window._clearExternalDragTimer) clearTimeout(window._clearExternalDragTimer);
-            window._clearExternalDragTimer = setTimeout(() => {
-              window.lastExternalDragTermId = null;
-            }, 1500);
-          }
-        });
-      }
-    }
-
-    // Read detached params
-    const termId = DETACHED_PARAMS.get('termId');
-    const cols = parseInt(DETACHED_PARAMS.get('cols')) || 80;
-    const rows = parseInt(DETACHED_PARAMS.get('rows')) || 24;
-    const cwd = DETACHED_PARAMS.get('cwd') || undefined;
-
-    if (!termId) return;
-
-    let restored = false;
-    let detachedBuffer = null; // stashed screen/scrollback (with tab label)
-    try { restored = await restoreState(); } catch { }
-
-    if (!restored) {
-      // Create a minimal workspace to hold the terminal
-      const wsId = 'detached-ws';
-      const wsp = {
-        id: wsId,
-        label: 'Detached',
-        layout: { type: 'group', id: 'group-detached', terminals: [], activeTermId: null },
-      };
-      workspaces = [wsp];
-      activeWsId = wsId;
-      sideOrder = [{ type: 'ws', id: wsId }];
-
-      // Read the stashed buffer now so the tab keeps its original name
-      try {
-        const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
-        if (raw) detachedBuffer = JSON.parse(raw);
-      } catch { }
-
-      // Create the terminal entry
-      const entry = _createTermEntry(wsp, termId, (detachedBuffer && detachedBuffer.label) || 'terminal');
-      entry.cwd = cwd;
-      wsp.layout.terminals = [entry];
-      wsp.layout.activeTermId = termId;
-    }
-
-    // Render the pane area (creates the DOM and opens the xterm)
-    renderPaneArea();
-
-    // The PTY for this terminal is already running in the main process (it
-    // was never killed on detach), so we do NOT send terminal:create — that
-    // would kill the session and spawn a fresh shell. Instead, replay the
-    // captured screen/scrollback and then let live output stream in.
-    const active = activeTerminal();
-    if (active && active.type !== 'browser') {
-      // Open at the size the PTY was running at so the replayed lines
-      // don't wrap, then fit to the actual window size after layout.
-      try { active.term.resize(cols, rows); } catch { }
-      if (!detachedBuffer) {
-        // restored-from-state path: the stash wasn't read above
-        try {
-          const raw = localStorage.getItem(DETACH_BUFFER_KEY(termId));
-          detachedBuffer = raw ? JSON.parse(raw) : null;
-        } catch { }
-      }
-      try { localStorage.removeItem(DETACH_BUFFER_KEY(termId)); } catch { }
-      if (detachedBuffer) restoreTermBuffer(active, detachedBuffer);
-    }
-
-    // Tell main we're ready so it flushes any output produced while the
-    // window was booting (it buffers PTY data for detached terminals).
-    if (window.electronAPI && window.electronAPI.terminalAttached) {
-      window.electronAPI.terminalAttached(termId);
-    }
-
-    // Fit after DOM is laid out
-    setTimeout(() => {
-      const t = activeTerminal();
-      if (t && t.type !== 'browser') fitTerm(t);
-    }, 80);
-  }
-
-  // Background image settings controls (declared here so the settings-window
-  // bootstrap can read them before the wiring below runs — TDZ guard).
+  // Declare background controls before the settings-window bootstrap.
   const bgModeSelect = document.getElementById('set-bg-mode');
   const bgOpacitySlider = document.getElementById('set-bg-opacity');
   const bgOpacityVal = document.getElementById('set-bg-opacity-val');
@@ -15161,7 +14592,6 @@
   // Settings-window bootstrap: skip the entire terminal/browser layer.
   if (SETTINGS_ONLY) { settingsOnlyBoot(); return; }
 
-  // Detached-terminal bootstrap: minimal terminal-only window.
   function setupServersDropdown() {
     const button = document.getElementById('btn-servers');
     const dropdown = document.getElementById('servers-dropdown');
@@ -15306,8 +14736,6 @@
   }
   setupServersDropdown();
 
-  if (DETACHED_ONLY) { detachedOnlyBoot(); return; }
-
   // Open/close
   document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
   const btnProfiles = document.getElementById('btn-profiles');
@@ -15401,7 +14829,6 @@
     }
     setTimeout(()=>notice.remove(),2000);
   }
-
 
   function createAgentTerminal(spec) {
     if (nativePtyReady) return window.electronAPI.terminalCreate(spec);
@@ -16208,7 +15635,6 @@
     activateTerminal(wsp.id, targetGroup.activeTermId || targetGroup.terminals[0].id);
   }
 
-
   function prevTab() {
     const wsp = activeWs();
     if (!wsp) return;
@@ -16395,14 +15821,14 @@
    ═══════════════════════════════════════════════════════════════ */
   (async () => {
     // Show titlebar immediately on desktop so window control overlay does not overlap tabs
-    if (isDesktop() && !SETTINGS_ONLY && !DETACHED_ONLY) {
+    if (isDesktop() && !SETTINGS_ONLY) {
       const tb = document.getElementById('titlebar');
       if (tb) tb.classList.add('active');
     }
 
     let restored = false;
     try {
-      if (!SETTINGS_ONLY && !DETACHED_ONLY) {
+      if (!SETTINGS_ONLY) {
         await profileGate();
       }
       await loadCustomThemes();
@@ -16557,9 +15983,9 @@
       }, 50);
     });
 
-    if (!DETACHED_ONLY && !SETTINGS_ONLY && window.electronAPI?.onAgentRequest) {
+    if (!SETTINGS_ONLY && window.electronAPI?.onAgentRequest) {
       window.electronAPI.onAgentRequest(handleAgentRequest);
-    } else if (!isDesktop() && !DETACHED_ONLY && !SETTINGS_ONLY) {
+    } else if (!isDesktop() && !SETTINGS_ONLY) {
       agentBrowserReady = true;
       if (wsReady) ws.send(JSON.stringify({ type: 'agent:ready' }));
     }
