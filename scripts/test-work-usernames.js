@@ -14,9 +14,13 @@ app.whenReady().then(async () => {
   const helper = source.slice(start, source.indexOf('  async function refreshThreadFlow(', start));
   const settingsStart = source.indexOf('  const loadThreadSettings =');
   const settings = source.slice(settingsStart, source.indexOf('\n  };', settingsStart) + 5);
-  console.log(await win.webContents.executeJavaScript(`(() => {
+  const privacy = source.slice(source.indexOf('  const EMAIL_RE ='), source.indexOf('  function blurTermEmails('));
+  console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     let threadSettings = { usernames: 'show' };
+    const hideEmails = false, copied = [];
+    window.electronAPI = { clipboardWrite: text => copied.push(text) };
+    ${privacy}
     ${settings}
     ${helper}
     document.body.innerHTML = '<div id="sbr-thread"><div class="thr-tools-text"></div><pre class="thr-tool-detail"></pre><pre class="thr-tool-output"></pre><div class="thr-tool-image-path"></div><p class="thr-msg-text"></p></div>';
@@ -42,7 +46,18 @@ app.whenReady().then(async () => {
     check(getComputedStyle(users[0]).filter === 'none', 'Show must remove blur immediately');
     loadThreadSettings(saved);
     check(getComputedStyle(users[0]).filter === 'blur(4px)', 'Restored settings must reapply blur');
-    return 'PASS: username-only blur, default show, live settings, restored preferences, syntax preservation and unchanged file paths';
+    const selection = window.getSelection(), range = document.createRange();
+    range.setStart(users[0].firstChild, 1); range.setEnd(users[0].firstChild, 4);
+    selection.removeAllRanges(); selection.addRange(range);
+    const event = new ClipboardEvent('copy', { bubbles: true, cancelable: true });
+    users[0].dispatchEvent(event);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    check(event.defaultPrevented && copied[0]?.startsWith('[user-') && !copied[0].includes('OHA'), 'Partial username selections must copy a token, never the hidden substring');
+    range.selectNodeContents(summary); selection.removeAllRanges(); selection.addRange(range);
+    summary.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    check(copied[1] && !copied[1].includes('MOHAME~1') && !copied[1].includes('/home/med/'), 'Whole paths must sanitize every hidden username');
+    return 'PASS: username blur, show/blur settings, native and partial selection copying without hidden values, and unchanged file paths';
   })()`));
   clearTimeout(timer); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });

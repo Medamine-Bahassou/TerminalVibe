@@ -1248,8 +1248,8 @@ body #sidebar.expanded:not(.hover-overlay) { flex-shrink:0; }
 }
 /* Settings → Hide email addresses off (xterm sets display inline, hence !important). */
 body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !important; }
-/* A revealed address: no blur, and clicks/selection go back to the terminal. */
-.xterm .xterm-decoration.term-email-blur.shown { -webkit-backdrop-filter:none; backdrop-filter:none; background:transparent; pointer-events:none; cursor:auto; }
+/* Keep revealed addresses clickable so the next click restores their blur. */
+.xterm .xterm-decoration.term-email-blur.shown { -webkit-backdrop-filter:none; backdrop-filter:none; background:transparent; pointer-events:auto; cursor:pointer; }
 
 /* ── Thread history tab: the history page covers its tab's (unused) shell ── */
 #pane-area .term-slot > #sbr-thread { position:absolute; inset:0; z-index:5; background:var(--bg); color:var(--fg); font-family:var(--ui-font); }
