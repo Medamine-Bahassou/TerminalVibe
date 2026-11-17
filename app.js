@@ -10180,8 +10180,31 @@
     syncChatInputLinks(surface, files);
     if (surface === thrPage) syncSendBtn();
   }
-  async function addChatFiles(files) {
+  const _chatFileAdds = new WeakMap();
+  function addChatFiles(files) {
     const tab = curChat();
+    if (!tab) return Promise.resolve();
+    const pending = (_chatFileAdds.get(tab) || Promise.resolve()).catch(() => {}).then(() => addChatFilesToTab(tab, files));
+    _chatFileAdds.set(tab, pending);
+    return pending;
+  }
+  async function findChatImageDuplicate(files, attachment) {
+    if (!attachment.image) return null;
+    const data = attachment.preview?.split(',')[1];
+    for (const file of files) {
+      if (!file.image) continue;
+      if (file.path === attachment.path) return file;
+      let existing = file.preview?.split(',')[1];
+      // Restored drafts have metadata only until their preview has loaded.
+      if (!existing && data && window.electronAPI?.readImageFile) {
+        const result = await window.electronAPI.readImageFile(file.path).catch(() => null);
+        existing = result?.data;
+      }
+      if (data && existing === data) return file;
+    }
+    return null;
+  }
+  async function addChatFilesToTab(tab, files) {
     for (const file of files) {
       try {
         const path = await localPathForFile(tab, file);
@@ -10194,6 +10217,23 @@
           reader.readAsDataURL(file);
         }) : '';
         const attachment = { name: file.name || path.split(/[\\/]/).pop(), path, image, preview, size: file.size || 0 };
+        const attached = curChat() === tab ? _chatFiles : (tab._files ||= tab.chat?.draftFiles || []);
+        const duplicate = await findChatImageDuplicate(attached, attachment);
+        if (duplicate) {
+          duplicate.preview ||= preview;
+          duplicate.size ||= attachment.size;
+          // Removing an inline link keeps its preview; repasting restores that link.
+          if (curChat() === tab) {
+            if (!duplicate.mention || !thrInput.value.includes(duplicate.mention)) insertChatMention(duplicate);
+          } else {
+            const input = document.createElement('textarea'); input.value = tab._draft ?? tab.chat?.draft ?? '';
+            input.setSelectionRange(input.value.length, input.value.length);
+            if (!duplicate.mention || !input.value.includes(duplicate.mention)) insertChatMention(duplicate, input, attached);
+            tab._draft = input.value;
+            if (!tab._editingQueued) { tab.chat ||= {}; tab.chat.draft = input.value; tab.chat.draftFiles = attached; }
+          }
+          continue;
+        }
         if (curChat() === tab) {
           if (image) insertChatMention(attachment);
           _chatFiles.push(attachment);
