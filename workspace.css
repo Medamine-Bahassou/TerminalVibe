@@ -194,7 +194,6 @@ body .term-group[style*="--group-tab-color"] .term-slot:not(.multi-selected)::af
 .session-context-drop-effect { position:absolute; inset:0; z-index:55; display:grid; place-items:center; background:color-mix(in srgb,var(--bg) 52%,transparent); backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); pointer-events:none; box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 50%,transparent); }
 .session-context-drop-card { display:flex; flex-direction:column; align-items:center; gap:12px; margin:16px; padding:24px 16px; border:1px dashed var(--accent); border-radius:8px; color:var(--accent); font:500 12px/1.5 var(--ui-font,sans-serif); text-align:center; }
 .session-context-drop-card svg { width:32px; height:32px; }
-.session-drop-feedback { position:absolute; top:8px; right:8px; max-width:min(360px,90%); z-index:70; background:var(--bg); color:var(--fg); border:1px solid var(--accent); border-radius:4px; padding:10px; font:12px/1.5 var(--ui-font, sans-serif); pointer-events:none; }
 
 /* Hallmark · pre-emit critique: P5 H4 E4 S5 R5 V4
    Premium workspace system. Terminal metrics remain owned by xterm. */
@@ -499,6 +498,9 @@ body .ctx-item i.ph { width:16px; font-size:15px; color:var(--muted-text); }
 body .ctx-item:hover i.ph { color:var(--fg); }
 body .ctx-item .ci-key { margin-left:auto; padding-left:16px; font:400 11.5px/1 var(--mono-font); color:var(--dim-text); }
 body .ctx-sep { height:1px; margin:4px -4px; background:var(--ui-line); }
+#ctx .ctx-usage-providers > .ctx-sub { top:auto; bottom:-4px; left:100%; }
+#ctx.sub-flip .ctx-usage-providers > .ctx-sub { right:100%; left:auto; }
+#ctx :is([data-usage-setting], .ctx-usage-providers [role="menuitemcheckbox"])[aria-checked="false"] > .ci-key { visibility:hidden; }
 body .ctx-item.danger:hover { background:color-mix(in srgb,#f07882 14%,transparent); color:#f07882; }
 body .ctx-item.danger:hover i.ph { color:#f07882; }
 body .ctx-item.checked, body .ctx-item.checked:hover { background:transparent; color:var(--muted-text); }
@@ -537,19 +539,38 @@ body .server-row:hover { background:var(--ui-hover); }
 .servers-message { margin:0 4px 4px; padding:16px 12px; border:1px dashed var(--border); border-radius:6px !important; text-align:center; font:400 13px/20px var(--ui-font); color:var(--dim-text); }
 body #servers-dropdown :focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
 
-/* Toast (session context feedback): elevated pill with a status dot. */
-.session-drop-feedback {
-  display:flex; align-items:flex-start; gap:8px; top:12px; right:12px; padding:10px 14px 10px 12px;
-  background:var(--ui-surface); color:var(--fg); border:1px solid var(--border); border-radius:var(--ui-radius) !important;
-  box-shadow:0 8px 24px #0005; font:400 13px/20px var(--ui-font);
-  animation:toast-in 160ms ease-out;
+/* Toast cards share the application's theme and fit narrow panes. */
+.app-toast {
+  display:flex; align-items:flex-start; gap:10px; padding:14px;
+  background:var(--ui-surface); color:var(--fg); border:1px solid var(--ui-line);
+  border-radius:var(--ui-radius) !important; box-shadow:0 4px 12px #0003;
+  font:500 13px/20px var(--ui-font); overflow-wrap:anywhere;
 }
-.session-drop-feedback > i { flex-shrink:0; font-size:16px; line-height:20px; color:var(--muted-text); }
-.session-drop-feedback.is-pending > i { animation:toast-spin 900ms linear infinite; }
-.session-drop-feedback.is-success > i { color:var(--ui-success); }
-.session-drop-feedback.is-error > i { color:var(--ui-error); }
+.app-toast > i { flex-shrink:0; font-size:16px; line-height:20px; color:var(--muted-text); }
+.app-toast > span { min-width:0; }
+.app-toast-fixed {
+  position:fixed; right:16px; bottom:40px; z-index:9999;
+  width:min(356px, calc(100vw - 32px)); opacity:0; visibility:hidden; pointer-events:none;
+  transform:translateY(8px); transition:opacity 160ms, transform 160ms, visibility 0s 160ms;
+}
+.app-toast-fixed.visible { visibility:visible; opacity:1; transform:none; pointer-events:auto; transition-delay:0s; }
+.app-toast-close {
+  display:grid; place-items:center; flex:0 0 24px; height:24px; margin:-2px -2px -2px auto;
+  border:0; border-radius:4px; background:transparent; color:var(--muted-text); cursor:pointer;
+}
+.app-toast-close[hidden] { display:none; }
+.app-toast-close:hover { background:var(--ui-hover); color:var(--fg); }
+.app-toast-close:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.session-drop-feedback { position:absolute; top:12px; right:12px; max-width:min(356px,90%); z-index:70; pointer-events:none; animation:toast-in 160ms ease-out; }
+.app-toast.is-pending > i { animation:toast-spin 900ms linear infinite; }
+.app-toast.is-success > i { color:var(--ui-success); }
+.app-toast.is-error > i { color:var(--ui-error); }
 @keyframes toast-spin { to { transform:rotate(360deg); } }
 @keyframes toast-in { from { opacity:0; transform:translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .app-toast-fixed { transform:none; transition:none; }
+  .session-drop-feedback, .app-toast.is-pending > i { animation:none; }
+}
 
 /* Tab-bar + titlebar icon buttons: rounded hover, like every other icon button. */
 body .tg-btn, body .titlebar-btn { border-radius:6px !important; transition:background-color 150ms, color 150ms; }
@@ -1183,8 +1204,9 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 #sbr-thread .thr-tools summary > i { font-size:14px; flex-shrink:0; }
 #sbr-thread .thr-tools-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #sbr-thread .thr-tools-count { font-size:11px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
-#sbr-thread .thr-tools-time { font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; opacity:0; }
-#sbr-thread .thr-tools > summary:is(:hover, :focus-visible) > .thr-tools-time { opacity:1; }
+#sbr-thread .thr-tools-time { font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+#sbr-thread .thr-tools > summary > :is(.thr-tools-count, .thr-tools-time) { flex:none; white-space:nowrap; opacity:0; transition:opacity 140ms ease; }
+#sbr-thread .thr-tools > summary:is(:hover, :focus-visible) > :is(.thr-tools-count, .thr-tools-time) { opacity:1; }
 #sbr-thread .thr-tools-caret { color:var(--dim-text); transition:transform 140ms; }
 #sbr-thread .thr-tools[open] .thr-tools-caret { transform:rotate(90deg); }
 #sbr-thread .thr-tool-list { display:flex; flex-direction:column; gap:2px; margin:2px 0 0 22px; }
@@ -1452,7 +1474,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #threads-sidebar .ts-caret { font-size:11px; color:var(--dim-text); transition:transform 140ms; }
 #threads-sidebar .ts-section.collapsed .ts-caret { transform:rotate(-90deg); }
 #threads-sidebar .ts-cards { display:flex; flex-direction:column; gap:4px; }
-#threads-sidebar .ts-card { display:flex; flex-direction:column; gap:4px; width:100%; padding:10px 12px; background:transparent; border:1px solid transparent; border-radius:10px !important; color:var(--fg); font:400 13px var(--ui-font); text-align:left; cursor:pointer; transition:background-color 140ms, border-color 140ms; }
+#threads-sidebar .ts-card { display:flex; flex-direction:column; gap:4px; width:100%; padding:8px 10px; background:transparent; border:1px solid transparent; border-radius:10px !important; color:var(--fg); font:400 13px var(--ui-font); text-align:left; cursor:pointer; transition:background-color 140ms, border-color 140ms; }
 #threads-sidebar .ts-card:hover { background:var(--ui-hover); }
 #threads-sidebar .ts-card.active { background:color-mix(in srgb,var(--fg) 7%,var(--ui-sidebar)); }
 #threads-sidebar .ts-card:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
@@ -1484,12 +1506,13 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 
 /* ── Chat prompts: images above the bubble; image paths in the text as link chips (both open the viewer) ── */
 #sbr-thread .thr-msg.user > .thr-images { justify-content:flex-end; max-width:85%; }
-#sbr-thread .thr-msg.user .thr-img { max-height:220px; cursor:zoom-in; }
+#sbr-thread .thr-msg.user > .thr-images > .thr-img-wrap { flex-shrink:0; }
+#sbr-thread .thr-msg.user > .thr-images .thr-img { display:block; width:100%; height:100%; object-fit:contain; cursor:zoom-in; }
 #sbr-thread .thr-img-size:empty { display:none; }
 
 /* ── Tab bar menu: Chat › agents (brand logos), and a disabled row when none is installed ── */
-body .ctx-item .ctx-agent-icon { display:grid; place-items:center; }
-body .ctx-item .ctx-agent-icon .ws-proc-icon { width:14px; height:14px; font-size:14px; fill:currentColor; }
+body .ctx-item .ctx-agent-icon { display:grid; place-items:center; flex:0 0 16px; width:16px; }
+body .ctx-item .ctx-agent-icon .ws-proc-icon { width:14px; height:14px; font-size:14px; line-height:1; object-fit:contain; fill:currentColor; }
 body .ctx-item.disabled { color:var(--dim-text); cursor:default; pointer-events:none; }
 
 /* ── Chat code: tool details and code blocks without borders (a soft tint instead); syntax colors from
@@ -1593,15 +1616,9 @@ body.ui-animations.resizing #threads-sidebar { transition:none; }
 #sbr-thread .thr-file-open { display:block; width:100%; height:100%; padding:0; border:0; background:transparent; cursor:zoom-in; }
 #sbr-thread .thr-file-open:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
 
-/* Translucent composer: blur the scrolling chat behind the input. */
-@supports ((backdrop-filter:blur(16px)) or (-webkit-backdrop-filter:blur(16px))) {
-  #sbr-thread .thr-composer-wrap { background:transparent; }
-  #sbr-thread .thr-composer {
-    background:color-mix(in srgb,var(--ui-surface) 65%,transparent);
-    -webkit-backdrop-filter:blur(16px);
-    backdrop-filter:blur(16px);
-  }
-}
+/* An opaque surface avoids re-blurring the history whenever a turn expands or streams. */
+#sbr-thread .thr-composer-wrap { background:transparent; }
+#sbr-thread .thr-composer { background:var(--ui-surface); }
 
 /* Chat tabs retain their chat surface when another pane takes focus. */
 .term-slot.chat-tab:not(.chat-cli) > .term-wrap { visibility:hidden; pointer-events:none; }
@@ -1658,7 +1675,7 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread .thr-image-ref small { font:400 10px/1.4 var(--ui-font); }
 #sbr-thread .thr-image-ref > span:not(.thr-inline-image-icon) { max-width:min(240px,44vw); overflow:hidden; text-overflow:ellipsis; }
 #sbr-thread .thr-inline-ref :is(a,button):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-#sbr-thread .thr-file.image { width:64px; height:64px; }
+#sbr-thread :is(.thr-file.image, .thr-msg.user > .thr-images > .thr-img-wrap) { width:64px; height:64px; }
 
 /* Queued prompts are quiet outgoing chat messages, above the floating composer. */
 #sbr-thread .thr-flow > .thr-queue { flex-shrink:0; align-self:stretch; max-height:none; overflow:visible; gap:12px; padding:8px 0 0; border:0; }
@@ -2037,7 +2054,8 @@ body.ui-animations #threads-sidebar .ts-usage:not([hidden]) { animation:ts-usage
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-fork { transition:none; } }
 
 /* Chat chrome (turn timers, times, action rows, headers) stays out of text selection and copies. */
-#sbr-thread :is(.thr-actions, .thr-turn > summary, .thr-worked, .thr-seg, .thr-tools > summary, .thr-status-line) { user-select:none; -webkit-user-select:none; }
+#sbr-thread :is(.thr-actions, .thr-worked, .thr-seg, .thr-status-line),
+:is(#sbr-thread, .thr-snapshot) .thr-flow details > summary { user-select:none; -webkit-user-select:none; }
 
 /* Chat messages: markdown blocks from mdLite (tables, quotes, rules) and emphasis. */
 #sbr-thread .thr-msg-text em { font-style:italic; }
@@ -2333,11 +2351,18 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 .term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { bottom:var(--chat-terminal-height, 35%); height:auto; }
 .chat-bottom-terminal { position:absolute; bottom:0; left:0; right:0; height:var(--chat-terminal-height, 35%); z-index:3; display:flex; flex-direction:column; border-top:1px solid var(--border); background:var(--bg); }
 .chat-bottom-terminal[hidden], .chat-cli > .chat-bottom-terminal { display:none; }
+.chat-bottom-sash { position:absolute; inset:-5px 0 auto; height:9px; cursor:row-resize; touch-action:none; z-index:1; }
+.chat-bottom-sash::after { content:''; position:absolute; inset:3px 0 auto; height:2px; background:var(--accent); opacity:0; }
+.chat-bottom-sash:is(:hover, :focus-visible, .dragging)::after { opacity:1; }
+.chat-bottom-sash:focus-visible { outline:none; }
 .chat-bottom-header { display:flex; align-items:center; justify-content:space-between; flex:none; padding:4px 10px; color:var(--muted-text); font-size:12px; }
 .chat-bottom-header button { display:grid; place-items:center; width:24px; height:24px; border:0; background:transparent; color:inherit; cursor:pointer; border-radius:4px; }
 .chat-bottom-header button:hover { background:var(--ui-hover); color:var(--fg); }
 .chat-bottom-header button:focus-visible { outline:2px solid var(--accent); }
-.chat-bottom-body { flex:1; min-height:0; padding:0 8px 6px; }
+.chat-bottom-body { position:relative; flex:1; min-height:0; }
+.chat-bottom-screen { height:100%; padding:0 8px 6px; }
+.chat-bottom-terminal.resizing .chat-bottom-body { overflow:clip; }
+.chat-bottom-terminal.resizing .chat-bottom-screen { position:absolute; inset:var(--chat-terminal-grid-offset, 0px) 0 auto; height:var(--chat-terminal-grid-height); }
 
 /* File attachment cards share the image preview footprint. */
 #sbr-thread .thr-file.document { position:relative; flex:0 0 64px; width:64px; height:64px; max-width:64px; padding:0; display:flex; flex-direction:column; gap:0; overflow:hidden; border:1px solid var(--border); border-radius:8px !important; background:var(--bg); }

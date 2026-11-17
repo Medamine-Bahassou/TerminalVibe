@@ -590,8 +590,19 @@
     if (!entry?.term || entry.type === 'browser' || entry.locked || entry.dead || !files.length) return;
     const target=entry.term;
     const available=()=>!entry.locked && !entry.dead && entry.term===target && findTermById(entry.id)?.term===entry;
-    const notice=document.createElement('div');notice.className='session-drop-feedback is-pending';
-    notice.setAttribute('role','status');notice.textContent='Adding files…';entry.el?.append(notice);
+    const notice = document.createElement('div');
+    notice.setAttribute('role', 'status');
+    const icon = document.createElement('i');
+    icon.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    notice.append(icon, label);
+    const show = (state, glyph, text) => {
+      notice.className = 'app-toast session-drop-feedback is-' + state;
+      icon.className = 'ph ' + glyph;
+      label.textContent = text;
+    };
+    show('pending', 'ph-circle-notch', 'Adding files…');
+    entry.el?.append(notice);
     try {
       const paths=[];
       for (const file of files) {
@@ -604,10 +615,9 @@
       // xterm emits one bracketed paste into this pane's editable draft. No Enter.
       target.paste(paths.join(' ')+' ');
       target.focus();
-      notice.className='session-drop-feedback is-success';
-      notice.textContent=files.length===1?'File added to draft':files.length+' files added to draft';
+      show('success', 'ph-check-circle', files.length === 1 ? 'File added to draft' : files.length + ' files added to draft');
     } catch(error) {
-      notice.className='session-drop-feedback is-error';notice.textContent=error.message;
+      show('error', 'ph-warning-circle', error.message);
       console.error('[drop] failed:',error);
     }
     setTimeout(()=>notice.remove(),4000);
@@ -1724,13 +1734,14 @@
   let showWsProcs = true;     // show running processes in workspace buttons
   let hideEmails = true;      // blur email addresses in terminal output (blurTermEmails)
   let notifyOnCommandFinish = true; // notify when a command / agent response finishes
-  let notificationSound = true;     // play sounds/notify.wav with those notifications
+  let notificationSound = true;     // play the chime for finish notifications and agent questions
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
-  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed', markdown: 'on', usernames: 'show' };
+  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageWindow: 'weekly', usageDisplay: 'consumed', markdown: 'on', usernames: 'show' };
   const _workUsernameRecords = new Map(), _workUsernameMarkup = new WeakMap();
   const loadThreadSettings = s => {
     if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s };
+    if (threadSettings.usageWindow === 'mostUsed') threadSettings.usageWindow = 'weekly';
     document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
     applyWorkUsernamePrivacy(document);
   };
@@ -5056,7 +5067,11 @@
     wsp.activeTermId = termId;
     pluginEmit('terminal:activate', { wsId, termId });
     const chatEntry = getWorkspaceTerminals(wsp).find(x => x.id === termId && x.threadHistory);
-    if (chatEntry) queueMicrotask(() => { _preferChat = chatEntry; syncThreadPanel(); }); // the chat page moves to it
+    if (chatEntry) queueMicrotask(() => {
+      if (wsp.activeTermId !== termId || (curChat() === chatEntry && thrPage.parentElement === chatEntry.el)) return;
+      _preferChat = chatEntry;
+      syncThreadPanel();
+    });
 
     const group = findGroupContainingTerm(wsp.layout, termId);
     if (group) {
@@ -5127,7 +5142,7 @@
             requestAnimationFrame(() => {
               if (t.term && !t.dead && t.el && t.el.offsetParent !== null) {
                 t.term.focus();
-                fitTerm(t);
+                if (!t.threadHistory || t._cliView) fitTerm(t);
               }
             });
           });
@@ -5577,7 +5592,7 @@
 
   function fitTerm(entry, immediate = false) {
     if (!entry || !entry.el || entry.type === 'browser') return;
-    if (entry.dead) return;
+    if (entry.dead || entry._draggingBottomTerminal) return;
     // Never fit a hidden terminal. When the slot (or an ancestor group /
     // workspace container) is display:none, computed dimensions resolve to 0
     // and FitAddon calls term.resize(0-ish) — corrupting the buffer so the
@@ -5612,7 +5627,7 @@
       if (!slot || !slot.id || !slot.id.startsWith('slot-')) continue;
       const id = slot.id.slice(5);
       const found = findTermById(id);
-      if (!found || !found.term || found.term.type === 'browser') continue;
+      if (!found || !found.term || found.term.type === 'browser' || found.term._draggingBottomTerminal) continue;
       if (found.term.el && (found.term.el.style.display === 'none' || found.term.el.offsetParent === null)) continue;
       // Skip zero-size transients (flex not yet settled)
       if (en.contentRect.width < 20 || en.contentRect.height < 20) continue;
@@ -7986,12 +8001,17 @@
       }));
       for (const [i, { ws, t }] of tabs.entries()) {
         if (!isLiveTerminal(t)) continue;
-        if (t._sdk?.alive) { syncTabAgentIcon(t); continue; } // a structured session: its events say what runs there
+        if (t._sdk?.alive) {
+          delete t._terminalQuestionKey;
+          syncTabAgentIcon(t);
+          continue; // structured sessions report questions through their own events
+        }
         const h = THREAD_HARNESSES.find(x => x.bin === names[i]);
         // An agent the chat just launched may not be the terminal's foreground process yet: keep its logo.
         if (!h && t._agentSince && Date.now() - t._agentSince < 8000) continue;
         const before = _tabAgent.get(t.id);
         _tabAgent.set(t.id, h?.id || null);
+        trackTerminalQuestion(t, h ? agentQuestion(t) : null);
         t._agentExited = !h && (!!before || !!t._agentExited); // an agent quit here: its logo goes too
         syncTabAgentIcon(t); // also catches agents the chat started itself
         if (h && before !== h.id && t.threadHistory) await adoptThreadAgent(t, h, ws); // typed into the Chat tab's own terminal
@@ -8020,7 +8040,7 @@
     return null;
   }
 
-  // ── Threads sidebar footer: each agent's weekly usage (most-used model when no weekly window exists);
+  // ── Threads sidebar footer: one quota window per agent, with a shared display preference;
   // the tooltip lists every window. Read through the agents' own CLIs (main process, cached 1 min). ──
   const fmtLeft = ms => { const m = Math.max(0, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`; };
   let _usageAt = 0, _usageLimits = null, _usageRequestId = 0;
@@ -8038,34 +8058,66 @@
   }
   const usageRemaining = () => threadSettings.usageDisplay === 'remaining';
   const usagePercent = used => usageRemaining() ? 100 - Math.min(100, Math.max(0, used)) : Math.min(100, Math.max(0, used));
-  function renderUsageSidebar() {
+  const usageWindows = { weekly: 'Weekly', session: 'Session', monthly: 'Monthly' };
+  const usageProviderIds = ['claude', 'codex', 'antigravity'];
+  const hiddenUsageProviders = () => new Set(Array.isArray(threadSettings.hiddenUsageProviders) ? threadSettings.hiddenUsageProviders : []);
+  const usageChartIcon = '<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>';
+  const monthlyUsage = w => w.mins === 43200 || /^monthly$/i.test(w.label);
+  function sidebarUsageWindow(windows, preferred) {
+    const weekly = windows.find(w => w.mins === 10080 && /^weekly$/i.test(w.label))
+      || windows.find(w => /^weekly$/i.test(w.label))
+      || windows.find(w => w.mins === 10080 || /^weekly\b/i.test(w.label));
+    if (preferred === 'session') {
+      const session = windows.find(w => w.mins === 300 || /^session$/i.test(w.label));
+      if (session) return session;
+    }
+    if (preferred === 'monthly') {
+      const monthly = windows.find(monthlyUsage);
+      if (monthly) return monthly;
+    }
+    return weekly || windows.reduce((a, b) => b.used > a.used ? b : a);
+  }
+  function renderUsageSidebar(animate = false) {
     const left = document.getElementById('ts-usage');
     if (!left) return;
+    const previous = new Map();
+    if (animate && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      for (const ring of left.querySelectorAll('.sb-usage-item[data-usage-agent]')) {
+        previous.set(ring.dataset.usageAgent, getComputedStyle(ring).getPropertyValue('--p'));
+      }
+    }
     const label = usageRemaining() ? 'remaining' : 'consumed';
-    left.setAttribute('aria-label', `Weekly usage limits: ${label}`);
+    const windowLabel = usageWindows[threadSettings.usageWindow] || usageWindows.weekly;
+    left.setAttribute('aria-label', `Usage limits, ${windowLabel.toLowerCase()}, ${label}`);
     const ids = Object.entries(_usageLimits || {}).filter(([id, u]) => harnessOf(id) && u.windows?.length).map(([id]) => id);
     if (_usageLimits) try { localStorage.setItem('tv-usage-agents', JSON.stringify(ids)); } catch {}
     // The first reading after the startup placeholders fades in (rings sweep from empty); later refreshes don't.
     const reveal = left.classList.contains('loading');
     left.classList.remove('loading');
     left.classList.toggle('reveal', reveal);
-    const items = Object.entries(_usageLimits || {}).map(([id, u]) => {
-      const h = harnessOf(id);
-      if (!h || !u.windows?.length) return '';
-      // Prefer the shared weekly quota over session or per-model limits.
-      const top = u.windows.find(w => w.mins === 10080 && /^weekly$/i.test(w.label))
-        || u.windows.find(w => /^weekly$/i.test(w.label))
-        || u.windows.find(w => w.mins === 10080 || /^weekly\b/i.test(w.label))
-        || u.windows.reduce((a, b) => b.used > a.used ? b : a);
+    const hidden = hiddenUsageProviders();
+    const items = ids.filter(id => !hidden.has(id)).map(id => {
+      const h = harnessOf(id), u = _usageLimits[id];
+      const top = sidebarUsageWindow(u.windows, threadSettings.usageWindow);
       const rows = u.windows.map(w => ({ icon: 'ph-clock', text: `${w.label}: ${usagePercent(w.used)}% ${label}${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
       const plan = u.plan ? ' · ' + u.plan[0].toUpperCase() + u.plan.slice(1) : '';
       // Gauge and percentage use the selected mode; warnings always reflect consumed quota.
-      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${usagePercent(top.used)}" data-tip="${escHtml(h.name + plan + ' · ' + top.label + ': ' + usagePercent(top.used) + '% ' + label)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
+      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${usagePercent(top.used)}" data-usage-agent="${escHtml(id)}" data-tip="${escHtml(h.name + plan + ' · ' + top.label + ': ' + usagePercent(top.used) + '% ' + label)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
         + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
         + `<span class="sb-usage-pct">${usagePercent(top.used)}%</span></span>`;
     }).join('');
-    left.innerHTML = items ? `${items}<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>` : '';
-    left.hidden = !items;
+    // Keep the menu reachable even when every provider is hidden.
+    left.hidden = !ids.length && !hidden.size;
+    left.innerHTML = left.hidden ? '' : items + usageChartIcon;
+    if (previous.size) {
+      for (const ring of left.querySelectorAll('.sb-usage-item[data-usage-agent]')) {
+        const from = previous.get(ring.dataset.usageAgent);
+        const to = ring.style.getPropertyValue('--p');
+        if (from !== undefined && Number(from) !== Number(to)) {
+          ring.animate([{ '--p': from }, { '--p': to }], { duration: 360, easing: 'cubic-bezier(.2,.8,.2,1)' });
+        }
+      }
+    }
   }
   // Usage modal: every agent's limit windows, shown in the selected display mode,
   // with an even-pace marker, reset time, and trend based on the remaining quota.
@@ -8130,21 +8182,36 @@
     overlay.querySelector('[data-act="close"]').focus();
     void loadUsageModal(true); // opening the details always checks the providers again
   }
-  document.getElementById('ts-usage')?.addEventListener('click', openUsageModal);
+  const usageButton = document.getElementById('ts-usage');
+  usageButton?.addEventListener('click', openUsageModal);
+  function openUsageMenu(e) {
+    e.preventDefault();
+    usageButton.focus({ preventScroll: true });
+    const rect = usageButton.getBoundingClientRect();
+    const keyboard = e.type === 'keydown' || (!e.pageX && !e.pageY);
+    showCtxMenu({ pageX: keyboard ? rect.right : e.pageX, pageY: keyboard ? rect.top : e.pageY, above: true, alignRight: true }, 'usage');
+    ctxEl.querySelector('.ctx-item')?.focus();
+  }
+  usageButton?.addEventListener('contextmenu', openUsageMenu);
+  usageButton?.addEventListener('keydown', e => {
+    if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) openUsageMenu(e);
+  });
   // From startup: the agents seen last time, as logos in empty rings, until the first reading arrives.
-  if (!SETTINGS_ONLY && window.electronAPI?.usageLimits) {
-    const left = document.getElementById('ts-usage');
+  function renderUsagePlaceholders() {
+    if (!usageButton) return;
     let ids = null;
     try { ids = JSON.parse(localStorage.getItem('tv-usage-agents')); } catch {}
-    const known = (Array.isArray(ids) ? ids : ['claude', 'codex', 'antigravity']).map(harnessOf).filter(Boolean);
-    if (left && known.length) {
-      left.innerHTML = known.map(h => `<span class="sb-usage-item" style="--p:0" data-tip="${escHtml(h.name)}: loading usage…">`
+    const hidden = hiddenUsageProviders();
+    const known = (Array.isArray(ids) ? ids : usageProviderIds).map(harnessOf).filter(Boolean);
+    if (known.length || hidden.size) {
+      usageButton.innerHTML = known.filter(h => !hidden.has(h.id)).map(h => `<span class="sb-usage-item" style="--p:0" data-tip="${escHtml(h.name)}: loading usage…">`
         + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
-        + '<span class="sb-usage-pct">&nbsp;</span></span>').join('') + '<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>';
-      left.classList.add('loading');
-      left.hidden = false;
+        + '<span class="sb-usage-pct">&nbsp;</span></span>').join('') + usageChartIcon;
+      usageButton.classList.add('loading');
+      usageButton.hidden = false;
     }
   }
+  if (!SETTINGS_ONLY && window.electronAPI?.usageLimits) renderUsagePlaceholders();
   if (!SETTINGS_ONLY) { setTimeout(() => refreshUsageLimits(true), 3000); setInterval(() => refreshUsageLimits(false), 60000); }
 
   // A terminal running an agent becomes a Chat tab over that agent (the chat button in its tab bar).
@@ -8302,19 +8369,100 @@
       requestAnimationFrame(() => { fitTerm(tab); tab.term.refresh(0, tab.term.rows - 1); tab.term.focus(); });
       void ensureChatTerminalSession(tab);
     }
-    else { _flowSig = ''; if (curChat() === tab) { restoreThreadScroll(tab); refreshThreadFlow(tab); syncThreadComposer(tab); } thrInput.focus(); }
+    else { if (curChat() === tab) { restoreThreadScroll(tab); refreshThreadFlow(tab); syncThreadComposer(tab); } thrInput.focus(); }
   }
   function disposeChatBottomTerminal(owner) {
     const entry = owner?._bottomTerminal;
     if (!entry) return;
     delete owner._bottomTerminal;
+    entry._finishBottomResize?.(false);
     sendControl({ type: 'close', id: entry.id });
     clearTimeout(entry._resizeTimeout);
+    cancelAnimationFrame(entry._fitObserverRaf);
     _termFitObserver.unobserve(entry.el);
     _disposeTermRenderers(entry.term);
     entry.term.dispose();
     entry.el.remove();
     owner.el?.classList.remove('chat-bottom-open');
+  }
+  function bindChatBottomResize(owner, entry) {
+    const panel = entry.el;
+    const sash = panel.querySelector('.chat-bottom-sash');
+    const body = panel.querySelector('.chat-bottom-body');
+    const screen = panel.querySelector('.chat-bottom-screen');
+    const min = 10, max = 75;
+    let height = Number.parseFloat(owner.el.style.getPropertyValue('--chat-terminal-height')) || 35;
+    let drag = null, frame = 0, pendingHeight;
+    const setHeight = value => {
+      const next = Math.max(min, Math.min(max, Math.round(value * 100) / 100));
+      if (next === height && sash.hasAttribute('aria-valuenow')) return;
+      height = next;
+      owner.el.style.setProperty('--chat-terminal-height', height + '%');
+      sash.setAttribute('aria-valuenow', String(Math.round(height)));
+      if (drag) {
+        const visibleHeight = drag.bodyHeight + (height - drag.height) * drag.paneHeight / 100;
+        const offset = Math.max(0, drag.cursorBottom - visibleHeight);
+        panel.style.setProperty('--chat-terminal-grid-offset', -offset + 'px');
+      }
+    };
+    sash.setAttribute('aria-valuemin', String(min));
+    sash.setAttribute('aria-valuemax', String(max));
+    setHeight(height);
+    sash.addEventListener('pointerdown', e => {
+      if (drag || e.button !== 0) return;
+      const paneHeight = owner.el.clientHeight;
+      if (!paneHeight) return;
+      e.preventDefault();
+      sash.setPointerCapture(e.pointerId);
+      const bodyHeight = body.clientHeight;
+      const buffer = entry.term.buffer?.active;
+      const gridHeight = screen.querySelector('.xterm-screen')?.offsetHeight || bodyHeight;
+      // Keep the top row steady. Only shift the frozen grid if shrinking would clip the live cursor.
+      const cursorBottom = buffer && buffer.viewportY === buffer.baseY
+        ? (buffer.cursorY + 1) * gridHeight / entry.term.rows : 0;
+      drag = { id: e.pointerId, y: e.clientY, height, paneHeight, bodyHeight, cursorBottom };
+      pendingHeight = height;
+      // Keep xterm's grid and canvas intact while the surrounding viewport moves.
+      panel.style.setProperty('--chat-terminal-grid-height', bodyHeight + 'px');
+      entry._draggingBottomTerminal = true;
+      panel.classList.add('resizing');
+      sash.classList.add('dragging');
+    });
+    sash.addEventListener('pointermove', e => {
+      if (drag?.id !== e.pointerId) return;
+      pendingHeight = drag.height + (drag.y - e.clientY) * 100 / drag.paneHeight;
+      if (!frame) frame = requestAnimationFrame(() => {
+        frame = 0;
+        setHeight(pendingHeight);
+      });
+    });
+    const finish = entry._finishBottomResize = (fit = true) => {
+      if (!drag) return;
+      const pointerId = drag.id;
+      drag = null;
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      setHeight(pendingHeight);
+      delete entry._draggingBottomTerminal;
+      panel.classList.remove('resizing');
+      panel.style.removeProperty('--chat-terminal-grid-height');
+      panel.style.removeProperty('--chat-terminal-grid-offset');
+      sash.classList.remove('dragging');
+      if (sash.hasPointerCapture(pointerId)) sash.releasePointerCapture(pointerId);
+      if (fit) fitTerm(entry, true);
+    };
+    for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+      sash.addEventListener(event, e => {
+        if (drag?.id === e.pointerId) finish();
+      });
+    }
+    sash.addEventListener('keydown', e => {
+      const next = { ArrowUp: height + 5, ArrowDown: height - 5, Home: min, End: max }[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setHeight(next);
+    });
   }
   function toggleChatBottomTerminal(owner) {
     if (!owner?.threadHistory || owner._cliView || !wsReady) return;
@@ -8330,10 +8478,12 @@
       panel.className = 'chat-bottom-terminal';
       panel.id = 'slot-' + entry.id;
       panel.setAttribute('aria-label', 'Project terminal');
-      panel.innerHTML = '<div class="chat-bottom-header"><span>Terminal</span><button type="button" aria-label="Hide terminal (Ctrl+J)" title="Hide terminal (Ctrl+J)"><i class="ph ph-x" aria-hidden="true"></i></button></div><div class="chat-bottom-body"></div>';
+      panel.innerHTML = '<div class="chat-bottom-sash" role="separator" tabindex="0" aria-label="Resize project terminal" aria-orientation="horizontal"></div>'
+        + '<div class="chat-bottom-header"><span>Terminal</span><button type="button" aria-label="Hide terminal (Ctrl+J)" title="Hide terminal (Ctrl+J)"><i class="ph ph-x" aria-hidden="true"></i></button></div><div class="chat-bottom-body"><div class="chat-bottom-screen"></div></div>';
       owner.el.append(panel);
       entry.el = panel;
-      entry.term.open(panel.querySelector('.chat-bottom-body'));
+      bindChatBottomResize(owner, entry);
+      entry.term.open(panel.querySelector('.chat-bottom-screen'));
       setupTerminalWheel(entry);
       entry.opened = true;
       // Keep the chat as the active tab when its shell receives focus.
@@ -8345,6 +8495,7 @@
       sendControl({ type: 'create', id: entry.id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd });
     } else {
       entry.el.hidden = !entry.el.hidden;
+      if (entry.el.hidden) entry._finishBottomResize(false);
       owner.el.classList.toggle('chat-bottom-open', !entry.el.hidden);
     }
     if (entry.el.hidden) { owner.term.focus(); return; }
@@ -8413,14 +8564,9 @@
     renderChatResume(ws, surface);
   }
   const pendingMessages = ws => { const p = _pendingMsgs.get(ws.id); return p ? (Array.isArray(p) ? p : [p]) : []; };
-  const pendingHtml = (ws, previousHead = '') => {
+  const pendingHtml = ws => {
     const pending = pendingMessages(ws);
-    if (!pending.length) return '';
-    const o = pending[0].options || chatOpts(ws), h = harnessOf(o.harness), name = h?.name || o.harness;
-    const meta = [o.model && o.model !== 'default' ? o.model : '', o.effort && o.effort !== 'default' ? o.effort : ''].filter(Boolean).join(' · ');
-    const head = name + '|' + meta;
-    const header = head === previousHead ? '' : `<div class="thr-seg thr-pending" data-head="${escHtml(head)}"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(pending[0].at)}</span></div>`;
-    return header + pending.map(p => `<div class="thr-msg user thr-pending" data-ts="${p.at}">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}<div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(p.text).html}</div></div></div>`).join('');
+    return pending.map(p => `<div class="thr-msg user thr-pending" data-ts="${p.at}">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}<div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(p.text).html}</div></div></div>`).join('');
   };
   const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
   // A chat is a tab (its history + a message box); a workspace can hold any number of them.
@@ -8491,7 +8637,7 @@
     const saved = closedThreads[closedThreads.length - 1];
     if (saved?.chat === tab.chat) saved.id = uuid(); // the live tab keeps its id
     tab.chat = { createdAt: Date.now(), storeId: uuid(), ...(tab.chat.scratch ? { scratch: true } : {}) }; // the old thread keeps its scratch folder
-    tab._chatSeg = null; tab._scrollState = null; tab._open = null;
+    tab._chatSeg = null; tab._scrollState = null;
     _pendingMsgs.delete(tab.id); _turns.delete(tab.id);
     clearChatDraft(tab);
     setChatTabLabel(tab);
@@ -8632,14 +8778,12 @@
     if (prev && prev !== tab) {
       rememberThreadScroll(prev);
       prev._draft = thrInput.value; prev._files = _chatFiles;
-      const flow = page.querySelector('#sbr-thread-flow');
-      prev._open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
-      if (!prev._closePending) prev._flowHtml = flow.innerHTML;
     }
     // Keep a chat surface even when its workspace was hidden before this call. Its slot may
     // become visible again without taking focus (for example, above a terminal in a split).
-    if (prev && prev !== tab && !prev._closePending && page.parentElement === prev.el && !prev._cliView) {
+    if (prev && prev !== tab && !prev._closePending && prev.el) {
       const snap = createThreadSnapshot(prev);
+      moveThreadHistory(page, snap);
       restoreThreadScroll(prev, snap);
     }
     if (!tab) {
@@ -8649,10 +8793,8 @@
       if (page.parentElement !== document.body) document.body.append(page); // parked until a Chat tab takes it
       return;
     }
-    if (page.parentElement !== tab.el) {
-      tab.el.querySelectorAll(':scope > .thr-snapshot').forEach(el => el.remove());
-      tab.el.appendChild(page);
-    }
+    const snapshot = prev !== tab ? tab.el.querySelector(':scope > .thr-snapshot') : null;
+    if (page.parentElement !== tab.el) tab.el.appendChild(page);
     // Each chat keeps its own unsent draft and attachments.
     if (prev !== tab) {
       thrInput.value = (tab._draft ?? tab.chat?.draft) || ''; _chatFiles = tab._files || tab.chat?.draftFiles || [];
@@ -8661,19 +8803,30 @@
     if (prev !== tab) { autosizeThreadInput(); renderChatFiles(); }
     syncThreadSelection();
     page.style.display = tab._cliView ? 'none' : 'flex';
-    if (page.dataset.chat !== tab.id || force) {
-      page.dataset.chat = tab.id; _flowSig = '';
-      if (prev !== tab) {
-        const flow = page.querySelector('#sbr-thread-flow');
-        // Its last view shows at once (no blank frame while its history loads); the refresh then redraws it.
-        flow.innerHTML = tab._flowHtml || '';
-        applyWorkUsernamePrivacy(flow);
-        if (tab._flowHtml) flow.dataset.seen = '1'; else delete flow.dataset.seen;
+    if (prev !== tab) {
+      if (snapshot) {
+        moveThreadHistory(snapshot, page);
+        snapshot.remove();
+      } else {
+        const flow = threadPart(page, 'flow');
+        flow.replaceChildren();
+        delete flow.dataset.seen;
+        flow._texts = undefined;
+        flow._historyChunks = undefined;
+        _flowSig = '';
       }
+      if (thrFind.q) thrFindRun(true);
     }
+    page.dataset.chat = tab.id;
+    if (force) _flowSig = '';
     // Restore only after replacing the previous chat's markup, which can reset/clamp scrollTop.
     if (page.querySelector('.thr-flow').dataset.seen) restoreThreadScroll(tab);
-    refreshThreadFlow(tab);
+    if (snapshot && _flowSig) {
+      // Let the restored history paint before checking the transcript for changes.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (_curChat === tab && page.parentElement === tab.el) refreshThreadFlow(tab);
+      }));
+    } else refreshThreadFlow(tab);
     syncThreadComposer(tab);
     // On startup, sibling Chat panes have never owned the shared page. Give each its own
     // initialized surface and load its history without moving focus or borrowing another chat.
@@ -8681,7 +8834,6 @@
       if (sibling === tab || sibling._cliView || sibling.el.querySelector(':scope > .thr-snapshot')) continue;
       const snap = createThreadSnapshot(sibling);
       const flow = snap.querySelector('.thr-flow');
-      flow.innerHTML = sibling._flowHtml || '';
       delete flow.dataset.seen;
       delete flow.dataset.signature;
       threadPart(snap, 'input').value = (sibling._draft ?? sibling.chat?.draft) || '';
@@ -8717,8 +8869,44 @@
   function threadPart(surface, id) {
     return surface.querySelector('#sbr-thread-' + id) || surface.querySelector('[data-thr-id="sbr-thread-' + id + '"]');
   }
+  function moveThreadHistory(fromSurface, toSurface) {
+    const from = threadPart(fromSurface, 'flow'), to = threadPart(toSurface, 'flow');
+    const live = toSurface === thrPage;
+    if (live && from._snapshotTabIndexes) {
+      for (const [el, tabindex] of from._snapshotTabIndexes) {
+        if (tabindex === null) el.removeAttribute('tabindex'); else el.setAttribute('tabindex', tabindex);
+      }
+    }
+    to.replaceChildren(...from.childNodes);
+    to._texts = from._texts;
+    from._texts = undefined;
+    to._historyChunks = from._historyChunks;
+    from._historyChunks = undefined;
+    if (from.dataset.seen) to.dataset.seen = from.dataset.seen; else delete to.dataset.seen;
+    if (live) {
+      _flowSig = from.dataset.signature || '';
+      bindThreadCopy(to);
+    } else {
+      to.dataset.signature = _flowSig;
+      disableSnapshotHistoryFocus(to);
+    }
+    const queue = to.querySelector(':scope > .thr-queue');
+    if (queue) {
+      queue.id = live ? 'sbr-thread-queue' : '';
+      if (live) delete queue.dataset.thrId; else queue.dataset.thrId = 'sbr-thread-queue';
+    }
+  }
+  function disableSnapshotHistoryFocus(flow) {
+    const previous = flow._snapshotTabIndexes;
+    const indices = flow._snapshotTabIndexes = new Map();
+    for (const el of flow.querySelectorAll('button, a[href], input, textarea, summary, [tabindex]')) {
+      indices.set(el, previous?.has(el) ? previous.get(el) : el.getAttribute('tabindex'));
+      el.tabIndex = -1;
+    }
+  }
   function createThreadSnapshot(owner) {
-    const snap = thrPage.cloneNode(true);
+    const snap = thrPage.cloneNode(false);
+    for (const part of thrPage.children) snap.append(part.cloneNode(!part.classList.contains('thr-flow')));
     snap.querySelectorAll('[id]').forEach(el => { el.dataset.thrId = el.id; el.removeAttribute('id'); });
     snap.classList.add('thr-snapshot');
     snap.style.display = 'flex';
@@ -8759,9 +8947,8 @@
         }
         else target.click();
       };
-      // Composer controls are already wired; history controls are wired after the async
-      // history render. Resolve against the owning chat only, even if focus changes again.
-      if (inHistory) refreshThreadFlow(owner).then(run);
+      // A rendered snapshot keeps its history controls when promoted to the live page.
+      if (inHistory && !_flowSig) refreshThreadFlow(owner).then(run);
       else run();
     }, true);
     snap.querySelector('.thr-flow').addEventListener('scroll', () => rememberThreadScroll(owner, snap), { passive: true });
@@ -8942,7 +9129,13 @@
       if (ev.error) noteChatError(t, `${name}: ${ev.error}`);
       onTerminalFinished({ id: t.id, kind: 'agent', name: s.harness });
       chatAgentIdle(t);
-    } else if (ev.type === 'ask') s.ask = sdkTrayAsk(ev.ask);
+    } else if (ev.type === 'ask') {
+      if (s.lastQuestionId !== ev.ask.id) {
+        s.lastQuestionId = ev.ask.id;
+        s.ask = sdkTrayAsk(ev.ask);
+        notifyAgentQuestion();
+      }
+    }
     else if (ev.type === 'ask-done') { if (s.ask?.id === ev.id) s.ask = null; }
     else if (ev.type === 'mode') { if (t._chatCfg) t._chatCfg.access = ev.mode; setChatOpts(t, { access: ev.mode }); }
     else if (ev.type === 'models' && s.harness === 'antigravity') setAgyModels(ev.models);
@@ -9030,7 +9223,7 @@
     if (lockBtn) {
       const ws = curChat(), t = ws && (liveThreadAgent(ws) || ws);
       if (lockBtn.dataset.lockAct === 'take') void takeOverChatSession(ws);
-      else if (agentLocked(t)) sendStdin(t.id, new TextEncoder().encode('r'));
+      else if (agentLocked(t) && !t._takingOverSession) sendStdin(t.id, new TextEncoder().encode('r'));
       return;
     }
     const b = e.target.closest('.thr-img-link');
@@ -9454,6 +9647,17 @@
     if (!t?.term || !isLiveTerminal(t)) return null;
     return parseAgentQuestion(screenText(t), t.term.cols);
   }
+  function trackTerminalQuestion(t, ask) {
+    if (!ask) {
+      delete t._terminalQuestionKey;
+      return;
+    }
+    // Moving the selection or toggling a checkbox leaves the question unchanged.
+    const key = JSON.stringify([ask.question, ask.options.map(o => o.label)]);
+    if (key === t._terminalQuestionKey) return;
+    t._terminalQuestionKey = key;
+    notifyAgentQuestion();
+  }
   function parseAgentQuestion(screen, cols = 80) {
     const lines = screen.split('\n').map(l => l.trimEnd());
     let first = lines.findLastIndex((l, i) => ASK_OPT_RE.exec(l)?.[2] === '1' && !ASK_OPT_RE.test(lines[i - 1] || '')), nav = false;
@@ -9521,27 +9725,30 @@
   // from an earlier run) it shows a lock screen waiting for R. Typing there would press its keys
   // (r retry, f fork), so nothing is sent until the lock is gone.
   const LOCK_RE = /open in another app[\s\S]*(press R\b|to retry)/i;
-  function agentLocked(t) { return !t?._sdk?.alive && !!t?.term && isLiveTerminal(t) && /open in another app[\s\S]*(press R\b|to retry)/i.test(screenText(t)); }
+  function agentLocked(t) { return !t?._sdk?.alive && !!t?.term && isLiveTerminal(t) && LOCK_RE.test(screenText(t)); }
   async function waitUnlocked(t, maxMs = 300000) {
     const t0 = Date.now();
     while (agentLocked(t) && Date.now() - t0 < maxMs) await sleep(500);
     return isLiveTerminal(t) && !agentLocked(t);
   }
-  // "Take over": stop the other copy holding the session, then retry (R) in this tab.
   async function takeOverChatSession(ws) {
-    if (!ws || ws._takingOver) return;
-    const t = liveThreadAgent(ws) || ws, sid = t._chatSeg?.sessionId || threadSegments(ws).findLast(x => x.sessionId)?.sessionId;
-    ws._takingOver = true;
+    const t = liveThreadAgent(ws) || ws;
+    if (!agentLocked(t) || t._takingOverSession) return;
+    const segment = t._chatSeg;
+    const sid = segment?.sessionId;
+    t._takingOverSession = true;
     try {
-      // The backend can recover a not-yet-recorded ID from this tab's own CLI arguments.
-      const killed = await window.electronAPI.releaseAgentSession(sid, t.id);
-      if (agentLocked(t)) {
-        if (killed) await sleep(600);
-        sendStdin(t.id, new TextEncoder().encode('r'));
-        if (!await waitUnlocked(t, 4000)) zoomBadge(killed ? 'The session is still locked. Close its other window, then retry.' : 'Could not identify the owner safely. Close this conversation in the other app, then retry.');
-      }
-    } catch (error) { zoomBadge(error.message || 'Could not release the conversation'); }
-    finally { delete ws._takingOver; }
+      const released = await window.electronAPI.releaseAgentSession(sid, t.id);
+      if (findTermById(t.id)?.term !== t || t._chatSeg !== segment || !agentLocked(t)) return;
+      sendStdin(t.id, new TextEncoder().encode('r'));
+      if (await waitUnlocked(t, 5000) || !agentLocked(t)) return;
+      zoomBadge(released ? 'Codex still has this conversation open. Close it in the other app, then retry.'
+        : 'Could not identify the session owner safely. Close this conversation in the other app, then retry.');
+    } catch (error) {
+      zoomBadge(error.message || 'Could not release the conversation');
+    } finally {
+      delete t._takingOverSession;
+    }
   }
   // The process really running in the tab right now (the watcher's view can be 1.5s old).
   async function agentRunning(entry, h) {
@@ -9959,7 +10166,7 @@
     const tabIndex = surface === thrPage ? 0 : -1;
     const tokens = [...references.keys()].sort((a, b) => b.length - a.length).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     let at = 0;
-    editor.innerHTML = (tokens.length ? input.value.split(new RegExp(`(${tokens.join('|')})`, 'g')) : [input.value]).map(part => {
+    const markup = (tokens.length ? input.value.split(new RegExp(`(${tokens.join('|')})`, 'g')) : [input.value]).map(part => {
       const file = references.get(part), lineStart = !at || input.value[at - 1] === '\n';
       at += part.length;
       if (!file) return md ? mdInputHtml(part, lineStart) : escHtml(part);
@@ -9974,6 +10181,8 @@
         : chatImageReferenceHtml(file, tabIndex);
       return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}">${link}</span>`;
     }).join('');
+    // Keep native spellcheck ranges when typing leaves the rendered markup unchanged.
+    if (editor.innerHTML !== markup) editor.innerHTML = markup;
     editor._draftValue = input.value; editor._draftReferences = signature; editor._draftMd = md;
     if (surface === thrPage && document.activeElement === editor) restoreChatEditorSelection(editor, input);
     openMdTokens(editor); // now, not on the async selectionchange: no frame with the caret's markers hidden
@@ -10295,8 +10504,8 @@
       });
     }
   }
-  // ── Suggestions while typing: "@" lists the chat folder's files and folders, "/" at the start
-  // lists the agent's slash commands. Arrows pick, Enter/Tab insert, Escape closes. ──
+  // ── Suggestions while typing: "@" lists files and folders, "/" at the draft's start lists commands.
+  // Arrows pick, Enter/Tab insert, Escape closes. ──
   const thrComplete = threadPart(thrPage, 'complete');
   const _completeCache = new Map(); // key -> { at, data: Promise }
   const cachedList = (key, ttl, load) => {
@@ -10310,13 +10519,20 @@
   function chatCompleteTrigger() {
     const editor = threadPart(thrPage, 'input-links');
     if (document.activeElement !== editor || thrInput.selectionStart !== thrInput.selectionEnd) return null;
-    const end = thrInput.selectionStart, before = thrInput.value.slice(0, end);
+    const caret = thrInput.selectionStart, before = thrInput.value.slice(0, caret);
     let m = before.match(/^\/([\w:.-]*)$/);
-    if (m) return { kind: 'slash', start: 0, end, query: m[1] };
+    if (m) {
+      const rest = thrInput.value.slice(caret);
+      const tail = rest.match(/^[\w:.-]*/)[0];
+      // A second slash belongs to a path, even if the caret is in its first component.
+      if (rest[tail.length] !== '/') return { kind: 'slash', start: caret - m[1].length - 1, end: caret + tail.length, query: m[1] };
+    }
     m = before.match(/(?:^|\s)@([^\s@]*)$/);
-    if (m) return { kind: 'at', start: end - m[1].length - 1, end, query: m[1] };
+    if (m) return { kind: 'at', start: caret - m[1].length - 1, end: caret, query: m[1] };
     return null;
   }
+  const sameChatCompleteTrigger = (a, b) => !!a && !!b
+    && a.kind === b.kind && a.start === b.start && a.end === b.end && a.query === b.query;
   // Best first: name starts with the query, name contains it, path contains it, letters in order.
   function rankPaths(entries, q) {
     q = q.toLowerCase();
@@ -10348,9 +10564,9 @@
         .sort((a, b) => !a.name.toLowerCase().startsWith(q) - !b.name.toLowerCase().startsWith(q)).slice(0, 50);
     }
     const now = chatCompleteTrigger(); // typing went on while the list loaded
-    if (!now || now.kind !== trig.kind || now.query !== trig.query) return;
+    if (curChat() !== ws || !sameChatCompleteTrigger(now, trig)) return;
     if (!items.length) { closeChatComplete(); return; }
-    const same = _complete && _complete.kind === trig.kind && _complete.query === trig.query;
+    const same = sameChatCompleteTrigger(_complete, trig);
     _complete = { ...trig, items, index: same ? Math.min(_complete.index, items.length - 1) : 0 };
     renderChatComplete();
   }
@@ -10377,17 +10593,22 @@
   function acceptChatComplete(i = _complete?.index) {
     const c = _complete, it = c?.items[i];
     if (!it) return;
+    if (!sameChatCompleteTrigger(c, chatCompleteTrigger())) { closeChatComplete(); return; }
     closeChatComplete();
-    let insert;
-    if (c.kind === 'slash') insert = '/' + it.name + ' ';
-    else {
+    let insert, end = c.end;
+    if (c.kind === 'slash') {
+      const next = thrInput.value[end];
+      insert = '/' + it.name;
+      if (next === ' ' || next === '\t') { insert += next; end++; }
+      else if (!next || !/^[,;!?)}\]]$/.test(next)) insert += ' ';
+    } else {
       const mention = '@' + (/\s/.test(it.rel) ? `"${it.rel}"` : it.rel);
       if (!_chatFiles.some(f => f.mention === mention)) {
         _chatFiles.push({ at: true, dir: it.dir, mention, name: it.rel.slice(it.rel.lastIndexOf('/') + 1), path: `${it.cwd.replace(/[\\/]$/, '')}/${it.rel}` });
       }
       insert = mention + ' ';
     }
-    thrInput.setRangeText(insert, c.start, c.end, 'end');
+    thrInput.setRangeText(insert, c.start, end, 'end');
     renderChatFiles(); autosizeThreadInput();
     thrInput.dispatchEvent(new Event('input', { bubbles: true }));
     thrInput.focus({ preventScroll: true });
@@ -10459,7 +10680,7 @@
     document.documentElement.style.setProperty('--thr-zoom', String(_chatZoom));
     try { localStorage.setItem('tv-chat-zoom', String(_chatZoom)); } catch {}
     if (atBottom) flow.scrollTop = flow.scrollHeight; // keep the latest message in view
-    zoomBadge(`Chat ${Math.round(_chatZoom * 100)}%`);
+    zoomBadge(`Chat ${Math.round(_chatZoom * 100)}%`, 800);
   }, { capture: true, passive: false });
   // ── Cite: select text in the chat, a "Cite" button appears; it adds the passage to the next message ──
   let _citationFlash = null;
@@ -10608,12 +10829,17 @@
   const scrollEndBtn = threadPart(thrPage, 'scroll-end');
   function syncScrollEnd() {
     if (!scrollEndBtn) return;
-    const last = [...flowEl.children].reverse().find(el => !el.hidden && el.getClientRects().length);
+    if (flowEl.scrollHeight - flowEl.scrollTop - flowEl.clientHeight <= 1) {
+      scrollEndBtn.hidden = true;
+      return;
+    }
+    let last = flowEl.lastElementChild;
+    while (last && (last.hidden || !last.getClientRects().length)) last = last.previousElementSibling;
     const composer = thrPage.querySelector('.thr-composer-wrap');
     const bottom = Math.min(flowEl.getBoundingClientRect().bottom,
       composer?.getClientRects().length ? composer.getBoundingClientRect().top : Infinity);
     const contentVisible = !last || last.getBoundingClientRect().bottom <= bottom + 1;
-    scrollEndBtn.hidden = contentVisible || flowEl.scrollHeight - flowEl.scrollTop - flowEl.clientHeight <= 1;
+    scrollEndBtn.hidden = contentVisible;
   }
   let scrollEndFrame = 0;
   const scheduleScrollEnd = () => {
@@ -10630,7 +10856,7 @@
   // Each chat remembers where it was scrolled (restored after a tab or chat switch).
   flowEl.addEventListener('scroll', () => {
     rememberThreadScroll(_curChat);
-    syncScrollEnd();
+    scheduleScrollEnd();
   }, { passive: true });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCite(); });
   let _chatCtrl = false;
@@ -10869,7 +11095,7 @@
         const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
         flow.querySelector('.thr-empty')?.remove();
         flow.querySelectorAll('.thr-pending').forEach(el => el.remove());
-        flow.insertAdjacentHTML('beforeend', pendingHtml(ws, [...flow.querySelectorAll('.thr-seg')].at(-1)?.dataset.head || ''));
+        flow.insertAdjacentHTML('beforeend', pendingHtml(ws));
         if (atBottom) flow.scrollTop = flow.scrollHeight;
         syncWorking(ws);
       }
@@ -11545,7 +11771,12 @@
     return `<div class="thr-tool-image" data-path="${escHtml(m[1])}"><span class="thr-img-wrap thr-md-img"><img class="thr-img" data-path="${escHtml(chatLinkPath(m[1]).path)}" alt="">`
       + '<span class="thr-img-actions"><button type="button" data-act="copy" title="Copy image" aria-label="Copy image"><i class="ph ph-copy" aria-hidden="true"></i></button></span></span></div>';
   };
-  const clockTime = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  const threadClock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+  const clockTime = ts => {
+    if (!ts) return '';
+    const date = new Date(ts);
+    return Number.isNaN(date.getTime()) ? '' : threadClock.format(date);
+  };
   function toolDetailsHtml(tool) {
     const image = toolImageHtml(tool);
     if (image) return image;
@@ -11767,9 +11998,9 @@
     const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     const scrollTop = flow.scrollTop;
     const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
-    const outputScroll = new Map([...flow.querySelectorAll('.thr-tool-output')].map(el => [el.closest('[data-key]')?.dataset.key, { top: el.scrollTop, left: el.scrollLeft }]));
-    if (ws._open) { ws._open.forEach(k => open.add(k)); ws._open = null; } // its state from before a chat switch
+    const outputScroll = new Map([...flow.querySelectorAll('details[open] > .thr-tool-output')].map(el => [el.parentElement.dataset.key, { top: el.scrollTop, left: el.scrollLeft }]));
     if (!segs.length || note) {
+      flow._historyChunks = undefined;
       flow.innerHTML = pendingHtml(ws) || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
       renderChatErrors(ws, flow);
       syncWorking(ws, surface);
@@ -11777,26 +12008,39 @@
     }
     // An agent is running but nothing was said yet: the same empty state, not a lone session header.
     if (!segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
+      flow._historyChunks = undefined;
       flow.innerHTML = pendingHtml(ws) || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
       renderChatErrors(ws, flow);
       syncWorking(ws, surface);
       return;
     }
     let html = '';
+    const chunks = [];
+    const finishChunk = () => {
+      if (html) chunks.push(html);
+      html = '';
+    };
     if (ws.chat?.forkOf) {
       const from = findThreadByKey(ws.chat.forkOf);
       html += `<div class="thr-note thr-fork-note"><i class="ph ph-git-fork" aria-hidden="true"></i>Forked from ${escHtml(from?.chat?.title || from?.label || 'a deleted thread')}</div>`;
     }
     const texts = new Map(); // data-key -> raw message text, for the copy buttons
     let lastHead = '';
+    const addAgentHeader = (opts, fallbackHarness, time) => {
+      const id = opts.harness || fallbackHarness;
+      const agent = harnessOf(id), name = agent?.name || id;
+      const meta = [opts.model, opts.effort].filter(value => value && value !== 'default').join(' · ');
+      const head = name + '|' + meta;
+      if (head === lastHead) return;
+      lastHead = head;
+      html += `<div class="thr-seg" data-head="${escHtml(head)}"${agent?.color ? ` style="--agent-color:${agent.color}"` : ''}>${procIconHtml(agent?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(time)}</span></div>`;
+    };
     segs.forEach((seg, i) => {
       const h = harnessOf(seg.harness), name = h?.name || seg.harness, res = hist[i] || { items: [] };
       if (!res.items.length && !res.unsupported) return; // a session with nothing said shows nothing
-      const meta = [seg.model && seg.model !== 'default' ? seg.model : '', seg.effort && seg.effort !== 'default' ? seg.effort : ''].filter(Boolean).join(' · ');
-      // The agent header shows only where the agent or its model changes, not at every session.
-      const head = name + '|' + meta;
-      if (head !== lastHead) html += `<div class="thr-seg" data-head="${escHtml(head)}"${h?.color ? ` style="--agent-color:${h.color}"` : ''}>${procIconHtml(h?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(seg.since)}</span></div>`;
-      lastHead = head;
+      const first = res.items[0];
+      const firstOptions = first?.role === 'user' && ws.chat?.turnOptions?.[first.ts];
+      addAgentHeader(firstOptions || seg, seg.harness, firstOptions ? first.ts : seg.since);
       if (seg.handoff) html += `<div class="thr-note"><i class="ph ph-arrows-left-right" aria-hidden="true"></i>Started with the full history of the ${i} earlier session${i > 1 ? 's' : ''}</div>`;
       if (res.trimmed) html += `<div class="thr-note">${res.trimmed} earlier items not shown</div>`;
       if (res.unsupported) html += `<div class="thr-note">${escHtml(name)} keeps no history TerminalVibe can read yet.</div>`;
@@ -11804,11 +12048,11 @@
       const toolsHtml = (tools, key) => {
         const failed = tools.filter(x => x.error).length;
         const last = tools[tools.length - 1];
-        return `<details class="thr-tools" data-key="${key}"${open.has(key) ? ' open' : ''}><summary><i class="ph ${toolIcon(last.name)}" aria-hidden="true"></i>`
+        return `<details class="thr-tools" data-key="${key}"><summary><i class="ph ${toolIcon(last.name)}" aria-hidden="true"></i>`
           + `<span class="thr-tools-text">${escHtml(last.name)} ${escHtml(last.summary)}</span>${tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
-          + `${failed ? `<i class="ph ph-warning-circle thr-tool-err" aria-label="${failed} failed"></i>` : ''}<span class="thr-tools-time">${clockTime(last.ts)}</span><i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
+          + `<span class="thr-tools-time">${clockTime(last.ts)}</span>${failed ? `<i class="ph ph-warning-circle thr-tool-err" aria-label="${failed} failed"></i>` : ''}<i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
           // Each call expands to its full command or arguments (older saved history has only the summary).
-          + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
+          + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
             + toolDetailsHtml(x) + '</details>').join('')
           + '</div></details>';
       };
@@ -11832,11 +12076,11 @@
           : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${extra}${actions}</div>`;
       };
       // The agent's thinking: "Thought" with a one-line peek, opening to the whole text.
-      const thoughtHtml = (m, key) => `<details class="thr-thought" data-key="${key}"${open.has(key) ? ' open' : ''}><summary><i class="ph ph-brain" aria-hidden="true"></i>`
+      const thoughtHtml = (m, key) => `<details class="thr-thought" data-key="${key}"><summary><i class="ph ph-brain" aria-hidden="true"></i>`
         + `<span class="thr-thought-label">Thought</span><span class="thr-thought-peek">${escHtml(m.text.replace(/\s+/g, ' ').slice(0, 140))}</span><i class="ph ph-caret-down thr-thought-caret" aria-hidden="true"></i></summary>`
         + `<div class="thr-thought-text">${mdLite(m.text)}</div></details>`;
       // A question the agent asked (AskUserQuestion): one row per question, like a thought, opening to the answer given.
-      const qaHtml = (m, key) => m.qa.map((x, n) => `<details class="thr-qa" data-key="${key}:q${n}"${open.has(`${key}:q${n}`) ? ' open' : ''}>`
+      const qaHtml = (m, key) => m.qa.map((x, n) => `<details class="thr-qa" data-key="${key}:q${n}">`
         + `<summary><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><span class="thr-qa-q">${escHtml(x.question)}</span>`
         + `<i class="ph ph-caret-down thr-qa-caret" aria-hidden="true"></i></summary>`
         + (x.answer != null ? `<div class="thr-qa-a"><i class="ph ph-arrow-bend-down-right" aria-hidden="true"></i><span>${escHtml(x.answer)}</span></div>`
@@ -11875,7 +12119,7 @@
         return `<div class="thr-changes"><div class="thr-changes-head"><span class="thr-changes-count">${all.length} changed file${all.length > 1 ? 's' : ''}</span>`
           + `<span class="thr-add">+${sum('add')}</span><span class="thr-del">-${sum('del')}</span>`
           + `<button type="button" class="thr-diff-btn"><i class="ph ph-file-text" aria-hidden="true"></i>Open diff</button></div>`
-          + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"${open.has(`${key}:${n}`) ? ' open' : ''}><summary><i class="ph ${linkFileIcon(f.path)}" aria-hidden="true"></i>`
+          + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"><summary><i class="ph ${linkFileIcon(f.path)}" aria-hidden="true"></i>`
             + `<span class="thr-change-path" title="${escHtml(f.path)}">${escHtml(rel(f.path))}</span><span class="thr-add">+${f.add}</span><span class="thr-del">-${f.del}</span></summary>`
             + `<pre class="thr-diff">${f.patches.map(p => p.split('\n').map(l => hlDiffLine(l, f.path)).join('')).join('<span class="dl sep"></span>')}</pre></details>`).join('')
           + '</div>';
@@ -11885,19 +12129,14 @@
       const list = res.items.map((m, j) => ({ m, j }));
       const firstPrompt = list.findIndex(x => x.m.role === 'user');
       if (firstPrompt !== 0) html += stepsHtml(firstPrompt < 0 ? list : list.slice(0, firstPrompt), i + ':pre'); // a resumed session's start
+      finishChunk();
       for (let u = firstPrompt; u >= 0 && u < list.length;) {
         let e = u + 1;
         while (e < list.length && list[e].m.role !== 'user') e++;
         const prompt = list[u], rest = list.slice(u + 1, e);
         const live = working && !awaitingTurnPrompt && i === segs.length - 1 && e === list.length;
         const options = ws.chat?.turnOptions?.[prompt.m.ts];
-        if (options) {
-          const agent = harnessOf(options.harness || seg.harness), agentName = agent?.name || options.harness || name;
-          const turnMeta = [options.model && options.model !== 'default' ? options.model : '', options.effort && options.effort !== 'default' ? options.effort : ''].filter(Boolean).join(' ? ');
-          const turnHead = agentName + '|' + turnMeta;
-          if (turnHead !== lastHead) html += `<div class="thr-seg" data-head="${escHtml(turnHead)}">${procIconHtml(agent?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(agentName)}</span><span class="thr-seg-meta">${escHtml(turnMeta)}</span><span class="thr-seg-time">${clockTime(prompt.m.ts)}</span></div>`;
-          lastHead = turnHead;
-        }
+        if (options) addAgentHeader(options, seg.harness, prompt.m.ts);
         html += msgHtml(prompt.m, i + ':' + prompt.j);
         let fin = -1;
         if (!live) for (let x = rest.length - 1; x >= 0; x--) if (rest[x].m.role === 'assistant') { fin = x; break; }
@@ -11907,7 +12146,7 @@
         if (live) html += stepsHtml(steps, i + ':' + prompt.j);
         else if (steps.length) {
           const tk = 'turn:' + i + ':' + prompt.j;
-          html += `<details class="thr-turn" data-key="${tk}"${open.has(tk) ? ' open' : ''}><summary><span>${took || 'Steps'}</span><i class="ph ph-caret-right thr-turn-caret" aria-hidden="true"></i></summary>`
+          html += `<details class="thr-turn" data-key="${tk}"><summary><span>${took || 'Steps'}</span><i class="ph ph-caret-right thr-turn-caret" aria-hidden="true"></i></summary>`
             + `<div class="thr-turn-steps">${stepsHtml(steps, i + ':' + prompt.j)}</div></details>`;
         } else if (took) html += `<div class="thr-worked">${took}</div>`;
         // The changed-files card closes a response: none while its turn runs (a message sent mid-turn
@@ -11926,20 +12165,103 @@
         }
         if (stopped) html += `<div class="thr-status-line" role="status"><i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span>`
           + `<span class="thr-status-detail">· ${stopped === 'crash' ? 'The agent exited unexpectedly. Send a message to continue' : stopped === 'tool' ? 'Stopped by you during a tool call' : 'Stopped by you'}</span></div>`;
+        finishChunk();
         u = e;
       }
     });
-    flow.innerHTML = html + pendingHtml(ws, lastHead);
-    renderChatErrors(ws, flow);
-    renderChatResume(ws, surface);
-    flow.querySelectorAll('.thr-tool-output').forEach(el => {
-      const saved = outputScroll.get(el.closest('[data-key]')?.dataset.key);
-      if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
-    });
-    decorateWorkUsernames(flow);
+    html += pendingHtml(ws);
+    finishChunk();
+    const content = updateThreadHistory(flow, chunks);
+    const newOutputs = content.querySelectorAll('.thr-tool-output');
+    const newImages = content.querySelectorAll('img.thr-img');
+    // Keep the open states on replaced rows, without making a toggle invalidate cached markup.
+    for (const details of content.querySelectorAll('details[data-key]')) details.open = open.has(details.dataset.key);
+    decorateWorkUsernames(content);
     flow._texts = texts;
-    hydrateChatAttachmentSizes(flow);
-    // Copy only the selected parts of messages as markdown.
+    hydrateChatAttachmentSizes(content);
+    bindThreadCopy(flow);
+    const hydrateImage = async img => {
+      const p = img.dataset.path;
+      let src = _thrImgCache.get(p);
+      if (!src) {
+        const r = await window.electronAPI?.readImageFile?.(p).catch(() => null);
+        if (!r?.data) {
+          const tool = img.closest('.thr-tool-image');
+          img.closest('.thr-img-wrap')?.remove();
+          if (tool) {
+            const label = document.createElement('span'); label.className = 'thr-tool-image-path'; label.textContent = tool.dataset.path;
+            tool.append(label); decorateWorkUsernames(tool);
+          }
+          return;
+        }
+        src = `data:${r.mediaType};base64,${r.data}`;
+        _thrImgSize.set(p, Math.floor(r.data.length * 3 / 4) - (r.data.endsWith('==') ? 2 : r.data.endsWith('=') ? 1 : 0));
+        _thrImgCache.set(p, src);
+        if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
+      }
+      const flow = img.closest('.thr-flow'); // the chat may have moved into or out of a snapshot
+      if (!flow) return;
+      img.src = src;
+      const size = _thrImgSize.get(p);
+      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size).replace(' ', ''); });
+      flow.querySelectorAll('.thr-img-link').forEach(link => {
+        if (link.dataset.path !== p) return;
+        link.querySelector('.thr-inline-image-icon').innerHTML = `<img src="${escHtml(src)}" alt="">`;
+      });
+    };
+    // Image actions: open in the full viewer (zoom, pan, rotate, flip) or copy as PNG.
+    content.querySelectorAll('.thr-img-wrap').forEach(wrap => {
+      const img = wrap.querySelector('img');
+      const open = () => openClaudeRefViewer(null, { kind: 'file', path: img.dataset.path, label: img.dataset.path.split(/[\\/]/).pop() }, '');
+      img.addEventListener('click', open);
+      const copy = wrap.querySelector('[data-act="copy"]');
+      copy.addEventListener('click', async () => {
+        try {
+          await copyChatImage(img);
+          copy.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+        } catch { copy.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>'; }
+        setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
+      });
+    });
+    content.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', () => {
+      const text = b.closest('.thr-flow')?._texts?.get(b.closest('.thr-msg').dataset.key) || '';
+      void copyPrivateText(text).catch(() => {});
+      b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+      b.setAttribute('aria-label', 'Copied');
+      setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
+    }));
+    content.querySelectorAll('i[data-favicon]').forEach(i => loadFavicon(i.dataset.favicon, i.dataset.origin).then(f => { if (f && i.isConnected) i.outerHTML = faviconHtml(f); }));
+    content.querySelectorAll('img.thr-favicon[data-host]').forEach(img => {
+      const fail = () => { _faviconMissing.add(img.dataset.host); img.outerHTML = '<i class="ph ph-globe" aria-hidden="true"></i>'; };
+      if (img.complete && !img.naturalWidth) fail(); else img.addEventListener('error', fail, { once: true });
+    });
+    content.querySelectorAll('.thr-table-copy').forEach(b => b.addEventListener('click', () => {
+      void copyPrivateText(b.dataset.md).catch(() => {});
+      b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+      setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
+    }));
+    content.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
+    content.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
+      const files = [...b.closest('.thr-changes').querySelectorAll('details.thr-change')];
+      const openAll = files.some(d => !d.open);
+      files.forEach(d => { d.open = openAll; });
+    }));
+    flow.append(content);
+    renderChatErrors(ws, flow);
+    syncWorking(ws, surface);
+    if (surface !== thrPage) disableSnapshotHistoryFocus(flow);
+    if (surface === thrPage && thrFind.q) thrFindRun(true);
+    for (const el of newOutputs) {
+      const saved = outputScroll.get(el.parentElement.dataset.key);
+      if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
+    }
+    newImages.forEach(hydrateImage);
+    if (!flow.dataset.seen && ws._scrollState && !ws._scrollState.bottom) { flow.scrollTop = ws._scrollState.top; flow.dataset.seen = '1'; } // back where it was
+    else { flow.scrollTop = atBottom || !flow.dataset.seen ? flow.scrollHeight : scrollTop; flow.dataset.seen = '1'; }
+    if (surface === thrPage) syncScrollEnd();
+  }
+  function bindThreadCopy(flow) {
+    // A selection across messages copies them as a transcript of their original markdown.
     if (!flow._copyBound) {
       flow._copyBound = true;
       flow.addEventListener('copy', e => {
@@ -11971,75 +12293,29 @@
         e.preventDefault();
       });
     }
-    syncWorking(ws, surface);
-    if (surface === thrPage && thrFind.q) thrFindRun(true); // the re-render dropped the old match ranges
-    flow.querySelectorAll('img.thr-img').forEach(async img => {
-      const p = img.dataset.path;
-      let src = _thrImgCache.get(p);
-      if (!src) {
-        const r = await window.electronAPI?.readImageFile?.(p).catch(() => null);
-        if (!r?.data) {
-          const tool = img.closest('.thr-tool-image');
-          img.closest('.thr-img-wrap').remove();
-          if (tool) {
-            const label = document.createElement('span'); label.className = 'thr-tool-image-path'; label.textContent = tool.dataset.path;
-            tool.append(label); decorateWorkUsernames(tool);
-          }
-          return;
-        }
-        src = `data:${r.mediaType};base64,${r.data}`;
-        _thrImgSize.set(p, Math.floor(r.data.length * 3 / 4) - (r.data.endsWith('==') ? 2 : r.data.endsWith('=') ? 1 : 0));
-        _thrImgCache.set(p, src);
-        if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
-      }
-      img.src = src;
-      const size = _thrImgSize.get(p);
-      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size).replace(' ', ''); });
-      flow.querySelectorAll('.thr-img-link').forEach(link => {
-        if (link.dataset.path !== p) return;
-        link.querySelector('.thr-inline-image-icon').innerHTML = `<img src="${escHtml(src)}" alt="">`;
-      });
-    });
-    // Image actions: open in the full viewer (zoom, pan, rotate, flip) or copy as PNG.
-    flow.querySelectorAll('.thr-img-wrap').forEach(wrap => {
-      const img = wrap.querySelector('img');
-      const open = () => openClaudeRefViewer(null, { kind: 'file', path: img.dataset.path, label: img.dataset.path.split(/[\\/]/).pop() }, '');
-      img.addEventListener('click', open);
-      const copy = wrap.querySelector('[data-act="copy"]');
-      copy.addEventListener('click', async () => {
-        try {
-          await copyChatImage(img);
-          copy.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
-        } catch { copy.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>'; }
-        setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
-      });
-    });
-    flow.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', () => {
-      const text = texts.get(b.closest('.thr-msg').dataset.key) || '';
-      void copyPrivateText(text).catch(() => {});
-      b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
-      b.setAttribute('aria-label', 'Copied');
-      setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
-    }));
-    flow.querySelectorAll('i[data-favicon]').forEach(i => loadFavicon(i.dataset.favicon, i.dataset.origin).then(f => { if (f && i.isConnected) i.outerHTML = faviconHtml(f); }));
-    flow.querySelectorAll('img.thr-favicon[data-host]').forEach(img => {
-      const fail = () => { _faviconMissing.add(img.dataset.host); img.outerHTML = '<i class="ph ph-globe" aria-hidden="true"></i>'; };
-      if (img.complete && !img.naturalWidth) fail(); else img.addEventListener('error', fail, { once: true });
-    });
-    flow.querySelectorAll('.thr-table-copy').forEach(b => b.addEventListener('click', () => {
-      void copyPrivateText(b.dataset.md).catch(() => {});
-      b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
-      setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
-    }));
-    flow.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
-    flow.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
-      const files = [...b.closest('.thr-changes').querySelectorAll('details.thr-change')];
-      const openAll = files.some(d => !d.open);
-      files.forEach(d => { d.open = openAll; });
-    }));
-    if (!flow.dataset.seen && ws._scrollState && !ws._scrollState.bottom) { flow.scrollTop = ws._scrollState.top; flow.dataset.seen = '1'; } // back where it was
-    else { flow.scrollTop = atBottom || !flow.dataset.seen ? flow.scrollHeight : scrollTop; flow.dataset.seen = '1'; }
-    if (surface === thrPage) syncScrollEnd();
+  }
+  function updateThreadHistory(flow, chunks) {
+    const previous = flow._historyChunks || [];
+    let first = 0;
+    while (first < chunks.length && previous[first]?.html === chunks[first]
+      && previous[first].nodes.every(node => node.parentNode === flow)) first++;
+    const kept = previous.slice(0, first);
+    const last = kept.at(-1)?.nodes.at(-1);
+    // Keep finished turns mounted so their details, focus, and layout survive streaming updates.
+    for (let node = last ? last.nextSibling : flow.firstChild; node;) {
+      const next = node.nextSibling;
+      node.remove();
+      node = next;
+    }
+    const content = document.createDocumentFragment();
+    const template = document.createElement('template');
+    for (let i = first; i < chunks.length; i++) {
+      template.innerHTML = chunks[i];
+      kept.push({ html: chunks[i], nodes: [...template.content.childNodes] });
+      content.append(template.content);
+    }
+    flow._historyChunks = kept;
+    return content;
   }
   // ── Find in the thread history: Ctrl+F while the panel has focus, or the header button ──
   // Matches are painted with the CSS Highlight API, so the message markup is never touched.
@@ -12259,16 +12535,84 @@
     ctxEl.innerHTML = '';
     ctxEl.style.minHeight = '';
 
-    const item = (icon, label, key, fn, danger) => {
+    const item = (icon, label, key, fn, danger, parent = ctxEl, keepOpen = false) => {
       const el = document.createElement('div');
       el.className = 'ctx-item' + (danger ? ' danger' : '');
       el.innerHTML = `<span>${icon}</span><span>${label}</span>${key ? `<span class="ci-key">${key}</span>` : ''}`;
-      el.addEventListener('click', () => { hideCtxMenu(); fn(); });
-      ctxEl.appendChild(el);
+      el.addEventListener('click', () => {
+        if (!keepOpen) hideCtxMenu();
+        fn();
+      });
+      parent.appendChild(el);
+      return el;
     };
     const sep = () => { const el = document.createElement('div'); el.className = 'ctx-sep'; ctxEl.appendChild(el); };
 
-    if (type === 'workspace') {
+    if (type === 'usage') {
+      const choice = (icon, label, key, value) => {
+        const el = item(`<i class="ph ${icon}" aria-hidden="true"></i>`, label,
+          '<i class="ph ph-check" aria-hidden="true"></i>', () => {
+            threadSettings = { ...threadSettings, [key]: value };
+            for (const sibling of ctxEl.querySelectorAll(`[data-usage-setting="${key}"]`)) {
+              sibling.setAttribute('aria-checked', String(sibling === el));
+            }
+            el.focus({ preventScroll: true });
+            if (key === 'usageDisplay') document.getElementById('set-thread-usage').value = value;
+            renderUsageSidebar(true);
+            renderUsageModal();
+            saveState();
+          }, false, ctxEl, true);
+        el.dataset.usageSetting = key;
+        el.setAttribute('role', 'menuitemradio');
+        el.setAttribute('aria-checked', String(threadSettings[key] === value));
+      };
+      const hasMonthly = Object.values(_usageLimits || {}).some(u => u.windows?.some(monthlyUsage));
+      choice('ph-clock', usageWindows.session, 'usageWindow', 'session');
+      choice('ph-calendar-blank', usageWindows.weekly, 'usageWindow', 'weekly');
+      if (hasMonthly || threadSettings.usageWindow === 'monthly')
+        choice('ph-calendar', usageWindows.monthly, 'usageWindow', 'monthly');
+      sep();
+      choice('ph-hourglass', 'Remaining', 'usageDisplay', 'remaining');
+      choice('ph-gauge', 'Consumed', 'usageDisplay', 'consumed');
+      sep();
+      const trigger = document.createElement('div');
+      trigger.className = 'ctx-item has-sub ctx-usage-providers';
+      trigger.setAttribute('aria-haspopup', 'menu');
+      trigger.innerHTML = '<span><i class="ph ph-robot" aria-hidden="true"></i></span><span>Sidebar providers</span><span class="ci-sub-caret"><i class="ph ph-caret-right" aria-hidden="true"></i></span>';
+      const submenu = document.createElement('div');
+      submenu.className = 'ctx-sub';
+      submenu.setAttribute('role', 'menu');
+      submenu.setAttribute('aria-label', 'Sidebar providers');
+      trigger.appendChild(submenu);
+      ctxEl.appendChild(trigger);
+      trigger.addEventListener('click', e => {
+        if (e.target.closest('.ctx-item') === trigger) {
+          trigger.focus();
+          submenu.querySelector('.ctx-item')?.focus();
+        }
+      });
+      const hidden = hiddenUsageProviders();
+      for (const id of new Set([...usageProviderIds, ...Object.keys(_usageLimits || {})])) {
+        const provider = harnessOf(id);
+        if (!provider) continue;
+        const el = item(procIconHtml(provider.bin, 'ph-robot'), escHtml(provider.name),
+          '<i class="ph ph-check" aria-hidden="true"></i>', () => {
+            if (hidden.has(id)) hidden.delete(id); else hidden.add(id);
+            el.setAttribute('aria-checked', String(!hidden.has(id)));
+            el.focus({ preventScroll: true });
+            threadSettings = { ...threadSettings, hiddenUsageProviders: [...hidden] };
+            if (usageButton.classList.contains('loading')) renderUsagePlaceholders();
+            else renderUsageSidebar();
+            saveState();
+          }, false, submenu, true);
+        const icon = el.firstElementChild;
+        icon.classList.add('ctx-agent-icon');
+        icon.setAttribute('aria-hidden', 'true');
+        if (provider.color) icon.style.color = provider.color;
+        el.setAttribute('role', 'menuitemcheckbox');
+        el.setAttribute('aria-checked', String(!hidden.has(id)));
+      }
+    } else if (type === 'workspace') {
       const wsId = data;
       const wsPinned = findWs(wsId)?.pinned;
       item('<i class="ph ph-plus"></i>', 'New terminal', 'Ctrl+Shift+T', () => { activateWorkspace(wsId); addTerminal(wsId); });
@@ -12593,7 +12937,7 @@
     ctxEl.inert = false;
     ctxEl.setAttribute('role', 'menu');
     ctxEl.querySelectorAll('.ctx-item').forEach(el => {
-      el.setAttribute('role', 'menuitem');
+      if (!el.hasAttribute('role')) el.setAttribute('role', 'menuitem');
       el.tabIndex = -1;
     });
     ctxEl.classList.add('open');
@@ -12933,13 +13277,20 @@
   // ── Finish notifications: main reports a command or an agent (Claude Code /
   // Codex) response that ended; skip it if you're looking at that tab, else
   // play the TerminalVibe chime and show a desktop notification. ──
-  let _notifyAudio = null;
-  function playNotifySound() {
+  const _notifyAudio = new Map();
+  function playNotifySound(file = 'notify.wav') {
     try {
-      _notifyAudio = _notifyAudio || new Audio('sounds/notify.wav');
-      _notifyAudio.currentTime = 0;
-      _notifyAudio.play().catch(() => { });
+      let audio = _notifyAudio.get(file);
+      if (!audio) {
+        audio = new Audio('sounds/' + file);
+        _notifyAudio.set(file, audio);
+      }
+      audio.currentTime = 0;
+      audio.play().catch(() => { });
     } catch { }
+  }
+  function notifyAgentQuestion() {
+    if (notificationSound) playNotifySound('question.wav');
   }
   function isTermOnScreen(ws, termId) {
     if (ws.id !== activeWsId) return false;
@@ -13063,17 +13414,35 @@
   const FONT_MIN = 8;
   const FONT_MAX = 32;
 
-  /* ── Zoom badge ── */
+  /* ── App toast ── */
   const zoomBadge = (function () {
     const el = document.createElement('div');
-    el.id = 'zoom-badge';
+    el.className = 'app-toast app-toast-fixed';
+    el.innerHTML = '<i class="ph ph-info" aria-hidden="true"></i><span role="status"></span>'
+      + '<button type="button" class="app-toast-close" aria-label="Dismiss notification" hidden><i class="ph ph-x" aria-hidden="true"></i></button>';
+    const label = el.querySelector('[role="status"]'), close = el.querySelector('button');
     document.body.appendChild(el);
-    var timer = null;
-    return function showZoomBadge(text) {
-      el.textContent = text;
-      el.classList.add('visible');
+    let timer, duration;
+    const hide = () => {
       clearTimeout(timer);
-      timer = setTimeout(function () { el.classList.remove('visible'); }, 800);
+      el.classList.remove('visible');
+      close.hidden = true;
+    };
+    const resume = () => {
+      clearTimeout(timer);
+      if (el.classList.contains('visible') && !el.matches(':hover, :focus-within')) timer = setTimeout(hide, duration);
+    };
+    close.addEventListener('click', hide);
+    el.addEventListener('pointerenter', () => clearTimeout(timer));
+    el.addEventListener('pointerleave', resume);
+    el.addEventListener('focusin', () => clearTimeout(timer));
+    el.addEventListener('focusout', () => queueMicrotask(resume));
+    return function showToast(text, timeout = 4000) {
+      duration = timeout;
+      label.textContent = text;
+      close.hidden = false;
+      el.classList.add('visible');
+      resume();
     };
   })();
 
@@ -13108,7 +13477,7 @@
     // fitTerm tells the PTY shortly after, so a TUI redraws over xterm's reflow of its old
     // layout quickly; writePtyData paints that redraw in one frame.
     fitTerm(active);
-    zoomBadge(newSize + 'px');
+    zoomBadge(newSize + 'px', 800);
 
   }, { capture: true, passive: false });
 
@@ -14829,7 +15198,7 @@
   async function attachContextToChat(entry, sessionId, workspaceContext = null) {
     const notice=document.createElement('div');notice.className='session-drop-feedback';notice.setAttribute('role','status');
     const host=entry?.el; if(!host) return;
-    const say=(icon,text,cls='')=>{notice.className='session-drop-feedback '+cls;notice.innerHTML=`<i class="ph ${icon}" aria-hidden="true"></i>`;const t=document.createElement('span');t.textContent=text;notice.append(t);};
+    const say=(icon,text,cls='')=>{notice.className='app-toast session-drop-feedback '+cls;notice.innerHTML=`<i class="ph ${icon}" aria-hidden="true"></i>`;const t=document.createElement('span');t.textContent=text;notice.append(t);};
     say('ph-circle-notch',workspaceContext ? 'Adding workspace context…' : 'Adding saved session context…','is-pending');host.append(notice);
     try {
       if(entry.type==='browser' || entry.locked || entry.dead) throw new Error('Choose an unlocked, running Claude terminal');
@@ -15278,7 +15647,7 @@
         document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
         applyWorkUsernamePrivacy(document);
       }
-      if (key === 'usageDisplay') { renderUsageSidebar(); renderUsageModal(); }
+      if (key === 'usageDisplay') { renderUsageSidebar(true); renderUsageModal(); }
       if (key === 'markdown') syncChatInputLinks();
       saveState();
     });

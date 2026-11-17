@@ -15,7 +15,7 @@ app.whenReady().then(async () => {
   for (const file of ['style.css', 'workspace.css']) await win.webContents.insertCSS(fs.readFileSync(path.join(root, file), 'utf8'));
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
   const copyHelpers = source.slice(source.indexOf('  function mdFromDom('), source.indexOf('  // Escape first, then the markdown agents use:'));
-  const copyBinding = source.slice(source.indexOf('    if (!flow._copyBound) {'), source.indexOf('    syncWorking(ws, surface);', source.indexOf('    if (!flow._copyBound) {')));
+  const copyBinding = source.slice(source.indexOf('  function bindThreadCopy('), source.indexOf('  function updateThreadHistory('));
   const privacyCopy = source.slice(source.indexOf('  function copyPrivateWorkSelection('), source.indexOf("  document.addEventListener('copy', copyPrivateWorkSelection"));
   const citations = source.slice(source.indexOf('  let _citationFlash = null;'), source.indexOf('  let _chatCtrl = false;'));
   console.log(await win.webContents.executeJavaScript(`(async () => {
@@ -37,6 +37,7 @@ app.whenReady().then(async () => {
       const flow = document.createElement('div'); document.body.append(flow);
       flow.innerHTML = '<div class="thr-msg assistant" data-key="a"><div class="thr-msg-text">First reply.</div></div><div class="thr-msg user" data-key="b"><div class="thr-msg-text">test</div></div><div class="thr-msg assistant" data-key="c"><div class="thr-msg-text">Last reply.</div></div>';
       ${copyBinding}
+      bindThreadCopy(flow);
       const range = document.createRange();
       range.setStart(flow.querySelector('[data-key="a"] .thr-msg-text').firstChild, 11);
       range.setEnd(flow.querySelector('[data-key="c"] .thr-msg-text').firstChild, 4);

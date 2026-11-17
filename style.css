@@ -2387,30 +2387,12 @@ webview.browser-surface {
 .browser-error-btn:hover { background: color-mix(in srgb, var(--fg) 15%, transparent); }
 .browser-error-btn-ext { border-color: var(--accent); color: var(--accent); }
 
-/* Zoom badge */
-#zoom-badge {
-  position: fixed;
-  bottom: 40px;
-  right: 16px;
-  background: rgba(0,0,0,0.75);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 4px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.15s;
-  z-index: 9999;
-}
-
 /* ── rounded-none: single management class ──
    Makes every element square. Remove this block to restore rounded corners. */
 .roundless, .roundless *,
 .roundless *::before, .roundless *::after {
   border-radius: 0 !important;
 }
-#zoom-badge.visible { opacity: 1; }
 
 /* ── sharp mode: colored workspace buttons get one full-height left border
    in the workspace color instead of the small active strip ── */

@@ -1,7 +1,7 @@
 'use strict';
 // One poll step of "a command / agent response finished" detection for a PTY.
 // cur: per-terminal state { wasBusy, name, agentSince } (mutated)
-// info: runningProcessInfo() result; io: { out, in } last output/input times.
+// info: runningProcessInfo() result; io: { out, in, hasCommand }.
 // Codex stays in the foreground between turns, so a response is finished when
 // its output (spinner, streamed text) stops. Claude Code is detected exactly
 // from its terminal title instead (renderer, setupTerminalTitles).
@@ -11,6 +11,8 @@ const AGENT_QUIET_MS = 2500; // silence that ends a response
 const AGENT_MIN_MS = 1500;   // shorter output runs are typing echo / redraws
 
 function finishStep(cur, info, io, now) {
+  // Shell profiles and prompt initialization run foreground helpers before the first command.
+  if (!io.hasCommand) return null;
   if (!info.running) {
     const event = cur.wasBusy ? { kind: 'command', name: cur.name } : null;
     cur.wasBusy = false; cur.name = null; cur.agentSince = 0;

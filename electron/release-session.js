@@ -1,5 +1,7 @@
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { setTimeout: delay } = require('node:timers/promises');
+const { releaseCodexLock } = require('./codex-lock');
 const exec = promisify(execFile);
 function releaseCandidates(procs, sessionId, own, host = process.pid) {
   if (!own || !/^[\w-]{8,}$/.test(String(sessionId || ''))) return [];
@@ -20,8 +22,9 @@ function ownSessionId(procs, own) {
   }
   return ids.size === 1 ? [...ids][0] : null;
 }
-async function releaseSession(sessionId, own) {
-  if (!own) return 0;
+async function releaseSession(sessionId, own, isCurrent = () => true) {
+  if (!own || (sessionId && (typeof sessionId !== 'string' || !/^[\w-]{8,}$/.test(sessionId)))) return false;
+  if (process.platform === 'linux' && sessionId) return releaseCodexLock(sessionId, own, isCurrent);
   let procs;
   if (process.platform === 'win32') {
     const { stdout } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress'], { windowsHide: true, timeout: 10000, maxBuffer: 16 << 20 });
@@ -33,10 +36,13 @@ async function releaseSession(sessionId, own) {
   }
   sessionId = sessionId || ownSessionId(procs, own);
   if (!sessionId) throw new Error('Could not resolve the locked conversation from this terminal. Open its terminal view and retry, or close its other window.');
+  if (!isCurrent()) return false;
+  if (process.platform === 'linux') return releaseCodexLock(sessionId, own, isCurrent);
   let count = 0;
   for (const p of releaseCandidates(procs, sessionId, own)) {
     try { process.kill(p.pid, 'SIGTERM'); count++; } catch {}
   }
-  return count;
+  if (count) await delay(600);
+  return count > 0;
 }
 module.exports = { releaseCandidates, releaseSession, ownSessionId };
