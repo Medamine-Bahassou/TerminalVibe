@@ -9500,7 +9500,11 @@
       }
     };
     if (pulls.length === 1) open(pulls[0]);
-    else openPickMenu(chip, pulls.map(pr => ({ value: pr, label: `#${pr.number} ${pr.title}` })), open, true);
+    else openPickMenu(chip, pulls.map(pr => ({
+      value: pr,
+      label: `#${pr.number} ${pr.title}`,
+      icon: '<i class="ph ph-git-pull-request" aria-hidden="true"></i>',
+    })), open, true);
   });
   async function setChatBranch(tab, cwd, branch) {
     const r = await window.electronAPI.gitCheckout(cwd, branch);
