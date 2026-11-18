@@ -9526,25 +9526,25 @@
         addBrowserTab(ws.id, findGroupContainingTerm(ws.layout, tab.id)?.id, pr.url, `PR #${pr.number}`);
       }
     };
-    const merge = pr => showConfirm(`Merge PR #${pr.number} “${pr.title}” on GitHub?`, async () => {
-      try {
-        const result = await window.electronAPI.gitMergePullRequest(cwd, pr.url, pr.headSha);
-        zoomBadge(result.merged ? `Merged PR #${pr.number}.` : result.error || `Could not merge PR #${pr.number}.`);
-      } catch {
-        zoomBadge(`Could not merge PR #${pr.number}.`);
-      } finally {
-        _chatPullRequests.delete(cwd);
-        if (chatCwd(curChat()) === cwd) syncThreadComposer(curChat());
-      }
-    });
+    const merge = async pr => {
+      if (curChat() !== tab || chatCwd(tab) !== cwd) return;
+      const text = `Please merge GitHub PR #${pr.number} (${pr.url}). If GitHub blocks the merge, tell me why.`;
+      const message = { id: uuid(), text, typed: text, files: [], after: _turns.get(tab.id)?.sentAt || Date.now() };
+      const busy = chatWorking(tab) || _chatStarting.has(tab.id) || _chatSending.has(tab.id);
+      if (!busy && await deliverChatMessage(tab, message)) return;
+      if (!findTermById(tab.id)) return;
+      tab.chat ||= { createdAt: Date.now() };
+      (tab.chat.queuedMessages ||= []).push(message);
+      if (!busy) tab.chat.queuePaused = true;
+      renderChatQueue(tab);
+      saveState();
+    };
     openPickMenu(chip, pulls.map(pr => ({
       value: pr,
       label: `#${pr.number} ${pr.draft ? 'Draft · ' : ''}${pr.title}`,
       title: `#${pr.number} ${pr.draft ? 'Draft · ' : ''}${pr.title}`,
       icon: '<i class="ph ph-git-pull-request" aria-hidden="true"></i>',
-      action: !pr.draft && pr.headSha && window.electronAPI?.gitMergePullRequest
-        ? { text: 'Merge', label: `Merge PR #${pr.number}`, run: () => merge(pr) }
-        : undefined,
+      action: { text: 'Merge', label: `Ask the agent to merge PR #${pr.number}`, run: () => void merge(pr) },
     })), open, true, false);
   });
   async function setChatBranch(tab, cwd, branch) {

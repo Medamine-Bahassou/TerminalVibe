@@ -1338,7 +1338,7 @@ function runGitHub(cwd, args) {
 }
 ipcMain.handle('git:pull-requests', async (_e, cwd) => {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { error: 'Select a project folder first.' };
-  const result = await runGitHub(cwd, ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url,headSha:.head.sha,draft}',
+  const result = await runGitHub(cwd, ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url,draft}',
     'repos/{owner}/{repo}/pulls?state=open&per_page=100']);
   if (result.error) return result;
   try {
@@ -1346,20 +1346,6 @@ ipcMain.handle('git:pull-requests', async (_e, cwd) => {
       .filter(pr => /^https:\/\//i.test(pr.url));
     return { pulls };
   } catch { return { error: 'Could not read the pull request results.' }; }
-});
-ipcMain.handle('git:merge-pull-request', async (_e, cwd, url, headSha) => {
-  const pull = typeof url === 'string' && /^https:\/\/([a-z0-9.-]+)\/([a-z0-9_-]+)\/([a-z0-9_.-]+)\/pull\/([1-9]\d*)$/i.exec(url);
-  if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !pull || typeof headSha !== 'string' || !/^[a-f0-9]{40}$/i.test(headSha)) {
-    return { error: 'Invalid pull request.' };
-  }
-  const [, host, owner, repo, number] = pull;
-  const result = await runGitHub(cwd, ['api', '--hostname', host, '--method', 'PUT',
-    `repos/${owner}/${repo}/pulls/${number}/merge`, '-f', `sha=${headSha}`, '--jq', '.merged']);
-  if (result.error) {
-    if (/pull request is still a draft/i.test(result.error)) return { error: 'Mark the pull request ready for review on GitHub before merging.' };
-    return result;
-  }
-  return result.out.trim() === 'true' ? { merged: true } : { error: 'GitHub did not merge the pull request.' };
 });
 ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
   if (!cwd || typeof cwd !== 'string' || typeof branch !== 'string' || !branch || branch.startsWith('-')) return { ok: false, error: 'Invalid branch' };
