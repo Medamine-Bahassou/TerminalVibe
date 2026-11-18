@@ -47,6 +47,7 @@
       // data-tip-rows: a heading (data-tip) over rows [{ icon: 'ph-…' | proc: '<process name>', text }].
       const rows = target.dataset.tipRows ? JSON.parse(target.dataset.tipRows) : null;
       tip.classList.toggle('ws-process-tooltip', !!(processes || rows));
+      tip.classList.toggle('ui-tooltip-wrap', target.hasAttribute('data-tip-wrap'));
       tip.textContent = target.dataset.tip;
       if (processes) {
         const heading = document.createElement('div');
@@ -8994,7 +8995,10 @@
       b.type = 'button';
       b.className = 'tv-pick-item' + (it.selected ? ' selected' : '');
       b.setAttribute('role', 'menuitem');
-      if (it.title) b.title = it.title;
+      if (it.title) {
+        b.dataset.tip = it.title;
+        b.dataset.tipWrap = '';
+      }
       b.innerHTML = `${it.icon || ''}<span class="tv-pick-label">${escHtml(it.label)}</span>${it.hint ? `<span class="tv-pick-hint">${escHtml(it.hint)}</span>` : ''}`;
       b.addEventListener('click', () => { closePickMenu(); onPick(it.value); });
       if (it.action) {

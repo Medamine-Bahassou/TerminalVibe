@@ -651,6 +651,7 @@ body .pp-add .pp-avatar-ph { background:transparent; border:1px dashed var(--bor
   opacity:0; transition:opacity 120ms;
 }
 .ui-tooltip.show { opacity:1; }
+.ui-tooltip.ui-tooltip-wrap { max-width:min(360px, calc(100vw - 8px)); box-sizing:border-box; white-space:normal; overflow-wrap:anywhere; text-overflow:clip; }
 
 /* Icon button rows: 28px buttons with an even 4px gap (title bar + tab bar). */
 body .term-group-actions { gap:4px; padding:0 6px; }
