@@ -91,6 +91,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   threadAgents: (names) => ipcRenderer.invoke('threads:agents', names),
   usageLimits: (fresh) => ipcRenderer.invoke('usage:limits', !!fresh),
   chatModels: () => ipcRenderer.invoke('chat:models'),
+  saveThreadAttachment: (id, name, bytes) => ipcRenderer.invoke('threads:save-attachment', id, name, bytes),
   threadHistory: (query) => ipcRenderer.invoke('threads:history', query),
   threadHandoff: (query) => ipcRenderer.invoke('threads:handoff', query),
   threadFork: (query) => ipcRenderer.invoke('threads:fork', query),

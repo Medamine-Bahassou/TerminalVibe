@@ -1,7 +1,8 @@
 // Paste routing regressions without reading or modifying the system clipboard.
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('node:assert/strict');
 const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-const helper = source.slice(source.indexOf('  async function doPaste('), source.indexOf('  // A real text field'));
+const codexCheck = source.slice(source.indexOf('  const isCodexProcess'), source.indexOf('  const isFileDrag'));
+const helper = codexCheck + source.slice(source.indexOf('  async function doPaste('), source.indexOf('  // A real text field'));
 let processName = 'claude', data, text, imageReads, textReads;
 let imagePath = '/tmp/clipboard.png';
 const entry = { id: 'pane-one', term: { paste(value) { text.push(value); } } };
@@ -12,8 +13,8 @@ const api = {
 };
 const context = vm.createContext({ window: { electronAPI: api }, navigator: { clipboard: { readText: async () => 'web text' } },
   findTermById: id => id === entry.id ? { term: entry } : null,
-  isDesktop: () => true, checkTerminalRunning: async () => processName, TextEncoder, Uint8Array,
-  sendStdin: (id, bytes) => data.push({ id, bytes: [...bytes] }), shellQuote: p => `'${p}'`, console });
+  trackPaneImage: () => {}, isDesktop: () => true, checkTerminalRunning: async () => processName, TextEncoder, Uint8Array,
+  sendStdin: (id, bytes) => data.push({ id, bytes: [...bytes] }), shellQuote: (p, force) => force ? `'${p}'` : p, console });
 vm.runInContext(helper, context);
 const paste = vm.runInContext('doPaste', context);
 const reset = () => { data = []; text = []; imageReads = 0; textReads = 0; entry.locked = false; entry.dead = false; };
@@ -25,8 +26,10 @@ const reset = () => { data = []; text = []; imageReads = 0; textReads = 0; entry
   reset(); api.platform = 'win32'; await paste(entry);
   assert.deepEqual(data[0].bytes, [27, 118], 'Windows Claude uses Alt+V');
   api.platform = 'linux';
+  reset(); processName = 'codex'; await paste(entry);
+  assert.deepEqual(text, ["'/tmp/clipboard.png'"], 'Codex receives one quoted image path');
   reset(); processName = null; await paste(entry);
-  assert.deepEqual(text, ["'/tmp/clipboard.png'"], 'Ordinary shells keep image path paste');
+  assert.deepEqual(text, ['/tmp/clipboard.png'], 'Ordinary shells keep image path paste');
   assert.equal(data.length, 0);
   reset(); imagePath = null; await paste(entry);
   assert.deepEqual(text, ['clipboard text']);
@@ -49,7 +52,7 @@ const reset = () => { data = []; text = []; imageReads = 0; textReads = 0; entry
   // Exercise the backend snapshot writer with image bytes, using a fake clipboard.
   const main = fs.readFileSync(path.join(__dirname, '..', 'electron/main.js'), 'utf8');
   const start = main.indexOf("ipcMain.handle('clipboard:paste-image'");
-  const end = main.indexOf('// ── IPC: local files', start);
+  const end = main.indexOf('// Previews of image paths', start);
   let snapshot;
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=', 'base64');
   new Function('ipcMain', 'clipboard', 'path', 'fs', 'require', main.slice(start, end))(

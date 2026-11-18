@@ -131,7 +131,7 @@ function setup(segments, picks = { harness: 'claude', model: 'sonnet', effort: '
   const inherited = setup([], { harness: 'codex', model: 'gpt-x', effort: 'low', access: 'full' });
   const optsSource = source.slice(source.indexOf('  const chatOpts ='), source.indexOf('  // Fast: every Claude model'));
   const sendSource = source.slice(source.indexOf('  function sendToAgent('), source.indexOf('  // A permission mode picked'));
-  const turnAccess = [];
+  const turnAccess = [], sentImages = [];
   Object.assign(inherited.context, {
     lastChatOpts: () => ({ harness: 'codex', model: 'gpt-x', effort: 'low', access: 'full' }),
     chatModels: () => [{ id: 'gpt-x', efforts: ['low'], defaultEffort: 'low' }],
@@ -140,14 +140,16 @@ function setup(segments, picks = { harness: 'claude', model: 'sonnet', effort: '
   Object.assign(inherited.context.window.electronAPI, {
     chatSdkStart: async () => ({ ok: true, sessionId: 'new-thread' }),
     chatSdkSetAccess: (_, access) => turnAccess.push(access),
-    chatSdkSend: async (_, text, { options }) => ({ ok: options.access === 'full' }),
+    chatSdkSend: async (_, text, { options, images }) => { sentImages.push(images); return { ok: options.access === 'full' }; },
   });
   delete inherited.context.chatOpts;
   vm.runInContext(optsSource + sendSource, inherited.context);
-  assert(await inherited.context.startChatAgent(inherited.tab, inherited.tab, 'first message'));
+  const images = [{ image: true, path: '/tmp/image.png' }, { path: '/tmp/notes.txt' }];
+  assert(await inherited.context.startChatAgent(inherited.tab, inherited.tab, 'first message', null, { files: images }));
   assert(inherited.tab.chat.segments[0].used);
   assert.equal(vm.runInContext('chatOpts', inherited.context)(inherited.tab).access, 'full', 'composer keeps Full access after first send');
-  assert(await inherited.context.sendToAgent(inherited.tab, 'follow-up'));
+  assert(await inherited.context.sendToAgent(inherited.tab, 'follow-up', true, images));
+  assert.deepEqual(sentImages.map(paths => Array.from(paths)), [['/tmp/image.png'], ['/tmp/image.png']]);
   assert.deepEqual(turnAccess, ['full', 'full']);
   // Antigravity resumes its ACP session by id; the terminal view resumes it with --conversation.
   const agyHarnesses = [...harnesses, { id: 'antigravity', name: 'Antigravity CLI', bin: 'agy' }];

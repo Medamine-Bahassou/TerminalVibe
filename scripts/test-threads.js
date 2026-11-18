@@ -7,7 +7,7 @@ const path = require('path');
 
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
-const { syncThread, threadHistory, writeHandoff, forkThread, deleteThread, parseCodex } = require('../electron/threads');
+const { saveThreadAttachment, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, parseCodex } = require('../electron/threads');
 
 const task = (type, timestamp) => ({ type: 'event_msg', timestamp, payload: { type } });
 assert.deepStrictEqual(parseCodex([task('task_started', '2026-01-01T10:00:00Z')]).turnState,
@@ -60,6 +60,12 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
 
 (async () => {
   const dir = path.join(home, '.terminalvibe', 'threads', 'thread-1');
+  const original = Buffer.from(PNG, 'base64');
+  const attachment = await saveThreadAttachment(meta.id, '../image.png', original, home);
+  assert.strictEqual(path.basename(attachment), 'image.png');
+  assert.strictEqual(path.relative(dir, attachment).split(path.sep)[0], 'attachments');
+  assert.deepStrictEqual(fs.readFileSync(attachment), original, 'attachment bytes survive independently of the source');
+  await assert.rejects(saveThreadAttachment('../other', 'image.png', original, home), /Invalid thread id/);
   const [claude, codex, opencode] = await syncThread(meta, home);
   assert.strictEqual(codex.turnState.status, 'completed', 'completion status reaches the renderer');
   assert.deepStrictEqual(claude.items.map(i => i.role), ['user', 'tool', 'assistant', 'tool'], 'the handoff read shows as a step, like in the CLI');

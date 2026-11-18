@@ -10,9 +10,11 @@ app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false });
   await win.loadURL('about:blank');
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  const imageReference = source.slice(source.indexOf('  function chatImageReferenceHtml('), source.indexOf('  function syncChatInputLinks('));
+  const imageReference = source.slice(source.indexOf('  function cacheThreadImage('), source.indexOf('  function syncChatInputLinks('));
   const composerImages = source.slice(source.indexOf('  function syncChatInputLinks('), source.indexOf('  function insertChatMention('));
   const userHtml = source.slice(source.indexOf('  function userTextHtml('), source.indexOf('  const _pendingMsgs ='));
+  const pending = source.slice(source.indexOf('  const pendingMessages ='), source.indexOf('  const _thrImgCache ='));
+  const hydrate = source.slice(source.indexOf('  async function hydrateThreadImage('), source.indexOf('  function bindThreadCopy('));
   const markdown = source.slice(source.indexOf('  function mdLite('), source.indexOf('  const toolIcon ='));
   const imageRegex = source.split('\n').filter(line => /^  const (IMAGE|ATTACHMENT)_PATH_RE =/.test(line)).join('\n');
   console.log(await win.webContents.executeJavaScript(`(async () => {
@@ -27,10 +29,13 @@ app.whenReady().then(async () => {
     ${markdown}
     ${imageReference}
     ${userHtml}
+    ${pending}
+    ${hydrate}
+    const _pendingMsgs = new Map();
     ${composerImages}
     const scope = document.createElement('div');
     const render = text => { const result = userTextHtml(text); scope.innerHTML = result.html; return result; };
-    const preview = 'data:image/png;base64,iVBORw0KGgo=';
+    const preview = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=';
     const thrPage = document.createElement('div'); thrPage.id = 'sbr-thread';
     thrPage.innerHTML = '<textarea id="sbr-thread-input"></textarea><div id="sbr-thread-input-links"></div>';
     document.body.append(thrPage);
@@ -72,7 +77,27 @@ app.whenReady().then(async () => {
     check(statReads === 3 && [...scope.querySelectorAll('.thr-img-size')].every(label => label.textContent === '2KB'), 'Document sizes must load from file metadata without duplicate reads');
     render('Use https://example.com/report.pdf');
     check(!scope.querySelector('.thr-img-link'), 'Web URLs must not become local attachments');
-    return 'PASS: sent image links, shared composer/message thumbnail, filename, size, original paths, inline code, spaces and citations';
+    const flow = document.createElement('div'); flow.className = 'thr-flow';
+    document.body.append(flow);
+    const second = '/tmp/two/image.png';
+    let reads = 0;
+    window.electronAPI.readImageFile = async path => {
+      check(path === second, 'Cached composer image must display without reading the file');
+      reads++;
+      return { mediaType: 'image/png', data: preview.split(',')[1] };
+    };
+    _pendingMsgs.set('chat', [{ text: 'Compare /tmp/one/image.png and /tmp/two/image.png', imagePaths: ['/tmp/one/image.png'], at: 1 }]);
+    flow.innerHTML = pendingHtml({ id: 'chat' });
+    const pendingImages = [...flow.querySelectorAll('.thr-pending > .thr-images img.thr-img')];
+    check(pendingImages.length === 2 && flow.querySelector('.thr-images').nextElementSibling.matches('.thr-bubble'), 'Pending previews must appear above the message with no duplicate attachment');
+    pendingImages.forEach(bindThreadImage);
+    check(pendingImages[0].getAttribute('src') === preview, 'Cached preview must be set immediately');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    check(reads === 1 && pendingImages[1].getAttribute('src') === preview, 'Typed image path must hydrate before transcript arrives');
+    await Promise.all(pendingImages.map(img => img.decode()));
+    pendingImages[0].click();
+    check(previews.at(-1)[1].path === '/tmp/one/image.png', 'Pending preview should open the image viewer');
+    return 'PASS: sent image links, shared composer/message thumbnail, filename, size, original paths, inline code, spaces, citations and previews before the transcript arrives';
   })()`));
   clearTimeout(timeout); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });

@@ -62,11 +62,13 @@
         <button type="button" data-palette-mode="history" aria-pressed="false">History</button>
       </div>
       <div class="ts-input-row">
-        <i class="ph ph-magnifying-glass"></i>
+        <i class="ph ph-magnifying-glass ts-search-icon" aria-hidden="true"></i>
+        <button type="button" class="ts-project-back" aria-label="Close project picker"><i class="ph ph-arrow-left" aria-hidden="true"></i></button>
         <input id="ts-input" role="combobox" aria-label="Search tabs" aria-autocomplete="list" aria-expanded="false" aria-controls="ts-results" placeholder="Search tabs…" spellcheck="false" autocomplete="off">
       </div>
+      <div class="ts-project-heading" id="ts-project-heading">Projects</div>
       <div id="ts-results" role="listbox" aria-label="Search results"></div>
-      <div class="ts-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate <kbd>Enter</kbd> Open</span><span><kbd>Esc</kbd> Close</span></div>
+      <div class="ts-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate <kbd>Enter</kbd> <span id="ts-enter-label">Open</span></span><span><kbd>Esc</kbd> Close</span></div>
       <span id="ts-status" class="sr-only" role="status"></span>
     </div>
   </div>
@@ -146,7 +148,7 @@
       <div class="ts-head">
         <label class="ts-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input id="ts-search" type="text" placeholder="Search" aria-label="Search threads" spellcheck="false" autocomplete="off"></label>
         <button type="button" class="ts-icon-btn" id="ts-filter" title="Filter by project" aria-label="Filter by project"><i class="ph ph-funnel-simple"></i></button>
-        <button type="button" class="ts-icon-btn" id="ts-new" title="New thread" aria-label="New thread"><i class="ph ph-note-pencil"></i></button>
+        <button type="button" class="ts-icon-btn" id="ts-new" title="New thread" aria-label="New thread" aria-haspopup="dialog"><i class="ph ph-note-pencil"></i></button>
       </div>
       <div class="ts-list" id="ts-list" role="list"></div>
       <button type="button" class="ts-usage" id="ts-usage" title="Usage limits · Right-click for display options" aria-haspopup="menu" hidden></button>
@@ -181,6 +183,7 @@
         <div class="thr-composer-bar">
           <button type="button" class="thr-attach" id="sbr-thread-attach" title="Attach files (or drop / paste them)" aria-label="Attach files"><i class="ph ph-paperclip"></i></button>
           <input type="file" id="sbr-thread-file" multiple hidden>
+          <button type="button" class="thr-ctx-ring" id="sbr-thread-ctx" hidden></button>
           <button type="button" class="thr-mode-chip" id="sbr-thread-mode" aria-haspopup="menu" title="Permission mode"></button>
           <button type="button" class="thr-model-chip" id="sbr-thread-model" aria-haspopup="dialog" aria-expanded="false" title="Agent, model and reasoning"></button>
           <button type="submit" class="thr-send" id="sbr-thread-send" title="Send (Enter)" aria-label="Send" disabled><i class="ph ph-arrow-up"></i></button>
@@ -199,19 +202,51 @@
   <dialog id="chat-schedule" aria-labelledby="chat-schedule-title">
     <form>
       <h2 id="chat-schedule-title"><i class="ph ph-clock" aria-hidden="true"></i> Schedule message</h2>
-      <label>Send
-        <select name="mode" autofocus>
-          <option value="delay">After a delay</option>
-          <option value="date">At a date and time</option>
+      <div class="chat-schedule-mode">
+        <label for="chat-schedule-mode-trigger">Schedule type</label>
+        <select id="chat-schedule-mode" name="mode" class="native-select-hidden" aria-label="Schedule type">
+          <option value="countdown">Countdown</option>
+          <option value="clock">Clock time</option>
         </select>
-      </label>
-      <div class="chat-schedule-delay">
-        <label>Delay <input name="delay" type="number" min="1" step="1" value="50" required></label>
-        <label>Unit <select name="unit"><option value="1000">Seconds</option><option value="60000">Minutes</option><option value="3600000">Hours</option><option value="86400000">Days</option></select></label>
+        <div class="custom-dropdown" data-for="chat-schedule-mode"></div>
       </div>
-      <label hidden>Date and time (local) <input name="date" type="datetime-local" required disabled></label>
+      <div class="chat-schedule-countdown" role="group" aria-label="Countdown duration">
+        <div class="chat-timer-part">
+          <button type="button" data-timer-field="hours" data-timer-step="1" aria-label="Increase hours"><i class="ph ph-caret-up" aria-hidden="true"></i></button>
+          <label><input name="hours" type="number" min="0" step="1" value="00" required><span>Hours</span></label>
+          <button type="button" data-timer-field="hours" data-timer-step="-1" aria-label="Decrease hours"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+        </div>
+        <span class="chat-time-colon" aria-hidden="true">:</span>
+        <div class="chat-timer-part">
+          <button type="button" data-timer-field="minutes" data-timer-step="1" aria-label="Increase minutes"><i class="ph ph-caret-up" aria-hidden="true"></i></button>
+          <label><input name="minutes" type="number" min="0" max="59" step="1" value="00" required><span>Minutes</span></label>
+          <button type="button" data-timer-field="minutes" data-timer-step="-1" aria-label="Decrease minutes"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+        </div>
+        <span class="chat-time-colon" aria-hidden="true">:</span>
+        <div class="chat-timer-part">
+          <button type="button" data-timer-field="seconds" data-timer-step="1" aria-label="Increase seconds"><i class="ph ph-caret-up" aria-hidden="true"></i></button>
+          <label><input name="seconds" type="number" min="0" max="59" step="1" value="50" required><span>Seconds</span></label>
+          <button type="button" data-timer-field="seconds" data-timer-step="-1" aria-label="Decrease seconds"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+        </div>
+      </div>
+      <div class="chat-schedule-clock" role="group" aria-label="Local clock time" hidden>
+        <div class="chat-clock-readout">
+          <label>Hour <input name="clockHour" type="number" min="1" max="12" step="1" value="9" required disabled></label>
+          <span class="chat-time-colon" aria-hidden="true">:</span>
+          <label>Minute <input name="clockMinute" type="number" min="0" max="59" step="1" value="00" required disabled></label>
+          <div class="chat-clock-period" role="group" aria-label="AM or PM">
+            <label><input name="clockPeriod" type="radio" value="AM" checked disabled><span>AM</span></label>
+            <label><input name="clockPeriod" type="radio" value="PM" disabled><span>PM</span></label>
+          </div>
+        </div>
+        <div class="chat-clock-face" role="group" aria-label="Choose hour">
+          <span class="chat-clock-hand" aria-hidden="true"></span>
+          <div class="chat-clock-ticks"></div>
+        </div>
+        <span class="chat-clock-hint">Sends at the next occurrence of this time.</span>
+      </div>
       <div class="prompt-actions">
-        <button type="button">Cancel</button>
+        <button type="button" data-schedule-cancel>Cancel</button>
         <button type="submit"><i class="ph ph-clock" aria-hidden="true"></i> Schedule</button>
       </div>
     </form>
@@ -251,7 +286,7 @@
     </div>
   </div>
   <!-- Close-tab confirmation modal (running process) -->
-  <div id="close-confirm-overlay">
+  <dialog id="close-confirm-overlay" aria-labelledby="cc-title" aria-describedby="cc-message">
     <div id="close-confirm-modal">
       <div class="cc-icon"><i class="ph ph-warning-circle"></i></div>
       <div id="cc-title">Close tab?</div>
@@ -265,7 +300,7 @@
         <button id="cc-close">Close tab</button>
       </div>
     </div>
-  </div>
+  </dialog>
   <!-- Settings -->
   <div id="settings-overlay" tabindex="-1"
     class="fixed inset-0 z-[10000] hidden flex flex-col opacity-0 transition-opacity duration-150">

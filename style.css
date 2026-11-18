@@ -1699,15 +1699,25 @@ body > .clr-picker { z-index: 10020 !important; }
 #close-confirm-overlay {
 position: fixed;
 inset: 0;
-background: rgba(0,0,0,0.5);
-backdrop-filter: blur(8px);
--webkit-backdrop-filter: blur(8px);
-z-index: 10002;
+width: 100%;
+height: 100%;
+max-width: none;
+max-height: none;
+margin: 0;
+padding: 0;
+border: 0;
+background: transparent;
+color: inherit;
 display: none;
 align-items: center;
 justify-content: center;
 }
-#close-confirm-overlay.open { display: flex; }
+#close-confirm-overlay.open[open] { display: flex; }
+#close-confirm-overlay::backdrop {
+background: rgba(0,0,0,0.5);
+backdrop-filter: blur(8px);
+-webkit-backdrop-filter: blur(8px);
+}
 #close-confirm-modal {
 background: color-mix(in srgb, var(--bg) 97%, #fff 3%);
 border: 1px solid var(--border);

@@ -47,7 +47,8 @@ if(!process.versions.electron) {
         window.pastes=[];term.onData(data=>pastes.push(data));
         const entry={id:'11111111-1111-4111-8111-111111111111',term,el:host};
         const findTermById=id=>id===entry.id?{term:entry}:null;
-        const checkTerminalRunning=async()=> 'claude';
+        let processName = 'claude';
+        const checkTerminalRunning=async()=>processName;
         const uuid=()=>crypto.randomUUID();
         let wsReady=false,fileDropReady=false,terminalBackendPlatform=null;
         const fileDropRequests=new Map();
@@ -66,7 +67,7 @@ if(!process.versions.electron) {
         ${helpers}
         ${handlers}
         setupGroupDragAndDrop(document.querySelector('#body'),{activeTermId:entry.id,terminals:[entry]},{},document.createElement('div'));
-        window.dropFixture={entry,dropFilesIntoTerminal,close:()=>ws.close(),unsupported:()=>{fileDropReady=false;}};
+        window.dropFixture={entry,dropFilesIntoTerminal,useCodex:()=>{processName='codex';},close:()=>ws.close(),unsupported:()=>{fileDropReady=false;}};
       })()`);
       win.webContents.debugger.attach('1.3');
       for(const type of ['dragEnter','dragOver','drop']) await win.webContents.debugger.sendCommand('Input.dispatchDragEvent',{type,x:300,y:300,data:{items:[],files:[file],dragOperationsMask:1}});
@@ -88,6 +89,20 @@ if(!process.versions.electron) {
         assert.equal(failed.count,1);assert.match(failed.message,/Restart.*backend/);
         const changed=await win.webContents.executeJavaScript(`(async()=>{let complete;window.electronAPI={getPathForFile:()=>'',saveTempFile:()=>new Promise(resolve=>complete=resolve)};const promise=dropFixture.dropFilesIntoTerminal(dropFixture.entry,[new File(['data'],'slow.pdf')]);while(!complete)await new Promise(r=>setTimeout(r,0));dropFixture.entry.locked=true;complete('/tmp/slow.pdf');await promise;return pastes.length;})()`);
         assert.equal(changed,1,'Do not paste after the target becomes locked');
+      }
+      if(desktop) {
+        const images=await win.webContents.executeJavaScript(`(async()=>{
+          dropFixture.useCodex();
+          const start=pastes.length;
+          await dropFixture.dropFilesIntoTerminal(dropFixture.entry,[new File(['one'],'one.png'),new File(['two'],'two.png'),new File(['document'],'notes.txt')]);
+          return pastes.slice(start);
+        })()`);
+        assert.equal(images.length,3);
+        for(const [i,name] of ['one','two'].entries()) {
+          assert.match(images[i], /^\x1b\[200~'.*'\x1b\[201~$/);
+          assert.equal(fs.readFileSync(images[i].slice(7,-7),'utf8'),name);
+        }
+        assert.match(images[2], /notes\.txt \x1b\[201~$/);
       }
       await win.webContents.executeJavaScript('dropFixture.close()');win.destroy();
       console.log(`PASS: ${desktop?'Electron preload':'browser WebSocket'} real file drop, exact PDF bytes, spaces/apostrophes, xterm draft insertion and no submission`);

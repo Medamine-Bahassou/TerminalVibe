@@ -148,6 +148,9 @@ function parseClaude(list) {
       continue;
     }
     if (!['user', 'assistant'].includes(row.type) || row.isMeta || row.isSidechain) continue;
+    // The context in use: the latest reply's prompt size (fresh + cached input).
+    const u = row.type === 'assistant' && row.message?.model !== '<synthetic>' && row.message?.usage;
+    if (u) items.ctx = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
     const content = row.message?.content;
     const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
     const start = items.length;
@@ -198,9 +201,12 @@ function parseClaude(list) {
 
 function parseCodex(list) {
   const items = [], tools = new Map();
-  let id = null, cwd = null, turnState = null;
+  let id = null, cwd = null, turnState = null, ctx = null;
   for (const r of list) {
     const p = r.payload;
+    if (r.type === 'event_msg' && p?.type === 'token_count' && p.info?.last_token_usage) {
+      ctx = { used: p.info.last_token_usage.input_tokens || 0, max: p.info.model_context_window || 0 };
+    }
     if (r.type === 'event_msg' && ['task_started', 'task_complete', 'turn_aborted'].includes(p?.type)) {
       turnState = { status: p.type === 'task_started' ? 'working' : p.type === 'task_complete' ? 'completed' : 'aborted', at: Date.parse(r.timestamp) || 0 };
     }
@@ -254,7 +260,7 @@ function parseCodex(list) {
       if ((typeof code === 'number' && code !== 0) || out?.success === false) tools.get(p.call_id).error = true;
     }
   }
-  return { id, cwd, items, ...(turnState ? { turnState } : {}) };
+  return { id, cwd, items, ...(turnState ? { turnState } : {}), ...(ctx ? { ctx } : {}) };
 }
 
 const claudeFiles = new Map(); // sessionId -> transcript path
@@ -269,7 +275,9 @@ async function claudeSegment({ sessionId, cwd, since, exclude = [] }, home) {
     if (!file) return { sessionId, items: [] };
     claudeFiles.set(sessionId, file);
   }
-  return { sessionId, items: await parseFile(file, parseClaude) };
+  const items = await parseFile(file, parseClaude);
+  // ponytail: Claude's window isn't in the transcript; 200k, or 1M once a prompt outgrows that.
+  return { sessionId, items, ...(items.ctx ? { ctx: { used: items.ctx, max: items.ctx > 200000 ? 1000000 : 200000 } } : {}) };
 }
 
 // Claude keeps a folder per project (its path with every other character as "-"):
@@ -301,7 +309,7 @@ async function codexSegment({ sessionId, cwd, since, exclude = [] }, home) {
   for (const { f } of stats.filter(s => s && (sessionId || s.t >= (Number(since) || 0))).sort((a, b) => b.t - a.t)) {
     const res = await parseFile(f, parseCodex).catch(() => null);
     if (!res || (!sessionId && (path.resolve(res.cwd || '') !== path.resolve(cwd || '') || exclude.includes(res.id)))) continue;
-    return { sessionId: res.id || sessionId, items: res.items, ...(res.turnState ? { turnState: res.turnState } : {}) };
+    return { sessionId: res.id || sessionId, items: res.items, ...(res.turnState ? { turnState: res.turnState } : {}), ...(res.ctx ? { ctx: res.ctx } : {}) };
   }
   return { sessionId, items: [] };
 }
@@ -346,6 +354,12 @@ const threadsRoot = home => path.join(home, '.terminalvibe', 'threads');
 function threadDir(id, root) {
   if (!/^[\w-]{1,64}$/.test(id || '')) throw new Error('Invalid thread id');
   return path.join(root, id);
+}
+// Keep composer attachments with the thread so draft and transcript paths survive temp cleanup.
+async function saveThreadAttachment(id, name, bytes, home = os.homedir()) {
+  const root = path.join(threadDir(id, threadsRoot(home)), 'attachments');
+  await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
+  return require('./dropped-files').saveDroppedFile(name, bytes, root);
 }
 const imageFiles = new WeakMap(); // parsed image -> saved file (parse results are cached, so this skips re-hashing)
 // Pasted images are saved in the thread folder: the panel and the handoff get file paths, not base64.
@@ -394,7 +408,7 @@ async function syncThread(meta = {}, home = os.homedir(), root = threadsRoot(hom
     const f = fresh[i];
     const items = f.items.length || !old ? f.items : old.items;
     return { harness: s.harness, sessionId: f.sessionId || s.sessionId || old?.sessionId || null, since: s.since,
-      model: s.model || null, effort: s.effort || null, handoff: !!s.handoff, ...(s.frozen ? { frozen: true } : {}), ...(f.unsupported ? { unsupported: true } : {}), ...(f.turnState ? { turnState: f.turnState } : {}), items };
+      model: s.model || null, effort: s.effort || null, handoff: !!s.handoff, ...(s.frozen ? { frozen: true } : {}), ...(f.unsupported ? { unsupported: true } : {}), ...(f.turnState ? { turnState: f.turnState } : {}), ...(f.ctx ? { ctx: f.ctx } : {}), items };
   });
   const thread = { id: meta.id, title: String(meta.title || 'New thread'), projectId: meta.projectId || null, cwd: meta.cwd || null,
     createdAt: meta.createdAt || null, segments: merged.map(({ items, unsupported, ...s }) => s) };
@@ -491,4 +505,4 @@ async function deleteThread(id, home = os.homedir(), root = threadsRoot(home)) {
   return true;
 }
 
-module.exports = { detectAgents, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, toolOutput, parseClaude, parseCodex, parseAcp, acpFile, fileChange };
+module.exports = { detectAgents, saveThreadAttachment, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, toolOutput, parseClaude, parseCodex, parseAcp, acpFile, fileChange };

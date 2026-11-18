@@ -73,7 +73,7 @@
       const workspaceButton = target.closest('.ws-btn');
       const sideTarget = workspaceButton;
       // Threads sidebar cards sit at the right edge: their tooltip opens to the left, top-aligned.
-      const leftTarget = target.closest('#threads-sidebar .ts-card');
+      const leftTarget = target.matches('#threads-sidebar .ts-card') && target;
       if (leftTarget) {
         const lr = leftTarget.getBoundingClientRect(), lw = tip.offsetWidth, lh = tip.offsetHeight;
         const lx = lr.left - lw - 8 >= 4 ? lr.left - lw - 8 : lr.right + 8;
@@ -539,8 +539,8 @@
   }
 
   // Quote a path for pasting into a shell (POSIX '…'\''…', PowerShell '…''…').
-  function shellQuote(p) {
-    if (/^[\w@%+=:,./~-]+$/.test(p)) return p;
+  function shellQuote(p, force = false) {
+    if (!force && /^[\w@%+=:,./~-]+$/.test(p)) return p;
     return (window.electronAPI?.platform || terminalBackendPlatform) === 'win32'
       ? `'${p.replace(/'/g, "''")}'`
       : `'${p.replace(/'/g, "'\\''")}'`;
@@ -549,6 +549,8 @@
   // Dropped files (e.g. an image from the file manager or a web page) →
   // paste their quoted paths into the terminal, like other terminals do.
   // Files without a disk path (dragged out of a browser) are saved to temp.
+  const isImagePath = path => /\.(png|jpe?g|gif|webp|bmp)$/i.test(path);
+  const isCodexProcess = name => /^codex(?:[-.\s]|$)/i.test(name || '');
   const isFileDrag = e => !!e.dataTransfer?.types?.includes('Files');
   async function saveBrowserDroppedFile(entry, file) {
     if (!wsReady || !ws || ws.readyState !== WebSocket.OPEN) throw new Error('Terminal backend is disconnected');
@@ -609,11 +611,17 @@
         if (!available()) throw new Error('The target terminal changed while adding files');
         const path=await localPathForFile(entry,file);
         if (!path) throw new Error('Could not transfer '+file.name);
-        paths.push(shellQuote(path));
+        paths.push(path);
       }
+      const codexImages = paths.some(isImagePath) && isCodexProcess(await checkTerminalRunning(entry.id, true));
       if (!available()) throw new Error('The target terminal changed while adding files');
-      // xterm emits one bracketed paste into this pane's editable draft. No Enter.
-      target.paste(paths.join(' ')+' ');
+      // Codex recognizes a quoted image path when it is the entire paste.
+      const plainPaths = [];
+      for (const path of paths) {
+        if (codexImages && isImagePath(path)) target.paste(shellQuote(path, true));
+        else plainPaths.push(shellQuote(path));
+      }
+      if (plainPaths.length) target.paste(plainPaths.join(' ') + ' ');
       target.focus();
       show('success', 'ph-check-circle', files.length === 1 ? 'File added to draft' : files.length + ' files added to draft');
     } catch(error) {
@@ -669,7 +677,7 @@
         const shortcut = window.electronAPI?.platform === 'win32' ? '\x1bv' : '\x16';
         sendStdin(entry.id, new TextEncoder().encode(shortcut));
       } else {
-        pasteText(shellQuote(path));
+        pasteText(shellQuote(path, isCodexProcess(process)));
       }
     };
     try {
@@ -1744,7 +1752,14 @@
     if (threadSettings.usageWindow === 'mostUsed') threadSettings.usageWindow = 'weekly';
     document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
     applyWorkUsernamePrivacy(document);
+    applyComposerParts();
   };
+  // Composer controls the user hid from its right-click menu (attach, mode, ctx).
+  const COMPOSER_PARTS = [['attach', 'File upload', 'ph-paperclip'], ['mode', 'Access mode', 'ph-shield'], ['ctx', 'Context usage', 'ph-circle-half']];
+  function applyComposerParts() {
+    const hidden = threadSettings.composerHidden || [];
+    for (const [k] of COMPOSER_PARTS) document.body.classList.toggle('thr-hide-' + k, hidden.includes(k));
+  }
   let activeWsId = null;
   let settingsWindowOpen = false; // separate Electron settings window is up
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
@@ -7722,7 +7737,12 @@
           e.stopPropagation();
           clearDropMarks();
           const tab = findChatThread(e.dataTransfer.getData(THREAD_DRAG));
-          if (tab) openChatTab(tab, wsp);
+          if (!tab) return;
+          // Move the thread into this workspace without switching to it.
+          if (!tab._closed) { if (moveTabToWorkspace(tab.id, wsp.id, { keepSource: true })) { saveState(); renderThreadsSidebar(); } return; }
+          const back = activeWsId;
+          openChatTab(tab, wsp);
+          if (back && back !== activeWsId && findWs(back)) activateWorkspace(back);
           return;
         }
         // ── Tab drop: include the dragged tab in this workspace ──
@@ -8580,25 +8600,32 @@
     renderChatResume(ws, surface);
   }
   const pendingMessages = ws => { const p = _pendingMsgs.get(ws.id); return p ? (Array.isArray(p) ? p : [p]) : []; };
-  const pendingHtml = ws => {
-    const pending = pendingMessages(ws);
-    return pending.map(p => `<div class="thr-msg user thr-pending" data-ts="${p.at}">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}<div class="thr-bubble"><div class="thr-msg-text">${userTextHtml(p.text).html}</div></div></div>`).join('');
-  };
+  function threadImagesHtml(paths) {
+    return paths.length ? `<div class="thr-images">${[...new Set(paths)].map(path =>
+      `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(path)}" alt="Pasted image"></div>`).join('')}</div>` : '';
+  }
+  const pendingHtml = ws => pendingMessages(ws).map(p => {
+    const user = userTextHtml(p.text);
+    const images = threadImagesHtml([...(p.imagePaths || []), ...user.paths]);
+    return `<div class="thr-msg user thr-pending" data-ts="${p.at}">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}${images}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}</div>`;
+  }).join('');
   const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
   // A chat is a tab (its history + a message box); a workspace can hold any number of them.
   // ponytail: it is a terminal tab whose shell sits under the page until the chat starts its agent
   // there; a real non-terminal tab type if the idle shell ever matters.
-  function newChatTab(ws, groupId, harness) {
+  function newChatTab(ws, groupId, harness, project) {
     if (!ws) return;
     if (activeWsId !== ws.id) activateWorkspace(ws.id);
-    const tab = addTerminal(ws.id, groupId, { label: 'Chat', threadHistory: true });
+    const tab = addTerminal(ws.id, groupId, { label: 'Chat', threadHistory: true, cwd: project });
     if (!tab) return;
     tab._chatShellUnused = true;
-    tab.chat = { createdAt: Date.now(), ...(threadSettings.folder !== 'workspace' ? { scratch: true } : {}) };
+    const scratch = project === null || (project === undefined && threadSettings.folder !== 'workspace');
+    tab.chat = { createdAt: Date.now(), ...(project ? { cwd: project } : scratch ? { scratch: true } : {}) };
     harness ||= CHAT_AGENTS[threadSettings.harness] && !harnessOf(threadSettings.harness)?.retired ? threadSettings.harness : '';
     if (harness) setChatOpts(tab, { harness });
     _preferChat = tab;
     syncThreadPanel(true);
+    if (project !== undefined) saveState();
     thrInput.focus();
     return tab;
   }
@@ -9330,6 +9357,10 @@
   const chatCwd = tab => tab?.chat?.scratch ? tab.chat.cwd || '' : tab?.chat?.cwd || tab?.cwd || wsOf(tab)?.cwd || getWorkspaceTerminals(wsOf(tab) || {}).find(t => t.cwd)?.cwd || '';
   const isScratchDir = d => /[\\/]\.terminalvibe[\\/]scratch[\\/][^\\/]+[\\/]?$/.test(d || '');
   const chatFolderName = cwd => !cwd || isScratchDir(cwd) ? 'No project' : cwd.split(/[\\/]/).filter(Boolean).pop() || cwd;
+  function chatProjectDirs(current) {
+    return [...new Set([current, ...workspaces.map(w => w.cwd), ...allChatTabs().map(chatCwd)]
+      .filter(dir => dir && !isScratchDir(dir)))];
+  }
   function syncThreadComposer(ws, surface = thrPage) {
     if (!ws) return;
     const thrChip = id => threadPart(surface, id), thrInput = threadPart(surface, 'input');
@@ -9618,7 +9649,7 @@
   document.addEventListener('mousedown', e => { if (_modelPicker && !_modelPicker.contains(e.target) && !thrChip('model').contains(e.target) && !e.target.closest?.('.tv-pick-menu')) closeModelPicker(false); }, true);
 
   // Paste-style write, then Enter on its own: sent together, Codex treats the text as a paste and Enter as a newline.
-  function sendToAgent(t, text, steer = false) {
+  function sendToAgent(t, text, steer = false, files = []) {
     // The history note rides on the first real message: after a slash command it would become its argument.
     if (t._handoff && !/^\s*\//.test(text)) { text += _handoffNote(t._handoff); t._handoff = null; }
     if (t._sideNote && !/^\s*\//.test(text)) { text += SIDE_NOTE; t._sideNote = false; }
@@ -9635,10 +9666,24 @@
         if (t._chatCfg) Object.assign(t._chatCfg, { model: o.model, effort: o.effort, fast: o.fast });
         if (t._chatSeg) Object.assign(t._chatSeg, { model: o.model, effort: o.effort });
       }
-      return window.electronAPI.chatSdkSend(t.id, text, { steer, options: sdkTurnOptions(o) }).then(r => {
+      return (async () => {
+        const images = files.filter(file => file.image && file.path);
+        let attachments = [];
+        if (t._sdk.harness === 'codex') {
+          attachments = images.map(file => file.path);
+        } else if (t._sdk.harness === 'claude') {
+          for (const file of images) {
+            const image = await window.electronAPI.readImageFile(file.path);
+            if (!image?.data) throw Error('Could not attach image ' + file.name);
+            if (image.mediaType !== 'image/bmp') attachments.push({ mediaType: image.mediaType, data: image.data });
+          }
+        }
+        const r = await window.electronAPI.chatSdkSend(t.id, text, {
+          steer, options: sdkTurnOptions(o), ...(attachments.length ? { images: attachments } : {}),
+        });
         if (!r?.ok) throw Error(r?.error || 'The agent did not take the message');
         return true;
-      });
+      })();
     }
     const enc = str => new TextEncoder().encode(str), body = text.replace(/\r?\n/g, '\r');
     sendStdin(t.id, enc(t.term.modes?.bracketedPasteMode ? `\x1b[200~${body}\x1b[201~` : body));
@@ -10007,7 +10052,7 @@
       // consume trust/permission prompts; the terminal is already visible for the user.
       if (launch.terminalOnly) return true;
       // A structured session takes messages at once: no screen to wait for, no trust or lock screen.
-      if (viaSdk) return text == null ? true : await sendToAgent(entry, text);
+      if (viaSdk) return text == null ? true : await sendToAgent(entry, text, false, launch.files);
       if (await waitAgentReady(entry) === 'trust') {
         // The question shows in the chat's answer tray (chatWorking → ask); a screen it can't read shows the terminal.
         // Send once it is answered (or the agent quits, or 5 minutes pass).
@@ -10033,9 +10078,7 @@
     } catch (err) { noteChatError(chatTab, err.message || `Could not start ${h.name}`); return false; }
     finally { _chatStarting.delete(ws.id); if (curChat() === ws) syncThreadPanel(true); }
   }
-  // ── Attachments: picked (paperclip), dropped on the box or pasted. Each becomes a path in the
-  // message, the way a file dropped on the agent's terminal does (Claude Code turns image paths
-  // into images). ──
+  // ── Attachments: picked, dropped or pasted. Keep file references in the draft and transcript.
   let _chatFiles = []; // [{ name, path, image, preview }]
   const _chatPreviewLoads = new WeakSet();
   function hydrateChatFiles(files, refresh) {
@@ -10180,13 +10223,14 @@
       open(text ? (o === c.data.length ? c.nextSibling : null) : c.childNodes[o]);
     }
   }
+  function cacheThreadImage(path, preview) {
+    _thrImgCache.set(path, preview);
+    if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
+  }
   function chatImageReferenceHtml(file, tabIndex = 0) {
     const path = file.path || '', name = file.name || path.split(/[\\/]/).pop();
     const image = file.image ?? /\.(png|jpe?g|gif|webp|bmp)$/i.test(path);
-    if (file.preview) {
-      _thrImgCache.set(path, file.preview);
-      if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
-    }
+    if (file.preview) cacheThreadImage(path, file.preview);
     if (file.size) _thrImgSize.set(path, file.size);
     const preview = file.preview || _thrImgCache.get(path), size = file.size || _thrImgSize.get(path);
     const icon = image ? 'ph-image' : linkFileIcon(path);
@@ -10355,18 +10399,26 @@
   async function addChatFilesToTab(tab, files) {
     for (const file of files) {
       try {
-        const path = await localPathForFile(tab, file);
-        if (!path) throw new Error('Could not read ' + file.name);
-        const image = /^image\/(png|jpeg|gif|webp|bmp)$/i.test(file.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(path);
+        const image = /^image\/(png|jpeg|gif|webp|bmp)$/i.test(file.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name);
+        const saveAttachment = window.electronAPI?.saveThreadAttachment;
+        const persistImage = image && saveAttachment;
+        const path = persistImage ? null : await localPathForFile(tab, file);
+        if (!path && !persistImage) throw new Error('Could not read ' + file.name);
         const preview = image ? await new Promise(resolve => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result);
           reader.onerror = reader.onabort = () => resolve('');
           reader.readAsDataURL(file);
         }) : '';
-        const attachment = { name: file.name || path.split(/[\\/]/).pop(), path, image, preview, size: file.size || 0 };
+        const attachment = { name: file.name || path?.split(/[\\/]/).pop(), path, image, preview, size: file.size || 0 };
         const attached = curChat() === tab ? _chatFiles : (tab._files ||= tab.chat?.draftFiles || []);
         const duplicate = await findChatImageDuplicate(attached, attachment);
+        if (!duplicate && persistImage) {
+          const name = isImagePath(file.name) ? file.name : `${file.name || 'image'}.${file.type.split('/')[1]}`;
+          attachment.path = await saveAttachment(threadKey(tab), name, new Uint8Array(await file.arrayBuffer()));
+          if (!attachment.path) throw new Error('Could not save ' + name);
+          attachment.name ||= name;
+        }
         if (curChat() === tab && (!duplicate || !duplicate.mention || !thrInput.value.includes(duplicate.mention))) {
           threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
         }
@@ -10926,25 +10978,148 @@
   let _chatCtrl = false, _chatAlt = false;
   const scheduleDialog = document.getElementById('chat-schedule');
   const scheduleForm = scheduleDialog?.querySelector('form');
+  const scheduleClock = scheduleForm?.querySelector('.chat-schedule-clock');
+  const scheduleClockFace = scheduleClock?.querySelector('.chat-clock-face');
+  const scheduleClockTicks = scheduleClockFace?.querySelector('.chat-clock-ticks');
   let scheduleTab = null;
+  let scheduleClockPart = 'clockHour';
+  const formatScheduleNumber = value => String(value).padStart(2, '0');
   function syncScheduleFields() {
-    const { mode, delay, unit, date } = scheduleForm.elements;
-    const absolute = mode.value === 'date';
-    delay.closest('.chat-schedule-delay').hidden = delay.disabled = unit.disabled = absolute;
-    date.parentElement.hidden = date.disabled = !absolute;
+    const { mode, hours } = scheduleForm.elements;
+    const useClock = mode.value === 'clock';
+    const countdown = hours.closest('.chat-schedule-countdown');
+    countdown.hidden = useClock;
+    for (const control of countdown.querySelectorAll('input, button')) control.disabled = useClock;
+    scheduleClock.hidden = !useClock;
+    for (const input of scheduleClock.querySelectorAll('input')) input.disabled = !useClock;
+    if (useClock) syncScheduleClockFace();
+  }
+  function syncScheduleClockFace(part = scheduleClockPart) {
+    scheduleClockPart = part;
+    const minutes = part === 'clockMinute';
+    const input = scheduleForm.elements[part];
+    const label = minutes ? 'minute' : 'hour';
+    if (scheduleClockTicks.dataset.part !== part) {
+      scheduleClockTicks.dataset.part = part;
+      scheduleClockFace.setAttribute('aria-label', 'Choose ' + label);
+      scheduleClockTicks.replaceChildren(...Array.from({ length: 12 }, (_, index) => {
+        const value = minutes ? index * 5 : index || 12;
+        const angle = index * Math.PI / 6;
+        const tick = document.createElement('button');
+        tick.type = 'button';
+        tick.className = 'chat-clock-tick';
+        tick.dataset.clockValue = value;
+        tick.textContent = minutes ? formatScheduleNumber(value) : value;
+        tick.setAttribute('aria-label', label + ' ' + tick.textContent);
+        tick.style.left = (50 + 39 * Math.sin(angle)) + '%';
+        tick.style.top = (50 - 39 * Math.cos(angle)) + '%';
+        return tick;
+      }));
+    }
+    const valid = input.validity.valid && Number.isFinite(input.valueAsNumber);
+    const value = input.valueAsNumber;
+    const angle = value * (minutes ? 6 : 30);
+    scheduleClockFace.style.setProperty('--clock-angle', (valid ? angle : 0) + 'deg');
+    scheduleClockFace.classList.toggle('has-hand', valid);
+    scheduleClock.querySelectorAll('.chat-clock-readout input[type="number"]').forEach(field => {
+      field.classList.toggle('active', field === input);
+    });
+    const nearest = valid ? (minutes ? Math.round(value / 5) % 12 : value % 12) : 0;
+    Array.from(scheduleClockTicks.children).forEach((tick, index) => {
+      tick.tabIndex = index === nearest ? 0 : -1;
+      tick.setAttribute('aria-pressed', String(valid && Number(tick.dataset.clockValue) === value));
+    });
+  }
+  function readScheduleClockTime() {
+    const { clockHour, clockMinute, clockPeriod } = scheduleForm.elements;
+    const hour = clockHour.valueAsNumber % 12 + (clockPeriod.value === 'PM' ? 12 : 0);
+    return formatScheduleNumber(hour) + ':' + formatScheduleNumber(clockMinute.valueAsNumber);
+  }
+  scheduleClockTicks?.addEventListener('click', e => {
+    const tick = e.target.closest('.chat-clock-tick');
+    if (!tick) return;
+    const input = scheduleForm.elements[scheduleClockPart];
+    input.value = formatScheduleNumber(Number(tick.dataset.clockValue));
+    input.setCustomValidity('');
+    if (scheduleClockPart === 'clockHour') {
+      syncScheduleClockFace('clockMinute');
+      scheduleClockTicks.querySelector('[tabindex="0"]')?.focus();
+    } else {
+      syncScheduleClockFace();
+      tick.focus();
+    }
+  });
+  scheduleClockTicks?.addEventListener('keydown', e => {
+    const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+    if (!step || !e.target.matches('.chat-clock-tick')) return;
+    e.preventDefault();
+    const ticks = Array.from(scheduleClockTicks.children);
+    const next = ticks[(ticks.indexOf(e.target) + step + ticks.length) % ticks.length];
+    e.target.tabIndex = -1;
+    next.tabIndex = 0;
+    next.focus();
+  });
+  scheduleForm?.addEventListener('focusin', e => {
+    if (e.target.name === 'clockHour' || e.target.name === 'clockMinute') syncScheduleClockFace(e.target.name);
+  });
+  scheduleForm?.querySelector('.chat-schedule-countdown').addEventListener('click', e => {
+    const button = e.target.closest('[data-timer-step]');
+    if (!button) return;
+    const input = scheduleForm.elements[button.dataset.timerField];
+    if (button.dataset.timerStep === '1') input.stepUp(); else input.stepDown();
+    input.value = formatScheduleNumber(input.valueAsNumber);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  function nextScheduleClockTime(now, time) {
+    const [hours, minutes] = time.split(':').map(Number);
+    const next = new Date(now);
+    next.setHours(hours, minutes, 0, 0);
+    if (+next <= now) {
+      next.setDate(next.getDate() + 1);
+      next.setHours(hours, minutes, 0, 0);
+    }
+    return +next;
+  }
+  function scheduleCountdownLabel(sendAt, now = Date.now()) {
+    const seconds = Math.max(0, Math.ceil((sendAt - now) / 1000));
+    return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+      .map(value => String(value).padStart(2, '0')).join(':');
+  }
+  function updateScheduleCountdowns(scope) {
+    const now = Date.now();
+    scope.querySelectorAll('[data-countdown-at]').forEach(label => {
+      const text = scheduleCountdownLabel(Number(label.dataset.countdownAt), now);
+      if (label.textContent !== text) label.textContent = text;
+    });
   }
   function openChatSchedule(ws) {
     if (!ws || ws._editingQueued || !chatMessageText(thrInput.value.trim(), _chatFiles) || !scheduleDialog || scheduleDialog.open) return;
     scheduleTab = ws;
     scheduleForm.reset();
+    const next = new Date(Math.floor(Date.now() / 300000) * 300000 + 300000);
+    const { clockHour, clockMinute, clockPeriod } = scheduleForm.elements;
+    clockHour.value = formatScheduleNumber(next.getHours() % 12 || 12);
+    clockMinute.value = formatScheduleNumber(next.getMinutes());
+    clockPeriod.value = next.getHours() < 12 ? 'AM' : 'PM';
+    scheduleClockPart = 'clockHour';
     scheduleForm.querySelectorAll('input').forEach(field => field.setCustomValidity(''));
-    syncScheduleFields();
+    scheduleForm.elements.mode.dispatchEvent(new Event('change'));
     scheduleDialog.showModal();
+    scheduleForm.querySelector('.custom-dropdown-btn')?.focus();
     syncSendBtn();
   }
   scheduleForm?.elements.mode.addEventListener('change', syncScheduleFields);
-  scheduleForm?.addEventListener('input', e => e.target.setCustomValidity?.(''));
-  scheduleForm?.querySelector('[type="button"]').addEventListener('click', () => scheduleDialog.close());
+  scheduleForm?.addEventListener('input', e => {
+    scheduleForm.elements.seconds.setCustomValidity('');
+    e.target.setCustomValidity?.('');
+    if (e.target.name === 'clockHour' || e.target.name === 'clockMinute') syncScheduleClockFace(e.target.name);
+  });
+  scheduleForm?.addEventListener('change', e => {
+    if (e.target.type === 'number' && e.target.validity.valid && Number.isFinite(e.target.valueAsNumber)) {
+      e.target.value = formatScheduleNumber(e.target.valueAsNumber);
+    }
+  });
+  scheduleForm?.querySelector('[data-schedule-cancel]').addEventListener('click', () => scheduleDialog.close());
   scheduleDialog?.addEventListener('close', () => {
     scheduleTab = null;
     _chatAlt = false;
@@ -10954,12 +11129,15 @@
     e.preventDefault();
     const ws = scheduleTab;
     if (!ws || curChat() !== ws) { scheduleDialog.close(); return; }
-    const { mode, delay, unit, date } = scheduleForm.elements;
-    const field = mode.value === 'date' ? date : delay;
+    const { mode, hours, minutes, seconds, clockMinute } = scheduleForm.elements;
+    const scheduleMode = mode.value;
+    const useClock = scheduleMode === 'clock';
     const now = Date.now();
-    const sendAt = field === date ? new Date(date.value).getTime() : now + delay.valueAsNumber * Number(unit.value);
+    const sendAt = useClock ? nextScheduleClockTime(now, readScheduleClockTime())
+      : now + (hours.valueAsNumber * 3600 + minutes.valueAsNumber * 60 + seconds.valueAsNumber) * 1000;
     if (!Number.isFinite(new Date(sendAt).getTime()) || sendAt <= now) {
-      field.setCustomValidity('Choose a time in the future.');
+      const field = useClock ? clockMinute : seconds;
+      field.setCustomValidity(useClock ? 'Choose a valid clock time.' : 'Enter a countdown greater than zero.');
       field.reportValidity();
       return;
     }
@@ -10967,7 +11145,7 @@
     if (!text) { scheduleDialog.close(); return; }
     ws.chat ||= { createdAt: now };
     ws.chat.opts ??= chatOpts(ws);
-    (ws.chat.queuedMessages ||= []).push({ id: uuid(), typed, files, text, sendAt });
+    (ws.chat.queuedMessages ||= []).push({ id: uuid(), typed, files, text, sendAt, scheduleMode });
     scheduleDialog.close();
     clearChatDraft(ws);
     updateChatQueue(ws);
@@ -11214,7 +11392,13 @@
       if (!ws.chat.title && typed) { ws.chat.title = typed.split('\n')[0].slice(0, 80); setChatTabLabel(ws); autoTitleChat(ws, typed); }
       ws.chat.updatedAt = Date.now();
       const flow = thrPage.querySelector('#sbr-thread-flow');
-      _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, at: Date.now(), afterTs: ws._lastUserTs || 0, steer, options: { ...(steer ? liveThreadAgent(ws)?._chatCfg || chatOpts(ws) : chatOpts(ws)) } }]);
+      const imagePaths = [];
+      for (const file of message.files || []) {
+        if (!file.image || !file.path) continue;
+        imagePaths.push(file.path);
+        if (file.preview) cacheThreadImage(file.path, file.preview);
+      }
+      _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, imagePaths, at: Date.now(), afterTs: ws._lastUserTs || 0, steer, options: { ...(steer ? liveThreadAgent(ws)?._chatCfg || chatOpts(ws) : chatOpts(ws)) } }]);
       const newTurn = !steer || !_turns.has(ws.id);
       if (newTurn) _turns.set(ws.id, { since: Date.now(), awaitingPrompt: true });
       if (curChat() === ws) {
@@ -11222,6 +11406,7 @@
         flow.querySelector('.thr-empty')?.remove();
         flow.querySelectorAll('.thr-pending').forEach(el => el.remove());
         flow.insertAdjacentHTML('beforeend', pendingHtml(ws));
+        flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
         if (atBottom) flow.scrollTop = flow.scrollHeight;
         syncWorking(ws);
       }
@@ -11241,8 +11426,8 @@
           || (picksSame && ((sdk && o.harness !== 'antigravity') || cfg.access === o.access)))));
       if (same && agentLocked(t) && !await waitUnlocked(t)) throw Error('The conversation is still open in another app');
       const back = ws.chat.bringBack && !/^\s*\//.test(text) ? _bringBackNote(ws.chat.bringBack) : '';
-      if (same) { if (!await sendToAgent(t, text + back, steer)) throw Error('The agent closed before the message was sent'); }
-      else if (!await startChatAgent(ws, ws, text + back, cfg && cfg.harness === o.harness ? t : null)) throw Object.assign(Error('Could not start the agent'), { shown: true });
+      if (same) { if (!await sendToAgent(t, text + back, steer, message.files)) throw Error('The agent closed before the message was sent'); }
+      else if (!await startChatAgent(ws, ws, text + back, cfg && cfg.harness === o.harness ? t : null, { files: message.files })) throw Object.assign(Error('Could not start the agent'), { shown: true });
       if (back) { delete ws.chat.bringBack; saveState(); }
       if (ws.chat.interruptedAt && !(ws.chat.interruptions || []).some(item => item.at === ws.chat.interruptedAt)) (ws.chat.interruptions ||= []).push({ at: ws.chat.interruptedAt });
       delete ws.chat.interruptedAt; ws.chat.lastContinueAt = Date.now(); saveState();
@@ -11277,12 +11462,15 @@
     const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
     const html = header + queue.map(m => {
       const label = queuedMessageTextHtml(m);
-      const schedule = m.sendAt ? `<div class="thr-queued-schedule"><i class="ph ph-clock" aria-hidden="true"></i><span>Scheduled for ${escHtml(new Date(m.sendAt).toLocaleString())}</span></div>` : '';
+      const schedule = m.scheduleMode === 'countdown' && m.sendAt
+        ? `<div class="thr-queued-schedule"><i class="ph ph-timer" aria-hidden="true"></i><span data-countdown-at="${m.sendAt}" role="timer" aria-label="Time remaining"></span></div>`
+        : m.sendAt ? `<div class="thr-queued-schedule"><i class="ph ph-clock" aria-hidden="true"></i><span>Scheduled for ${escHtml(new Date(m.sendAt).toLocaleString())}</span></div>` : '';
       const previews = (m.files || []).map((file, i) => !file.image ? '' : `<button type="button" class="thr-queued-preview" data-queue-act="preview" data-file-i="${i}" aria-label="Preview ${escHtml(file.name)}">${file.preview ? `<img src="${escHtml(file.preview)}" alt="${escHtml(file.name)}">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</button>`).join('');
       return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"><div class="thr-queued-bubble">${schedule}${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${label}</div></div>`
         + '<div class="thr-queued-actions"><button type="button" data-queue-act="send" aria-label="Send queued message now"><i class="ph ph-arrow-up" aria-hidden="true"></i><span>Send now</span></button><button type="button" data-queue-act="edit" aria-label="Edit queued message"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button><button type="button" data-queue-act="remove" aria-label="Remove queued message"><i class="ph ph-x" aria-hidden="true"></i></button></div></div>';
     }).join('');
-    if (box.innerHTML !== html) box.innerHTML = html;
+    if (box._queueHtml !== html) { box.innerHTML = html; box._queueHtml = html; }
+    updateScheduleCountdowns(box);
     if (atBottom) flow.scrollTop = flow.scrollHeight;
   }
   function updateChatQueue(ws) {
@@ -11358,6 +11546,7 @@
     if (completedAt >= first.after && completedAt > (ws._queueCompletionAt || 0) && ws.chat.queuedMessages?.find(message => !message.sendAt) === first && !ws.chat.queuePaused && !ws._editingQueued && findTermById(ws.id)) await sendQueuedMessage(ws, first.id, false, completedAt);
   }
   setInterval(() => {
+    updateScheduleCountdowns(document);
     for (const ws of workspaces) for (const tab of getWorkspaceTerminals(ws)) {
       if (tab.threadHistory && tab.chat?.queuedMessages?.length) drainChatQueue(tab);
     }
@@ -11452,7 +11641,7 @@
     // One per agent the thread used, with its latest session's model (the card shows the same agents).
     const models = hs.map(x => ({ h: x, text: modelLabel(segs.findLast(sg => sg.harness === x.id)) || x.name }));
     return { w, ws: wsOf(w) || findWs(w.workspaceId), h, hs, cwd, folder: chatFolderName(cwd), branch: _gitBranch.get(cwd) || '',
-      draft: threadDraft(w), title: w.chat.title || threadDraft(w).split('\n')[0].slice(0, 80) || w.label, updated: w.chat.updatedAt || last?.since || w.chat.createdAt || 0, work: chatWorking(w),
+      draft: threadDraft(w), unsent: !!(w._closed && !chatWorking(w) && (w.chat.draft || '').trim()), title: w.chat.title || threadDraft(w).split('\n')[0].slice(0, 80) || w.label, updated: w.chat.updatedAt || last?.since || w.chat.createdAt || 0, work: chatWorking(w),
       model: modelLabel(last), models, openIn: w._closed ? null : wsOf(w) };
   }
   function renderThreadsSidebar() {
@@ -11469,7 +11658,10 @@
     const clocks = new Map();
     const row = (x, shelf) => {
       const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No project' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
-        ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...x.models.map(m => ({ proc: m.h.bin, text: m.text }))];
+        ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...x.models.map(m => ({ proc: m.h.bin, text: m.text })),
+        ...(x.w.chat.forkOf ? [{ icon: 'ph-git-fork', text: `Forked from ${findThreadByKey(x.w.chat.forkOf)?.chat?.title || 'a deleted thread'}` }] : [])];
+      const parent = x.w.chat.forkOf && findThreadByKey(x.w.chat.forkOf);
+      const forkBtn = parent ? `<button type="button" class="ts-pin ts-fork" data-act="parent" aria-label="Open parent thread" data-tip="Open parent: ${escHtml(parent.chat?.title || parent.label || 'thread')}"><i class="ph ph-git-fork" aria-hidden="true"></i></button>` : '';
       // Settled rows lead with the project's icon (folder icon when it has none); a working thread, the spinner.
       const lead = x.work ? '<i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>'
         : projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder');
@@ -11480,7 +11672,7 @@
         : '<button type="button" class="ts-act" data-act="settle" aria-label="Settle thread"><i class="ph ph-check" aria-hidden="true"></i><span class="ts-act-label">Settle</span></button>';
       const pin = x.w.chat.pinned ? '<button type="button" class="ts-pin" data-act="unpin" aria-label="Unpin thread" data-tip="Unpin thread"><i class="ph ph-push-pin" aria-hidden="true"></i></button>' : '';
       const title = `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`;
-      const folder = `<span class="ts-folder">${x.draft ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : ''}${projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder')}<span>${escHtml(x.folder)}</span></span>`;
+      const folder = `<span class="ts-folder">${x.draft || x.unsent ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : ''}${projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder')}<span>${escHtml(x.folder)}</span></span>`;
       // Pinned / Working / Threads keep the full card (folder · time · status, title, branch · agents); Settled is slim.
       if (shelf !== 'settled') {
         const status = x.work ? '<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i></span>' : '';
@@ -11489,7 +11681,7 @@
           + `<span class="ts-row">${folder}${pin}<span class="ts-end">${x.draft || x.work ? '' : '<span class="ts-time"></span>'}${action}</span>${status}</span>`
           + title
           + (x.draft ? '' : `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
-            + (x.hs.length ? `<span class="ts-agents">${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span>')
+            + (x.hs.length || forkBtn ? `<span class="ts-agents">${forkBtn}${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span>')
           + '</div>';
       }
       return `<div role="button" tabindex="0" class="ts-card slim" draggable="true" data-tab="${x.w.id}"`
@@ -11501,9 +11693,9 @@
       + `<button type="button" class="ts-section-head" aria-expanded="${!tsCollapsed.has(id)}"><span>${label}</span><span class="ts-count">${list.length}</span><i class="ph ph-caret-down ts-caret" aria-hidden="true"></i></button>`
       + `<div class="ts-cards">${tsCollapsed.has(id) ? '' : list.slice(0, more || undefined).map(x => row(x, id)).join('')
         + (more && list.length > more ? `<button type="button" class="ts-more">Show more <span class="ts-count">${list.length - more}</span></button>` : '')}</div></div>`;
-    const drafts = all.filter(x => x.draft);
-    const pinned = all.filter(x => !x.draft && x.w.chat.pinned);
-    const rest = all.filter(x => !x.draft && !x.w.chat.pinned);
+    const drafts = all.filter(x => x.draft || x.unsent); // a closed thread with unsent text counts as a draft too
+    const pinned = all.filter(x => !x.draft && !x.unsent && x.w.chat.pinned);
+    const rest = all.filter(x => !x.draft && !x.unsent && !x.w.chat.pinned);
     const html = all.length
       ? section('drafts', 'Drafts', drafts) + section('pinned', 'Pinned', pinned) + section('working', 'Working', rest.filter(x => x.work))
         + section('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
@@ -11535,6 +11727,7 @@
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'settle' || act === 'unsettle') { setThreadFlag(tab, 'settledAt', act === 'settle'); return; }
     if (act === 'unpin') { setThreadFlag(tab, 'pinned', false); return; }
+    if (act === 'parent') { const p = findThreadByKey(tab.chat?.forkOf); if (p) openChatTab(p); return; }
     openChatTab(tab);
   });
   tsList.addEventListener('dblclick', e => {
@@ -11571,7 +11764,7 @@
     showCtxMenu(e, 'chat-thread', c.dataset.tab);
   });
   tsSearch.addEventListener('input', renderThreadsSidebar);
-  document.getElementById('ts-new').addEventListener('click', () => newChatTab(activeWs()));
+  document.getElementById('ts-new').addEventListener('click', () => openPalette('projects'));
   document.getElementById('ts-filter')?.addEventListener('click', e => {
     e.stopPropagation(); // the document click handler would close the menu right away
     const btn = e.currentTarget;
@@ -12050,6 +12243,21 @@
     if (flow) { const bottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1; renderChatErrors(tab, flow); if (bottom) flow.scrollTop = flow.scrollHeight; }
     saveState();
   }
+  // The composer's context ring: how full the agent's context window was at its latest reply.
+  function syncContextRing(el, ctx) {
+    if (!el) return;
+    el.hidden = !ctx?.max;
+    if (el.hidden) return;
+    const p = Math.min(100, Math.round(ctx.used / ctx.max * 100));
+    el.style.setProperty('--p', p);
+    el.setAttribute('aria-label', `Context: ${p}% used`);
+  }
+  // Right-click the composer (outside the text) to pick which controls it shows.
+  document.addEventListener('contextmenu', e => {
+    if (!e.target.closest?.('.thr-composer') || e.target.closest('.thr-input-wrap')) return;
+    e.preventDefault();
+    showCtxMenu(e, 'composer');
+  });
   async function refreshThreadFlow(ws, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow');
     const t = ws.chat;
@@ -12063,6 +12271,7 @@
     }
     if (surface === thrPage ? curChat() !== ws : !surface.isConnected || surface.parentElement !== ws.el) return;
     if (segs[segs.length - 1]?.harness === 'codex' && hist[hist.length - 1]?.turnState) ws._chatTurnState = hist[hist.length - 1].turnState;
+    syncContextRing(threadPart(surface, 'ctx'), hist[hist.length - 1]?.ctx);
     // A side chat's forked session starts with a copy of the thread's history: like T3 Code, it shows
     // only what was said in the side chat itself (the agent still has the rest).
     if (ws.chat?.side && ws.chat.createdAt) for (const h of hist) h.items = h.items.filter(m => !m.ts || Date.parse(m.ts) >= ws.chat.createdAt - 2000);
@@ -12148,6 +12357,7 @@
     if (!segs.length || note) {
       flow._historyChunks = undefined;
       flow.innerHTML = pendingHtml(ws) || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
+      flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
       renderChatErrors(ws, flow);
       syncWorking(ws, surface);
       return;
@@ -12156,6 +12366,7 @@
     if (!segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
       flow._historyChunks = undefined;
       flow.innerHTML = pendingHtml(ws) || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
+      flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
       renderChatErrors(ws, flow);
       syncWorking(ws, surface);
       return;
@@ -12166,9 +12377,11 @@
       if (html) chunks.push(html);
       html = '';
     };
+    // The fork note marks the fork point: after the copied (frozen) sessions, before the fork's own.
+    let forkNote = '';
     if (ws.chat?.forkOf) {
       const from = findThreadByKey(ws.chat.forkOf);
-      html += `<div class="thr-note thr-fork-note"><i class="ph ph-git-fork" aria-hidden="true"></i>Forked from ${escHtml(from?.chat?.title || from?.label || 'a deleted thread')}</div>`;
+      forkNote = `<div class="thr-note thr-fork-note"><i class="ph ph-git-fork" aria-hidden="true"></i>Forked from ${escHtml(from?.chat?.title || from?.label || 'a deleted thread')}</div>`;
     }
     const texts = new Map(); // data-key -> raw message text, for the copy buttons
     let lastHead = '';
@@ -12182,6 +12395,7 @@
       html += `<div class="thr-seg" data-head="${escHtml(head)}"${agent?.color ? ` style="--agent-color:${agent.color}"` : ''}>${procIconHtml(agent?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(time)}</span></div>`;
     };
     segs.forEach((seg, i) => {
+      if (forkNote && !seg.frozen) { html += forkNote; forkNote = ''; lastHead = ''; }
       const h = harnessOf(seg.harness), name = h?.name || seg.harness, res = hist[i] || { items: [] };
       if (!res.items.length && !res.unsupported) return; // a session with nothing said shows nothing
       const first = res.items[0];
@@ -12221,9 +12435,7 @@
           + (forkAt != null ? `<button type="button" class="thr-fork" data-seg="${i}" data-item="${forkAt}" data-tip="Fork from here" aria-label="Fork the thread from this reply"><i class="ph ph-git-fork" aria-hidden="true"></i></button>` : '')
           + `<span class="thr-time">${clockTime(m.ts)}</span></div>` : '';
         const user = m.role === 'user' ? userTextHtml(m.text, m.threads) : null;
-        const shown = user ? [...new Set([...(m.images || []), ...user.paths])] : m.images || [];
-        const imgs = shown.length ? `<div class="thr-images">${shown.map(p =>
-          `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(p)}" alt="Pasted image"></div>`).join('')}</div>` : '';
+        const imgs = threadImagesHtml(m.images?.length ? m.images : user?.paths || []);
         return m.role === 'user'
           ? `<div class="${cls}" data-key="${key}" data-ts="${Date.parse(m.ts) || 0}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : (m.steered || t?.steered?.includes(m.ts)) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
           : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${extra}${actions}</div>`;
@@ -12242,9 +12454,10 @@
       const stepsHtml = (list, base, completed = false, changedFiles) => {
         let out = '', run = [];
         const totalTools = list.filter(({ m }) => m.role === 'tool' && !m.qa).length;
-        const flush = () => {
+        // A run the agent has moved on from is done (summarized) even mid-turn; only the trailing run stays live.
+        const flush = (done = true) => {
           // A single run can use the whole turn's diff, including files changed by shell commands.
-          if (run.length) out += toolsHtml(run.map(x => x.m), base + ':tools:' + run[0].j, completed,
+          if (run.length) out += toolsHtml(run.map(x => x.m), base + ':tools:' + run[0].j, done,
             run.length === totalTools ? changedFiles : undefined);
           run = [];
         };
@@ -12258,7 +12471,7 @@
           flush();
           out += m.role === 'thinking' ? thoughtHtml(m, i + ':' + j) : msgHtml(m, i + ':' + j, false);
         }
-        flush();
+        flush(completed);
         return out;
       };
       // The files a turn changed (from its edit tools' diffs): a card with +/- counts; each file,
@@ -12328,7 +12541,7 @@
         u = e;
       }
     });
-    html += pendingHtml(ws);
+    html += forkNote + pendingHtml(ws);
     finishChunk();
     const content = updateThreadHistory(flow, chunks);
     const newOutputs = content.querySelectorAll('.thr-tool-output');
@@ -12339,49 +12552,6 @@
     flow._texts = texts;
     hydrateChatAttachmentSizes(content);
     bindThreadCopy(flow);
-    const hydrateImage = async img => {
-      const p = img.dataset.path;
-      let src = _thrImgCache.get(p);
-      if (!src) {
-        const r = await window.electronAPI?.readImageFile?.(p).catch(() => null);
-        if (!r?.data) {
-          const tool = img.closest('.thr-tool-image');
-          img.closest('.thr-img-wrap')?.remove();
-          if (tool) {
-            const label = document.createElement('span'); label.className = 'thr-tool-image-path'; label.textContent = tool.dataset.path;
-            tool.append(label); decorateWorkUsernames(tool);
-          }
-          return;
-        }
-        src = `data:${r.mediaType};base64,${r.data}`;
-        _thrImgSize.set(p, Math.floor(r.data.length * 3 / 4) - (r.data.endsWith('==') ? 2 : r.data.endsWith('=') ? 1 : 0));
-        _thrImgCache.set(p, src);
-        if (_thrImgCache.size > 30) _thrImgCache.delete(_thrImgCache.keys().next().value);
-      }
-      const flow = img.closest('.thr-flow'); // the chat may have moved into or out of a snapshot
-      if (!flow) return;
-      img.src = src;
-      const size = _thrImgSize.get(p);
-      if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size).replace(' ', ''); });
-      flow.querySelectorAll('.thr-img-link').forEach(link => {
-        if (link.dataset.path !== p) return;
-        link.querySelector('.thr-inline-image-icon').innerHTML = `<img src="${escHtml(src)}" alt="">`;
-      });
-    };
-    // Image actions: open in the full viewer (zoom, pan, rotate, flip) or copy as PNG.
-    content.querySelectorAll('.thr-img-wrap').forEach(wrap => {
-      const img = wrap.querySelector('img');
-      const open = () => openClaudeRefViewer(null, { kind: 'file', path: img.dataset.path, label: img.dataset.path.split(/[\\/]/).pop() }, '');
-      img.addEventListener('click', open);
-      const copy = wrap.querySelector('[data-act="copy"]');
-      copy?.addEventListener('click', async () => {
-        try {
-          await copyChatImage(img);
-          copy.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
-        } catch { copy.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>'; }
-        setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
-      });
-    });
     content.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', () => {
       const text = b.closest('.thr-flow')?._texts?.get(b.closest('.thr-msg').dataset.key) || '';
       void copyPrivateText(text).catch(() => {});
@@ -12416,10 +12586,52 @@
       const saved = outputScroll.get(el.parentElement.dataset.key);
       if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
     }
-    newImages.forEach(hydrateImage);
+    newImages.forEach(bindThreadImage);
     if (!flow.dataset.seen && ws._scrollState && !ws._scrollState.bottom) { flow.scrollTop = ws._scrollState.top; flow.dataset.seen = '1'; } // back where it was
     else { flow.scrollTop = atBottom || !flow.dataset.seen ? flow.scrollHeight : scrollTop; flow.dataset.seen = '1'; }
     if (surface === thrPage) syncScrollEnd();
+  }
+  async function hydrateThreadImage(img) {
+    const p = img.dataset.path;
+    let src = _thrImgCache.get(p);
+    if (!src) {
+      const r = await window.electronAPI?.readImageFile?.(p).catch(() => null);
+      if (!r?.data) {
+        const tool = img.closest('.thr-tool-image');
+        img.closest('.thr-img-wrap')?.remove();
+        if (tool) {
+          const label = document.createElement('span'); label.className = 'thr-tool-image-path'; label.textContent = tool.dataset.path;
+          tool.append(label); decorateWorkUsernames(tool);
+        }
+        return;
+      }
+      src = `data:${r.mediaType};base64,${r.data}`;
+      _thrImgSize.set(p, Math.floor(r.data.length * 3 / 4) - (r.data.endsWith('==') ? 2 : r.data.endsWith('=') ? 1 : 0));
+      cacheThreadImage(p, src);
+    }
+    const flow = img.closest('.thr-flow'); // the chat may have moved into or out of a snapshot
+    if (!flow) return;
+    img.src = src;
+    const size = _thrImgSize.get(p);
+    if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size).replace(' ', ''); });
+    flow.querySelectorAll('.thr-img-link').forEach(link => {
+      if (link.dataset.path !== p) return;
+      link.querySelector('.thr-inline-image-icon').innerHTML = `<img src="${escHtml(src)}" alt="">`;
+    });
+  }
+  function bindThreadImage(img) {
+    const wrap = img.closest('.thr-img-wrap');
+    const open = () => openClaudeRefViewer(null, { kind: 'file', path: img.dataset.path, label: img.dataset.path.split(/[\\/]/).pop() }, '', _thrImgCache.get(img.dataset.path));
+    img.addEventListener('click', open);
+    const copy = wrap.querySelector('[data-act="copy"]');
+    copy?.addEventListener('click', async () => {
+      try {
+        await copyChatImage(img);
+        copy.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+      } catch { copy.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>'; }
+      setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
+    });
+    void hydrateThreadImage(img);
   }
   function bindThreadCopy(flow) {
     // A selection across messages copies them as a transcript of their original markdown.
@@ -12709,7 +12921,21 @@
     };
     const sep = () => { const el = document.createElement('div'); el.className = 'ctx-sep'; ctxEl.appendChild(el); };
 
-    if (type === 'usage') {
+    if (type === 'composer') {
+      for (const [k, label, icon] of COMPOSER_PARTS) {
+        const shown = () => !(threadSettings.composerHidden || []).includes(k);
+        const el = item(`<i class="ph ${icon}" aria-hidden="true"></i>`, label, '<i class="ph ph-check" aria-hidden="true"></i>', () => {
+          const hidden = new Set(threadSettings.composerHidden || []);
+          if (hidden.has(k)) hidden.delete(k); else hidden.add(k);
+          threadSettings = { ...threadSettings, composerHidden: [...hidden] };
+          applyComposerParts(); saveState();
+          el.setAttribute('aria-checked', String(shown()));
+        }, false, ctxEl, true);
+        el.setAttribute('role', 'menuitemcheckbox');
+        el.dataset.composerPart = k;
+        el.setAttribute('aria-checked', String(shown()));
+      }
+    } else if (type === 'usage') {
       const choice = (icon, label, key, value) => {
         const el = item(`<i class="ph ${icon}" aria-hidden="true"></i>`, label,
           '<i class="ph ph-check" aria-hidden="true"></i>', () => {
@@ -12839,10 +13065,10 @@
       }
     } else if (type === 'chat-cwd') {
       const tab = data, cur = chatCwd(tab);
-      const dirs = [...new Set([cur, ...workspaces.map(w => w.cwd), ...chatThreads().map(t => chatCwd(t))].filter(d => d && !isScratchDir(d)))].slice(0, 12);
+      const dirs = chatProjectDirs(cur).slice(0, 12);
       item('<i class="ph ph-selection"></i>', 'No project', '', () => setChatCwd(tab, null, true));
       if (dirs.length) sep();
-      dirs.forEach(d => item(chatFolderIcon(d, d === cur), escHtml(d.replace(/^\/home\/[^/]+/, '~')), '', () => setChatCwd(tab, d)));
+      dirs.forEach(d => item(projectIconHtml(d).startsWith('<img') ? projectIconHtml(d) : chatFolderIcon(d, d === cur), escHtml(d.replace(/^\/home\/[^/]+/, '~')), '', () => setChatCwd(tab, d)));
       if (window.electronAPI?.selectDirectory) {
         if (dirs.length) sep();
         item('<i class="ph ph-folder-plus"></i>', 'Choose folder…', '', async () => setChatCwd(tab, await window.electronAPI.selectDirectory(cur || undefined)));
@@ -12936,6 +13162,8 @@
       if (!tab || !w) return;
       const agent = liveThreadAgent(tab), h = agent && harnessOf(_tabAgent.get(tab.id));
       item('<i class="ph ph-chats-circle"></i>', 'Open', '', () => openChatTab(tab));
+      const parent = findThreadByKey(tab.chat?.forkOf);
+      if (parent) item('<i class="ph ph-git-fork"></i>', 'Open parent thread', '', () => openChatTab(parent));
       item('<i class="ph ph-pencil-simple"></i>', 'Rename', '', () => { const card = tsOpen && [...tsList.querySelectorAll('.ts-card')].find(c => c.dataset.tab === tab.id); if (card) return startThreadRename(card); showPrompt('Rename thread', tab.chat?.title || tab.label, value => {
         if (!value.trim()) return;
         tab.chat ||= { createdAt: Date.now() };
@@ -13373,42 +13601,39 @@
     if (closeConfirmDontAgain) closeConfirmDontAgain.checked = false;
     if (closeConfirmDontAgainRow) closeConfirmDontAgainRow.style.display = key ? 'flex' : 'none';
 
-    closeConfirmOverlay.inert = false;
     closeConfirmOverlay.classList.add('open');
+    closeConfirmOverlay.showModal();
     closeConfirmCancel.focus();
 
-    let onKey;
-    let cancelled = false;
     const close = () => {
-      closeConfirmOverlay.inert = true;
       closeConfirmOverlay.classList.remove('open');
       closeConfirmOk.onclick = null;
       closeConfirmCancel.onclick = null;
       closeConfirmOverlay.onclick = null;
+      closeConfirmOverlay.oncancel = null;
       document.removeEventListener('keydown', onKey, true);
+      closeConfirmOverlay.close();
     };
     const cancel = () => {
-      if (cancelled) return;
-      cancelled = true;
-      onCancel();
       close();
+      onCancel();
     };
     const submit = () => {
-      if (key && closeConfirmDontAgain && closeConfirmDontAgain.checked) setDontAskAgain(key);
+      if (key && closeConfirmDontAgain?.checked) setDontAskAgain(key);
       close();
       callback();
     };
-
-    onKey = e => {
+    const onKey = e => {
       e.stopPropagation();
       if (submitShortcut && matchShortcut(e, submitShortcut)) { e.preventDefault(); submit(); return; }
-      if (e.key === 'Enter') submit();
-      if (e.key === 'Escape') cancel();
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
     };
 
     closeConfirmOk.onclick = submit;
     closeConfirmCancel.onclick = cancel;
     closeConfirmOverlay.onclick = e => { if (e.target === closeConfirmOverlay) cancel(); };
+    closeConfirmOverlay.oncancel = e => { e.preventDefault(); cancel(); };
     document.addEventListener('keydown', onKey, true);
   }
 
@@ -13710,8 +13935,7 @@
     return qi === query.length ? score : Infinity;
   }
 
-  // One overlay, three modes: 'tabs' (jump to tab), 'cmds' (command palette),
-  // 'snips' (saved commands). Items: { label, meta, icon, run(e), del?, pin? }.
+  // Shared search overlay for tabs, commands, snippets, history and thread projects.
   let tsMode = 'tabs';
   let tsShown = [];
   let tsReturnFocus = null;
@@ -13931,13 +14155,37 @@
     return items;
   }
 
+  function collectProjectItems() {
+    const ws = activeWs();
+    const start = project => newChatTab(findWs(ws?.id) || activeWs(), undefined, undefined, project);
+    const projects = chatProjectDirs(ws?.cwd).map(path => ({
+      label: chatFolderName(path), path, search: `${chatFolderName(path)} ${path}`, run: () => start(path),
+    }));
+    projects.splice(Math.min(1, projects.length), 0, { label: 'No project', icon: 'ph-selection', run: () => start(null) });
+    projects.push({
+      label: 'Choose folder…', icon: 'ph-folder-plus', always: true,
+      run: async () => {
+        if (!window.electronAPI?.selectDirectory) {
+          showPrompt('Project folder path', '', value => { if (value.trim()) start(value.trim()); });
+          return;
+        }
+        try {
+          const path = await window.electronAPI.selectDirectory(ws?.cwd || undefined);
+          if (path) start(path);
+        } catch {
+          zoomBadge('Could not open the folder picker');
+        }
+      },
+    });
+    return projects;
+  }
+
   function renderTabSearch() {
     const q = tsInput.value;
     tsShown = tsItems
-      .map((it, i) => ({ it, i, score: it.pin ? (q ? Infinity : 1e9) : fuzzyScore(q, it.search || it.label) }))
+      .map((it, i) => ({ it, i, score: it.always ? 1e9 : it.pin ? (q ? Infinity : 1e9) : fuzzyScore(q, it.search || it.label) }))
       .filter(x => x.score !== Infinity)
-      // History keeps recency order on ties; other modes sort alphabetically.
-      .sort((a, b) => a.score - b.score || (tsMode === 'history' ? a.i - b.i : a.it.label.localeCompare(b.it.label)))
+      .sort((a, b) => a.score - b.score || (tsMode === 'history' || tsMode === 'projects' ? a.i - b.i : a.it.label.localeCompare(b.it.label)))
       .map(x => x.it);
     tsResults.innerHTML = '';
     tsInput.removeAttribute('aria-activedescendant');
@@ -13956,9 +14204,16 @@
       row.id = 'ts-result-' + i;
       row.setAttribute('role', 'option');
       row.setAttribute('aria-selected', 'false');
-      row.innerHTML = `<i class="ph ${it.icon}"></i><span class="ts-label"></span><span class="ts-ws"></span>`;
+      row.innerHTML = `${it.path ? projectIconHtml(it.path) : `<i class="ph ${it.icon}"></i>`}<span class="ts-label"></span><span class="ts-ws"></span>`;
       row.querySelector('.ts-label').textContent = it.label;
-      row.querySelector('.ts-ws').textContent = it.meta;
+      row.querySelector('.ts-ws').textContent = it.meta || '';
+      if (it.path) {
+        const path = document.createElement('small');
+        path.className = 'ts-project-path';
+        path.textContent = `Local · ${it.path}`;
+        row.querySelector('.ts-label').append(path);
+        row.title = it.path;
+      }
       if (it.metaUi) row.querySelector('.ts-ws').classList.add('ts-ws-ui'); // plain text, not a key/url/command
       if (it.del) {
         const d = document.createElement('i');
@@ -13967,7 +14222,8 @@
         d.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); it.del(); });
         row.appendChild(d);
       }
-      row.addEventListener('mousedown', e => { e.preventDefault(); tsPick(i, e); });
+      row.addEventListener('mousedown', e => { e.preventDefault(); if (tsMode !== 'projects') tsPick(i, e); });
+      if (tsMode === 'projects') row.addEventListener('click', e => tsPick(i, e));
       row.addEventListener('mouseenter', () => setTsSelected(i));
       tsResults.appendChild(row);
     });
@@ -13992,14 +14248,18 @@
     item.run(e);
   }
 
-  const TS_PLACEHOLDERS = { tabs: 'Search tabs…', cmds: 'Type a command…', snips: 'Search snippets… (Ctrl+Enter runs)', history: 'Search browser history…' };
+  const TS_PLACEHOLDERS = { tabs: 'Search tabs…', cmds: 'Type a command…', snips: 'Search snippets… (Ctrl+Enter runs)', history: 'Search browser history…', projects: 'Search projects…' };
   function openPalette(mode, query) {
     if (!tabSearchEl || tsResults.contains(document.activeElement)) return;
     if (tabSearchEl.style.display === 'none') tsReturnFocus = document.activeElement;
     tsMode = mode;
+    tabSearchEl.dataset.mode = mode;
+    tabSearchEl.querySelector('[role="dialog"]').setAttribute('aria-label', mode === 'projects' ? 'Choose a project for the new thread' : 'Find tabs and commands');
+    tsResults.setAttribute('aria-label', mode === 'projects' ? 'Projects' : 'Search results');
+    document.getElementById('ts-enter-label').textContent = mode === 'projects' ? 'Select' : 'Open';
     document.querySelectorAll('[data-palette-mode]').forEach(btn => btn.setAttribute('aria-pressed', String(btn.dataset.paletteMode === mode)));
     tsItems = mode === 'cmds' ? collectCommandItems() : mode === 'snips' ? collectSnippetItems()
-      : mode === 'history' ? collectHistoryItems() : collectTabItems();
+      : mode === 'history' ? collectHistoryItems() : mode === 'projects' ? collectProjectItems() : collectTabItems();
     tsInput.placeholder = TS_PLACEHOLDERS[mode];
     tsInput.setAttribute('aria-label', TS_PLACEHOLDERS[mode]);
     tsInput.setAttribute('aria-expanded', 'true');
@@ -14030,10 +14290,11 @@
   document.querySelectorAll('[data-palette-mode]').forEach(btn => {
     btn.addEventListener('click', () => openPalette(btn.dataset.paletteMode, tsInput.value));
   });
+  tabSearchEl.querySelector('.ts-project-back').addEventListener('click', closeTabSearch);
   tabSearchEl.addEventListener('keydown', e => {
     if (e.key === 'Escape' && e.target !== tsInput) { e.stopPropagation(); closeTabSearch(); }
     if (e.key !== 'Tab') return;
-    const controls = [...tabSearchEl.querySelectorAll('button, input')];
+    const controls = [...tabSearchEl.querySelectorAll('button, input')].filter(control => control.getClientRects().length);
     const first = controls[0], last = controls[controls.length - 1];
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
@@ -14231,6 +14492,7 @@
     dd.replaceChildren();
     const btn = document.createElement('button');
     btn.type = 'button';
+    btn.id = select.id + '-trigger';
     btn.className = 'custom-dropdown-btn';
     btn.setAttribute('aria-haspopup', 'listbox');
     btn.setAttribute('aria-expanded', 'false');
@@ -14266,7 +14528,10 @@
     function refresh() {
       label.replaceChildren();
       appendIcon(label, select.selectedOptions[0]?.dataset.icon, select.selectedOptions[0]?.dataset.agent);
-      label.append(document.createTextNode(select.selectedOptions[0]?.textContent || ''));
+      const text = select.selectedOptions[0]?.textContent || '';
+      label.append(document.createTextNode(text));
+      const accessibleName = select.getAttribute('aria-label');
+      if (accessibleName) btn.setAttribute('aria-label', accessibleName + ': ' + text);
       btn.disabled = select.disabled;
       for (const option of menu.children) {
         const selected = option.dataset.value === select.value;
@@ -14322,7 +14587,7 @@
       Object.assign(menu.style, { position: 'fixed', inset: 'auto', margin: '0', width: 'max-content', minWidth: '0', maxHeight: '256px', visibility: 'hidden' });
       menu.showPopover();
       const anchor = btn.getBoundingClientRect();
-      const modal = dd.closest('#settings-modal')?.getBoundingClientRect();
+      const modal = dd.closest('#settings-modal, dialog')?.getBoundingClientRect();
       const bounds = { left: Math.max(8, modal?.left + 8 || 8), right: Math.min(innerWidth - 8, modal?.right - 8 || innerWidth - 8),
         top: Math.max(8, modal?.top + 8 || 8), bottom: Math.min(innerHeight - 8, modal?.bottom - 8 || innerHeight - 8) };
       const width = Math.min(Math.max(anchor.width, menu.scrollWidth + 2), bounds.right - bounds.left);
@@ -14363,6 +14628,7 @@
       options[next]?.focus({ preventScroll: true }); options[next]?.scrollIntoView({ block: 'nearest' });
     }, { signal: lifetime.signal });
     select.addEventListener('change', refresh, { signal: lifetime.signal });
+    dd.closest('dialog')?.addEventListener('close', () => close(), { signal: lifetime.signal });
     dd._disposeDropdown = () => { close(); lifetime.abort(); };
     refresh();
   }
