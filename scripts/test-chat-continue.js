@@ -44,6 +44,15 @@ app.whenReady().then(async () => {
     check(flow.querySelector('[data-ts="400"]').previousElementSibling.dataset.interruptedAt === '300', 'Second interruption must remain in its own turn');
     renderChatResume(tab);
     check(flow.querySelectorAll('.thr-interruption-status').length === 2, 'History updates must not duplicate interruptions');
+    tab.chat = { interruptions: [{ at: 300 }] };
+    flow.innerHTML = '<div class="thr-seg">Previous model</div><div class="thr-msg user" data-ts="200">Stopped prompt</div>'
+      + '<div class="thr-seg">Next model</div><div class="thr-note">Session note</div><div class="thr-msg user" data-ts="400">Continue</div>';
+    renderChatResume(tab);
+    const resumedHeader = flow.querySelectorAll('.thr-seg')[1], stopped = resumedHeader.previousElementSibling;
+    check(stopped.dataset.interruptedAt === '300' && stopped.previousElementSibling.dataset.ts === '200', 'The interruption must sit between the stopped turn and the next model header');
+    stopped.classList.remove('thr-interruption-status');
+    renderChatResume(tab);
+    check(flow.querySelectorAll('.thr-status-line').length === 1, 'A model header must not cause a duplicate transcript interruption');
     tab.chat = { lastContinueAt: 1000 }; syncChatInterruption(tab, [{ items: [], turnState: { status: 'aborted', at: 123 } }]);
     check(!tab.chat.interruptedAt, 'Old interruptions must not reappear after continuation');
     return 'PASS: reply/tool/crash/aborted interruptions show Continue; play sends exact query once without consuming drafts';

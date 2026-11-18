@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatModels: () => ipcRenderer.invoke('chat:models'),
   saveThreadAttachment: (id, name, bytes) => ipcRenderer.invoke('threads:save-attachment', id, name, bytes),
   threadHistory: (query) => ipcRenderer.invoke('threads:history', query),
+  threadHistoryPreview: (query) => ipcRenderer.invoke('threads:history-preview', query),
   threadHandoff: (query) => ipcRenderer.invoke('threads:handoff', query),
   threadFork: (query) => ipcRenderer.invoke('threads:fork', query),
   threadDelete: (id, scratchDir) => ipcRenderer.invoke('threads:delete', id, scratchDir),
@@ -122,6 +123,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatSdkSetAccess: (key, access) => ipcRenderer.invoke('chat-sdk:set-access', key, access),
   chatSdkStop: (key) => ipcRenderer.invoke('chat-sdk:stop', key),
   chatSdkModels: (harness, bin, cwd) => ipcRenderer.invoke('chat-sdk:models', harness, bin, cwd),
+  chatSdkSkills: (harness, key, bin, cwd) => ipcRenderer.invoke('chat-sdk:skills', harness, key, bin, cwd),
   onChatSdkEvent: (cb) => {
     const l = (_e, d) => cb(d);
     ipcRenderer.on('chat-sdk:event', l);

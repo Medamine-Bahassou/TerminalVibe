@@ -7,7 +7,7 @@ const path = require('path');
 
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
-const { saveThreadAttachment, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, parseCodex } = require('../electron/threads');
+const { saveThreadAttachment, syncThread, threadHistory, threadHistoryPreview, writeHandoff, forkThread, deleteThread, parseCodex } = require('../electron/threads');
 
 const task = (type, timestamp) => ({ type: 'event_msg', timestamp, payload: { type } });
 assert.deepStrictEqual(parseCodex([task('task_started', '2026-01-01T10:00:00Z')]).turnState,
@@ -90,6 +90,25 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   assert.strictEqual(thread.segments[1].sessionId, 'codex-1');
   assert.strictEqual(thread.segments[1].handoff, true);
   assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'history.json'), 'utf8')).segments[0].items.length, 4);
+
+  const longMeta = { id: 'long-history', segments: [{ harness: 'claude', since: 1, frozen: true }, { harness: 'codex', since: 2, frozen: true }] };
+  const longDir = path.join(home, '.terminalvibe', 'threads', longMeta.id), historyFile = path.join(longDir, 'history.json');
+  fs.mkdirSync(longDir, { recursive: true });
+  const stored = { segments: longMeta.segments.map((s, i) => ({
+    ...s, items: Array.from({ length: i ? 650 : 50 }, (_, j) => ({ role: 'user', text: String(j) })),
+  })) };
+  fs.writeFileSync(historyFile, JSON.stringify(stored));
+  const preview = await threadHistoryPreview(longMeta, home);
+  assert.deepStrictEqual(preview.map(s => s.items.length), [0, 100], 'Preview returns only the recent saved tail');
+  assert.strictEqual(preview[1].items[0].text, '550');
+  assert.strictEqual(preview[1].previewOffset, 500, 'Preview indices align with the complete visible history');
+  assert(!fs.existsSync(path.join(longDir, 'thread.json')), 'Preview does not synchronize or write thread metadata');
+  const full = await threadHistory(longMeta, home);
+  assert.deepStrictEqual(full.map(s => s.items.length), [0, 600], 'An exhausted budget does not include older sessions');
+  const stamp = fs.statSync(historyFile).mtimeMs;
+  await threadHistory(longMeta, home);
+  assert.strictEqual(fs.statSync(historyFile).mtimeMs, stamp, 'Unchanged history is not written again');
+  assert.strictEqual(await threadHistoryPreview({ ...longMeta, segments: [] }, home), null, 'A changed segment list does not show stale preview messages');
 
   // The agent's transcript is gone: the thread keeps its own copy.
   fs.rmSync(claudeFile);

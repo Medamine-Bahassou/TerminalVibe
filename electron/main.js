@@ -1176,6 +1176,7 @@ ipcMain.handle('usage:limits', (_e, fresh) => {
 });
 ipcMain.handle('threads:save-attachment', (_e, id, name, bytes) => require('./threads').saveThreadAttachment(id, name, bytes));
 ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
+ipcMain.handle('threads:history-preview', (_e, query) => require('./threads').threadHistoryPreview(query));
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
 ipcMain.handle('threads:fork', (_e, query) => require('./threads').forkThread(query));
 // A scratch thread's folder goes with it; only a direct child of ~/.terminalvibe/scratch is ever removed.
@@ -1292,9 +1293,33 @@ async function gitSnapshot(cwd) {
 }
 ipcMain.handle('git:snapshot', async (_e, cwd) => (await gitSnapshot(cwd))?.tree || null);
 // Files changed between two snapshots, as the chat's changed-files card wants them: [{ path, add, del, patch }].
+// Two trees always diff the same, so results are kept on disk: reopening the app re-renders every past
+// turn, and spawning git for each one stalled the main process for seconds at startup.
+// ponytail: whole-file JSON rewrite, capped at 400 turns; move to one file per diff if it grows.
+const turnDiffFile = () => path.join(app.getPath('userData'), 'turn-diffs.json');
+let turnDiffCache = null, turnDiffSave = null;
+function turnDiffs() {
+  if (!turnDiffCache) {
+    try { turnDiffCache = new Map(Object.entries(JSON.parse(fs.readFileSync(turnDiffFile(), 'utf8')))); }
+    catch { turnDiffCache = new Map(); }
+  }
+  return turnDiffCache;
+}
 ipcMain.handle('git:turn-diff', async (_e, cwd, from, to) => {
   const isTree = s => typeof s === 'string' && /^[0-9a-f]{40,64}$/.test(s);
   if (!isTree(from) || !isTree(to)) return null;
+  const key = `${path.resolve(String(cwd))}\0${from}..${to}`, cache = turnDiffs();
+  if (cache.has(key)) return cache.get(key);
+  const files = await turnDiff(cwd, from, to);
+  if (files && JSON.stringify(files).length < 1 << 20) {
+    cache.set(key, files);
+    while (cache.size > 400) cache.delete(cache.keys().next().value);
+    clearTimeout(turnDiffSave);
+    turnDiffSave = setTimeout(() => fs.promises.writeFile(turnDiffFile(), JSON.stringify(Object.fromEntries(cache))).catch(() => {}), 1000);
+  }
+  return files;
+});
+async function turnDiff(cwd, from, to) {
   const r = await git(cwd, ['rev-parse', '--show-toplevel']);
   if (!r.ok) return null;
   const root = r.out.trim();
@@ -1311,7 +1336,7 @@ ipcMain.handle('git:turn-diff', async (_e, cwd, from, to) => {
     if (cur.body && line) cur.lines.push(line);
   }
   return files.map(f => require('./threads').fileChange(f.path, f.lines));
-});
+}
 ipcMain.handle('git:branches', async (_e, cwd) => {
   if (!cwd || typeof cwd !== 'string') return [];
   const r = await require('./git-command').runGit(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);

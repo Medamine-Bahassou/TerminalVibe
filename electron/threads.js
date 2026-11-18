@@ -9,6 +9,7 @@ const { readEdges } = require('./claude-sessions');
 // shortcut: a transcript over 2 x 2 MB loses its middle, read it in chunks if long threads need it.
 const EDGE = 2 * 1024 * 1024;
 const MAX_ITEMS = 600;
+const PREVIEW_ITEMS = 100;
 
 // name -> absolute launcher path, or null. Windows npm shims are .cmd files.
 function detectAgents(names, env = process.env, home = os.homedir()) {
@@ -296,8 +297,19 @@ async function findClaudeSession(cwd, since, exclude, home) {
 // Codex has no --session-id flag: without a known id, take the newest rollout
 // in this cwd that started after the segment launched.
 // shortcut: two Codex sessions started in the same folder at once can swap, read the id from the Codex app-server if that becomes scriptable.
+const codexFiles = new Map();
 async function codexSegment({ sessionId, cwd, since, exclude = [] }, home) {
   const root = path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'sessions');
+  const cacheKey = sessionId && path.join(root, sessionId);
+  const cachedFile = cacheKey && codexFiles.get(cacheKey);
+  if (cachedFile) {
+    const result = await parseFile(cachedFile, parseCodex).catch(() => null);
+    if (result) {
+      const { id, cwd, ...history } = result;
+      return { sessionId: id || sessionId, ...history };
+    }
+    codexFiles.delete(cacheKey);
+  }
   const start = new Date(Math.max(0, (Number(since) || Date.now()) - 86400000));
   const files = [];
   for (let d = new Date(start.getFullYear(), start.getMonth(), start.getDate()); d <= new Date(); d.setDate(d.getDate() + 1)) {
@@ -309,6 +321,10 @@ async function codexSegment({ sessionId, cwd, since, exclude = [] }, home) {
   for (const { f } of stats.filter(s => s && (sessionId || s.t >= (Number(since) || 0))).sort((a, b) => b.t - a.t)) {
     const res = await parseFile(f, parseCodex).catch(() => null);
     if (!res || (!sessionId && (path.resolve(res.cwd || '') !== path.resolve(cwd || '') || exclude.includes(res.id)))) continue;
+    if (res.id || cacheKey) {
+      if (codexFiles.size >= 128) codexFiles.delete(codexFiles.keys().next().value);
+      codexFiles.set(path.join(root, res.id || sessionId), f);
+    }
     return { sessionId: res.id || sessionId, items: res.items, ...(res.turnState ? { turnState: res.turnState } : {}), ...(res.ctx ? { ctx: res.ctx } : {}) };
   }
   return { sessionId, items: [] };
@@ -361,21 +377,24 @@ async function saveThreadAttachment(id, name, bytes, home = os.homedir()) {
   await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
   return require('./dropped-files').saveDroppedFile(name, bytes, root);
 }
-const imageFiles = new WeakMap(); // parsed image -> saved file (parse results are cached, so this skips re-hashing)
+const imageFiles = new WeakMap(); // parsed image -> files by thread (parse results are cached)
 // Pasted images are saved in the thread folder: the panel and the handoff get file paths, not base64.
 async function saveImages(dir, items) {
+  if (!items.some(it => it.images?.some(image => typeof image !== 'string'))) return items;
   return Promise.all(items.map(async it => {
     if (!it.images) return it;
     const images = [];
     for (const im of it.images) {
       if (typeof im === 'string') { images.push(im); continue; }
-      let file = imageFiles.get(im);
+      let saved = imageFiles.get(im);
+      if (!saved) imageFiles.set(im, saved = new Map());
+      let file = saved.get(dir);
       if (!file) {
         file = path.join(dir, 'images', crypto.createHash('sha1').update(im.data).digest('hex').slice(0, 16) + '.' + IMG_EXT[im.mediaType]);
         try {
           await fs.promises.mkdir(path.dirname(file), { recursive: true });
           await fs.promises.writeFile(file, Buffer.from(im.data, 'base64'), { flag: 'wx' }).catch(e => { if (e.code !== 'EEXIST') throw e; });
-          imageFiles.set(im, file);
+          saved.set(dir, file);
         } catch { continue; } // a failed save drops the preview, never the history
       }
       images.push(file);
@@ -384,15 +403,32 @@ async function saveImages(dir, items) {
   }));
 }
 
-const written = new Map(); // dir -> last JSON written, so an unchanged poll writes nothing
+const written = new Map(); // dir -> metadata and parsed item references from the last write
+const savedHistories = new Map();
+async function readSavedHistory(dir) {
+  const file = path.join(dir, 'history.json');
+  try {
+    const stat = await fs.promises.stat(file);
+    const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+    const cached = savedHistories.get(dir);
+    if (cached?.stamp === stamp) return cached.segments;
+    const saved = JSON.parse(await fs.promises.readFile(file, 'utf8')).segments;
+    const segments = Array.isArray(saved) ? saved : [];
+    if (savedHistories.size >= 16) savedHistories.delete(savedHistories.keys().next().value);
+    savedHistories.set(dir, { stamp, segments });
+    return segments;
+  } catch {
+    savedHistories.delete(dir);
+    return [];
+  }
+}
 
 // Refresh a thread's folder from the agents' transcripts and return its full history.
 // A session whose transcript is gone (deleted, cleaned up) keeps the copy saved earlier.
 async function syncThread(meta = {}, home = os.homedir(), root = threadsRoot(home)) {
   const dir = threadDir(meta.id, root);
   const segs = (Array.isArray(meta.segments) ? meta.segments : []).slice(-20);
-  let saved = [];
-  try { saved = JSON.parse(await fs.promises.readFile(path.join(dir, 'history.json'), 'utf8')).segments || []; } catch {}
+  const saved = await readSavedHistory(dir);
   const fresh = [];
   const claimed = segs.map(s => s.sessionId).filter(Boolean);
   for (const s of segs) {
@@ -412,26 +448,55 @@ async function syncThread(meta = {}, home = os.homedir(), root = threadsRoot(hom
   });
   const thread = { id: meta.id, title: String(meta.title || 'New thread'), projectId: meta.projectId || null, cwd: meta.cwd || null,
     createdAt: meta.createdAt || null, segments: merged.map(({ items, unsupported, ...s }) => s) };
-  const history = { segments: merged.map(({ unsupported, ...s }) => s) };
-  const json = JSON.stringify([thread, history]);
-  if (written.get(dir) !== json) {
-    await fs.promises.mkdir(dir, { recursive: true });
-    await fs.promises.writeFile(path.join(dir, 'thread.json'), JSON.stringify(thread, null, 2));
-    await fs.promises.writeFile(path.join(dir, 'history.json'), JSON.stringify(history));
-    written.set(dir, json);
+  const items = merged.map(s => s.items);
+  const metadata = JSON.stringify(thread);
+  const prior = written.get(dir);
+  if (prior?.metadata !== metadata || !items.every((list, i) => list === prior.items[i] || (!list.length && !prior.items[i].length))) {
+    const history = JSON.stringify({ segments: merged.map(({ unsupported, ...s }) => s) });
+    if (prior?.metadata !== metadata || prior.history !== history) {
+      await fs.promises.mkdir(dir, { recursive: true });
+      await fs.promises.writeFile(path.join(dir, 'thread.json'), JSON.stringify(thread, null, 2));
+      await fs.promises.writeFile(path.join(dir, 'history.json'), history);
+    }
+    if (written.size >= 16) written.delete(written.keys().next().value);
+    written.set(dir, { metadata, items, history });
   }
   return merged;
 }
 
-// What the side panel shows: the newest MAX_ITEMS items across all sessions.
-async function threadHistory(meta, home = os.homedir(), root = threadsRoot(home)) {
-  const out = (await syncThread(meta, home, root)).map(s => ({ ...s }));
-  let budget = MAX_ITEMS;
+function latestItems(segments, budget) {
+  const out = segments.map(s => ({ ...s }));
   for (let i = out.length - 1; i >= 0; i--) {
-    if (out[i].items.length > budget) { out[i].trimmed = out[i].items.length - budget; out[i].items = out[i].items.slice(-budget); }
+    if (out[i].items.length > budget) {
+      out[i].trimmed = out[i].items.length - budget;
+      out[i].items = budget ? out[i].items.slice(-budget) : [];
+    }
     budget = Math.max(0, budget - out[i].items.length);
   }
   return out;
+}
+// Read the saved tail without waiting for the agents' transcripts or writing files.
+async function threadHistoryPreview(meta, home = os.homedir(), root = threadsRoot(home)) {
+  const saved = await readSavedHistory(threadDir(meta.id, root));
+  const segments = (Array.isArray(meta.segments) ? meta.segments : []).slice(-20).map(s => {
+    const old = saved.find(x => x.since === s.since && x.harness === s.harness);
+    return old || { items: [] };
+  });
+  if (!segments.some(s => s.items.length)) return null;
+  const full = latestItems(segments, MAX_ITEMS);
+  return latestItems(segments, PREVIEW_ITEMS).map((segment, i) => ({
+    ...segment, previewOffset: (segment.trimmed || 0) - (full[i].trimmed || 0),
+  }));
+}
+
+const historyReads = new Map();
+async function threadHistory(meta, home = os.homedir(), root = threadsRoot(home)) {
+  const key = JSON.stringify([root, home, meta]);
+  if (historyReads.has(key)) return historyReads.get(key);
+  const result = syncThread(meta, home, root).then(segments => latestItems(segments, MAX_ITEMS))
+    .finally(() => historyReads.delete(key));
+  historyReads.set(key, result);
+  return result;
 }
 
 // What the next agent is told about the history file. One list, so the wording is easy to tune.
@@ -501,8 +566,9 @@ async function forkThread({ meta, seg, item, id, title } = {}, home = os.homedir
 async function deleteThread(id, home = os.homedir(), root = threadsRoot(home)) {
   const dir = threadDir(id, root);
   written.delete(dir);
+  savedHistories.delete(dir);
   await fs.promises.rm(dir, { recursive: true, force: true });
   return true;
 }
 
-module.exports = { detectAgents, saveThreadAttachment, syncThread, threadHistory, writeHandoff, forkThread, deleteThread, toolSummary, toolOutput, parseClaude, parseCodex, parseAcp, acpFile, fileChange };
+module.exports = { detectAgents, saveThreadAttachment, syncThread, threadHistory, threadHistoryPreview, writeHandoff, forkThread, deleteThread, toolSummary, toolOutput, parseClaude, parseCodex, parseAcp, acpFile, fileChange };

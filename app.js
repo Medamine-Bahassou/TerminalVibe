@@ -3459,7 +3459,7 @@
     _profileSwitching = true; // block any accidental saveState flush mid-transition
     // Cover the old profile synchronously so it doesn't flash during the swap.
     const splash = document.getElementById('splash');
-    if (splash) { splash.style.transition = 'none'; splash.classList.remove('hide'); }
+    splash?.classList.remove('hide');
     teardownAllWorkspaces();
     return profilesApi().profilesSwitchInPlace(p.id).then(async ok => {
       try {
@@ -4026,6 +4026,9 @@
   function _syncWebgl(entry, visible) {
     if (!entry || entry.type === 'browser' || !entry.term) return;
     const term = entry.term;
+    // The chat hides its shell. Promoting that shell to WebGL can block the
+    // tab switch and evict a renderer that is in use by a visible terminal.
+    visible = visible && (!entry.threadHistory || entry._cliView);
     if (!visible || entry._webglUnavailable) {
       if (!term._webglAddon) _useCanvas(entry);
       return;
@@ -4628,6 +4631,11 @@
     }
     return text;
   }
+  // The terminal keys act on: a chat's Ctrl+J shell when it has focus, else the active tab.
+  function keyTerminal() {
+    const active = activeTerminal(), bottom = active?._bottomTerminal;
+    return bottom && !bottom.el.hidden && bottom.el.contains(document.activeElement) ? bottom : active;
+  }
   async function copyPrivateText(text, terminal = false) {
     const safe = await privateClipboardText(text, terminal);
     if (window.electronAPI?.clipboardWrite) return window.electronAPI.clipboardWrite(safe);
@@ -5086,7 +5094,7 @@
     pluginEmit('terminal:activate', { wsId, termId });
     const chatEntry = getWorkspaceTerminals(wsp).find(x => x.id === termId && x.threadHistory);
     if (chatEntry) queueMicrotask(() => {
-      if (wsp.activeTermId !== termId || (curChat() === chatEntry && thrPage.parentElement === chatEntry.el)) return;
+      if (activeWsId !== wsId || wsp.activeTermId !== termId || (curChat() === chatEntry && thrPage.parentElement === chatEntry.el)) return;
       _preferChat = chatEntry;
       syncThreadPanel();
     });
@@ -5158,6 +5166,7 @@
           // The 20ms timeout was too short for nested splits; RAF waits for paint.
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
+              if (activeWsId !== wsId || wsp.activeTermId !== termId) return;
               if (t.term && !t.dead && t.el && t.el.offsetParent !== null) {
                 t.term.focus();
                 if (!t.threadHistory || t._cliView) fitTerm(t);
@@ -5170,6 +5179,7 @@
     // Double-RAF + trailing resync — same fix as switchWorkspacePane, single RAF
     // can still read a pre-settle size on a busy frame right after display toggle.
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (activeWsId !== wsId || wsp.activeTermId !== termId) return;
       const terms = getWorkspaceTerminals(wsp);
       syncBrowserSlots();
       const t = terms.find(x => x.id === termId);
@@ -5180,6 +5190,7 @@
       }
     }));
     setTimeout(() => {
+      if (activeWsId !== wsId || wsp.activeTermId !== termId) return;
       syncBrowserSlots();
       const terms = getWorkspaceTerminals(wsp);
       const t = terms.find(x => x.id === termId);
@@ -6125,7 +6136,8 @@
         ${t.locked ? '<i class="ph ph-lock-simple tg-tab-lock"></i>' : ''}<span class="tg-tab-name">${escHtml(t.label)}</span>
         <span class="tg-tab-close" title="Close">✕</span>
         `;
-        tab.title = t.label;
+        tab.title = (t.threadHistory && t.chat?.title) || t.label;
+        if (t.threadHistory) tab.dataset.tipWrap = '';
         if (t.type === 'browser') syncBrowserTabIcon(t, tab);
         syncTabAgentIcon(t, tab);
         applyTabColor(tab, t.color);
@@ -8406,7 +8418,11 @@
     tab.el?.classList.toggle('chat-cli', !!cli);
     if (thrPage.parentElement === tab.el) thrPage.style.display = cli ? 'none' : 'flex';
     if (cli) {
-      requestAnimationFrame(() => { fitTerm(tab); tab.term.refresh(0, tab.term.rows - 1); tab.term.focus(); });
+      requestAnimationFrame(() => {
+        if (!tab._cliView || !tab.el?.offsetParent) return;
+        _syncWebgl(tab, true);
+        fitTerm(tab); tab.term.refresh(0, tab.term.rows - 1); tab.term.focus();
+      });
       void ensureChatTerminalSession(tab);
     }
     else { if (curChat() === tab) { restoreThreadScroll(tab); refreshThreadFlow(tab); syncThreadComposer(tab); } thrInput.focus(); }
@@ -8529,6 +8545,10 @@
       // Keep the chat as the active tab when its shell receives focus.
       panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); });
       panel.querySelector('button').addEventListener('click', () => toggleChatBottomTerminal(owner));
+      panel.addEventListener('contextmenu', e => {
+        e.preventDefault(); e.stopPropagation(); // not the chat's or the tab's menu
+        showCtxMenu(e, 'chat-terminal', { entry, owner });
+      });
       owner.el.classList.add('chat-bottom-open');
       _termFitObserver.observe(panel);
       fitTerm(entry, true);
@@ -8777,13 +8797,19 @@
       const status = t.threadHistory ? chatWorking(t) : t._agentWorking && !agentQuestion(t) && !agentLocked(t);
       icon.classList.toggle('working', !!status && !status.wait);
     }
+    // The whole tab shimmers in the agent's color while it works (see .tg-tab.agent-working).
+    el.classList.toggle('agent-working', !!icon?.classList.contains('working'));
+    if (h?.color) el.style.setProperty('--agent-color', h.color);
   }
   function setChatTabLabel(tab) {
-    const label = (tab.chat?.title || 'Chat').replace(/\s+/g, ' ').slice(0, 28);
+    const title = (tab.chat?.title || 'Chat').replace(/\s+/g, ' ');
+    const el = document.querySelector(`.tg-tab[data-termid="${tab.id}"]`);
+    if (el) el.dataset.tip = title;
+    const label = title.slice(0, 28);
     if (tab.label === label) return;
     tab.label = label;
-    const el = document.querySelector(`.tg-tab[data-termid="${tab.id}"] .tg-tab-name`);
-    if (el) el.textContent = label;
+    const name = el?.querySelector('.tg-tab-name');
+    if (name) name.textContent = label;
     saveState();
   }
   // The chat page is a single element: it moves into the Chat tab in view (the focused one, or
@@ -8806,6 +8832,7 @@
   function syncThreadPanel(force) {
     const page = thrPage;
     if (!page) return;
+    const refreshToken = page._threadRefreshToken = {};
     const ws = activeWs();
     clearInterval(_threadPoll); _threadPoll = null;
     const chats = ws ? getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.el) : [];
@@ -8834,8 +8861,9 @@
     // become visible again without taking focus (for example, above a terminal in a split).
     if (prev && prev !== tab && !prev._closePending && prev.el) {
       const snap = createThreadSnapshot(prev);
-      moveThreadHistory(page, snap);
-      restoreThreadScroll(prev, snap);
+      const hidden = !shown.includes(prev);
+      moveThreadHistory(page, snap, hidden);
+      if (!hidden) restoreThreadScroll(prev, snap);
     }
     if (!tab) {
       _curChat = null;
@@ -8864,6 +8892,8 @@
         delete flow.dataset.seen;
         flow._texts = undefined;
         flow._historyChunks = undefined;
+        flow._historyPreviewTried = false;
+        flow._showingHistoryPreview = false;
         _flowSig = '';
       }
       if (thrFind.q) thrFindRun(true);
@@ -8873,16 +8903,28 @@
     // Restore only after replacing the previous chat's markup, which can reset/clamp scrollTop.
     if (page.querySelector('.thr-flow').dataset.seen) restoreThreadScroll(tab);
     if (snapshot && _flowSig) {
-      // Let the restored history paint before checking the transcript for changes.
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (_curChat === tab && page.parentElement === tab.el) refreshThreadFlow(tab);
-      }));
+      // Let the switch paint first; re-reading the transcript waits for idle time so rapid
+      // tab switching stays smooth (a working chat still refreshes within 150ms).
+      const later = window.requestIdleCallback || (fn => setTimeout(fn, 50));
+      later(() => {
+        if (page._threadRefreshToken === refreshToken && page.parentElement === tab.el) refreshThreadFlow(tab);
+      }, { timeout: chatWorking(tab) ? 150 : 600 });
     } else refreshThreadFlow(tab);
     syncThreadComposer(tab);
     // On startup, sibling Chat panes have never owned the shared page. Give each its own
     // initialized surface and load its history without moving focus or borrowing another chat.
     for (const sibling of shown) {
-      if (sibling === tab || sibling._cliView || sibling.el.querySelector(':scope > .thr-snapshot')) continue;
+      if (sibling === tab || sibling._cliView) continue;
+      const existing = sibling.el.querySelector(':scope > .thr-snapshot');
+      if (existing) {
+        const flow = threadPart(existing, 'flow');
+        if (flow.inert) {
+          disableSnapshotHistoryFocus(flow);
+          flow.inert = false;
+          restoreThreadScroll(sibling, existing);
+        }
+        continue;
+      }
       const snap = createThreadSnapshot(sibling);
       const flow = snap.querySelector('.thr-flow');
       delete flow.dataset.seen;
@@ -8899,14 +8941,27 @@
   }
 
   function syncThreadSelection() {
-    const activeId = activeWs()?.activeTermId;
+    const ws = activeWs();
+    const tabs = ws ? getWorkspaceTerminals(ws) : [];
+    if (ws && document.hasFocus()) {
+      let changed = false;
+      for (const tab of tabs) {
+        if (!tab.chat?.unseenCompletion || !isTermOnScreen(ws, tab.id)) continue;
+        delete tab.chat.unseenCompletion;
+        changed = true;
+      }
+      if (changed) { saveState(); renderThreadsSidebar(); }
+    }
+    const activeId = ws?.activeTermId;
     document.querySelectorAll('#ts-list .ts-card').forEach(button => {
       const selected = button.dataset.tab === activeId;
       button.classList.toggle('active', selected);
-      button.setAttribute('aria-current', String(selected));
+      if (button.getAttribute('aria-current') !== String(selected)) button.setAttribute('aria-current', String(selected));
     });
+    const tabsById = new Map(tabs.map(tab => [tab.id, tab]));
     document.querySelectorAll('.tg-tab[data-termid]').forEach(button => {
-      const tab = findTermById(button.dataset.termid)?.term;
+      const id = button.dataset.termid;
+      const tab = tabsById.get(id) || findTermById(id)?.term;
       button.classList.toggle('unsent', !!(tab?.threadHistory && tab.id !== activeId && tab.chat?.draft?.trim()));
     });
   }
@@ -8925,28 +8980,41 @@
   function threadPart(surface, id) {
     return surface.querySelector('#sbr-thread-' + id) || surface.querySelector('[data-thr-id="sbr-thread-' + id + '"]');
   }
-  function moveThreadHistory(fromSurface, toSurface) {
+  function moveThreadHistory(fromSurface, toSurface, hiddenSnapshot = false) {
     const from = threadPart(fromSurface, 'flow'), to = threadPart(toSurface, 'flow');
     const live = toSurface === thrPage;
+    // Keep the transcript, its indexes, and its rendered turns together when
+    // switching surfaces. The empty flow just fills the slot it leaves behind.
+    const next = to.nextSibling;
+    from.replaceWith(to);
+    toSurface.insertBefore(from, next);
+    if (live) {
+      to.removeAttribute('id');
+      to.dataset.thrId = 'sbr-thread-flow';
+      from.id = 'sbr-thread-flow';
+      delete from.dataset.thrId;
+    } else {
+      from.removeAttribute('id');
+      from.dataset.thrId = 'sbr-thread-flow';
+      to.id = 'sbr-thread-flow';
+      delete to.dataset.thrId;
+    }
     if (live && from._snapshotTabIndexes) {
       for (const [el, tabindex] of from._snapshotTabIndexes) {
         if (tabindex === null) el.removeAttribute('tabindex'); else el.setAttribute('tabindex', tabindex);
       }
+      from._snapshotTabIndexes = undefined;
     }
-    to.replaceChildren(...from.childNodes);
-    to._texts = from._texts;
-    from._texts = undefined;
-    to._historyChunks = from._historyChunks;
-    from._historyChunks = undefined;
-    if (from.dataset.seen) to.dataset.seen = from.dataset.seen; else delete to.dataset.seen;
     if (live) {
       _flowSig = from.dataset.signature || '';
-      bindThreadCopy(to);
+      from.inert = false;
+      bindThreadCopy(from);
     } else {
-      to.dataset.signature = _flowSig;
-      disableSnapshotHistoryFocus(to);
+      from.dataset.signature = _flowSig;
+      if (hiddenSnapshot) from.inert = true;
+      else disableSnapshotHistoryFocus(from);
     }
-    const queue = to.querySelector(':scope > .thr-queue');
+    const queue = from.querySelector(':scope > .thr-queue');
     if (queue) {
       queue.id = live ? 'sbr-thread-queue' : '';
       if (live) delete queue.dataset.thrId; else queue.dataset.thrId = 'sbr-thread-queue';
@@ -8986,10 +9054,13 @@
       owner.term.focus();
       const run = () => {
         if (!action || curChat() !== owner || thrPage.parentElement !== owner.el) return;
-        let target = id ? threadPart(thrPage, id.replace(/^sbr-thread-/, ''))
-          : queueId ? [...thrPage.querySelectorAll('[data-queue-id]')].find(el => el.dataset.queueId === queueId)
-          : key ? [...thrPage.querySelectorAll('[data-key]')].find(el => el.dataset.key === key) : thrPage;
-        for (const index of route) target = target?.children[index];
+        let target = action;
+        if (!thrPage.contains(action)) {
+          target = id ? threadPart(thrPage, id.replace(/^sbr-thread-/, ''))
+            : queueId ? [...thrPage.querySelectorAll('[data-queue-id]')].find(el => el.dataset.queueId === queueId)
+            : key ? [...thrPage.querySelectorAll('[data-key]')].find(el => el.dataset.key === key) : thrPage;
+          for (const index of route) target = target?.children[index];
+        }
         if (!target || target.tagName !== action.tagName) return;
         if (target.matches('textarea, input, [contenteditable="true"]')) {
           target.focus({ preventScroll: true });
@@ -9007,7 +9078,9 @@
       if (inHistory && !_flowSig) refreshThreadFlow(owner).then(run);
       else run();
     }, true);
-    snap.querySelector('.thr-flow').addEventListener('scroll', () => rememberThreadScroll(owner, snap), { passive: true });
+    snap.addEventListener('scroll', e => {
+      if (e.target.matches?.('.thr-flow')) rememberThreadScroll(owner, snap);
+    }, { capture: true, passive: true });
     owner.el.querySelectorAll(':scope > .thr-snapshot').forEach(el => el.remove());
     owner.el.appendChild(snap);
     return snap;
@@ -9227,7 +9300,7 @@
     else if (ev.type === 'idle') {
       s.busy = false; s.idleAt = t._idleAt = Date.now(); t._agentWorking = false;
       if (ev.error) noteChatError(t, `${name}: ${ev.error}`);
-      onTerminalFinished({ id: t.id, kind: 'agent', name: s.harness });
+      onTerminalFinished({ id: t.id, kind: 'agent', name: s.harness, completed: !ev.error && _turns.has(t.id) });
       chatAgentIdle(t);
     } else if (ev.type === 'ask') {
       if (s.lastQuestionId !== ev.ask.id) {
@@ -9312,7 +9385,8 @@
       if (!toggle) tray._q = '';
     }
   }
-  thrPage.querySelector('#sbr-thread-flow').addEventListener('click', e => {
+  thrPage.addEventListener('click', e => {
+    if (!e.target.closest('#sbr-thread-flow')) return;
     const mention = e.target.closest('.thr-thread-mention');
     if (mention) {
       e.preventDefault();
@@ -9341,7 +9415,8 @@
     else window.electronAPI?.showInFolder?.(path);
   });
   // Right-click in the chat: a link, an image, or a message (its text).
-  thrPage.querySelector('#sbr-thread-flow').addEventListener('contextmenu', e => {
+  thrPage.addEventListener('contextmenu', e => {
+    if (!e.target.closest('#sbr-thread-flow')) return;
     citeBtn.hidden = true; // the menu takes over (its "Cite selection" does the same)
     const img = e.target.closest('img.thr-img');
     if (img?.dataset.path) { e.preventDefault(); showCtxMenu(e, 'chat-image', img); return; }
@@ -9450,7 +9525,10 @@
     const chip = thrChip('model');
     if (chip.dataset.sig !== sig) {
       chip.dataset.sig = sig;
-      chip.innerHTML = `<span class="thr-chip-logo"${ho.color ? ` style="color:${ho.color}"` : ''}>${procIconHtml(ho.bin, 'ph-robot')}</span><span>${escHtml(modelName(o, true, ws))}</span>${effort ? `<span class="thr-chip-sub">${escHtml(effort)}</span>` : ''}`
+      const model = modelName(o, true, ws);
+      chip.title = [model, effort, o.fast && 'Fast', o.ultra && 'Ultracode'].filter(Boolean).join(' · ');
+      chip.setAttribute('aria-label', `Agent, model and reasoning: ${chip.title}`);
+      chip.innerHTML = `<span class="thr-chip-logo"${ho.color ? ` style="color:${ho.color}"` : ''}>${procIconHtml(ho.bin, 'ph-robot')}</span><span>${escHtml(model)}</span>${effort ? `<span class="thr-chip-sub">${escHtml(effort)}</span>` : ''}`
         + (o.fast ? '<i class="ph ph-lightning thr-chip-mode" aria-label="Fast"></i>' : '') + (o.ultra ? '<i class="ph ph-infinity thr-chip-mode" aria-label="Ultracode"></i>' : '');
     }
     // The permission mode, beside the model picker (the same choices as the picker's mode menu).
@@ -9462,6 +9540,7 @@
         modeEl.innerHTML = `<i class="ph ${acc[2]}" aria-hidden="true"></i><span>${escHtml(acc[1])}</span>`;
         modeEl.classList.toggle('danger', /full|bypass/i.test(o.access));
         modeEl.setAttribute('aria-label', `Permission mode: ${acc[1]}`);
+        modeEl.title = `Permission mode: ${acc[1]}`;
       }
     }
     syncTabAgentIcon(ws);
@@ -9473,7 +9552,9 @@
     surface.classList.toggle('thr-new', fresh);
     cwdEl.disabled = !fresh;
     const folderName = chatFolderName(cwd);
-    cwdEl.innerHTML = `${folderName === 'No project' ? '<i class="ph ph-selection" aria-hidden="true"></i>' : chatFolderIcon(cwd)}<span>${escHtml(folderName)}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
+    cwdEl.dataset.projectCwd = folderName === 'No project' ? '' : cwd;
+    const icon = projectIconHtml(cwd, 'ph-selection');
+    cwdEl.innerHTML = `${folderName === 'No project' || icon.startsWith('<img') ? icon : chatFolderIcon(cwd)}<span>${escHtml(folderName)}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
     cwdEl.title = fresh ? `Working folder: ${cwd || 'a new scratch folder'}` : cwd;
     // Above the composer: a thread's side chats, or (in a side chat) the thread it belongs to.
     const sidesEl = thrChip('sides');
@@ -9665,6 +9746,7 @@
     if (!_modelPicker) return;
     const pop = _modelPicker;
     _modelPicker = null;
+    pop._modelResize?.disconnect();
     if (document.body.classList.contains('ui-animations') && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       pop.inert = true;
       pop.classList.add('closing');
@@ -9674,23 +9756,22 @@
     thrChip('model').setAttribute('aria-expanded', 'false');
     if (refocus) thrInput.focus();
   }
-  async function openModelPicker() {
+  function openModelPicker() {
     if (_modelPicker) { closeModelPicker(true); return; }
     const ws = curChat(), trigger = thrChip('model');
-    const { found = {} } = await loadChatAgents();
+    let found = _chatAgentsFound;
     const favs = new Set((() => { try { return JSON.parse(localStorage.getItem('tv-model-favs')) || []; } catch { return []; } })());
     const favKey = (h, m) => `${h}:${m}`;
     const currentHarness = chatOpts(ws).harness;
     let filter = favs.size || !chatAgentIds().includes(currentHarness) ? 'fav' : currentHarness, query = '';
     const openCodeCwd = chatCwd(ws);
-    const canLoadOpenCode = found.opencode && window.electronAPI?.chatSdkModels;
-    let openCodeStatus = canLoadOpenCode ? 'Loading OpenCode models…' : '';
+    let openCodeRequested = false, openCodeLoading = false, openCodeStatus = '';
     const pop = document.createElement('div');
     pop.className = 'tv-model-picker';
     pop.setAttribute('role', 'dialog');
     pop.setAttribute('aria-label', 'Choose a model');
     pop.innerHTML = `<div class="mp-rail" role="tablist" aria-label="Agents"></div>
-      <div class="mp-main"><label class="mp-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search models…" aria-label="Search models" spellcheck="false" autocomplete="off"></label><div class="mp-list" role="listbox" aria-label="Models"></div></div>
+      <div class="mp-main"><label class="mp-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search models…" aria-label="Search models" spellcheck="false" autocomplete="off"></label><div class="mp-list" role="listbox" aria-label="Models"><div class="mp-model-rows"></div><div class="mp-empty mp-status" role="status" hidden></div></div></div>
       <div class="mp-side"><div class="mp-side-head"><span>Reasoning</span><span class="mp-side-model"></span></div><div class="mp-efforts" role="listbox" aria-label="Reasoning effort"></div></div>
       <div class="mp-foot">
         <div class="mp-speed" role="radiogroup" aria-label="Speed"><button type="button" role="radio" data-fast="0">Standard</button><button type="button" role="radio" data-fast="1"><i class="ph ph-lightning" aria-hidden="true"></i>Fast</button></div>
@@ -9698,34 +9779,84 @@
         <button type="button" class="mp-access" aria-haspopup="menu" title="Permissions for the next agent the chat starts"></button>
       </div>`;
     const rail = pop.querySelector('.mp-rail'), list = pop.querySelector('.mp-list'), side = pop.querySelector('.mp-efforts'), search = pop.querySelector('input');
+    const modelRows = list.querySelector('.mp-model-rows'), status = list.querySelector('.mp-status');
     const STAR_FILLED = '<svg class="mp-star-fill" viewBox="0 0 256 256" aria-hidden="true"><path fill="currentColor" d="M234.3 114.1l-45.1 39.4 13.5 58.6a16 16 0 0 1-23.8 17.3L128 198.3l-50.8 30.8a16 16 0 0 1-23.9-17.3l13.5-58.5-45.1-39.4a16 16 0 0 1 9.1-28.1l59.5-5.1 23.2-55.3a16 16 0 0 1 29.5 0l23.3 55.3 59.4 5.1a16 16 0 0 1 9.1 28.1z"/></svg>';
     // Favorites in list order; the first nine get Ctrl+1…9 while the picker is open.
-    const favList = () => chatAgentIds().flatMap(id => chatModels(id, ws).filter(m => favs.has(favKey(id, m.id))).map(m => ({ h: harnessOf(id), m })));
+    const favList = () => favs.size ? chatAgentIds().flatMap(id => chatModels(id, ws).filter(m => favs.has(favKey(id, m.id))).map(m => ({ h: harnessOf(id), m }))) : [];
+    // Each row occupies 36px including its gap. Keep a few more mounted on either side of the viewport.
+    const rowHeight = 36, overscan = 4;
+    let rows = [], renderModel = null, firstRendered = -1, lastRendered = -1;
+    function renderModelRows() {
+      const first = Math.min(rows.length, Math.max(0, Math.floor(list.scrollTop / rowHeight) - overscan));
+      const last = Math.min(rows.length, Math.ceil((list.scrollTop + list.clientHeight) / rowHeight) + overscan);
+      if (first === firstRendered && last === lastRendered) return;
+      const focused = modelRows.contains(document.activeElement) ? Number(document.activeElement.dataset.index) : -1;
+      firstRendered = first;
+      lastRendered = last;
+      modelRows.style.paddingTop = Math.min(first, rows.length) * rowHeight + 'px';
+      modelRows.style.paddingBottom = (rows.length - last) * rowHeight + 'px';
+      modelRows.innerHTML = rows.slice(first, last).map((row, i) => renderModel(row, first + i)).join('');
+      if (focused >= 0) {
+        const target = modelRows.querySelector(`[data-index="${focused}"]`);
+        (target || search).focus({ preventScroll: true });
+      }
+    }
+    function focusModel(index) {
+      const top = index * rowHeight, bottom = top + rowHeight;
+      if (top < list.scrollTop) list.scrollTop = top;
+      else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+      renderModelRows();
+      modelRows.querySelector(`[data-index="${index}"]`)?.focus({ preventScroll: true });
+    }
+    list.addEventListener('scroll', renderModelRows, { passive: true });
+    function requestOpenCode() {
+      if (openCodeRequested || !found?.opencode || !window.electronAPI?.chatSdkModels) return;
+      openCodeRequested = true;
+      openCodeLoading = !openCodeCatalogs.has(openCodeCwd);
+      window.electronAPI.chatSdkModels('opencode', found.opencode, openCodeCwd).catch(() => null).then(models => {
+        openCodeLoading = false;
+        if (Array.isArray(models)) {
+          openCodeCatalogs.set(openCodeCwd, models);
+          openCodeStatus = models.length ? '' : 'No models from connected OpenCode providers';
+          if (curChat() === ws) syncThreadComposer(ws);
+        } else openCodeStatus = 'Could not load OpenCode models';
+        if (_modelPicker === pop) render();
+      });
+    }
     const render = () => {
-      const o = chatOpts(ws), favOrder = favList().map(x => favKey(x.h.id, x.m.id));
+      const o = chatOpts(ws), favorites = favList();
+      const favOrder = new Map(favorites.slice(0, 9).map(({ h, m }, i) => [favKey(h.id, m.id), i + 1]));
+      const ids = chatAgentIds(), logos = new Map(ids.map(id => {
+        const h = harnessOf(id);
+        return [id, procIconHtml(h.bin, 'ph-robot')];
+      }));
       rail.innerHTML = [['fav', filter === 'fav' ? STAR_FILLED : '<i class="ph ph-star" aria-hidden="true"></i>', 'Favorites'],
-        ...chatAgentIds().map(id => { const h = harnessOf(id); return [id, `<span${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`, h.name]; })]
+        ...ids.map(id => { const h = harnessOf(id); return [id, `<span${h.color ? ` style="color:${h.color}"` : ''}>${logos.get(id)}</span>`, h.name]; })]
         .map(([id, icon, label]) => `<button type="button" role="tab" class="mp-rail-btn${(filter || '') === id ? ' active' : ''}" data-f="${id}" title="${escHtml(label)}" aria-label="${escHtml(label)}" aria-selected="${(filter || '') === id}">${icon}</button>`).join('');
       const q = query.toLowerCase();
+      if (q || filter === 'opencode' || (filter === 'fav' && [...favs].some(key => key.startsWith('opencode:')))) requestOpenCode();
       // Search looks through every agent; otherwise the rail picks favorites or one agent.
-      const rows = chatAgentIds().filter(id => q || filter === 'fav' || id === filter).flatMap(id => chatModels(id, ws).map(m => ({ h: harnessOf(id), m })))
-        .filter(({ h, m }) => q ? `${m.name} ${h.name} ${m.id}`.toLowerCase().includes(q) : filter !== 'fav' || favs.has(favKey(h.id, m.id)));
-      list.innerHTML = rows.map(({ h, m }) => {
-        const n = favOrder.indexOf(favKey(h.id, m.id));
+      rows = !q && filter === 'fav' ? favorites : ids.filter(id => q || id === filter).flatMap(id => {
+        const h = harnessOf(id);
+        return chatModels(id, ws).filter(m => !q || `${m.name} ${h.name} ${m.id}`.toLowerCase().includes(q)).map(m => ({ h, m }));
+      });
+      renderModel = ({ h, m }, index) => {
+        const key = favKey(h.id, m.id), n = favOrder.get(key), favorite = favs.has(key);
         const sel = o.harness === h.id && (o.model === m.id || (m.id === 'default' && o.model === 'default'));
-        return `<button type="button" role="option" class="mp-row${sel ? ' selected' : ''}" data-h="${h.id}" data-m="${escHtml(m.id)}" aria-selected="${sel}">`
-          + `<span class="mp-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span><span class="mp-name">${escHtml(m.name)}</span>`
-          + (sel ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + (found[h.bin] ? '' : '<span class="mp-hint">not installed</span>')
-          + `<span class="mp-fav${favs.has(favKey(h.id, m.id)) ? ' on' : ''}" title="${favs.has(favKey(h.id, m.id)) ? 'Remove from favorites' : 'Add to favorites'}">${favs.has(favKey(h.id, m.id)) ? STAR_FILLED : '<i class="ph ph-star" aria-hidden="true"></i>'}</span>`
-          + (n >= 0 && n < 9 ? `<kbd class="mp-kbd">Ctrl+${n + 1}</kbd>` : '') + '</button>';
-      }).join('') || `<div class="mp-empty">${!q && filter === 'fav' ? 'Star a model to add it here' : 'No models match'}</div>`;
-      if (!q && filter === 'opencode' && openCodeStatus) {
-        const status = document.createElement('div');
-        status.className = 'mp-empty';
-        status.setAttribute('role', 'status');
-        status.textContent = openCodeStatus;
-        list.appendChild(status);
-      }
+        return `<button type="button" role="option" class="mp-row${sel ? ' selected' : ''}" data-index="${index}" data-h="${h.id}" data-m="${escHtml(m.id)}" aria-selected="${sel}" aria-posinset="${index + 1}" aria-setsize="${rows.length}">`
+          + `<span class="mp-logo"${h.color ? ` style="color:${h.color}"` : ''}>${logos.get(h.id)}</span><span class="mp-name">${escHtml(m.name)}</span>`
+          + (sel ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + (!found || found[h.bin] ? '' : '<span class="mp-hint">not installed</span>')
+          + `<span class="mp-fav${favorite ? ' on' : ''}" title="${favorite ? 'Remove from favorites' : 'Add to favorites'}">${favorite ? STAR_FILLED : '<i class="ph ph-star" aria-hidden="true"></i>'}</span>`
+          + (n ? `<kbd class="mp-kbd">Ctrl+${n}</kbd>` : '') + '</button>';
+      };
+      firstRendered = lastRendered = -1;
+      if (list.scrollTop > rows.length * rowHeight) list.scrollTop = 0;
+      renderModelRows();
+      const showLoading = openCodeLoading && (filter === 'opencode' || (q && !rows.length));
+      status.textContent = (!q && filter === 'opencode' && openCodeStatus)
+        || (rows.length ? '' : !q && filter === 'fav' ? 'Star a model to add it here' : 'No models match');
+      if (showLoading) status.innerHTML = '<span class="tv-loading-spinner" aria-hidden="true"></span>Loading OpenCode models…';
+      status.hidden = !status.textContent;
       const cur = chatModels(o.harness, ws).find(x => x.id === o.model) || chatModels(o.harness, ws)[0];
       pop.querySelector('.mp-side-model').textContent = modelName(o, true, ws);
       side.innerHTML = cur.efforts.map(e => `<button type="button" role="option" class="mp-row mp-effort${o.effort === e ? ' selected' : ''}" data-e="${e}" aria-selected="${o.effort === e}">`
@@ -9747,7 +9878,7 @@
     });
     pop.querySelector('.mp-speed').addEventListener('click', e => { const b = e.target.closest('[data-fast]'); if (b) { setChatOpts(ws, { fast: b.dataset.fast === '1' }); render(); } });
     pop.querySelector('.mp-ultra').addEventListener('click', () => { setChatOpts(ws, { ultra: !chatOpts(ws).ultra }); render(); });
-    rail.addEventListener('click', e => { const b = e.target.closest('.mp-rail-btn'); if (b) { filter = b.dataset.f; query = search.value = ''; render(); search.focus(); } });
+    rail.addEventListener('click', e => { const b = e.target.closest('.mp-rail-btn'); if (b) { filter = b.dataset.f; query = search.value = ''; list.scrollTop = 0; render(); search.focus(); } });
     list.addEventListener('click', e => {
       const r = e.target.closest('.mp-row'); if (!r) return;
       if (e.target.closest('.mp-fav')) {
@@ -9760,7 +9891,7 @@
       render(); // stays open: pick the effort next, or click away
     });
     side.addEventListener('click', e => { const r = e.target.closest('.mp-row'); if (r) { setChatOpts(ws, { effort: r.dataset.e }); render(); } }); // stays open: Esc or click away closes
-    search.addEventListener('input', () => { query = search.value; render(); });
+    search.addEventListener('input', () => { query = search.value; list.scrollTop = 0; render(); });
     pop.addEventListener('keydown', e => {
       if (e.key === 'Escape') { e.stopPropagation(); closeModelPicker(true); return; }
       if (e.ctrlKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
@@ -9768,31 +9899,35 @@
         if (f) { e.preventDefault(); e.stopPropagation(); setChatOpts(ws, { harness: f.h.id, model: f.m.id }); render(); }
         return;
       }
-      const rows = [...pop.querySelectorAll('.mp-list .mp-row')], i = rows.indexOf(document.activeElement);
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); (rows[i < 0 ? 0 : (i + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length])?.focus(); }
-      else if (e.key === 'Enter' && e.target === search) { e.preventDefault(); rows[0]?.click(); }
+      if (!rows.length) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const i = modelRows.contains(document.activeElement) ? Number(document.activeElement.dataset.index) : -1;
+        focusModel(i < 0 ? 0 : (i + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length);
+      } else if (e.key === 'Enter' && e.target === search) {
+        e.preventDefault();
+        list.scrollTop = 0;
+        renderModelRows();
+        modelRows.querySelector('[data-index="0"]')?.click();
+      }
     });
-    render();
     document.body.appendChild(pop);
+    _modelPicker = pop;
+    render();
+    pop._modelResize = new ResizeObserver(renderModelRows);
+    pop._modelResize.observe(list);
     // Above the chip, right edges aligned (the composer sits at the bottom of the pane).
     const r = trigger.getBoundingClientRect();
     pop.style.left = Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8)) + 'px';
     pop.style.top = Math.max(8, r.top - 8 - pop.offsetHeight) + 'px';
-    _modelPicker = pop;
     trigger.setAttribute('aria-expanded', 'true');
     search.focus();
-    if (canLoadOpenCode) {
-      window.electronAPI.chatSdkModels('opencode', found.opencode, openCodeCwd).catch(() => null).then(models => {
-        if (Array.isArray(models)) {
-          openCodeCatalogs.set(openCodeCwd, models);
-          openCodeStatus = models.length ? '' : 'No models from connected OpenCode providers';
-          if (curChat() === ws) syncThreadComposer(ws);
-        } else {
-          openCodeStatus = 'Could not load OpenCode models';
-        }
-        if (_modelPicker === pop) render();
-      });
-    }
+    if (!found) loadChatAgents().then(result => {
+      if (_modelPicker !== pop) return;
+      found = result.found || {};
+      if (filter !== 'fav' && !chatAgentIds().includes(filter)) filter = 'fav';
+      render();
+    });
   }
   thrChip('model')?.addEventListener('click', openModelPicker);
   document.addEventListener('mousedown', e => { if (_modelPicker && !_modelPicker.contains(e.target) && !thrChip('model').contains(e.target) && !e.target.closest?.('.tv-pick-menu')) closeModelPicker(false); }, true);
@@ -9834,6 +9969,13 @@
         return true;
       })();
     }
+    if (_tabAgent.get(t.id) === 'opencode' && /(?:^|[\s([{])\$[\w:.-]/.test(text)) {
+      return openCodeSkillText(t, text).then(text =>
+        _tabAgent.get(t.id) === 'opencode' && isLiveTerminal(t) && sendToTerminalAgent(t, text, steer));
+    }
+    return sendToTerminalAgent(t, text, steer);
+  }
+  function sendToTerminalAgent(t, text, steer) {
     const enc = str => new TextEncoder().encode(str), body = text.replace(/\r?\n/g, '\r');
     sendStdin(t.id, enc(t.term.modes?.bracketedPasteMode ? `\x1b[200~${body}\x1b[201~` : body));
     t._chatSent = true;
@@ -10782,6 +10924,45 @@
     return data;
   };
   let _complete = null; // { kind, start, end, query, items, index }
+  const chatCompleteHarness = ws => chatWorking(ws) && liveThreadAgent(ws) ? _tabAgent.get(ws.id) : chatOpts(ws).harness;
+  const chatHasSkills = harness => ['codex', 'claude', 'opencode', 'antigravity'].includes(harness);
+  const showSkillsInSlash = harness => harness === 'opencode' || harness === 'antigravity';
+  const chatCatalogs = new Map();
+  function chatCatalog(kind, harness, cwd, tabId) {
+    const api = window.electronAPI;
+    if (kind === 'skill' ? !chatHasSkills(harness) || !api?.chatSdkSkills : !api?.chatCommands) return null;
+    const key = JSON.stringify([kind, harness, cwd]);
+    let catalog = chatCatalogs.get(key);
+    if (!catalog) {
+      catalog = { items: undefined, refreshAt: 0, pending: null };
+      chatCatalogs.set(key, catalog);
+    }
+    if (!catalog.pending && Date.now() >= catalog.refreshAt) {
+      catalog.pending = Promise.resolve().then(async () => {
+        let items = null;
+        try {
+          if (kind === 'slash') items = await api.chatCommands(harness, cwd);
+          else {
+            const agents = harness === 'claude' ? null : await loadChatAgents();
+            items = await api.chatSdkSkills(harness, tabId, agents?.found?.[harnessOf(harness).bin], cwd);
+          }
+        } catch { /* Keep the last catalog available if a refresh fails. */ }
+        if (Array.isArray(items)) catalog.items = items;
+        else catalog.items ??= null;
+        catalog.refreshAt = Date.now() + (Array.isArray(items) ? 60000 : 5000);
+        catalog.pending = null;
+        if (_complete?.catalog === catalog || _complete?.skillCatalog === catalog) void updateChatComplete();
+      });
+    }
+    return catalog;
+  }
+  async function openCodeSkillText(tab, text) {
+    const catalog = chatCatalog('skill', 'opencode', chatCwd(tab), tab.id);
+    if (catalog?.items === undefined) await catalog?.pending;
+    const ids = new Set(catalog?.items?.map(skill => skill.name));
+    return text.replace(/(^|[\s([{])\$([\w:.-]+?)(?=$|[\s,!?;)\]}]|\.(?=$|\s))/g,
+      (match, prefix, name) => ids.has(name) ? prefix + '@' + name : match);
+  }
   function chatCompleteTrigger() {
     const editor = threadPart(thrPage, 'input-links');
     if (document.activeElement !== editor || thrInput.selectionStart !== thrInput.selectionEnd) return null;
@@ -10792,6 +10973,11 @@
       const tail = rest.match(/^[\w:.-]*/)[0];
       // A second slash belongs to a path, even if the caret is in its first component.
       if (rest[tail.length] !== '/') return { kind: 'slash', start: caret - m[1].length - 1, end: caret + tail.length, query: m[1] };
+    }
+    m = before.match(/(?:^|[\s([{])\$([\w:.-]*)$/);
+    if (m) {
+      const tail = thrInput.value.slice(caret).match(/^[\w:.-]*/)[0];
+      return { kind: 'skill', start: caret - m[1].length - 1, end: caret + tail.length, query: m[1] };
     }
     m = before.match(/(?:^|\s)@([^\s@]*)$/);
     if (m) return { kind: 'at', start: caret - m[1].length - 1, end: caret, query: m[1] };
@@ -10815,39 +11001,68 @@
   async function updateChatComplete() {
     const trig = chatCompleteTrigger(), ws = curChat();
     if (!trig || !ws) { closeChatComplete(); return; }
-    const cwd = chatCwd(ws), harness = liveThreadAgent(ws) ? _tabAgent.get(ws.id) : chatOpts(ws).harness;
-    let items;
+    const cwd = chatCwd(ws), harness = chatCompleteHarness(ws);
+    const same = sameChatCompleteTrigger(_complete, trig) && _complete.tab === ws
+      && _complete.cwd === cwd && _complete.harness === harness;
+    let items, status, loading, catalog, source, skillCatalog, slashSkills;
     if (trig.kind === 'at') {
       if (!cwd || !window.electronAPI?.chatFiles) { closeChatComplete(); return; }
       const list = await cachedList('f|' + cwd, 15000, () => window.electronAPI.chatFiles(cwd));
-      if (!list) { closeChatComplete(); return; }
-      list._entries ||= [...list.dirs.map(rel => ({ rel, dir: true })), ...list.files.map(rel => ({ rel, dir: false }))];
-      items = rankPaths(list._entries, trig.query).map(e => ({ ...e, cwd }));
+      if (curChat() !== ws || chatCwd(ws) !== cwd || !sameChatCompleteTrigger(chatCompleteTrigger(), trig)) return;
+      source = list;
+      if (same && _complete?.source === source) return;
+      if (list) {
+        list._entries ||= [...list.dirs.map(rel => ({ rel, dir: true })), ...list.files.map(rel => ({ rel, dir: false }))];
+        items = rankPaths(list._entries, trig.query).map(e => ({ ...e, cwd }));
+      } else items = [];
     } else {
-      const list = window.electronAPI?.chatCommands ? await cachedList('c|' + harness + '|' + cwd, 30000, () => window.electronAPI.chatCommands(harness, cwd)) : null;
-      const q = trig.query.toLowerCase();
-      items = (list || []).filter(c => c.name.toLowerCase().includes(q))
-        .sort((a, b) => !a.name.toLowerCase().startsWith(q) - !b.name.toLowerCase().startsWith(q)).slice(0, 50);
+      catalog = chatCatalog(trig.kind, harness, cwd, ws.id);
+      if (!catalog) { closeChatComplete(); return; }
+      source = catalog.items;
+      const skillsCommand = trig.kind === 'slash' && /^\/skills$/i.test(thrInput.value) && chatHasSkills(harness);
+      if (trig.kind === 'slash') {
+        if (skillsCommand) skillCatalog = chatCatalog('skill', harness, cwd, ws.id);
+        else if (showSkillsInSlash(harness)) skillCatalog = chatCatalogs.get(JSON.stringify(['skill', harness, cwd]));
+        if (showSkillsInSlash(harness)) slashSkills = skillCatalog?.items;
+      }
+      loading = !!(trig.kind === 'skill' ? catalog.pending : skillsCommand && skillCatalog?.pending);
+      if (same && _complete.source === source && _complete.slashSkills === slashSkills && _complete.loading === loading) return;
+      const q = trig.query.toLowerCase(), prefixes = [], matches = [];
+      const entries = skillCatalog ? [...(source || []), ...(slashSkills || []).map(skill => ({ ...skill, skill: true }))] : source || [];
+      const seen = new Set();
+      for (const item of entries) {
+        if (seen.has(item.name)) continue;
+        seen.add(item.name);
+        const name = item.name.toLowerCase();
+        if (name.startsWith(q)) prefixes.push(item);
+        else if (name.includes(q)) matches.push(item);
+      }
+      items = prefixes.concat(matches).slice(0, 50);
+      if (loading && (!items.length || skillsCommand)) status = 'Loading skills…';
+      else if (trig.kind === 'skill') {
+        status = source ? (source.length ? 'No matching skills' : 'No available skills') : 'Could not load skills';
+      } else if (source === undefined) status = 'Loading commands…';
     }
-    const now = chatCompleteTrigger(); // typing went on while the list loaded
-    if (curChat() !== ws || !sameChatCompleteTrigger(now, trig)) return;
-    if (!items.length) { closeChatComplete(); return; }
-    const same = sameChatCompleteTrigger(_complete, trig);
-    _complete = { ...trig, items, index: same ? Math.min(_complete.index, items.length - 1) : 0 };
+    if (!items.length && !status) { closeChatComplete(); return; }
+    _complete = { ...trig, items, status, loading, catalog, source, skillCatalog, slashSkills, cwd, harness, tab: ws,
+      index: same && _complete ? Math.max(0, Math.min(_complete.index, items.length - 1)) : 0 };
     renderChatComplete();
   }
   function renderChatComplete() {
     const c = _complete;
     thrComplete.innerHTML = c.items.map((it, i) => {
-      const icon = c.kind === 'slash' ? (it.custom ? 'ph-lightning' : 'ph-terminal') : it.dir ? 'ph-folder' : linkFileIcon(it.rel);
-      const name = c.kind === 'slash' ? '/' + it.name : it.rel.slice(it.rel.lastIndexOf('/') + 1);
-      const meta = c.kind === 'slash' ? it.description || '' : it.rel.includes('/') ? it.rel.slice(0, it.rel.lastIndexOf('/')) : '';
+      const icon = c.kind === 'skill' ? 'ph-lightning' : c.kind === 'slash' ? (it.custom || it.skill ? 'ph-lightning' : 'ph-terminal') : it.dir ? 'ph-folder' : linkFileIcon(it.rel);
+      const name = c.kind === 'at' ? it.rel.slice(it.rel.lastIndexOf('/') + 1) : (c.kind === 'skill' ? '$' : '/') + it.name;
+      const meta = c.kind === 'at' ? it.rel.slice(0, Math.max(0, it.rel.lastIndexOf('/'))) : it.description || '';
       return `<div class="thr-complete-item" role="option" id="thr-complete-${i}" data-i="${i}" aria-selected="${i === c.index}">`
         + `<i class="ph ${icon}" aria-hidden="true"></i><span class="thr-complete-name">${escHtml(name)}</span>`
         + (meta ? `<span class="thr-complete-meta">${escHtml(meta)}</span>` : '') + '</div>';
-    }).join('');
+    }).join('') + (c.status && (!c.items.length || c.loading)
+      ? `<div class="thr-complete-status" role="status">${c.loading ? '<span class="tv-loading-spinner" aria-hidden="true"></span>' : ''}${escHtml(c.status)}</div>` : '');
     thrComplete.hidden = false;
-    threadPart(thrPage, 'input-links')?.setAttribute('aria-activedescendant', 'thr-complete-' + c.index);
+    const editor = threadPart(thrPage, 'input-links');
+    if (c.items.length) editor?.setAttribute('aria-activedescendant', 'thr-complete-' + c.index);
+    else editor?.removeAttribute('aria-activedescendant');
     thrComplete.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
   }
   function closeChatComplete() {
@@ -10856,15 +11071,28 @@
     thrComplete.hidden = true; thrComplete.replaceChildren();
     threadPart(thrPage, 'input-links')?.removeAttribute('aria-activedescendant');
   }
+  function openChatSkills() {
+    closeChatComplete();
+    threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
+    thrInput.value = '$';
+    thrInput.setSelectionRange(1, 1);
+    thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+    thrInput.focus({ preventScroll: true });
+    void updateChatComplete();
+  }
   function acceptChatComplete(i = _complete?.index) {
     const c = _complete, it = c?.items[i];
     if (!it) return;
-    if (!sameChatCompleteTrigger(c, chatCompleteTrigger())) { closeChatComplete(); return; }
+    const ws = curChat();
+    if (ws !== c.tab || chatCwd(ws) !== c.cwd || chatCompleteHarness(ws) !== c.harness
+      || !sameChatCompleteTrigger(c, chatCompleteTrigger())) { closeChatComplete(); return; }
+    if (c.kind === 'slash' && it.name === 'skills' && /^\s*\/([\w:.-]*)\s*$/.test(thrInput.value)
+      && chatHasSkills(c.harness)) { openChatSkills(); return; }
     closeChatComplete();
     let insert, end = c.end;
-    if (c.kind === 'slash') {
+    if (c.kind !== 'at') {
       const next = thrInput.value[end];
-      insert = '/' + it.name;
+      insert = (c.kind === 'skill' || it.skill ? '$' : '/') + it.name;
       if (next === ' ' || next === '\t') { insert += next; end++; }
       else if (!next || !/^[,;!?)}\]]$/.test(next)) insert += ' ';
     } else {
@@ -10890,6 +11118,7 @@
       editor.addEventListener('keydown', e => {
         if (!_complete || e.isComposing || (e.altKey && e.key === 'Enter')) return;
         const n = _complete.items.length;
+        if (!n && e.key !== 'Escape') return;
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') _complete.index = (_complete.index + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
         else if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') acceptChatComplete();
         else if (e.key === 'Escape') closeChatComplete();
@@ -11065,20 +11294,24 @@
   citeBtn.innerHTML = '<i class="ph ph-quotes" aria-hidden="true"></i><span>Cite</span>';
   document.body.appendChild(citeBtn);
   const hideCite = () => { citeBtn.hidden = true; };
-  const flowEl = thrPage.querySelector('#sbr-thread-flow');
-  flowEl.addEventListener('mouseup', e => e.button === 0 && setTimeout(() => { // a right-click opens the menu instead (it has Cite)
-    const sel = window.getSelection(), text = sel?.toString().trim();
-    if (!text || !sel.rangeCount || !flowEl.contains(sel.anchorNode) || !flowEl.contains(sel.focusNode)) return hideCite();
-    const parts = selectedResponseCitations(sel, flowEl);
-    if (!parts.length) return hideCite();
-    const range = parts[parts.length - 1].range, rects = range.getClientRects(), r = rects[rects.length - 1] || range.getBoundingClientRect();
-    citeBtn.hidden = false;
-    citeBtn.style.left = Math.max(8, Math.min(r.right - citeBtn.offsetWidth / 2, innerWidth - citeBtn.offsetWidth - 8)) + 'px';
-    citeBtn.style.top = Math.max(8, r.top - citeBtn.offsetHeight - 6) + 'px';
-  }));
+  thrPage.addEventListener('mouseup', e => {
+    const flow = e.target.closest('#sbr-thread-flow');
+    if (e.button !== 0 || !flow) return;
+    setTimeout(() => { // a right-click opens the menu instead (it has Cite)
+      if (flow.parentElement !== thrPage) return;
+      const sel = window.getSelection(), text = sel?.toString().trim();
+      if (!text || !sel.rangeCount || !flow.contains(sel.anchorNode) || !flow.contains(sel.focusNode)) return hideCite();
+      const parts = selectedResponseCitations(sel, flow);
+      if (!parts.length) return hideCite();
+      const range = parts[parts.length - 1].range, rects = range.getClientRects(), r = rects[rects.length - 1] || range.getBoundingClientRect();
+      citeBtn.hidden = false;
+      citeBtn.style.left = Math.max(8, Math.min(r.right - citeBtn.offsetWidth / 2, innerWidth - citeBtn.offsetWidth - 8)) + 'px';
+      citeBtn.style.top = Math.max(8, r.top - citeBtn.offsetHeight - 6) + 'px';
+    });
+  });
   citeBtn.addEventListener('mousedown', e => e.preventDefault()); // keep the selection
   citeBtn.addEventListener('click', () => {
-    const parts = selectedResponseCitations(window.getSelection(), flowEl);
+    const parts = selectedResponseCitations(window.getSelection(), threadPart(thrPage, 'flow'));
     hideCite();
     if (!parts.length) return;
     for (const { cite, source } of parts) {
@@ -11090,11 +11323,149 @@
     thrInput.focus();
   });
   document.addEventListener('mousedown', e => { if (!citeBtn.hidden && e.target !== citeBtn && !citeBtn.contains(e.target)) hideCite(); }, true);
-  flowEl.addEventListener('scroll', hideCite);
   // "Scroll to end": a pill over the composer while the chat is scrolled up from its latest message.
   const scrollEndBtn = threadPart(thrPage, 'scroll-end');
+  const promptNav = threadPart(thrPage, 'prompts');
+  const promptTicks = promptNav.querySelector('.thr-prompt-ticks');
+  const promptPreview = promptNav.querySelector('.thr-prompt-preview');
+  const promptPreviewTitle = promptPreview.querySelector('.thr-prompt-preview-title');
+  const promptPreviewReply = promptPreview.querySelector('.thr-prompt-preview-reply');
+  const promptSelector = '.thr-msg.user[data-key]';
+  let checkpointPrompts = [];
+  let activeCheckpoint = -1;
+  function showCheckpoint(index) {
+    activeCheckpoint = index;
+    for (const [i, tick] of Array.from(promptTicks.children).entries()) {
+      const distance = index < 0 ? Infinity : Math.abs(i - index);
+      tick.style.setProperty('--tick-scale', [1, .667, .417][distance] ?? .333);
+      tick.classList.toggle('active', distance === 0);
+    }
+    const prompt = checkpointPrompts[index];
+    promptPreview.hidden = !prompt;
+    const label = prompt?.querySelector('.thr-msg-text')?.textContent.trim().replace(/\s+/g, ' ') || 'User message';
+    promptNav.setAttribute('aria-label', prompt ? 'Jump to prompt: ' + label : 'Jump to a prompt');
+    if (!prompt) return;
+    let reply;
+    for (let row = prompt.nextElementSibling; row && !row.matches(promptSelector); row = row.nextElementSibling) {
+      if (row.matches('.thr-msg.assistant')) reply = row;
+    }
+    promptPreview.style.top = promptTicks.children[index].style.top;
+    promptPreviewTitle.textContent = label;
+    promptPreviewReply.textContent = reply?.querySelector('.thr-msg-text')?.textContent.trim() || '';
+  }
+  function renderPromptNav() {
+    const flow = threadPart(thrPage, 'flow');
+    const prompts = [...flow.querySelectorAll(':scope > ' + promptSelector)];
+    if (prompts.length === checkpointPrompts.length && prompts.every((prompt, i) => prompt === checkpointPrompts[i])) return;
+    const activePrompt = checkpointPrompts[activeCheckpoint];
+    checkpointPrompts = prompts;
+    promptNav.hidden = prompts.length < 2;
+    promptNav.style.setProperty('--prompt-rail-height', (prompts.length - 1) * 8 + 'px');
+    promptTicks.replaceChildren(...prompts.map((_, index) => {
+      const tick = document.createElement('span');
+      tick.className = 'thr-prompt-tick';
+      tick.style.top = index / Math.max(1, prompts.length - 1) * 100 + '%';
+      return tick;
+    }));
+    showCheckpoint(prompts.indexOf(activePrompt));
+  }
+  function checkpointAtPointer(event) {
+    const { top, height } = promptNav.getBoundingClientRect();
+    const progress = Math.max(0, Math.min(1, (event.clientY - top) / height));
+    return Math.round(progress * (checkpointPrompts.length - 1));
+  }
+  promptNav.addEventListener('pointermove', event => {
+    if (event.buttons) return;
+    const index = checkpointAtPointer(event);
+    if (index !== activeCheckpoint || promptPreview.hidden) showCheckpoint(index);
+  });
+  promptNav.addEventListener('pointerleave', () => showCheckpoint(-1));
+  promptNav.addEventListener('focus', () => showCheckpoint(Math.max(0, activeCheckpoint)));
+  promptNav.addEventListener('blur', () => showCheckpoint(-1));
+  promptNav.addEventListener('mousedown', event => event.preventDefault());
+  promptNav.addEventListener('keydown', event => {
+    const last = checkpointPrompts.length - 1;
+    const indexes = { ArrowUp: activeCheckpoint - 1, ArrowDown: activeCheckpoint + 1, Home: 0, End: last };
+    if (Object.hasOwn(indexes, event.key)) {
+      event.preventDefault();
+      showCheckpoint(Math.max(0, Math.min(last, indexes[event.key])));
+    }
+    if (event.key === 'Escape') showCheckpoint(-1);
+  });
+  let stopCheckpointScroll;
+  promptNav.addEventListener('click', event => {
+    const index = event.detail ? checkpointAtPointer(event) : Math.max(0, activeCheckpoint);
+    const prompt = checkpointPrompts[index];
+    if (!prompt) return;
+    stopCheckpointScroll?.();
+    showCheckpoint(-1);
+    prompt.tabIndex = -1;
+    prompt.focus({ preventScroll: true });
+    const smooth = document.body.classList.contains('ui-animations') && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const flow = threadPart(thrPage, 'flow');
+    const destination = target => {
+      const viewportTop = flow.getBoundingClientRect().top + flow.clientTop;
+      const top = flow.scrollTop + target.getBoundingClientRect().top - viewportTop - 8;
+      return Math.max(0, Math.min(flow.scrollHeight - flow.clientHeight, top));
+    };
+    // Lay out every row from the checkpoint down once, so the destination uses real heights (no drift).
+    for (let row = prompt.parentElement === flow ? prompt : null; row; row = row.nextElementSibling) row.classList.add('thr-seen');
+    const key = prompt.dataset.key;
+    const started = performance.now();
+    const listeners = new AbortController();
+    let frame, previousProgress = 0, settledFrames = 0;
+    const stop = () => {
+      cancelAnimationFrame(frame);
+      listeners.abort();
+      flow.classList.remove('thr-checkpoint-scrolling');
+      stopCheckpointScroll = undefined;
+    };
+    stopCheckpointScroll = stop;
+    flow.classList.add('thr-checkpoint-scrolling');
+    const advance = now => {
+      const target = prompt.parentElement === flow ? prompt
+        : flow.querySelector(`:scope > ${promptSelector}[data-key="${CSS.escape(key)}"]`);
+      if (!target || flow !== threadPart(thrPage, 'flow') || !flow.clientHeight) return stop();
+      if (target !== prompt && document.activeElement === document.body) {
+        target.tabIndex = -1;
+        target.focus({ preventScroll: true });
+      }
+      // Offscreen messages use estimated heights until the scroll brings them into view.
+      const progress = smooth ? 1 - Math.pow(1 - Math.min(1, (now - started) / 420), 3) : 1;
+      const top = destination(target);
+      const delta = top - flow.scrollTop;
+      const step = progress < 1 ? (progress - previousProgress) / (1 - previousProgress) : 1;
+      flow.scrollTo({ top: flow.scrollTop + delta * step, behavior: 'instant' });
+      previousProgress = progress;
+      settledFrames = progress === 1 && Math.abs(delta) <= 1 ? settledFrames + 1 : 0;
+      if (settledFrames >= 3 || now - started > 1200) stop();
+      else frame = requestAnimationFrame(advance);
+    };
+    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
+      thrPage.addEventListener(type, stop, { capture: true, passive: true, signal: listeners.signal });
+    }
+    advance(started);
+  });
+  promptNav.addEventListener('wheel', event => {
+    if (event.ctrlKey || !event.deltaY) return;
+    event.preventDefault();
+    const flow = threadPart(thrPage, 'flow');
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? flow.clientHeight : 1;
+    flow.scrollTop += event.deltaY * unit;
+  }, { passive: false });
+  function syncCheckpointVisibility() {
+    if (promptNav.hidden) return;
+    const bounds = threadPart(thrPage, 'flow').getBoundingClientRect();
+    for (const [index, prompt] of checkpointPrompts.entries()) {
+      const rect = prompt.getBoundingClientRect();
+      promptTicks.children[index].classList.toggle('in-view', rect.bottom > bounds.top && rect.top < bounds.bottom);
+    }
+  }
+  promptNav.addEventListener('pointerenter', syncCheckpointVisibility);
+  promptNav.addEventListener('focus', syncCheckpointVisibility);
   function syncScrollEnd() {
     if (!scrollEndBtn) return;
+    const flowEl = thrPage.querySelector('.thr-flow');
     if (flowEl.scrollHeight - flowEl.scrollTop - flowEl.clientHeight <= 1) {
       scrollEndBtn.hidden = true;
       return;
@@ -11109,21 +11480,43 @@
   }
   let scrollEndFrame = 0;
   const scheduleScrollEnd = () => {
-    if (!scrollEndFrame) scrollEndFrame = requestAnimationFrame(() => { scrollEndFrame = 0; syncScrollEnd(); });
+    if (!scrollEndFrame) scrollEndFrame = requestAnimationFrame(() => { scrollEndFrame = 0; syncScrollEnd(); syncCheckpointVisibility(); });
   };
-  new MutationObserver(scheduleScrollEnd).observe(flowEl, { childList: true, subtree: true, characterData: true });
-  new ResizeObserver(scheduleScrollEnd).observe(flowEl);
-  flowEl.addEventListener('load', scheduleScrollEnd, true);
-  flowEl.addEventListener('toggle', scheduleScrollEnd, true);
+  const historyChanges = new MutationObserver(() => {
+    scheduleScrollEnd();
+    renderPromptNav();
+  });
+  const historySize = new ResizeObserver(scheduleScrollEnd);
+  let observedFlow;
+  function observeLiveFlow() {
+    const flow = threadPart(thrPage, 'flow');
+    if (observedFlow === flow) return;
+    observedFlow = flow;
+    historyChanges.disconnect();
+    historySize.disconnect();
+    historyChanges.observe(flow, { childList: true, subtree: true, characterData: true });
+    historySize.observe(flow);
+    hideCite();
+    renderPromptNav();
+    scheduleScrollEnd();
+  }
+  new MutationObserver(observeLiveFlow).observe(thrPage, { childList: true });
+  observeLiveFlow();
+  for (const event of ['load', 'toggle']) thrPage.addEventListener(event, e => {
+    if (e.target.closest?.('#sbr-thread-flow')) scheduleScrollEnd();
+  }, true);
   scrollEndBtn?.addEventListener('click', () => {
+    const flowEl = threadPart(thrPage, 'flow');
     const smooth = document.body.classList.contains('ui-animations') && !matchMedia('(prefers-reduced-motion: reduce)').matches;
     flowEl.scrollTo({ top: flowEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   });
   // Each chat remembers where it was scrolled (restored after a tab or chat switch).
-  flowEl.addEventListener('scroll', () => {
+  thrPage.addEventListener('scroll', e => {
+    if (e.target.id !== 'sbr-thread-flow') return;
+    hideCite();
     rememberThreadScroll(_curChat);
     scheduleScrollEnd();
-  }, { passive: true });
+  }, { capture: true, passive: true });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCite(); });
   let _chatCtrl = false, _chatAlt = false;
   const scheduleDialog = document.getElementById('chat-schedule');
@@ -11396,6 +11789,10 @@
     if (thrSend.dataset.mode === 'Continue' && !thrInput.value.trim() && !_chatFiles.length) { void continueInterruptedChat(curChat()); return; }
     if (e.submitter === thrSend && thrSend.classList.contains('stop')) { if (curChat()) stopChatTurn(curChat()); return; }
     const ws = curChat(), typed = thrInput.value.trim(), files = _chatFiles;
+    if (ws && !ws._editingQueued && /^\/skills$/i.test(typed) && chatHasSkills(chatCompleteHarness(ws))) {
+      openChatSkills();
+      return;
+    }
     const text = chatMessageText(typed, files);
     if (!ws || !text) return;
     if (ws._editingQueued) { finishQueuedEdit(ws, true); return; }
@@ -11517,7 +11914,11 @@
     if (!s || s.at < ts - 60000) return null;
     s.promptTs ??= ts;
     if (nextTs && snapOf(Date.parse(nextTs)) === k) return 'later'; // the next prompt is a mid-turn message of the same turn
-    const rerender = () => { _flowSig = ''; if (curChat() === ws) refreshThreadFlow(ws); };
+    // Diffs land in bursts when a chat opens: one refresh for all of them, not one per turn.
+    const rerender = () => {
+      clearTimeout(ws._diffRerender);
+      ws._diffRerender = setTimeout(() => { _flowSig = ''; if (curChat() === ws) refreshThreadFlow(ws); }, 50);
+    };
     const to = s.to || snaps[k + 1]?.from;
     if (!to) {
       if (chatWorking(ws)) return null; // its end state is taken once the agent is done
@@ -11712,14 +12113,23 @@
   const tsAside = document.getElementById('threads-sidebar');
   const tsList = document.getElementById('ts-list');
   const tsSearch = document.getElementById('ts-search');
-  const tsCollapsed = new Set(['settled']); // section ids folded by the user (the Settled shelf starts folded, as in T3 Code)
-  let tsSettledShown = 10; // Settled shelf: 10 rows, then 25 more per "Show more"
-  // Project filter (header funnel, like T3 Code): null = all projects, '' = No project, else the folder path.
+  const tsLayout = document.getElementById('set-thread-layout');
+  try { if (localStorage.getItem('tv-threads-layout') === 'project') tsLayout.value = 'project'; } catch {}
+  const tsCollapsed = new Map();
+  const tsSettledShown = new Map();
+  function normalizeThreadProjectPath(cwd) {
+    const trimmed = cwd.replace(/[\\/]+$/, '');
+    return !trimmed || /^[a-z]:$/i.test(trimmed) ? cwd : trimmed;
+  }
+  // Project filter (header funnel): null = all projects, '' = No project, else the folder path.
   let tsProject = null;
-  try { const p = localStorage.getItem('tv-threads-project'); if (p != null) tsProject = p; } catch {}
-  const tsProjectKey = x => x.folder === 'No project' ? '' : x.cwd || '';
+  try {
+    const savedProject = localStorage.getItem('tv-threads-project');
+    if (savedProject != null) tsProject = normalizeThreadProjectPath(savedProject);
+  } catch {}
+  const tsProjectKey = x => x.folder === 'No project' ? '' : normalizeThreadProjectPath(x.cwd || '');
   // A project's own icon (favicon / app icon, found by the main process like T3 Code), else the folder icon.
-  // Looked up once per folder per session; the sidebar redraws when one arrives.
+  // Looked up once per folder per session; the sidebar and composer update when one arrives.
   const _projIcons = new Map(); // cwd -> { value: dataUrl | null } (value absent while loading)
   function projectIconHtml(cwd, fallback = 'ph-folder') {
     const folderIcon = `<i class="ph ${fallback}" aria-hidden="true"></i>`;
@@ -11727,7 +12137,16 @@
     let entry = _projIcons.get(cwd);
     if (!entry) {
       _projIcons.set(cwd, entry = {});
-      window.electronAPI.projectIcon(cwd).then(v => { entry.value = v || null; if (v) renderThreadsSidebar(); }, () => { entry.value = null; });
+      window.electronAPI.projectIcon(cwd).then(v => {
+        entry.value = v || null;
+        if (!v) return;
+        document.querySelectorAll('.thr-cwd[data-project-cwd]').forEach(button => {
+          if (button.dataset.projectCwd === cwd && button.firstElementChild) {
+            button.firstElementChild.outerHTML = projectIconHtml(cwd);
+          }
+        });
+        renderThreadsSidebar();
+      }, () => { entry.value = null; });
     }
     return entry.value ? `<img class="ts-proj-icon" src="${entry.value}" alt="" aria-hidden="true">` : folderIcon;
   }
@@ -11817,46 +12236,79 @@
         ...(x.w.chat.forkOf ? [{ icon: 'ph-git-fork', text: `Forked from ${findThreadByKey(x.w.chat.forkOf)?.chat?.title || 'a deleted thread'}` }] : [])];
       const parent = x.w.chat.forkOf && findThreadByKey(x.w.chat.forkOf);
       const forkBtn = parent ? `<button type="button" class="ts-pin ts-fork" data-act="parent" aria-label="Open parent thread" data-tip="Open parent: ${escHtml(parent.chat?.title || parent.label || 'thread')}"><i class="ph ph-git-fork" aria-hidden="true"></i></button>` : '';
-      // Settled rows lead with the project's icon (folder icon when it has none); a working thread, the spinner.
-      const lead = x.work ? '<i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>'
-        : projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder');
       const end = x.work ? (x.work.wait ? 'Waiting' : fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))) : ago(x.updated);
       clocks.set(x.w.id, { time: ago(x.updated), status: x.work ? (x.work.wait ? end : `Working ${end}`) : '' });
-      const action = x.draft || x.work ? ''
+      const action = shelf === 'project' || x.draft || x.work ? ''
         : shelf === 'settled' ? '<button type="button" class="ts-act" data-act="unsettle" aria-label="Un-settle thread"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><span class="ts-act-label">Un-settle</span></button>'
         : '<button type="button" class="ts-act" data-act="settle" aria-label="Settle thread"><i class="ph ph-check" aria-hidden="true"></i><span class="ts-act-label">Settle</span></button>';
       const pin = x.w.chat.pinned ? '<button type="button" class="ts-pin" data-act="unpin" aria-label="Unpin thread" data-tip="Unpin thread"><i class="ph ph-push-pin" aria-hidden="true"></i></button>' : '';
       const title = `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`;
       const unsent = x.unsent ? ' unsent' : '';
       const draftIcon = x.unsent ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : '';
-      const folder = `<span class="ts-folder">${draftIcon}${projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder')}<span>${escHtml(x.folder)}</span></span>`;
-      // Pinned / Working / Threads keep the full card (folder · time · status, title, branch · agents); Settled is slim.
+
+      const done = !x.draft && !x.work && x.w.chat.unseenCompletion
+        ? '<span class="ts-status done"><i class="ph ph-check-circle" aria-hidden="true"></i>Done</span>' : '';
+      const statusLabel = x.work ? ', working' : done ? ', done' : '';
+      // Project threads and the active status shelves use full cards; the Settled shelf is slim.
       if (shelf !== 'settled') {
+        const heading = shelf === 'project' ? draftIcon + title
+          : `<span class="ts-folder">${draftIcon}${projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder')}<span>${escHtml(x.folder)}</span></span>`;
         const status = x.work ? '<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i></span>' : '';
         return `<div role="button" tabindex="0" class="ts-card${x.draft ? ' draft' : ''}${unsent}${x.work ? ' working' : ''}" draggable="${!x.draft}" data-tab="${x.w.id}"`
-          + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
-          + `<span class="ts-row">${folder}${pin}<span class="ts-end">${x.draft || x.work ? '' : '<span class="ts-time"></span>'}${action}</span>${status}</span>`
-          + title
+          + ` aria-label="${escHtml(x.title)}${statusLabel}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
+          + `<span class="ts-row">${heading}${pin}<span class="ts-end">${done}${x.draft || x.work ? '' : '<span class="ts-time"></span>'}${action}</span>${status}</span>`
+          + (shelf === 'project' ? '' : title)
           + (x.draft ? '' : `<span class="ts-row ts-meta">${x.branch ? `<span class="ts-branch"><i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(x.branch)}</span></span>` : '<span></span>'}`
             + (x.hs.length || forkBtn ? `<span class="ts-agents">${forkBtn}${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span>')
           + '</div>';
       }
+      // Settled rows lead with the project's icon (folder icon when it has none); a working thread, the spinner.
+      const lead = x.work ? '<i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i>'
+        : projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder');
       return `<div role="button" tabindex="0" class="ts-card slim${unsent}" draggable="true" data-tab="${x.w.id}"`
-        + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
+        + ` aria-label="${escHtml(x.title)}${statusLabel}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
         + `<span class="ts-lead">${lead}</span>${draftIcon}${title}${pin}`
-        + `<span class="ts-end"><span class="ts-time"></span>${action}</span></div>`;
+        + `<span class="ts-end">${done}<span class="ts-time"></span>${action}</span></div>`;
     };
-    const section = (id, label, list, more = 0) => !list.length ? '' : `<div class="ts-section${tsCollapsed.has(id) ? ' collapsed' : ''}" data-sec="${id}">`
-      + `<button type="button" class="ts-section-head" aria-expanded="${!tsCollapsed.has(id)}"><span>${label}</span><span class="ts-count">${list.length}</span><i class="ph ph-caret-down ts-caret" aria-hidden="true"></i></button>`
-      + `<div class="ts-cards">${tsCollapsed.has(id) ? '' : list.slice(0, more || undefined).map(x => row(x, id)).join('')
-        + (more && list.length > more ? `<button type="button" class="ts-more">Show more <span class="ts-count">${list.length - more}</span></button>` : '')}</div></div>`;
-    const drafts = all.filter(x => x.draft);
-    const pinned = all.filter(x => !x.draft && x.w.chat.pinned);
-    const rest = all.filter(x => !x.draft && !x.w.chat.pinned);
+    const section = (id, label, count, body, folded = false) => {
+      if (!count) return '';
+      const collapsed = tsCollapsed.get(id) ?? folded;
+      return `<div class="ts-section${collapsed ? ' collapsed' : ''}" data-sec="${escHtml(id)}">`
+        + `<button type="button" class="ts-section-head" aria-expanded="${!collapsed}">${label}<span class="ts-count">${count}</span><i class="ph ph-caret-down ts-caret" aria-hidden="true"></i></button>`
+        + `<div class="ts-cards">${collapsed ? '' : body()}</div></div>`;
+    };
+    const shelves = list => {
+      const shelf = (kind, label, items) => {
+        const folded = kind === 'settled';
+        const limit = folded ? tsSettledShown.get(kind) ?? 10 : items.length;
+        return section(kind, `<span>${label}</span>`, items.length, () => items.slice(0, limit).map(x => row(x, kind)).join('')
+          + (items.length > limit ? `<button type="button" class="ts-more">Show more <span class="ts-count">${items.length - limit}</span></button>` : ''), folded);
+      };
+      const rest = list.filter(x => !x.draft && !x.w.chat.pinned);
+      return shelf('drafts', 'Drafts', list.filter(x => x.draft))
+        + shelf('pinned', 'Pinned', list.filter(x => !x.draft && x.w.chat.pinned))
+        + shelf('working', 'Working', rest.filter(x => x.work))
+        + shelf('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
+        + shelf('settled', 'Settled', rest.filter(settled).sort((a, b) => b.w.chat.settledAt - a.w.chat.settledAt));
+    };
+    const byProject = () => {
+      const groups = new Map();
+      for (const thread of all) {
+        const key = tsProjectKey(thread);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(thread);
+      }
+      return [...groups].map(([key, list]) => {
+        const id = `project:${JSON.stringify(key)}`;
+        const working = list.filter(x => x.work).length;
+        const label = projectIconHtml(key, key ? 'ph-folder' : 'ph-selection')
+          + `<span class="ts-project-name" title="${escHtml(key || 'No project')}">${escHtml(list[0].folder)}</span>`
+          + (working ? `<span class="ts-project-working">${working} working</span>` : '');
+        return section(id, label, list.length, () => list.map(x => row(x, 'project')).join(''));
+      }).join('');
+    };
     const html = all.length
-      ? section('drafts', 'Drafts', drafts) + section('pinned', 'Pinned', pinned) + section('working', 'Working', rest.filter(x => x.work))
-        + section('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
-        + section('settled', 'Settled', rest.filter(settled).sort((a, b) => b.w.chat.settledAt - a.w.chat.settledAt), tsSettledShown)
+      ? (tsLayout.value === 'project' ? byProject() : shelves(all))
       : `<div class="ts-empty">${q ? 'No threads match' : tsProject != null ? `No threads in ${escHtml(tsProject === '' ? 'No project' : chatFolderName(tsProject))}` : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
     if (tsList.querySelector('.ts-rename')) return; // an inline rename is open: don't rebuild under it
     if (tsList._html !== html) { tsList._html = html; tsList.innerHTML = html; } // rebuild only on change (keeps hover and focus)
@@ -11877,8 +12329,20 @@
   }
   tsList.addEventListener('click', e => {
     const head = e.target.closest('.ts-section-head');
-    if (head) { const id = head.parentElement.dataset.sec; tsCollapsed.has(id) ? tsCollapsed.delete(id) : tsCollapsed.add(id); renderThreadsSidebar(); return; }
-    if (e.target.closest('.ts-more')) { tsSettledShown += 25; renderThreadsSidebar(); return; }
+    if (head) {
+      const id = head.parentElement.dataset.sec;
+      tsCollapsed.set(id, head.getAttribute('aria-expanded') === 'true');
+      renderThreadsSidebar();
+      tsList.querySelector(`[data-sec="${CSS.escape(id)}"] > .ts-section-head`)?.focus({ preventScroll: true });
+      return;
+    }
+    const more = e.target.closest('.ts-more');
+    if (more) {
+      const id = more.closest('.ts-section').dataset.sec;
+      tsSettledShown.set(id, (tsSettledShown.get(id) ?? 10) + 25);
+      renderThreadsSidebar();
+      return;
+    }
     const c = e.target.closest('.ts-card'), tab = c && findChatThread(c.dataset.tab);
     if (!tab || e.target.closest('.ts-rename')) return;
     const act = e.target.closest('[data-act]')?.dataset.act;
@@ -11921,6 +12385,11 @@
     showCtxMenu(e, 'chat-thread', c.dataset.tab);
   });
   tsSearch.addEventListener('input', renderThreadsSidebar);
+  tsLayout.addEventListener('change', () => {
+    try { localStorage.setItem('tv-threads-layout', tsLayout.value); } catch {}
+    tsList.scrollTop = 0;
+    renderThreadsSidebar();
+  });
   document.getElementById('ts-new').addEventListener('click', () => openPalette('projects'));
   document.getElementById('ts-filter')?.addEventListener('click', e => {
     e.stopPropagation(); // the document click handler would close the menu right away
@@ -12276,6 +12745,13 @@
   function toolDetailsHtml(tool) {
     const image = toolImageHtml(tool);
     if (image) return image;
+    const changes = (tool.files || []).filter(file => file.patch);
+    if (changes.length) return changes.map(file => {
+      const path = escHtml(file.path);
+      const diff = file.patch.split('\n').map(line => hlDiffLine(line, file.path)).join('');
+      return `<div class="thr-tool-change"><div class="thr-change-path" title="${path}">${path}</div>`
+        + `<pre class="thr-diff" data-lang="diff" tabindex="0" role="region" aria-label="File diff"><span class="thr-diff-lines">${diff}</span></pre></div>`;
+    }).join('');
     const shell = /(?:^|\.)(bash|shell|local_shell|exec_command|run_terminal_cmd|terminal|run_command|execute)$/i.test(tool.name);
     const command = `<pre class="thr-tool-detail">${hlCode(tool.detail || tool.summary || '', shell ? 'sh' : /^\s*[{[]/.test(tool.detail || '') ? 'json' : '')}</pre>`;
     return command + (shell && tool.output !== undefined
@@ -12305,7 +12781,7 @@
     }
   }
   function decorateWorkUsernames(root) {
-    for (const element of root.querySelectorAll('.thr-tools-text, .thr-tool-sum, .thr-tool-detail, .thr-tool-output, .thr-change-path, .thr-tool-image-path')) {
+    for (const element of root.querySelectorAll('.thr-tools-text, .thr-tool-sum, .thr-tool-detail, .thr-tool-output, .thr-change-path, .thr-tool-image-path, .thr-tool-change .thr-diff')) {
       if (element.dataset.usernamesDecorated) continue;
       element.dataset.usernamesDecorated = '1';
       // Match username components only, including JSON-escaped Windows paths.
@@ -12363,16 +12839,23 @@
     // Keep locally stopped turns even after the active Continue state is cleared.
     const interruptions = [...(tab.chat?.interruptions || [])];
     if (tab.chat?.interruptedAt && !interruptions.some(item => item.at === tab.chat.interruptedAt)) interruptions.push({ at: tab.chat.interruptedAt });
+    const prompts = interruptions.length ? [...flow.querySelectorAll('.thr-msg.user[data-ts]')] : [];
     for (const { at } of interruptions.sort((a, b) => a.at - b.at)) {
-      const next = [...flow.querySelectorAll('.thr-msg.user[data-ts]')].find(el => Number(el.dataset.ts) > at);
-      const previous = next ? next.previousElementSibling : [...flow.children].filter(el => !el.matches('.thr-queue, .thr-working')).at(-1);
+      const next = prompts.find(el => Number(el.dataset.ts) > at);
+      let anchor = next;
+      // A model header introduces the next prompt. Keep the previous turn's
+      // interruption outside that header and any intervening session notes.
+      for (let row = next?.previousElementSibling; row?.matches('.thr-seg, .thr-note'); row = row.previousElementSibling) {
+        if (row.matches('.thr-seg')) anchor = row;
+      }
+      const previous = anchor ? anchor.previousElementSibling : [...flow.children].filter(el => !el.matches('.thr-queue, .thr-working')).at(-1);
       if (previous?.matches('.thr-status-line')) continue;
       const status = document.createElement('div');
       status.className = 'thr-status-line thr-interruption-status';
       status.setAttribute('role', 'status');
       status.dataset.interruptedAt = at;
-      status.innerHTML = '<i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span><span class="thr-status-detail">? Generation stopped</span>';
-      if (next) next.before(status); else flow.insertBefore(status, flow.querySelector('.thr-queue'));
+      status.innerHTML = '<i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span><span class="thr-status-detail">· Generation stopped</span>';
+      if (anchor) anchor.before(status); else flow.insertBefore(status, flow.querySelector('.thr-queue'));
     }
     if (surface === thrPage && curChat() === tab) syncSendBtn();
   }
@@ -12417,23 +12900,54 @@
   });
   async function refreshThreadFlow(ws, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow');
-    const t = ws.chat;
     const api = window.electronAPI;
     const segs = threadSegments(ws);
+    const storeId = ws.chat?.storeId;
+    const current = () => flow.parentElement === surface && ws.chat?.storeId === storeId
+      && (surface === thrPage ? curChat() === ws : surface.isConnected && surface.parentElement === ws.el);
     let hist = [], note = '';
     if (segs.length && !api?.threadHistory) note = 'The history preview needs the desktop app.';
     else if (segs.length) {
-      try { hist = await api.threadHistory(threadMeta(ws)); }
+      const meta = threadMeta(ws);
+      if (!flow.firstElementChild) {
+        flow.innerHTML = '<div class="thr-empty" role="status"><span class="tv-loading-spinner" aria-hidden="true"></span><span>Loading conversation…</span></div>';
+      }
+      if (!flow._historyPreviewTried && !flow.dataset.seen && api.threadHistoryPreview
+        && !ws.chat?.side && !pendingMessages(ws).length && !chatWorking(ws)
+        && (!ws._scrollState || ws._scrollState.bottom)) {
+        flow._historyPreviewTried = true;
+        const cached = await api.threadHistoryPreview(meta).catch(() => null);
+        if (!current()) return;
+        if (cached?.length && !flow.dataset.seen && !pendingMessages(ws).length && !chatWorking(ws)) {
+          renderThreadFlow(ws, surface, flow, segs, cached, '', true);
+          // Show the saved tail before parsing or rendering the full transcript.
+          if (!document.hidden) await new Promise(resolve => {
+            const timeout = setTimeout(() => { cancelAnimationFrame(frame); resolve(); }, 64);
+            let frame = requestAnimationFrame(() => {
+              frame = requestAnimationFrame(() => { clearTimeout(timeout); resolve(); });
+            });
+          });
+          if (!current()) return;
+        }
+      }
+      try { hist = await api.threadHistory(meta); }
       catch { note = 'Could not read the history.'; }
     }
-    if (surface === thrPage ? curChat() !== ws : !surface.isConnected || surface.parentElement !== ws.el) return;
-    if (segs[segs.length - 1]?.harness === 'codex' && hist[hist.length - 1]?.turnState) ws._chatTurnState = hist[hist.length - 1].turnState;
+    if (!current()) return;
+    if (note && flow._showingHistoryPreview) return;
+    renderThreadFlow(ws, surface, flow, segs, hist, note);
+  }
+
+  function renderThreadFlow(ws, surface, flow, segs, hist, note, preview = false) {
+    const t = ws.chat, replacingPreview = flow._showingHistoryPreview && !preview;
+    flow._showingHistoryPreview = preview;
+    if (!preview && segs[segs.length - 1]?.harness === 'codex' && hist[hist.length - 1]?.turnState) ws._chatTurnState = hist[hist.length - 1].turnState;
     syncContextRing(threadPart(surface, 'ctx'), hist[hist.length - 1]?.ctx);
     // A side chat's forked session starts with a copy of the thread's history: like T3 Code, it shows
     // only what was said in the side chat itself (the agent still has the rest).
     if (ws.chat?.side && ws.chat.createdAt) for (const h of hist) h.items = h.items.filter(m => !m.ts || Date.parse(m.ts) >= ws.chat.createdAt - 2000);
     // The chat's title (first prompt) and last activity, for its tab and the threads sidebar.
-    if (t) {
+    if (t && !preview) {
       const all = hist.flatMap(h => h.items);
       const first = all.find(m => m.role === 'user' && m.text);
       const lastTs = Math.max(0, ...all.map(m => Date.parse(m.ts) || 0));
@@ -12444,9 +12958,9 @@
       }
     }
     // A session with messages can be resumed later (or handed off to another agent).
-    hist.forEach((h, i) => { if (h.items.length && segs[i] && !segs[i].used) { segs[i].used = true; saveState(); } });
+    if (!preview) hist.forEach((h, i) => { if (h.items.length && segs[i] && !segs[i].used) { segs[i].used = true; saveState(); } });
     // Codex ids are only known once its transcript exists.
-    hist.forEach((h, i) => {
+    if (!preview) hist.forEach((h, i) => {
       if (!h.sessionId || segs[i].sessionId) return;
       segs[i].sessionId = h.sessionId;
       if (i === segs.length - 1) t.sessionId = h.sessionId;
@@ -12461,7 +12975,7 @@
         && String(m.text || '').replace(/\s+/g, ' ').includes(head));
     };
     // Stopped prompts the transcript doesn't have go into the history where they were sent.
-    if (t?.stopped?.length && hist.length) {
+    if (!preview && t?.stopped?.length && hist.length) {
       const before = t.stopped.length;
       t.stopped = t.stopped.filter(x => !inTranscript(x.text, x.at));
       if (t.stopped.length !== before) saveState();
@@ -12479,10 +12993,15 @@
         }
       }
     }
-    syncChatInterruption(ws, hist);
+    if (!preview) syncChatInterruption(ws, hist);
     renderChatResume(ws, surface);
-    const sig = note + '|' + segs.length + '|' + hist.map(h => { const l = h.items[h.items.length - 1]; return `${h.items.length}:${l?.text?.length || 0}:${l?.error ? 1 : 0}`; }).join(',')
-      + '|' + JSON.stringify(hist.map(h => h.items.filter(m => m.role === 'tool').map(m => m.output)));
+    const sig = note + '|' + segs.length + '|' + hist.map(h => {
+      const l = h.items[h.items.length - 1];
+      return `${h.trimmed || 0}:${h.items.length}:${l?.ts || ''}:${l?.text?.length || 0}:${l?.error ? 1 : 0}`;
+    }).join(',')
+      // Tool outputs grow while they stream: their count and total size catch that without
+      // stringifying every output on each refresh (that made switching to long chats lag).
+      + '|' + hist.map(h => { let n = 0, len = 0; for (const m of h.items) if (m.role === 'tool') { n++; len += typeof m.output === 'string' ? m.output.length : (m.output ? JSON.stringify(m.output).length : 0); } return n + ':' + len; }).join(',');
     // The sent message shows until the transcript has it (or 60s pass).
     const pending = pendingMessages(ws);
     const remaining = pending.filter(pend => {
@@ -12509,6 +13028,7 @@
     if (surface === thrPage) _flowSig = sigP; else flow.dataset.signature = sigP;
     const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     const scrollTop = flow.scrollTop;
+    const distanceFromBottom = replacingPreview ? flow.scrollHeight - flow.clientHeight - scrollTop : 0;
     const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
     const outputScroll = new Map([...flow.querySelectorAll('details[open] > .thr-tool-output')].map(el => [el.parentElement.dataset.key, { top: el.scrollTop, left: el.scrollLeft }]));
     if (!segs.length || note) {
@@ -12541,6 +13061,8 @@
       forkNote = `<div class="thr-note thr-fork-note"><i class="ph ph-git-fork" aria-hidden="true"></i>Forked from ${escHtml(from?.chat?.title || from?.label || 'a deleted thread')}</div>`;
     }
     const texts = new Map(); // data-key -> raw message text, for the copy buttons
+    const lazy = new Map(); // data-key -> body of a collapsed tool call or diff, built when it opens
+    const lazyBody = (key, html) => { lazy.set(key, html); return ''; };
     let lastHead = '';
     const addAgentHeader = (opts, fallbackHarness, time) => {
       const id = opts.harness || fallbackHarness;
@@ -12576,9 +13098,9 @@
         return `<details class="thr-tools" data-key="${key}"><summary><i class="ph ${completed ? 'ph-hammer' : toolIcon(last.name)}" aria-hidden="true"></i>`
           + `<span class="thr-tools-text">${escHtml(title)}</span>${!completed && tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
           + `${completed ? '' : `<span class="thr-tools-time">${clockTime(last.ts)}</span>`}<i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
-          // Each call expands to its full command or arguments (older saved history has only the summary).
+          // Each call expands to its command, arguments, or recorded file changes.
           + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${toolTimestampHtml(x.ts)}${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
-            + toolDetailsHtml(x) + '</details>').join('')
+            + lazyBody(`${key}:${n}`, () => toolDetailsHtml(x)) + '</details>').join('')
           + '</div></details>';
       };
       const msgHtml = (m, key, showActions = true, extra = '') => {
@@ -12587,7 +13109,8 @@
         // Copy + time under the message, shown on hover.
         // A reply can be forked: a new thread with the history up to it. The fork point is the full (untrimmed)
         // item index, which is what the main process slices.
-        const forkAt = m.role !== 'user' && window.electronAPI?.threadFork ? Number(key.split(':')[1]) + (res.trimmed || 0) : null;
+        const forkAt = m.role !== 'user' && window.electronAPI?.threadFork
+          ? Number(key.split(':')[1]) + (res.trimmed || 0) - (res.previewOffset || 0) : null;
         const actions = showActions ? `<div class="thr-actions"><button type="button" class="thr-copy" aria-label="Copy message"><i class="ph ph-copy" aria-hidden="true"></i></button>`
           + (forkAt != null ? `<button type="button" class="thr-fork" data-seg="${i}" data-item="${forkAt}" data-tip="Fork from here" aria-label="Fork the thread from this reply"><i class="ph ph-git-fork" aria-hidden="true"></i></button>` : '')
           + `<span class="thr-time">${clockTime(m.ts)}</span></div>` : '';
@@ -12649,12 +13172,12 @@
           + `<span class="thr-add">+${sum('add')}</span><span class="thr-del">-${sum('del')}</span></summary>`
           + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"><summary><i class="ph ${linkFileIcon(f.path)}" aria-hidden="true"></i>`
             + `<span class="thr-change-path" title="${escHtml(f.path)}">${escHtml(rel(f.path))}</span><span class="thr-add">+${f.add}</span><span class="thr-del">-${f.del}</span></summary>`
-            + `<pre class="thr-diff">${f.patches.map(p => p.split('\n').map(l => hlDiffLine(l, f.path)).join('')).join('<span class="dl sep"></span>')}</pre></details>`).join('')
+            + lazyBody(`${key}:${n}`, () => `<pre class="thr-diff"><span class="thr-diff-lines">${f.patches.map(p => p.split('\n').map(l => hlDiffLine(l, f.path)).join('')).join('<span class="dl sep"></span>')}</span></pre>`) + '</details>').join('')
           + '</details><button type="button" class="thr-diff-btn"><i class="ph ph-file-text" aria-hidden="true"></i>Open diff</button></div>';
       };
       // T3-style turns: the prompt; for a finished turn a collapsible "Worked for 16s" holding its
       // steps, then the final reply and the files it changed. The turn in progress shows its steps live.
-      const list = res.items.map((m, j) => ({ m, j }));
+      const list = res.items.map((m, j) => ({ m, j: j + (res.previewOffset || 0) }));
       const firstPrompt = list.findIndex(x => x.m.role === 'user');
       if (firstPrompt !== 0) html += stepsHtml(firstPrompt < 0 ? list : list.slice(0, firstPrompt), i + ':pre', !working || i < segs.length - 1 || firstPrompt > 0); // a resumed session's start
       finishChunk();
@@ -12688,7 +13211,7 @@
         html += fin >= 0 ? msgHtml(rest[fin].m, i + ':' + rest[fin].j, true, changes) : changes;
         // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
         const stopped = !live && (prompt.m.interrupted || rest.find(x => x.m.interrupted)?.m.interrupted);
-        if (stopped && i === segs.length - 1 && e === list.length) {
+        if (stopped && !preview && i === segs.length - 1 && e === list.length) {
           const at = Math.max(Date.parse(prompt.m.ts) || 0, ...rest.map(x => Date.parse(x.m.interruptedAt || x.m.ts) || 0));
           if (at > (ws.chat.lastContinueAt || 0)) ws.chat.interruptedAt ||= at;
         }
@@ -12704,7 +13227,13 @@
     const newOutputs = content.querySelectorAll('.thr-tool-output');
     const newImages = content.querySelectorAll('img.thr-img');
     // Keep the open states on replaced rows, without making a toggle invalidate cached markup.
-    for (const details of content.querySelectorAll('details[data-key]')) details.open = open.has(details.dataset.key);
+    flow._lazy = lazy;
+    // Lazy-render each row once: after it first scrolls into view it stays laid out (no re-skip jitter).
+    for (const row of flow.children) if (!row.classList.contains('thr-seen')) seenObserver().observe(row);
+    for (const details of content.querySelectorAll('details[data-key]')) {
+      details.open = open.has(details.dataset.key);
+      if (details.open) fillLazyDetails(details, lazy);
+    }
     decorateWorkUsernames(content);
     flow._texts = texts;
     hydrateChatAttachmentSizes(content);
@@ -12745,7 +13274,14 @@
     }
     newImages.forEach(bindThreadImage);
     if (!flow.dataset.seen && ws._scrollState && !ws._scrollState.bottom) { flow.scrollTop = ws._scrollState.top; flow.dataset.seen = '1'; } // back where it was
-    else { flow.scrollTop = atBottom || !flow.dataset.seen ? flow.scrollHeight : scrollTop; flow.dataset.seen = '1'; }
+    else {
+      const bottom = Math.max(0, flow.scrollHeight - flow.clientHeight);
+      const restoredTop = atBottom || !flow.dataset.seen ? bottom
+        : replacingPreview ? bottom - distanceFromBottom : scrollTop;
+      // Assigning the current position cancels an in-flight smooth scroll.
+      if (flow.scrollTop !== restoredTop) flow.scrollTop = restoredTop;
+      flow.dataset.seen = '1';
+    }
     if (surface === thrPage) syncScrollEnd();
   }
   async function hydrateThreadImage(img) {
@@ -12824,6 +13360,21 @@
       });
     }
   }
+  // Hidden tool bodies and diffs are built on first open: highlighting all of them made long chats slow to show.
+  function seenObserver() {
+    return seenObserver.io ||= new IntersectionObserver(entries => {
+      for (const e of entries) if (e.isIntersecting) { e.target.classList.add('thr-seen'); seenObserver.io.unobserve(e.target); }
+    }, { rootMargin: '600px 0px' });
+  }
+  function fillLazyDetails(details, lazy = details.closest('.thr-flow')?._lazy) {
+    const html = !details.dataset.filled && lazy?.get(details.dataset.key);
+    if (!html) return;
+    details.dataset.filled = '1';
+    details.insertAdjacentHTML('beforeend', html());
+    decorateWorkUsernames(details);
+    details.querySelectorAll('img.thr-img').forEach(bindThreadImage);
+  }
+  document.addEventListener('toggle', e => { if (e.target.open && e.target.matches?.('details[data-key]')) fillLazyDetails(e.target); }, true);
   function updateThreadHistory(flow, chunks) {
     const previous = flow._historyChunks || [];
     let first = 0;
@@ -12855,6 +13406,7 @@
   function thrFindRun(keepIndex) {
     const flow = thrPage.querySelector('#sbr-thread-flow'), q = thrFind.q.toLowerCase(), ranges = [];
     if (q && flow) {
+      flow.querySelectorAll('details[data-key]:not([data-filled])').forEach(d => fillLazyDetails(d));
       const walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT, { acceptNode: n =>
         n.parentElement?.closest('.thr-actions, .thr-tools-time, .thr-seg-time, .thr-img-actions') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
       for (let n; (n = walker.nextNode());) {
@@ -13332,8 +13884,10 @@
       }); });
       if (window.electronAPI?.chatTitle) item('<i class="ph ph-sparkle"></i>', 'Regenerate title', '', () => regenerateChatTitle(tab));
       item(`<i class="ph ${tab.chat?.pinned ? 'ph-push-pin-slash' : 'ph-push-pin'}"></i>`, tab.chat?.pinned ? 'Unpin' : 'Pin', '', () => setThreadFlag(tab, 'pinned', !tab.chat?.pinned));
-      const isSettled = tab.chat?.settledAt && tab.chat.settledAt >= (tab.chat.updatedAt || 0);
-      item(`<i class="ph ${isSettled ? 'ph-arrow-counter-clockwise' : 'ph-check'}"></i>`, isSettled ? 'Un-settle' : 'Settle', '', () => setThreadFlag(tab, 'settledAt', !isSettled));
+      if (tsLayout.value !== 'project') {
+        const isSettled = tab.chat?.settledAt && tab.chat.settledAt >= (tab.chat.updatedAt || 0);
+        item(`<i class="ph ${isSettled ? 'ph-arrow-counter-clockwise' : 'ph-check'}"></i>`, isSettled ? 'Un-settle' : 'Settle', '', () => setThreadFlag(tab, 'settledAt', !isSettled));
+      }
       if (h) {
         sep();
         item('<i class="ph ph-terminal-window"></i>', `Show ${escHtml(h.name)} terminal`, '', () => { if (viewSwitchBlocked(tab)) return; openChatTab(tab); setChatView(tab, true); });
@@ -13346,6 +13900,15 @@
       }
       sep();
       item('<i class="ph ph-trash"></i>', 'Delete thread', '', () => confirmDeleteThread(tab, w), true);
+    } else if (type === 'chat-terminal') {
+      const { entry, owner } = data, term = entry.term;
+      const copy = item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+Shift+C', () => { void copyPrivateTerminal(term).catch(() => {}); });
+      if (!term.hasSelection()) copy.classList.add('disabled');
+      item('<i class="ph ph-clipboard-text"></i>', 'Paste', 'Ctrl+Shift+V', () => { doPaste(entry); term.focus(); });
+      item('<i class="ph ph-selection-all"></i>', 'Select all', '', () => term.selectAll());
+      item('<i class="ph ph-eraser"></i>', 'Clear', '', () => term.clear());
+      sep();
+      item('<i class="ph ph-x"></i>', 'Hide terminal', 'Ctrl+J', () => toggleChatBottomTerminal(owner));
     } else if (type === 'browser-more') {
       const { entry, history } = data;
       item('<i class="ph ph-clock-counter-clockwise"></i>', 'History', '', history);
@@ -13844,10 +14407,16 @@
     const group = findGroupContainingTerm(ws.layout, termId);
     return !!group && group.activeTermId === termId && (!ws._maximizedGroupId || ws._maximizedGroupId === group.id);
   }
-  function onTerminalFinished({ id, kind, name }) {
-    if (!notifyOnCommandFinish) return;
+  window.addEventListener('focus', syncThreadSelection);
+  function onTerminalFinished({ id, kind, name, completed = kind === 'agent' }) {
     const found = findTermById(id);
     if (!found || (document.hasFocus() && isTermOnScreen(found.ws, id))) return;
+    if (completed && found.term.threadHistory && found.term.chat && !found.term.chat.unseenCompletion) {
+      found.term.chat.unseenCompletion = true;
+      saveState();
+      renderThreadsSidebar();
+    }
+    if (!notifyOnCommandFinish) return;
     if (notificationSound) playNotifySound();
     const agent = /^claude/i.test(name || '') ? 'Claude Code' : /^codex/i.test(name || '') ? 'Codex' : null;
     const title = kind === 'agent' ? `${agent || name} finished responding` : (name ? `${name} finished` : 'Command finished');
@@ -15016,8 +15585,6 @@
     renderShortcutsList();
 
     // Always open on the first category (General) unless deep-linked
-    document.getElementById('settings-nav-search').value = '';
-    document.querySelectorAll('.settings-cat-btn').forEach(btn => { btn.hidden = false; });
     switchSettingsCat(typeof cat === 'string' ? cat : 'general');
     settingsOverlay.inert = false;
     settingsOverlay.classList.add('open');
@@ -15057,6 +15624,7 @@
       shown++;
       const item = document.createElement('div');
       item.className = 'shortcut-item';
+      item.dataset.shortcutAction = action;
       const labelEl = document.createElement('span');
       labelEl.textContent = label;
       const key = document.createElement('span');
@@ -15294,6 +15862,11 @@
 
   function switchSettingsCat(cat) {
     closeActiveDropdown?.();
+    settingsSearchInput.value = '';
+    settingsSearchResults.hidden = true;
+    settingsSearchMatches.replaceChildren();
+    settingsSearchStatus.textContent = '';
+    settingsOverlay.querySelector('.settings-search-target')?.classList.remove('settings-search-target');
     if (!document.querySelector(`.settings-cat-btn[data-cat="${CSS.escape(cat)}"]`)) cat = 'general';
     const prevCat = document.querySelector('.settings-cat-btn.active')?.dataset.cat;
     document.querySelectorAll('.settings-cat-btn').forEach(b => { b.classList.toggle('active', b.dataset.cat === cat); b.setAttribute('aria-pressed', String(b.dataset.cat === cat)); });
@@ -15448,7 +16021,7 @@
     }
     // Copy
     if (matchShortcut(e, 'copy')) {
-      const t = activeTerminal();
+      const t = keyTerminal();
       if (t && t.type !== 'browser' && t.term.hasSelection()) {
         e.preventDefault(); e.stopPropagation();
         void copyPrivateTerminal(t.term).catch(() => {});
@@ -15458,7 +16031,7 @@
     // Paste — leave it to the focused text field
     const inTextField = isTextField(e.target);
     if (matchShortcut(e, 'paste')) {
-      const t = activeTerminal();
+      const t = keyTerminal();
       if (t && t.type !== 'browser' && !inTextField) {
         e.preventDefault(); e.stopPropagation();
         doPaste(t);
@@ -15467,7 +16040,7 @@
     }
     // Ctrl+V paste (non-shift variant)
     if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') {
-      const t = activeTerminal();
+      const t = keyTerminal();
       if (t && t.type !== 'browser' && !inTextField) {
         e.preventDefault(); e.stopPropagation();
         doPaste(t);
@@ -15557,6 +16130,137 @@
     if (dispatchPluginKeydown(e)) return;
   });
 
+  const settingsSearchInput = document.getElementById('settings-nav-search');
+  const settingsSearchResults = document.getElementById('settings-search-results');
+  const settingsSearchMatches = settingsSearchResults.querySelector('.settings-search-matches');
+  const settingsSearchStatus = settingsSearchResults.querySelector('.settings-search-status');
+
+  function normalizeSettingsSearch(text) {
+    return text.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  }
+
+  function showSettingsSearchTarget({ cat, target, action }) {
+    switchSettingsCat(cat);
+    if (action) {
+      document.getElementById('shortcuts-search').value = '';
+      renderShortcutsList();
+      target = document.querySelector(`[data-shortcut-action="${CSS.escape(action)}"]`);
+    }
+    if (target && !target.getClientRects().length) {
+      const fallback = {
+        'set-custom-search-row': 'set-search-engine',
+        'fontfamily-custom-row': 'set-fontpreset',
+        'set-default-shell-row': 'set-default-path',
+      }[target.id];
+      target = fallback && document.getElementById(fallback)?.closest('[data-setting]');
+    }
+    const destination = target || settingsOverlay.querySelector('.settings-cat-btn.active');
+    if (target) {
+      target.tabIndex = -1;
+      target.classList.add('settings-search-target');
+      target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    destination?.focus({ preventScroll: true });
+  }
+
+  function renderSettingsSearch() {
+    const rawQuery = settingsSearchInput.value.trim();
+    const query = normalizeSettingsSearch(rawQuery);
+    const terms = query ? query.split(' ') : [];
+    const results = [];
+    settingsSearchMatches.replaceChildren();
+
+    function addResult(cat, category, label, keywords, destination) {
+      if (!label) return;
+      const name = normalizeSettingsSearch(label);
+      const details = normalizeSettingsSearch(keywords);
+      const context = normalizeSettingsSearch(category);
+      if (!terms.length || !terms.every(term => name.includes(term) || details.includes(term) || context.includes(term))) return;
+      if (destination && !terms.some(term => name.includes(term) || details.includes(term))) return;
+      const score = (name === query ? 100 : name.includes(query) ? 20 : 0) +
+        terms.reduce((total, term) => total + (name.includes(term) ? 4 : details.includes(term) ? 2 : 0), 0);
+      results.push({ cat, category, label, score, ...destination });
+    }
+
+    for (const section of settingsOverlay.querySelectorAll('.settings-section[data-cat]')) {
+      const cat = section.dataset.cat;
+      const category = settingsOverlay.querySelector(`.settings-cat-btn[data-cat="${cat}"] span`).textContent.trim();
+      if (!rawQuery) continue;
+      addResult(cat, category, category, '', null);
+      for (const target of section.querySelectorAll('[data-setting]')) {
+        if (target.style.display === 'none') continue;
+        const heading = target.querySelector('h3') || target.querySelector(':scope > .gap-1 > :first-child');
+        const label = heading?.textContent.trim() || target.textContent.trim() || target.title;
+        const options = [...target.querySelectorAll('option')].map(option => option.textContent).join(' ');
+        addResult(cat, category, label, `${target.textContent} ${target.dataset.setting} ${options}`, { target });
+      }
+      if (cat === 'shortcuts') {
+        for (const [action, shortcut] of Object.entries(customShortcuts)) {
+          addResult(cat, category, SHORTCUT_LABELS[action] || action, formatKeyCombo(shortcut), { action });
+        }
+      }
+    }
+
+    settingsSearchResults.hidden = !rawQuery;
+    settingsSearchStatus.textContent = !rawQuery ? '' : results.length
+      ? `${results.length} ${results.length === 1 ? 'result' : 'results'}`
+      : 'No settings found';
+    results.sort((a, b) => b.score - a.score);
+    for (const result of results) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'settings-search-result';
+      button.title = result.target || result.action ? `${result.label} (${result.category})` : result.label;
+      const label = document.createElement('span');
+      label.textContent = result.label;
+      button.append(label);
+      if (result.target || result.action) {
+        const category = document.createElement('small');
+        category.textContent = result.category;
+        button.append(category);
+      }
+      button.addEventListener('click', () => showSettingsSearchTarget(result));
+      settingsSearchMatches.append(button);
+    }
+    settingsSearchResults.scrollTop = 0;
+  }
+
+  settingsSearchInput.addEventListener('input', renderSettingsSearch);
+  settingsSearchInput.addEventListener('keydown', e => {
+    if (e.isComposing) return;
+    const first = settingsSearchMatches.firstElementChild;
+    if (e.key === 'Enter' && first) {
+      e.preventDefault();
+      first.click();
+    } else if (e.key === 'ArrowDown' && first) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.key === 'Escape' && settingsSearchInput.value) {
+      e.preventDefault();
+      e.stopPropagation();
+      settingsSearchInput.value = '';
+      renderSettingsSearch();
+    }
+  });
+  document.getElementById('settings-close').addEventListener('click', closeSettings);
+  settingsOverlay.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const controls = [...settingsOverlay.querySelectorAll('button,input,select,textarea,[tabindex="0"],a[href]')]
+      .filter(el => !el.disabled && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+    const first = controls[0], last = controls[controls.length - 1];
+    if (!first) return;
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === settingsOverlay)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || document.activeElement === settingsOverlay)) { e.preventDefault(); first.focus(); }
+  });
+  settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) { closeSettings(); e.stopPropagation(); }
+    if (e.ctrlKey && e.key === ',' && !e.metaKey && !e.altKey) { e.preventDefault(); openSettingsGlobal(); }
+  });
+  // Deep-link API: e.g. openSettings('appearance')
+  window.openSettings = openSettingsGlobal;
+  window.closeSettings = closeSettings;
+
   // Settings-window bootstrap: skip the entire terminal/browser layer.
   async function settingsOnlyBoot() {
     await loadCustomThemes();
@@ -15564,9 +16268,8 @@
     await loadPlugins();
     applyTheme(currentThemeName);
     document.body.classList.add('settings-only');
-    const splash = document.getElementById('splash');
-    if (splash) splash.classList.add('hide');
     openSettings();
+    document.getElementById('splash')?.classList.add('hide');
   }
 
   // Declare background controls before the settings-window bootstrap.
@@ -16070,35 +16773,6 @@
     }
     throw new Error('Unknown method');
   }
-
-  document.getElementById('settings-nav-search').addEventListener('input', e => {
-    const query = e.target.value.trim().toLowerCase();
-    document.querySelectorAll('.settings-cat-btn').forEach(btn => { btn.hidden = !btn.textContent.toLowerCase().includes(query); });
-  });
-  document.querySelectorAll('.settings-cat-btn').forEach(btn => {
-    btn.setAttribute('role', 'button'); btn.tabIndex = 0;
-    btn.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); btn.click(); }
-    });
-  });
-  document.getElementById('settings-close').addEventListener('click', closeSettings);
-  settingsOverlay.addEventListener('keydown', e => {
-    if (e.key !== 'Tab') return;
-    const controls = [...settingsOverlay.querySelectorAll('button,input,select,textarea,[tabindex="0"],a[href]')]
-      .filter(el => !el.disabled && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
-    const first = controls[0], last = controls[controls.length - 1];
-    if (!first) return;
-    if (e.shiftKey && (document.activeElement === first || document.activeElement === settingsOverlay)) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && (document.activeElement === last || document.activeElement === settingsOverlay)) { e.preventDefault(); first.focus(); }
-  });
-  settingsOverlay.addEventListener('click', e => { if (e.target === settingsOverlay) closeSettings(); });
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) { closeSettings(); e.stopPropagation(); }
-    if (e.ctrlKey && e.key === ',' && !e.metaKey && !e.altKey) { e.preventDefault(); openSettingsGlobal(); }
-  });
-  // Deep-link API: e.g. openSettings('appearance')
-  window.openSettings = openSettingsGlobal;
-  window.closeSettings = closeSettings;
 
   // Plugins: open the plugins directory in the OS file manager
   const pluginsOpenDir = document.getElementById('plugins-open-dir');
@@ -16829,14 +17503,28 @@
       applyWsProcsSetting();
     } catch (bootErr) {
       console.error('[BOOT-ERROR]', bootErr);
+    }
+    try {
+      applyBackground();
+      if (restored) {
+        renderSidebar();
+        renderPaneArea();
+      }
+      if (isDesktop()) connectNativePTY();
+      else {
+        // Build the initial pane while the socket connects so the splash never
+        // hands off to an empty desktop.
+        if (!workspaces.length) {
+          for (const term of getWorkspaceTerminals(createWorkspace('Main'))) term.pending = true;
+        }
+        connectWS();
+      }
+    } catch (bootErr) {
+      console.error('[BOOT-ERROR]', bootErr);
     } finally {
-      const splash = document.getElementById('splash');
-      if (splash) splash.classList.add('hide');
+      document.getElementById('splash')?.classList.add('hide');
     }
     if (!SETTINGS_ONLY) loadPlugins(); // deferred, non-blocking
-
-    // Apply initial background & opacity
-    applyBackground();
 
     // Settings live in a separate Electron window; re-apply on any change
     if (isDesktop() && window.electronAPI && window.electronAPI.onSettingsChanged) {
@@ -16874,18 +17562,6 @@
     // Ctrl+Shift+Q shortcut. Main holds the window open until we confirm.
     if (isDesktop() && window.electronAPI && window.electronAPI.onAppCloseRequest) {
       window.electronAPI.onAppCloseRequest(() => confirmQuitApp());
-    }
-
-    if (restored) {
-      renderSidebar();
-      renderPaneArea();
-    }
-
-    // In the desktop shell use the native PTY backend; otherwise plain WebSocket
-    if (isDesktop()) {
-      setTimeout(() => { try { connectNativePTY(); } catch (e) { console.error('connectNativePTY failed:', e); } }, 100);
-    } else {
-      try { connectWS(); } catch (e) { console.error('connectWS failed:', e); }
     }
 
     // Desktop shell: show the native-overlay titlebar strip (drag region + label)

@@ -28,7 +28,7 @@ app.whenReady().then(async () => {
     const curChat = () => _curChat;
     const autosizeThreadInput = () => {};
     const renderChatFiles = (files = _chatFiles, surface = thrPage) => { surface.querySelector('.attachments').textContent = files.map(f => f.name).join(','); };
-    const syncThreadComposer = () => {}, fitTerm = () => {}, syncWorking = () => {};
+    const syncThreadComposer = () => {}, fitTerm = () => {}, syncWorking = () => {}, _syncWebgl = () => {};
     const ensureChatTerminalSession = async () => true;
     const clearCitationFlash = () => {};
     const decorateWorkUsernames = () => {}; // Privacy rendering is covered by test-work-usernames.
@@ -137,9 +137,11 @@ app.whenReady().then(async () => {
     a.el.style.display = 'none'; current = b; syncThreadPanel();
     let snap = first.el.querySelector('.thr-snapshot');
     check(snap && snap.querySelector('textarea').value === 'unfinished prompt', 'Hidden workspace lost its chat surface or draft');
+    check(snap.querySelector('.thr-flow').inert, 'Hidden snapshot walked its history controls during the switch');
     check(snap.textContent.includes('screenshot.png') && snap.querySelector('details').open, 'Snapshot lost attachments or expanded history');
     a.activeTermId = second.id; b.el.style.display = 'none'; a.el.style.display = 'block'; current = a; syncThreadPanel();
     check(getComputedStyle(snap).display === 'flex' && snap.offsetHeight > 0, 'Unfocused chat requires a click to show');
+    check(!snap.querySelector('.thr-flow').inert && snap.querySelector('summary').tabIndex === -1, 'Visible sibling did not restore clickable history with safe keyboard focus');
     check(getComputedStyle(snap).position === 'absolute', 'Chat is underneath the terminal layer');
     press(snap);
     check(thrPage.parentElement === first.el && !first.el.querySelector('.thr-snapshot'), 'Focusing snapshot did not restore the live chat');
@@ -170,10 +172,17 @@ app.whenReady().then(async () => {
     _flowSig = ''; await refreshThreadFlow(first);
     check(flow.scrollHeight > 1000, 'Scroll test needs an overflowing history');
     const firstMessage = flow.querySelector('.thr-msg');
+    const flowMutations = new MutationObserver(() => {});
+    flowMutations.observe(flow, { childList: true });
     flow.scrollTop = 370;
-    a.activeTermId = second.id; syncThreadPanel(); await winTick();
+    a.activeTermId = second.id; syncThreadPanel();
+    check(first.el.querySelector('.thr-snapshot .thr-flow') === flow, 'Switching parked the rows individually instead of moving the transcript');
+    check(flowMutations.takeRecords().length === 0, 'Switching changed the transcript children');
+    await winTick();
     check(first._scrollState.top === 370 && !first._scrollState.bottom, 'Switching failed to capture scroll before the scroll event');
     a.activeTermId = first.id; syncThreadPanel();
+    check(thrPage.querySelector('.thr-flow') === flow, 'Switching back did not restore the same transcript element');
+    flowMutations.disconnect();
     check(Math.abs(flow.scrollTop - 370) < 2, 'Tab switch jumps before history loads');
     await winTick();
     check(Math.abs(flow.scrollTop - 370) < 2, 'Async history redraw resets the scroll position');
@@ -200,6 +209,21 @@ app.whenReady().then(async () => {
       check(threadList.querySelectorAll('[aria-current="true"]').length === 1, 'Multiple thread buttons marked current');
     }
     check(threadList.firstElementChild === firstButton && threadList.lastElementChild === secondButton, 'Selection replaced the thread buttons');
+    const cold = makeChat(a, 'cold');
+    cold.chat = { title: 'Cold chat', segments: [{ harness: 'codex' }] };
+    const saved = { role: 'user', text: 'Recent saved message', ts: '2026-11-15T00:00:01Z' };
+    let resolveLive;
+    window.electronAPI.threadHistoryPreview = async meta => meta.id === cold.id ? [{ items: [saved] }] : null;
+    window.electronAPI.threadHistory = async meta => meta.id === cold.id ? new Promise(resolve => { resolveLive = resolve; }) : [];
+    a.activeTermId = cold.id; syncThreadPanel();
+    check(thrPage.textContent.includes('Loading conversation'), 'Cold history has no loading state');
+    await winTick();
+    check(thrPage.textContent.includes('Recent saved message'), 'Saved messages did not appear ahead of the live transcript');
+    for (let i = 0; !resolveLive && i < 10; i++) await winTick();
+    check(resolveLive, 'Live history did not load after the preview');
+    resolveLive([{ items: [{ role: 'user', text: 'Older history', ts: '2026-11-15T00:00:00Z' }, saved] }]);
+    await winTick();
+    check(thrPage.textContent.includes('Older history') && thrPage.textContent.includes('Recent saved message'), 'Full history did not replace the preview');
     if (historyErrors.length) throw historyErrors[0];
     clearInterval(_threadPoll);
     return 'Chat view regressions passed: immediate thread selection, rapid switching, first-click actions, startup, split focus, drafts, scroll restoration, hidden tabs, bottom position.';

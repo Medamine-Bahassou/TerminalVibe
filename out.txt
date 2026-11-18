@@ -1,0 +1,5 @@
+ [>4;0m[>7u               https://learn.chatgpt.com/docs/linux/linux-app    and run  chatgpt .                                    ›   Ask Codex to do anything       GPT-6.1-Sol default  ·  ~/Projects/Git/TerminalVibe     ←  for agents ·  ?  for shortcuts    [0 q                                                     [<1u[<u[>4;0m  [0 q ]7501;state=clear\[0 q Disconnected from this task. Any running work continues.
+To reconnect, run:
+   codex resume 01a1e147-7997-78d1-8855-d4490a5fdff8 
+Stop the current turn: run  codex agents , select this task, and press x.
+^C

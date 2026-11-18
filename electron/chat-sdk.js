@@ -11,6 +11,14 @@ const fs = require('fs');
 const path = require('path');
 
 const ASK_INPUT = 'Type something';
+const skillReferences = text => text.matchAll(/(?:^|[\s([{])\$([\w:.-]+?)(?=$|[\s,!?;)\]}]|\.(?=$|\s))/g);
+function expandSlashSkill(text, references, skills) {
+  const first = references.find(match => skills.some(skill => skill.name === match[1]));
+  if (!first) return text;
+  const [, name] = first;
+  const rest = first.index === 0 && first[0] === '$' + name ? text.slice(first[0].length).trimStart() : text;
+  return '/' + name + (rest ? ' ' + rest : '');
+}
 
 // A Windows npm shim (.cmd) can't be spawned directly. It wraps `node <script>`: run that instead, so
 // arguments (JSON settings, paths) are passed as-is, never re-parsed by cmd.exe.
@@ -174,6 +182,8 @@ class ClaudeSession extends Session {
       '--permission-prompt-tool', 'stdio', '--allow-dangerously-skip-permissions', ...argv.filter((x, i, a) => x !== '--permission-mode' && a[i - 1] !== '--permission-mode'),
       '--permission-mode', CLAUDE_MODE(access)], cwd, env);
     this.access = access;
+    this.cwd = cwd;
+    this.env = env;
     this.control({ subtype: 'initialize' });
     return Promise.resolve({ ok: true });
   }
@@ -227,6 +237,13 @@ class ClaudeSession extends Session {
     this.asks.get(id).cancel = stopped;
   }
   send(text, { images = [] } = {}) {
+    if (!/^\s*\//.test(text) && text.includes('$')) {
+      const references = [...skillReferences(text)];
+      if (references.length) {
+        const skills = require('./chat-complete').listClaudeSkills(this.cwd, undefined, this.env);
+        text = expandSlashSkill(text, references, skills);
+      }
+    }
     const content = images.length ? [{ type: 'text', text }, ...images.map(({ mediaType, data }) => ({
       type: 'image', source: { type: 'base64', media_type: mediaType, data },
     }))] : text;
@@ -247,31 +264,48 @@ class ClaudeSession extends Session {
 }
 
 class CodexSession extends Session {
-  start({ bin, cwd, env, options = {}, resume, fork, clientVersion }) {
+  async initialize({ bin, cwd, env, clientVersion }) {
     this.launch(bin, ['app-server'], cwd, env);
-    this.rpcId = 0; this.pending = new Map(); this.turnId = null; this.options = options; this.cwd = cwd;
+    this.rpcId = 0; this.pending = new Map(); this.turnId = null; this.cwd = cwd;
     this.rejectPending = err => { for (const p of this.pending.values()) p.reject(err); this.pending.clear(); };
+    await this.rpc('initialize', { clientInfo: { name: 'terminalvibe', title: 'TerminalVibe', version: clientVersion || '0' } });
+    this.write({ method: 'initialized', params: {} });
+  }
+  async start({ bin, cwd, env, options = {}, resume, fork, clientVersion }) {
+    this.options = options;
     const a = codexAccess(options.access);
     const params = { cwd, ...(options.model && options.model !== 'default' ? { model: options.model } : {}), ...(a.approvalPolicy ? { approvalPolicy: a.approvalPolicy, sandbox: a.sandbox } : {}),
       ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}) };
-    return (async () => {
-      await this.rpc('initialize', { clientInfo: { name: 'terminalvibe', title: 'TerminalVibe', version: clientVersion || '0' } });
-      this.write({ method: 'initialized', params: {} });
-      const r = resume ? await this.rpc('thread/resume', { ...params, threadId: resume, excludeTurns: true })
-        : fork ? await this.rpc('thread/fork', { ...params, threadId: fork, excludeTurns: true })
-        : await this.rpc('thread/start', params);
-      this.sessionId = r.thread.id;
-      this.emit('session', { sessionId: r.thread.id });
-      return { ok: true, sessionId: r.thread.id };
-    })();
+    await this.initialize({ bin, cwd, env, clientVersion });
+    const r = resume ? await this.rpc('thread/resume', { ...params, threadId: resume, excludeTurns: true })
+      : fork ? await this.rpc('thread/fork', { ...params, threadId: fork, excludeTurns: true })
+      : await this.rpc('thread/start', params);
+    this.sessionId = r.thread.id;
+    this.cwd = r.thread.cwd || cwd;
+    this.emit('session', { sessionId: r.thread.id });
+    return { ok: true, sessionId: r.thread.id };
   }
-  rpc(method, params) {
+  rpc(method, params, timeout = 0) {
     return new Promise((resolve, reject) => {
       if (!this.alive) return reject(Error('Codex is not running'));
       const id = ++this.rpcId;
-      this.pending.set(id, { resolve, reject });
+      const timer = timeout && setTimeout(() => {
+        this.pending.delete(id);
+        reject(Error(`Codex did not respond to ${method}`));
+      }, timeout);
+      this.pending.set(id, {
+        resolve: value => { clearTimeout(timer); resolve(value); },
+        reject: error => { clearTimeout(timer); reject(error); },
+      });
       this.write({ id, method, params });
     });
+  }
+  async listSkills() {
+    const result = await this.rpc('skills/list', { cwds: this.cwd ? [this.cwd] : [] }, 5000);
+    const seen = new Set();
+    return (result.data?.[0]?.skills || [])
+      .filter(skill => skill.enabled && /^[\w:.-]+$/.test(skill.name) && skill.path && !seen.has(skill.name) && seen.add(skill.name))
+      .map(({ name, description, path }) => ({ name, description, path }));
   }
   onMessage(m) {
     if (m.id !== undefined && !m.method) { // a response to our request
@@ -318,6 +352,14 @@ class CodexSession extends Session {
     const input = [{ type: 'text', text, text_elements: [] }, ...images.map(path => ({ type: 'localImage', path }))];
     this.setBusy(true);
     try {
+      const names = new Set([...skillReferences(text)].map(match => match[1]));
+      if (names.size) {
+        const skills = new Map((await this.listSkills().catch(() => [])).map(skill => [skill.name, skill.path]));
+        for (const name of names) {
+          const path = skills.get(name);
+          if (path) input.push({ type: 'skill', name, path });
+        }
+      }
       if (steer && this.turnId) {
         try { await this.rpc('turn/steer', { threadId: this.sessionId, expectedTurnId: this.turnId, input }); return true; }
         catch { /* the turn ended meanwhile: start a new one */ }
@@ -353,9 +395,13 @@ function acpPermissionAsk(params = {}) {
     answer: i => opts[i] ? { outcome: { outcome: 'selected', optionId: opts[i].optionId } } : { outcome: { outcome: 'cancelled' } } };
 }
 const ACP_TOOL_DETAIL = 4000;
+// ACP advertises custom slash actions and skills together with these built-in controls.
+const AGY_CONTROLS = new Set(['goal', 'compact', 'schedule', 'browser', 'plan', 'swarm']);
 class AcpSession extends Session {
   start({ bin, cwd, env, options = {}, resume, clientVersion, transcriptDir }) {
     this.options = options; this.dir = transcriptDir; this.tools = new Map(); this.buf = null; this.waiting = 0;
+    this.cwd = cwd;
+    this.commandsReady = new Promise(resolve => { this.resolveCommands = resolve; });
     // Full access is a start flag (it auto-approves every request); the other permissions are the session's modes.
     this.full = options.access === 'full';
     this.launch(bin, ['acp', ...(this.full ? ['--dangerously-skip-permissions'] : [])], cwd, env);
@@ -442,6 +488,12 @@ class AcpSession extends Session {
     this.write({ id: m.id, error: { code: -32601, message: `TerminalVibe does not handle ${m.method}` } });
   }
   onUpdate(u) {
+    if (u.sessionUpdate === 'available_commands_update') {
+      this.skills = (u.availableCommands || []).filter(c => /^[\w:.-]+$/.test(c.name) && !AGY_CONTROLS.has(c.name))
+        .map(({ name, description }) => ({ name, description }));
+      this.resolveCommands?.();
+      return;
+    }
     if (this.replaying) return;
     const kind = u.sessionUpdate;
     if (kind === 'agent_message_chunk' || kind === 'agent_thought_chunk') {
@@ -461,6 +513,15 @@ class AcpSession extends Session {
       if (u.status === 'completed' || u.status === 'failed') { this.recordTool(t, u.status === 'failed'); this.tools.delete(u.toolCallId); }
     }
   }
+  async listSkills() {
+    if (!this.skills && this.commandsReady) {
+      let timer;
+      try {
+        await Promise.race([this.commandsReady, new Promise(resolve => { timer = setTimeout(resolve, 1500); })]);
+      } finally { clearTimeout(timer); }
+    }
+    return this.skills || [];
+  }
   send(text, { options } = {}) {
     if (options) this.options = options;
     this.waiting++;
@@ -470,7 +531,9 @@ class AcpSession extends Session {
       this.record({ role: 'user', text });
       try {
         await this.apply(this.options);
-        const r = await this.rpc('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }] });
+        const references = /^\s*\//.test(text) ? [] : [...skillReferences(text)];
+        const prompt = references.length ? expandSlashSkill(text, references, await this.listSkills()) : text;
+        const r = await this.rpc('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text: prompt }] });
         this.endTurn(r?.stopReason && !['end_turn', 'cancelled'].includes(r.stopReason) ? `stopped (${r.stopReason})` : null);
       } catch (err) { this.endTurn(err.message || 'The turn failed'); }
     };
@@ -497,16 +560,21 @@ class AcpSession extends Session {
   }
 }
 // The Antigravity models, read from a session opened and closed at once (an unused session isn't kept).
-async function acpProbeModels(bin, env, cwd) {
-  const s = new AcpSession('models-probe', 'antigravity', () => {});
+async function acpProbe(bin, env, cwd, read) {
+  const s = new AcpSession('acp-probe', 'antigravity', () => {});
+  const timer = setTimeout(() => s.stop(), 8000);
   try {
     const r = await s.start({ bin, cwd, env, options: {} });
-    s.rpc('session/close', { sessionId: r.sessionId }).catch(() => {});
-    return r.models || [];
-  } finally { setTimeout(() => s.stop(), 300); }
+    return await read(s, r);
+  } finally {
+    clearTimeout(timer);
+    if (s.sessionId) s.rpc('session/close', { sessionId: s.sessionId }).catch(() => {});
+    setTimeout(() => s.stop(), 300);
+  }
 }
+const acpProbeModels = (bin, env, cwd) => acpProbe(bin, env, cwd, (_session, result) => result.models || []);
 // Use the detected executable and TerminalVibe's agent environment for the SDK's local server.
-async function openCodeModels(bin, env, cwd) {
+async function withOpenCodeServer(bin, env, cwd, read) {
   const launch = resolveLaunch(bin, ['serve', '--hostname=127.0.0.1', '--port=0']);
   if (!launch) throw Error('Could not launch OpenCode');
   const { createOpencodeClient } = await import('@opencode-ai/sdk/v2/client');
@@ -538,6 +606,13 @@ async function openCodeModels(bin, env, cwd) {
       baseUrl, throwOnError: true,
       headers: { Authorization: 'Basic ' + Buffer.from('opencode:' + password).toString('base64') },
     });
+    return await read(client, signal);
+  } finally {
+    child.kill();
+  }
+}
+function openCodeModels(bin, env, cwd) {
+  return withOpenCodeServer(bin, env, cwd, async (client, signal) => {
     const { data } = await client.provider.list({ directory: cwd }, { signal });
     const connected = new Set(data.connected);
     return data.all.filter(provider => connected.has(provider.id)).flatMap(provider =>
@@ -545,9 +620,7 @@ async function openCodeModels(bin, env, cwd) {
         id: `${provider.id}/${model.id}`, name: `${model.name} · ${provider.name}`,
         efforts: ['default'], defaultEffort: 'default',
       }))).sort((a, b) => a.name.localeCompare(b.name));
-  } finally {
-    child.kill();
-  }
+  });
 }
 const toolSummaryOf = input => { try { return require('./threads').toolSummary(input); } catch { return ''; } };
 
@@ -572,6 +645,34 @@ function register(ipcMain, { send, env: makeEnv, version, dataDir }) {
   });
   const emit = (key, ev) => send('chat-sdk:event', { key, ...ev });
   const get = key => { const s = sessions.get(key); return s?.alive ? s : null; };
+  ipcMain.handle('chat-sdk:skills', async (_e, harness, key, bin, cwd) => {
+    const live = get(key);
+    if (harness === 'claude') {
+      return require('./chat-complete').listClaudeSkills(cwd || live?.cwd, undefined, makeEnv(key));
+    }
+    if (live?.harness === harness && live.sessionId && (!cwd || cwd === live.cwd)
+      && (live instanceof CodexSession || live instanceof AcpSession)) return live.listSkills();
+    if (typeof bin !== 'string') throw Error('Agent executable was not found on PATH');
+    const directory = typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : require('os').homedir();
+    if (harness === 'opencode') {
+      return withOpenCodeServer(bin, makeEnv(key), directory, async (client, signal) => {
+        const { data } = await client.app.skills({ directory }, { signal });
+        return data.filter(skill => /^[\w:.-]+$/.test(skill.id || skill.name))
+          .map(skill => ({ name: skill.id || skill.name, description: skill.description }));
+      });
+    }
+    if (harness === 'antigravity') return acpProbe(bin, makeEnv(key), directory, session => session.listSkills());
+    if (harness !== 'codex') return [];
+    const probe = new CodexSession(key, 'codex', () => {});
+    const timer = setTimeout(() => probe.stop(), 10000);
+    try {
+      await probe.initialize({ bin, cwd: directory, env: makeEnv(key), clientVersion: version });
+      return await probe.listSkills();
+    } finally {
+      clearTimeout(timer);
+      probe.stop();
+    }
+  });
   ipcMain.handle('chat-sdk:start', async (_e, key, opts = {}) => {
     const S = SESSIONS[opts.harness];
     if (!S || typeof key !== 'string' || typeof opts.bin !== 'string') return { ok: false, error: 'Unsupported agent' };
@@ -649,6 +750,21 @@ if (require.main === module) {
     { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } },
   ]);
   claude.send('Check this image', { images: [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }] });
+  const claudeConfig = fs.mkdtempSync(path.join(require('os').tmpdir(), 'tv-claude-skills-'));
+  try {
+    const skillDir = path.join(claudeConfig, 'skills', 'lint');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Lint');
+    claude.env = { CLAUDE_CONFIG_DIR: claudeConfig };
+    const sent = [];
+    claude.write = message => sent.push(message.message.content);
+    claude.send('$lint src');
+    claude.send('Use $lint on src');
+    claude.send('$unknown and $5');
+    assert.deepStrictEqual(sent, ['/lint src', '/lint Use $lint on src', '$unknown and $5']);
+  } finally {
+    fs.rmSync(claudeConfig, { recursive: true, force: true });
+  }
   const codex = new CodexSession('test', 'codex', () => {});
   codex.options = {};
   codex.turnId = 'turn';
@@ -665,6 +781,43 @@ if (require.main === module) {
     await codex.send('Check this image', { images: [imagePath] });
     await codex.send('Check this image', { images: [imagePath], steer: true });
     assert.deepStrictEqual(methods, ['turn/start', 'turn/steer']);
+    const text = 'Use $project-skill with $project-skill and $disabled.';
+    codex.cwd = '/project';
+    codex.rpc = async (method, params) => {
+      if (method === 'skills/list') {
+        assert.deepStrictEqual(params, { cwds: ['/project'] });
+        return { data: [{ skills: [
+          { name: 'project-skill', enabled: true, path: '/project/.agents/skills/project-skill/SKILL.md' },
+          { name: 'project-skill', enabled: true, path: '/other/SKILL.md' },
+          { name: 'disabled', enabled: false, path: '/disabled/SKILL.md' },
+        ] }] };
+      }
+      assert.equal(method, 'turn/start');
+      assert.deepStrictEqual(params.input, [
+        { type: 'text', text, text_elements: [] },
+        { type: 'skill', name: 'project-skill', path: '/project/.agents/skills/project-skill/SKILL.md' },
+      ]);
+      return { turn: { id: 'turn' } };
+    };
+    await codex.send(text);
+    const agy = new AcpSession('test', 'antigravity', () => {});
+    agy.queue = Promise.resolve();
+    agy.waiting = 0;
+    agy.tools = new Map();
+    agy.apply = async () => {};
+    agy.onUpdate({ sessionUpdate: 'available_commands_update', availableCommands: [
+      { name: 'compact', description: 'Compact the session' },
+      { name: 'project-skill', description: 'A project skill' },
+    ] });
+    assert.deepStrictEqual(await agy.listSkills(), [{ name: 'project-skill', description: 'A project skill' }]);
+    let agyCall;
+    agy.rpc = async (method, { prompt }) => {
+      agyCall = { method, prompt };
+      return { stopReason: 'end_turn' };
+    };
+    await agy.send('$project-skill src');
+    await agy.queue;
+    assert.deepStrictEqual(agyCall, { method: 'session/prompt', prompt: [{ type: 'text', text: '/project-skill src' }] });
     console.log('chat-sdk: ok');
   })().catch(error => { console.error(error); process.exitCode = 1; });
 }

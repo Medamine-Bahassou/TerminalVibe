@@ -142,7 +142,7 @@
       </div>
 
     </div>
-    <!-- ── Threads sidebar (right): every workspace chat, T3-style ── -->
+    <!-- ── Threads sidebar (right): every workspace chat ── -->
     <aside id="threads-sidebar" class="collapsed" aria-label="Threads" inert>
       <div class="ts-sash" aria-hidden="true"></div>
       <div class="ts-head">
@@ -168,6 +168,13 @@
     <div id="sbr-thread-flow" class="thr-flow" tabindex="-1" aria-live="polite" aria-label="Thread messages">
       <div class="thr-queue" id="sbr-thread-queue" aria-label="Queued messages" hidden></div>
     </div>
+    <button type="button" class="thr-prompts" id="sbr-thread-prompts" aria-label="Jump to a prompt" hidden>
+      <span class="thr-prompt-ticks" aria-hidden="true"></span>
+      <span class="thr-prompt-preview" aria-hidden="true" hidden>
+        <span class="thr-prompt-preview-title"></span>
+        <span class="thr-prompt-preview-reply"></span>
+      </span>
+    </button>
     <div class="thr-composer-wrap">
       <div class="thr-new-head" id="sbr-thread-new-head">What should we work on?</div>
       <button type="button" class="thr-scroll-end" id="sbr-thread-scroll-end" hidden><i class="ph ph-caret-down" aria-hidden="true"></i>Scroll to end</button>
@@ -317,7 +324,11 @@
       <div class="settings-layout flex flex-1 min-h-0 overflow-hidden">
         <div
           class="settings-nav w-[200px] shrink-0 bg-[color-mix(in_srgb,var(--bg)_60%,rgba(0,0,0,0.2))] border-r border-[var(--border)] flex flex-col overflow-y-auto">
-          <label class="settings-nav-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input id="settings-nav-search" type="search" placeholder="Search settings" aria-label="Search settings categories"></label>
+          <label class="settings-nav-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input id="settings-nav-search" type="search" placeholder="Search settings" aria-label="Search settings" aria-controls="settings-search-results"></label>
+          <div id="settings-search-results" class="settings-search-results" hidden>
+            <p class="settings-search-status" role="status"></p>
+            <div class="settings-search-matches"></div>
+          </div>
           <div
             class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
             data-cat="general">
@@ -367,7 +378,7 @@
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Open terminal links in</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Where web links from a
@@ -382,7 +393,7 @@
                 </div>
               </div>
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Notify when a command or agent finishes</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">When a command ends or
@@ -398,7 +409,7 @@
                 </div>
               </div>
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Notification sound</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Play a chime for
@@ -413,7 +424,7 @@
                   </label>
                 </div>
               </div>
-              <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Search engine</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Used when typing search
@@ -431,7 +442,7 @@
                 </div>
               </div>
               <div id="set-custom-search-row"
-                class="hidden items-center justify-between px-3 py-2.5 border-t border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting="custom search engine" class="hidden items-center justify-between px-3 py-2.5 border-t border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Custom Search URL</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Use %s as the search
@@ -447,8 +458,21 @@
             <div class="settings-section-label mt-4 mb-1.5 ml-1">Threads</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <label for="set-thread-layout" class="text-[12.5px] font-medium text-[var(--fg)]">Thread arrangement</label>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Choose how threads are grouped in the sidebar</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-thread-layout" class="native-select-hidden">
+                    <option value="status">By Status</option>
+                    <option value="project">By Project</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-thread-layout"></div>
+                </div>
+              </div>
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Default agent</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">The agent a new thread
@@ -462,7 +486,7 @@
                 </div>
               </div>
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Default folder</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Where a new thread's
@@ -476,7 +500,7 @@
                   <div class="custom-dropdown" data-for="set-thread-folder"></div>
                 </div>
               </div>
-              <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <label for="set-thread-usage" class="text-[12.5px] font-medium text-[var(--fg)]">Usage display</label>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show remaining or consumed quota in the sidebar and usage limits</span>
@@ -489,7 +513,7 @@
                   <div class="custom-dropdown" data-for="set-thread-usage"></div>
                 </div>
               </div>
-              <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <label for="set-thread-usernames" class="text-[12.5px] font-medium text-[var(--fg)]">Usernames in work details</label>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show or blur usernames in file paths inside collapsible work details</span>
@@ -503,7 +527,7 @@
                 </div>
               </div>
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Composer markdown</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Renders markdown in the
@@ -518,7 +542,7 @@
                   <div class="custom-dropdown" data-for="set-thread-markdown"></div>
                 </div>
               </div>
-              <div class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Title generator</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Writes a short title
@@ -538,7 +562,7 @@
           </div>
           <!-- Appearance -->
           <div class="settings-section select-none" data-cat="appearance">
-            <section class="scheme-gallery" aria-labelledby="scheme-gallery-title">
+            <section data-setting="dark mode light mode system theme" class="scheme-gallery" aria-labelledby="scheme-gallery-title">
               <h3 id="scheme-gallery-title">Color scheme</h3>
               <div class="scheme-card-grid" role="group" aria-label="Color scheme">
                 <button type="button" class="scheme-choice" data-scheme="system" aria-pressed="false"><span class="scheme-preview scheme-preview-system" aria-hidden="true"><span class="scheme-preview-nav"><i></i><i></i><i></i></span><span class="scheme-preview-main"><i></i><i></i><i></i><span class="scheme-preview-input"></span></span></span><span>System</span></button>
@@ -546,7 +570,7 @@
                 <button type="button" class="scheme-choice" data-scheme="dark" aria-pressed="true"><span class="scheme-preview scheme-preview-dark" aria-hidden="true"><span class="scheme-preview-nav"><i></i><i></i><i></i></span><span class="scheme-preview-main"><i></i><i></i><i></i><span class="scheme-preview-input"></span></span></span><span>Dark</span></button>
               </div>
             </section>
-            <section class="theme-gallery" aria-labelledby="theme-gallery-title">
+            <section data-setting="color palette import theme" class="theme-gallery" aria-labelledby="theme-gallery-title">
               <div class="theme-gallery-header">
                 <h3 id="theme-gallery-title">Themes</h3>
                 <div class="theme-gallery-actions">
@@ -559,7 +583,7 @@
               <select id="set-theme" hidden aria-label="Theme"></select>
               <div id="theme-card-grid" class="theme-card-grid" role="group" aria-label="Available themes"></div>
             </section>
-            <div class="flex items-center justify-between px-3 py-2.5 gap-3 mb-3 border border-[var(--border)]">
+            <div data-setting class="flex items-center justify-between px-3 py-2.5 gap-3 mb-3 border border-[var(--border)]">
               <div class="flex flex-col gap-1">
                 <label for="set-animations" class="text-[12.5px] font-medium text-[var(--fg)]">Animations</label>
                 <span id="animations-description" class="text-[11px] text-[var(--muted-text)]">Fade and scale modals, fade menus, and slide drawers. Respects reduced motion.</span>
@@ -572,7 +596,7 @@
             <div class="settings-section-label mt-0 mb-1.5 ml-1">Workspace</div>
             <div class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] mb-3 flex flex-col">
               <div
-                class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Sidebar style</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">How the sidebar is
@@ -587,7 +611,7 @@
                   <div class="custom-dropdown" data-for="set-sidebar-mode"></div>
                 </div>
               </div>
-              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Workspace process details</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show running processes
@@ -608,7 +632,7 @@
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Font family</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Preset, imported, or
@@ -620,7 +644,7 @@
                 </div>
               </div>
               <div id="fontfamily-custom-row"
-                class="hidden items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting="custom typeface" class="hidden items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Custom CSS font-family</span>
                 </div>
@@ -631,7 +655,7 @@
                 </div>
               </div>
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Import font</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">TTF, OTF, WOFF or WOFF2
@@ -646,7 +670,7 @@
               </div>
               <div id="custom-fonts-list" class="px-3 py-2 flex flex-col gap-1.5"></div>
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Font size</span>
                 </div>
@@ -657,7 +681,7 @@
                     id="set-fontsize-val"></span>
                 </div>
               </div>
-              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Line height</span>
                 </div>
@@ -670,12 +694,12 @@
               </div>
             </div>
             <div class="settings-section-label mt-4 mb-1.5 ml-1">
-              Background</div>
+              Background image</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
-              <div class="flex items-start justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+              <div data-setting="wallpaper opacity transparency" class="flex items-start justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Background mode</span>
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Background image mode</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show image per tab, per
                     workspace, or globally</span>
                 </div>
@@ -723,7 +747,7 @@
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Cursor style</span>
                 </div>
@@ -736,7 +760,7 @@
                   <div class="custom-dropdown" data-for="set-cursor"></div>
                 </div>
               </div>
-              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Cursor blink</span>
                 </div>
@@ -755,7 +779,7 @@
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
               <div id="set-default-shell-row"
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting="bash zsh fish" class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Default shell</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Shell used by new terminal tabs</span>
@@ -766,7 +790,7 @@
                 </div>
               </div>
               <div
-                class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Default path</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Working directory for new terminals (leave empty to follow current directory)</span>
@@ -780,7 +804,7 @@
                   </button>
                 </div>
               </div>
-              <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-3 hover:bg-white/[0.01]">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-3 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Scrollback lines</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Number of lines kept in
@@ -793,7 +817,7 @@
                     id="set-scrollback-val"></span>
                 </div>
               </div>
-              <div class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 gap-3 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Hide email addresses</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Blur emails in terminal
@@ -825,12 +849,12 @@
               <div class="flex justify-end mt-2 pt-2 border-t border-[var(--border)]">
                 <span
                   class="shortcuts-reset text-[11px] cursor-pointer text-[#e55] transition-colors duration-150 hover:text-[#f77] hover:underline"
-                  id="shortcuts-reset">Reset to defaults</span>
+                  data-setting="restore keyboard shortcuts" id="shortcuts-reset">Reset to defaults</span>
               </div>
             </div>
           </div>
           <div class="settings-section select-none" data-cat="skills">
-            <div class="settings-section-label mt-0 mb-1.5 ml-1">TerminalVibe orchestration</div>
+            <div data-setting="agent splits panes" class="settings-section-label mt-0 mb-1.5 ml-1">TerminalVibe orchestration</div>
             <p class="skills-description">Let your agent open and arrange splits, inspect output, and use browser panes. Install once, then ask naturally without a slash command.</p>
             <div id="skills-list" aria-busy="false"></div>
             <p id="skills-status" class="skills-description" role="status" aria-live="polite"></p>
@@ -841,7 +865,7 @@
             <div class="flex items-center justify-between mt-0 mb-1.5 ml-1">
               <div id="plugins-title" class="settings-section-label">
                 Plugins</div>
-              <button type="button" id="plugins-open-dir" class="plugin-icon-btn" title="Open the plugins directory">
+              <button data-setting="directory folder" type="button" id="plugins-open-dir" class="plugin-icon-btn" title="Open the plugins directory">
                 <i class="ph ph-folder-open"></i>
               </button>
             </div>
@@ -860,7 +884,7 @@
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
               <div
-                class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+                data-setting class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <span class="text-[12.5px] font-medium text-[var(--fg)]">Shell override</span>
                   <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Override system default
@@ -872,7 +896,7 @@
                 </div>
               </div>
             </div>
-            <div class="settings-section-label mt-3 mb-1.5 ml-1">
+            <div data-setting="cli commands" class="settings-section-label mt-3 mb-1.5 ml-1">
               Command line</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">

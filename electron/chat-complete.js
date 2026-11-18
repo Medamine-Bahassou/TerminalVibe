@@ -267,22 +267,37 @@ function projectDirs(cwd, home) {
   }
   return dirs;
 }
+function claudeCustomCommands(cwd, home, config) {
+  return [...projectDirs(cwd, home).flatMap(p => [...mdCommands(path.join(p, 'commands')), ...skills(path.join(p, 'skills'))]),
+    ...mdCommands(path.join(config, 'commands')), ...skills(path.join(config, 'skills')), ...syncedSkills(config), ...pluginCommands(config)];
+}
+function listClaudeSkills(cwd, home = os.homedir(), env = process.env) {
+  const config = env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+  const settings = [readJson(path.join(config, 'settings.json')), ...projectDirs(cwd, home).reverse()
+    .flatMap(dir => ['settings.json', 'settings.local.json'].map(file => readJson(path.join(dir, file))))];
+  const overrides = Object.assign({}, ...settings.map(s => s?.skillOverrides));
+  const bundled = settings.some(s => s?.disableBundledSkills === true) ? []
+    : BUILTIN.claude.filter(c => ['batch', 'claude-api', 'code-review', 'debug', 'loop', 'run', 'simplify', 'verify'].includes(c.name));
+  const seen = new Set();
+  return [...claudeCustomCommands(cwd, home, config), ...bundled]
+    .filter(c => /^[\w:.-]+$/.test(c.name) && overrides[c.name] !== 'off' && !seen.has(c.name) && seen.add(c.name));
+}
 function listCommands(harness, cwd, home = os.homedir(), env = process.env) {
   let own = [];
   if (harness === 'claude') {
     const config = env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
-    own = [...projectDirs(cwd, home).flatMap(p => [...mdCommands(path.join(p, 'commands')), ...skills(path.join(p, 'skills'))]),
-      ...mdCommands(path.join(config, 'commands')), ...skills(path.join(config, 'skills')), ...syncedSkills(config), ...pluginCommands(config)];
+    own = claudeCustomCommands(cwd, home, config);
   } else if (harness === 'codex') {
     own = mdCommands(path.join(env.CODEX_HOME || path.join(home, '.codex'), 'prompts')).map(c => ({ ...c, name: 'prompts:' + c.name }));
   }
   const seen = new Set(['model', 'effort']); // the chat's model picker sets these
   // The chat's own: a side question opens a side chat (forked from this one) instead of the TUI overlay.
   const chat = [{ name: 'side', description: 'Ask a side question in a new side chat' }, { name: 'btw', description: 'Ask a side question in a new side chat' }];
+  if (harness === 'opencode' || harness === 'antigravity') chat.push({ name: 'skills', description: 'List available skills' });
   return [...own.map(c => ({ ...c, custom: true })), ...chat, ...(BUILTIN[harness] || [])].filter(c => !seen.has(c.name) && seen.add(c.name));
 }
 
-module.exports = { listFiles, listCommands };
+module.exports = { listFiles, listCommands, listClaudeSkills };
 
 if (require.main === module) {
   const assert = require('assert');
@@ -324,6 +339,13 @@ if (require.main === module) {
     assert.equal(claude.find(c => c.name === 'pl:go').description, 'Go now', 'Enabled plugin skills');
     assert(!claude.some(c => c.name === 'off:x'), 'Disabled plugins skipped');
     assert.equal(claude.find(c => c.name === 'pdf').description, 'Read PDFs', 'Synced account skills');
+    const picker = listClaudeSkills(project, home, {});
+    assert(['lint', 'git:ship', 'pl:go', 'pdf', 'debug'].every(name => picker.some(c => c.name === name)));
+    assert(!picker.some(c => c.name === 'off:x' || c.name === 'compact'));
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({
+      disableBundledSkills: true, skillOverrides: { lint: 'off' },
+    }));
+    assert(!listClaudeSkills(project, home, {}).some(c => c.name === 'lint' || c.name === 'debug'));
     assert(!listCommands('codex', project, home, {}).some(c => c.name === 'model'));
     assert.equal(listCommands('codex', project, home, {})[0].name, 'prompts:fix');
     fs.rmSync(home, { recursive: true, force: true });

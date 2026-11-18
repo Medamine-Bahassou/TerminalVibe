@@ -70,6 +70,13 @@ app.whenReady().then(async () => {
     _syncWebgl(entry, true);
     check(entry.term._canvasAddon && !entry.term._webglAddon, 'Failed GPU retried on tab switch');
     WebglAddon.WebglAddon = RealWebgl;
+    const chat = makeEntry();
+    chat.threadHistory = true;
+    _syncWebgl(chat, true);
+    check(chat.term._canvasAddon && !chat.term._webglAddon, 'Chat view promoted its hidden shell to WebGL');
+    chat._cliView = true;
+    _syncWebgl(chat, true);
+    check(chat.term._webglAddon, 'Explicit terminal view did not promote the chat shell');
     const accelerated = [];
     for (let i = 0; i < 9; i++) {
       const next = makeEntry();
