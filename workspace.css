@@ -1824,13 +1824,6 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread .thr-lock-btn:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-lock-btn { transition:none; } }
 
-/* Chat side chat: "Bring back" in the composer footer (right-aligned, after the branch). */
-#sbr-thread .thr-bring-back { margin-left:auto; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); font:inherit; cursor:pointer; transition:background-color 140ms, color 140ms; }
-#sbr-thread .thr-foot-branch:not([hidden]) ~ .thr-bring-back { margin-left:4px; }
-#sbr-thread .thr-bring-back:hover { background:var(--ui-hover); color:var(--fg); }
-#sbr-thread .thr-bring-back:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
-@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-bring-back { transition:none; } }
-
 /* Chat: a thread's side chats (or a side chat's thread), a tray attached to the composer's top edge. */
 #sbr-thread .thr-sides { display:flex; align-items:center; gap:2px; min-height:32px; width:calc(100% - 36px); max-width:752px; margin:0 auto; padding:3px 6px 3px 12px; overflow-x:auto; scrollbar-width:none;
   background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--border); border-bottom:0; border-radius:16px 16px 0 0 !important; font:400 12px var(--ui-font); color:var(--dim-text); }
@@ -1858,6 +1851,8 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread .thr-sides:not(.collapsed) .thr-sides-label { grid-row:1; grid-column:1; display:flex; align-items:center; min-height:24px; padding-left:6px; }
 #sbr-thread .thr-sides:not(.collapsed) .thr-sides-toggle { grid-row:1; grid-column:2; }
 #sbr-thread .thr-sides:not(.collapsed) .thr-side-chip { grid-column:1 / -1; width:100%; max-width:none; height:30px; justify-content:flex-start; padding:0 8px; text-align:left; }
+#sbr-thread .thr-sides:not(.collapsed) .thr-bring-back { grid-row:1; grid-column:2; width:auto; height:24px; }
+#sbr-thread .thr-bring-back:disabled { opacity:.55; cursor:wait; }
 /* Tray motion (only with UI animations on): it rises from behind the composer, chips follow one by one;
    collapsing sinks it back and the bubble rises in its place. The composer (position:relative) paints over it. */
 body.ui-animations #sbr-thread .thr-sides { transform-origin:50% 100%; }

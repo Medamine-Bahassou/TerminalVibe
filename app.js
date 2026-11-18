@@ -9454,7 +9454,10 @@
       let collapsed = !parent; // collapsed by default; opening it is remembered
       if (!parent) try { collapsed = !localStorage.getItem('tv-side-chats-expanded'); } catch {}
       const what = `${sides.length} side chat${sides.length > 1 ? 's' : ''}`;
-      const html = parent ? `<span class="thr-sides-label">Side chat of</span>${chip(parent, 'ph-chats-circle')}`
+      const useAsContext = parent && threadSegments(ws).some(x => x.used)
+        ? `<button type="button" class="thr-side-chip thr-bring-back" title="Include this side chat with your next message in ${escHtml(parent.chat?.title || parent.label)}"><i class="ph ph-arrow-bend-up-left" aria-hidden="true"></i><span>Use as context</span></button>`
+        : '';
+      const html = parent ? `<span class="thr-sides-label">Side chat of</span>${useAsContext}${chip(parent, 'ph-chats-circle')}`
         : !sides.length ? ''
         : collapsed ? `<button type="button" class="thr-sides-toggle thr-sides-bubble" aria-expanded="false" aria-label="Show ${what}" data-tip="Side chats">`
           + `<i class="ph ph-chat-circle-dots" aria-hidden="true"></i><span class="thr-sides-count">${sides.length}</span><i class="ph ph-caret-up" aria-hidden="true"></i></button>`
@@ -9464,13 +9467,6 @@
       sidesEl.hidden = !html;
       sidesEl.classList.toggle('collapsed', collapsed);
       if (sidesEl._html !== html) { sidesEl._html = html; sidesEl.innerHTML = html; }
-    }
-    // A side chat: "Bring back" once it has something to hand over.
-    const back = thrChip('bringback');
-    if (back) {
-      const parent = findThreadByKey(ws.chat?.side?.parentId);
-      back.hidden = !parent || !threadSegments(ws).some(x => x.used);
-      back.title = parent ? `Give “${parent.chat?.title || parent.label}” this side chat with your next message there` : '';
     }
     const branch = thrChip('branch');
     void refreshChatGitBranch(cwd);
@@ -9495,9 +9491,15 @@
     if (surface === thrPage) syncSendBtn();
   }
 
-  // Pick a new chat's working folder: the workspaces' folders, or any folder.
-  thrChip('bringback')?.addEventListener('click', () => { const c = curChat(); if (c) void bringBackSideChat(c); });
   thrChip('sides')?.addEventListener('click', e => {
+    const back = e.target.closest('.thr-bring-back');
+    if (back) {
+      const chat = curChat();
+      if (!chat) return;
+      back.disabled = true;
+      void bringBackSideChat(chat).finally(() => { back.disabled = false; });
+      return;
+    }
     // The caret, or anywhere on the open tray's "Side chats" header row.
     if (e.target.closest('.thr-sides-toggle, .thr-sides:not(.collapsed):has(> .thr-sides-toggle) > .thr-sides-label')) {
       const el = e.currentTarget;
