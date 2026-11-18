@@ -1322,30 +1322,41 @@ ipcMain.handle('git:branches', async (_e, cwd) => {
   const r = await require('./git-command').runGit(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);
   return r.ok ? r.out.split(/\r?\n/).filter(Boolean) : [];
 });
-ipcMain.handle('git:pull-requests', async (_e, cwd) => {
-  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { error: 'Select a project folder first.' };
+function runGitHub(cwd, args) {
   return new Promise(resolve => {
-    const child = require('child_process').execFile('gh',
-      ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url}', 'repos/{owner}/{repo}/pulls?state=open&per_page=100'],
+    const child = require('child_process').execFile('gh', args,
       { cwd, env: { ...terminalEnv(), GH_PROMPT_DISABLED: '1' }, timeout: 15000, windowsHide: true },
       (err, out, stderr) => {
-        if (err) {
-          const detail = stderr.trim().split(/\r?\n/).find(Boolean);
-          const error = err.code === 'ENOENT' ? 'Install the GitHub CLI (gh) to look up pull requests.'
-            : err.killed ? 'The pull request lookup timed out.'
-            : detail || 'Could not look up pull requests.';
-          resolve({ error });
-          return;
-        }
-        try {
-          const pulls = out.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
-            .filter(pr => /^https:\/\//i.test(pr.url));
-          resolve({ pulls });
-        }
-        catch { resolve({ error: 'Could not read the pull request results.' }); }
+        if (!err) return resolve({ out });
+        const error = err.code === 'ENOENT' ? 'Install the GitHub CLI (gh) to use pull requests.'
+          : err.killed ? 'The GitHub request timed out.'
+          : stderr.trim().split(/\r?\n/).find(Boolean) || 'The GitHub request failed.';
+        resolve({ error });
       });
     child.stdin?.end();
   });
+}
+ipcMain.handle('git:pull-requests', async (_e, cwd) => {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { error: 'Select a project folder first.' };
+  const result = await runGitHub(cwd, ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url,headSha:.head.sha}',
+    'repos/{owner}/{repo}/pulls?state=open&per_page=100']);
+  if (result.error) return result;
+  try {
+    const pulls = result.out.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
+      .filter(pr => /^https:\/\//i.test(pr.url));
+    return { pulls };
+  } catch { return { error: 'Could not read the pull request results.' }; }
+});
+ipcMain.handle('git:merge-pull-request', async (_e, cwd, url, headSha) => {
+  const pull = typeof url === 'string' && /^https:\/\/([a-z0-9.-]+)\/([a-z0-9_-]+)\/([a-z0-9_.-]+)\/pull\/([1-9]\d*)$/i.exec(url);
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !pull || typeof headSha !== 'string' || !/^[a-f0-9]{40}$/i.test(headSha)) {
+    return { error: 'Invalid pull request.' };
+  }
+  const [, host, owner, repo, number] = pull;
+  const result = await runGitHub(cwd, ['api', '--hostname', host, '--method', 'PUT',
+    `repos/${owner}/${repo}/pulls/${number}/merge`, '-f', `sha=${headSha}`, '--jq', '.merged']);
+  if (result.error) return result;
+  return result.out.trim() === 'true' ? { merged: true } : { error: 'GitHub did not merge the pull request.' };
 });
 ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
   if (!cwd || typeof cwd !== 'string' || typeof branch !== 'string' || !branch || branch.startsWith('-')) return { ok: false, error: 'Invalid branch' };

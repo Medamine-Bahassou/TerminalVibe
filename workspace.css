@@ -1292,6 +1292,11 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 .tv-pick-menu .tv-pick-item:is(:hover,:focus-visible,.selected) { outline:none; background:var(--ui-hover); }
 .tv-pick-menu .tv-pick-item i, .tv-pick-menu .tv-pick-item .ws-proc-icon { font-size:14px; width:14px; height:14px; fill:currentColor; color:var(--muted-text); flex-shrink:0; }
 .tv-pick-menu .tv-pick-label { min-width:0; overflow-wrap:anywhere; }
+.tv-pick-menu .tv-pick-row { display:flex; align-items:center; gap:4px; }
+.tv-pick-menu .tv-pick-row .tv-pick-item { flex:1; min-width:0; }
+.tv-pick-menu .tv-pick-action { flex:none; margin-right:4px; padding:4px 9px; border:0; border-radius:5px !important; background:#2563eb; color:#fff; font:inherit; font-size:12px; cursor:pointer; }
+.tv-pick-menu .tv-pick-action:hover { background:#1d4ed8; }
+.tv-pick-menu .tv-pick-action:focus-visible { outline:2px solid var(--fg); outline-offset:2px; }
 .tv-pick-menu .tv-pick-hint { min-width:0; margin-left:auto; font:400 11px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* ── Chat: a sent message waiting for the transcript ── */

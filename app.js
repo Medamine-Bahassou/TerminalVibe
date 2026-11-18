@@ -8996,7 +8996,20 @@
       b.setAttribute('role', 'menuitem');
       b.innerHTML = `${it.icon || ''}<span class="tv-pick-label">${escHtml(it.label)}</span>${it.hint ? `<span class="tv-pick-hint">${escHtml(it.hint)}</span>` : ''}`;
       b.addEventListener('click', () => { closePickMenu(); onPick(it.value); });
-      menu.appendChild(b);
+      if (it.action) {
+        const row = document.createElement('div');
+        row.className = 'tv-pick-row';
+        row.setAttribute('role', 'presentation');
+        const action = document.createElement('button');
+        action.type = 'button';
+        action.className = 'tv-pick-action';
+        action.setAttribute('role', 'menuitem');
+        action.setAttribute('aria-label', it.action.label);
+        action.textContent = it.action.text;
+        action.addEventListener('click', () => { closePickMenu(); it.action.run(); });
+        row.append(b, action);
+        menu.appendChild(row);
+      } else menu.appendChild(b);
     }
     document.body.appendChild(menu);
     const r = trigger.getBoundingClientRect();
@@ -9004,9 +9017,9 @@
     menu.style.left = Math.max(8, Math.min(alignRight ? r.right - w : r.left, innerWidth - w - 8)) + 'px';
     menu.style.top = (r.bottom + 6 + menu.offsetHeight > innerHeight ? Math.max(8, r.top - 6 - menu.offsetHeight) : r.bottom + 6) + 'px';
     _pickMenu = menu;
-    (menu.querySelector('.selected') || menu.firstChild)?.focus();
+    (menu.querySelector('.selected') || menu.querySelector('[role="menuitem"]'))?.focus();
     menu.addEventListener('keydown', e => {
-      const all = [...menu.children], i = all.indexOf(document.activeElement);
+      const all = [...menu.querySelectorAll('[role="menuitem"]')], i = all.indexOf(document.activeElement);
       if (e.key === 'Escape') { e.stopPropagation(); closePickMenu(); trigger.focus(); }
       else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus(); }
     });
@@ -9499,10 +9512,24 @@
         addBrowserTab(ws.id, findGroupContainingTerm(ws.layout, tab.id)?.id, pr.url, `PR #${pr.number}`);
       }
     };
+    const merge = pr => showConfirm(`Merge PR #${pr.number} “${pr.title}” on GitHub?`, async () => {
+      try {
+        const result = await window.electronAPI.gitMergePullRequest(cwd, pr.url, pr.headSha);
+        zoomBadge(result.merged ? `Merged PR #${pr.number}.` : result.error || `Could not merge PR #${pr.number}.`);
+      } catch {
+        zoomBadge(`Could not merge PR #${pr.number}.`);
+      } finally {
+        _chatPullRequests.delete(cwd);
+        if (chatCwd(curChat()) === cwd) syncThreadComposer(curChat());
+      }
+    });
     openPickMenu(chip, pulls.map(pr => ({
       value: pr,
       label: `#${pr.number} ${pr.title}`,
       icon: '<i class="ph ph-git-pull-request" aria-hidden="true"></i>',
+      action: pr.headSha && window.electronAPI?.gitMergePullRequest
+        ? { text: 'Merge', label: `Merge PR #${pr.number}`, run: () => merge(pr) }
+        : undefined,
     })), open, true);
   });
   async function setChatBranch(tab, cwd, branch) {
