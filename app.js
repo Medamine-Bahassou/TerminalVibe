@@ -8981,7 +8981,7 @@
   // Small popover list (the chat composer's agent / model / effort / access pickers).
   let _pickMenu = null;
   function closePickMenu() { _pickMenu?.remove(); _pickMenu = null; }
-  function openPickMenu(trigger, items, onPick, alignRight = false) {
+  function openPickMenu(trigger, items, onPick, alignRight = false, focusFirst = true) {
     const reopen = _pickMenu?._trigger === trigger;
     closePickMenu();
     if (reopen) return;
@@ -8994,6 +8994,7 @@
       b.type = 'button';
       b.className = 'tv-pick-item' + (it.selected ? ' selected' : '');
       b.setAttribute('role', 'menuitem');
+      if (it.title) b.title = it.title;
       b.innerHTML = `${it.icon || ''}<span class="tv-pick-label">${escHtml(it.label)}</span>${it.hint ? `<span class="tv-pick-hint">${escHtml(it.hint)}</span>` : ''}`;
       b.addEventListener('click', () => { closePickMenu(); onPick(it.value); });
       if (it.action) {
@@ -9017,11 +9018,20 @@
     menu.style.left = Math.max(8, Math.min(alignRight ? r.right - w : r.left, innerWidth - w - 8)) + 'px';
     menu.style.top = (r.bottom + 6 + menu.offsetHeight > innerHeight ? Math.max(8, r.top - 6 - menu.offsetHeight) : r.bottom + 6) + 'px';
     _pickMenu = menu;
-    (menu.querySelector('.selected') || menu.querySelector('[role="menuitem"]'))?.focus();
+    if (focusFirst) (menu.querySelector('.selected') || menu.querySelector('[role="menuitem"]'))?.focus();
+    else {
+      menu.tabIndex = -1;
+      menu.focus({ preventScroll: true });
+    }
     menu.addEventListener('keydown', e => {
       const all = [...menu.querySelectorAll('[role="menuitem"]')], i = all.indexOf(document.activeElement);
       if (e.key === 'Escape') { e.stopPropagation(); closePickMenu(); trigger.focus(); }
-      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const down = e.key === 'ArrowDown';
+        const next = i < 0 ? (down ? 0 : all.length - 1) : (i + (down ? 1 : all.length - 1)) % all.length;
+        all[next]?.focus();
+      }
     });
   }
   document.addEventListener('mousedown', e => { if (_pickMenu && !_pickMenu.contains(e.target) && !_pickMenu._trigger.contains(e.target)) closePickMenu(); }, true);
@@ -9526,11 +9536,12 @@
     openPickMenu(chip, pulls.map(pr => ({
       value: pr,
       label: `#${pr.number} ${pr.title}`,
+      title: `#${pr.number} ${pr.title}`,
       icon: '<i class="ph ph-git-pull-request" aria-hidden="true"></i>',
       action: pr.headSha && window.electronAPI?.gitMergePullRequest
         ? { text: 'Merge', label: `Merge PR #${pr.number}`, run: () => merge(pr) }
         : undefined,
-    })), open, true);
+    })), open, true, false);
   });
   async function setChatBranch(tab, cwd, branch) {
     const r = await window.electronAPI.gitCheckout(cwd, branch);
