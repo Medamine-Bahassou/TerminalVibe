@@ -1296,7 +1296,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 .tv-pick-menu .tv-pick-row { display:flex; align-items:center; border-radius:6px !important; }
 .tv-pick-menu .tv-pick-row:is(:hover,:focus-within) { background:var(--ui-hover); }
 .tv-pick-menu .tv-pick-row .tv-pick-item { flex:1; min-width:0; background:transparent; }
-.tv-pick-menu .tv-pick-row .tv-pick-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tv-pick-menu .tv-pick-item[data-tip-wrap] .tv-pick-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tv-pick-menu .tv-pick-action { flex:none; inline-size:0; overflow:hidden; padding:2px 0; border:0; border-radius:4px !important; background:#2563eb; color:#fff; font:600 10px/14px var(--ui-font); cursor:pointer; opacity:0; pointer-events:none; }
 .tv-pick-menu .tv-pick-row:hover .tv-pick-action,
 .tv-pick-menu .tv-pick-action:focus-visible { inline-size:auto; margin-inline:4px 6px; padding-inline:5px; opacity:1; pointer-events:auto; }

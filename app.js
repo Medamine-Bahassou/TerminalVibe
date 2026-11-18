@@ -9539,10 +9539,10 @@
     });
     openPickMenu(chip, pulls.map(pr => ({
       value: pr,
-      label: `#${pr.number} ${pr.title}`,
-      title: `#${pr.number} ${pr.title}`,
+      label: `#${pr.number} ${pr.draft ? 'Draft · ' : ''}${pr.title}`,
+      title: `#${pr.number} ${pr.draft ? 'Draft · ' : ''}${pr.title}`,
       icon: '<i class="ph ph-git-pull-request" aria-hidden="true"></i>',
-      action: pr.headSha && window.electronAPI?.gitMergePullRequest
+      action: !pr.draft && pr.headSha && window.electronAPI?.gitMergePullRequest
         ? { text: 'Merge', label: `Merge PR #${pr.number}`, run: () => merge(pr) }
         : undefined,
     })), open, true, false);

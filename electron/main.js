@@ -1338,7 +1338,7 @@ function runGitHub(cwd, args) {
 }
 ipcMain.handle('git:pull-requests', async (_e, cwd) => {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { error: 'Select a project folder first.' };
-  const result = await runGitHub(cwd, ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url,headSha:.head.sha}',
+  const result = await runGitHub(cwd, ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url,headSha:.head.sha,draft}',
     'repos/{owner}/{repo}/pulls?state=open&per_page=100']);
   if (result.error) return result;
   try {
@@ -1355,7 +1355,10 @@ ipcMain.handle('git:merge-pull-request', async (_e, cwd, url, headSha) => {
   const [, host, owner, repo, number] = pull;
   const result = await runGitHub(cwd, ['api', '--hostname', host, '--method', 'PUT',
     `repos/${owner}/${repo}/pulls/${number}/merge`, '-f', `sha=${headSha}`, '--jq', '.merged']);
-  if (result.error) return result;
+  if (result.error) {
+    if (/pull request is still a draft/i.test(result.error)) return { error: 'Mark the pull request ready for review on GitHub before merging.' };
+    return result;
+  }
   return result.out.trim() === 'true' ? { merged: true } : { error: 'GitHub did not merge the pull request.' };
 });
 ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
