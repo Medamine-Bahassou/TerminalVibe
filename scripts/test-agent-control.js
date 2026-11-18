@@ -38,7 +38,7 @@ async function main() {
     // Exercise the real renderer handler without starting the application or paid agents.
     const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
     const start = source.indexOf('  function createAgentTerminal');
-    const handler = source.slice(start, source.indexOf("\n  document.getElementById('settings-nav-search')", start));
+    const handler = source.slice(start, source.indexOf('\n  // Plugins: open the plugins directory', start));
     let sequence = 0, activeWsId, spawns = [], writes = [];
     const workspaces = [];
     const all = node => node.type === 'split' ? node.children.flatMap(all) : node.terminals;
