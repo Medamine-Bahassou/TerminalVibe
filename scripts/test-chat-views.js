@@ -15,6 +15,7 @@ app.whenReady().then(async () => {
   await win.loadURL('about:blank');
   for (const file of ['style.css', 'workspace.css']) await win.webContents.insertCSS(fs.readFileSync(path.join(root, file), 'utf8'));
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const focus = source.slice(source.indexOf('  function focusSlot(entry)'), source.indexOf('  let ws = null;'));
   const sync = source.slice(source.indexOf('  function syncThreadPanel(force)'), source.indexOf('  // Small popover list', source.indexOf('  function syncThreadPanel(force)')));
   const view = source.slice(source.indexOf('  function setChatView(tab, cli)'), source.indexOf('  // An agent finished its turn:', source.indexOf('  function setChatView(tab, cli)')));
   const refresh = source.slice(source.indexOf('  async function refreshThreadFlow('), source.indexOf('  // ── Find in the thread history:', source.indexOf('  async function refreshThreadFlow(')));
@@ -31,7 +32,7 @@ app.whenReady().then(async () => {
     const ensureChatTerminalSession = async () => true;
     const clearCitationFlash = () => {};
     const decorateWorkUsernames = () => {}; // Privacy rendering is covered by test-work-usernames.
-    const renderChatErrors = () => {}, renderChatResume = () => {}, syncChatInterruption = () => {}, syncScrollEnd = () => {};
+    const renderChatErrors = () => {}, renderChatResume = () => {}, syncChatInterruption = () => {}, syncScrollEnd = () => {}, syncContextRing = () => {};
     const turnGitFiles = () => [];
     const hydrateChatAttachmentSizes = () => {};
     const threadSegments = tab => tab.chat?.segments || [], threadMeta = tab => ({ id: tab.id });
@@ -77,12 +78,25 @@ app.whenReady().then(async () => {
     check(pendingHtml(second).includes('New prompt') && !pendingHtml(second).includes('thr-seg'), 'Sending renders a temporary agent header');
     _pendingMsgs.delete(second.id);
     const activeWs = () => current, getWorkspaceTerminals = ws => ws.tabs;
-    const focusSlot = tab => { current.activeTermId = tab.id; };
+    let focusedSlotId;
+    const clearSlotFocus = () => {}, updateFocusedGroup = () => {};
+    const findTermById = id => {
+      const term = current.tabs.find(tab => tab.id === id);
+      return term && { ws: current, term };
+    };
     const findGroupContainingTerm = (_, id) => ({ activeTermId: id });
+    ${focus}
     ${sync}
     ${view}
     syncThreadPanel();
     check(firstButton.classList.contains('active') && firstButton.getAttribute('aria-current') === 'true', 'Initial thread selection was not synchronous');
+    const terminal = { id: 'terminal', el: document.createElement('div') };
+    a.tabs.push(terminal);
+    focusSlot(terminal);
+    check(!firstButton.classList.contains('active') && firstButton.getAttribute('aria-current') === 'false', 'Focusing a terminal leaves the previous thread selected');
+    check(thrPage.parentElement === first.el, 'Terminal focus displaced the visible split chat');
+    focusSlot(first);
+    check(firstButton.classList.contains('active'), 'Returning to the chat did not restore its sidebar selection');
     // Cold startup: the unfocused pane has never held the live page or a snapshot.
     const initial = second.el.querySelector('.thr-snapshot');
     check(initial && initial.offsetHeight > 0 && initial.querySelector('textarea'), 'Startup did not initialize the unfocused chat interface');

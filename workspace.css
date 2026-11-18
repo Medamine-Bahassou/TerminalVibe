@@ -1744,10 +1744,13 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread .thr-link > i { display:inline-block; font-size:14px; margin-right:3px; vertical-align:-2px; color:var(--muted-text); }
 
 /* Threads sidebar: a chat with only unsent text is a draft card, tinted with the warning color. */
-#threads-sidebar .ts-card.draft, #threads-sidebar .ts-card.draft.active { background:color-mix(in srgb,var(--ui-warning) 6%,var(--ui-sidebar)); }
-#threads-sidebar .ts-card.draft:hover { background:color-mix(in srgb,var(--ui-warning) 10%,var(--ui-sidebar)); }
-#threads-sidebar .ts-card.draft .ts-draft-icon { color:var(--ui-warning); }
+#threads-sidebar .ts-card:is(.draft,.unsent:not(.active)) { background:color-mix(in srgb,var(--ui-warning) 6%,var(--ui-sidebar)); }
+#threads-sidebar .ts-card:is(.draft,.unsent:not(.active)):hover { background:color-mix(in srgb,var(--ui-warning) 10%,var(--ui-sidebar)); }
+#threads-sidebar .ts-card .ts-draft-icon { display:none; color:var(--ui-warning); }
+#threads-sidebar .ts-card:is(.draft,.unsent:not(.active)) .ts-draft-icon { display:inline-block; }
 #threads-sidebar .ts-card.draft .ts-folder { gap:6px; }
+body .term-group .tg-tab.unsent { background:color-mix(in srgb,var(--ui-warning) 6%,var(--ui-sidebar)); color:var(--ui-warning); }
+body .term-group .tg-tab.unsent:hover { background:color-mix(in srgb,var(--ui-warning) 10%,var(--ui-sidebar)); }
 
 /* New chat (nothing said yet): the composer sits centered under a heading; its folder is a picker. */
 #sbr-thread .thr-new-head { display:none; }
@@ -2414,11 +2417,7 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 #sbr-thread .thr-file.document .thr-file-x { position:absolute; top:2px; right:2px; width:18px; height:18px; background:var(--ui-surface); border:1px solid var(--border); border-radius:5px !important; }
 #sbr-thread .thr-file.document .thr-file-x:hover { background:var(--ui-hover); }
 
-/* Match image and file attachment geometry, labels and remove controls. */
-#sbr-thread .thr-file.image { display:flex; flex-direction:column; gap:0; }
-#sbr-thread .thr-file.image .thr-file-open { display:flex; flex-direction:column; color:inherit; font:inherit; }
-#sbr-thread .thr-file.image .thr-file-preview { flex:1; min-height:0; }
-#sbr-thread .thr-file.image .thr-file-name { display:block; flex-shrink:0; width:100%; box-sizing:border-box; padding:3px 5px 5px; font-size:10px; line-height:13px; text-align:center; }
+/* Match image and file attachment remove controls. */
 #sbr-thread .thr-file.image .thr-file-x { top:2px; right:2px; width:18px; height:18px; border-radius:5px !important; }
 
 #sbr-thread .thr-document-open { display:flex; flex-direction:column; cursor:pointer; color:inherit; font:inherit; }

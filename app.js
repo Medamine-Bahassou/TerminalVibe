@@ -1815,6 +1815,7 @@
       found.ws.activeTermId = entry.id;
       const group = findGroupContainingTerm(found.ws.layout, entry.id);
       if (group) group.activeTermId = entry.id;
+      syncThreadSelection();
     }
   }
 
@@ -6409,6 +6410,7 @@
         const activeEntry = node.terminals.find(t => t.id === node.activeTermId);
         if (activeEntry) {
           wsp.activeTermId = activeEntry.id;
+          syncThreadSelection();
           if (activeEntry.type === 'browser') {
             if (activeEntry.browserContainer) activeEntry.browserContainer.classList.add('focused');
           } else if (activeEntry.term) {
@@ -8897,10 +8899,15 @@
   }
 
   function syncThreadSelection() {
+    const activeId = activeWs()?.activeTermId;
     document.querySelectorAll('#ts-list .ts-card').forEach(button => {
-      const selected = button.dataset.tab === _curChat?.id;
+      const selected = button.dataset.tab === activeId;
       button.classList.toggle('active', selected);
       button.setAttribute('aria-current', String(selected));
+    });
+    document.querySelectorAll('.tg-tab[data-termid]').forEach(button => {
+      const tab = findTermById(button.dataset.termid)?.term;
+      button.classList.toggle('unsent', !!(tab?.threadHistory && tab.id !== activeId && tab.chat?.draft?.trim()));
     });
   }
 
@@ -9368,6 +9375,7 @@
   const _chatStarting = new Map(); // chat tab id -> { text, wait } while its agent boots (shown in the working row)
   const _gitBranch = new Map(); // cwd -> branch | null
   const _gitBranchChecked = new Map(), _gitBranchPending = new Map();
+  const _chatBranchSwitches = new Set();
   const _chatPullRequests = new Map();
   function refreshChatPullRequests(cwd) {
     if (!window.electronAPI?.gitPullRequests) return;
@@ -9403,9 +9411,34 @@
   const chatCwd = tab => tab?.chat?.scratch ? tab.chat.cwd || '' : tab?.chat?.cwd || tab?.cwd || wsOf(tab)?.cwd || getWorkspaceTerminals(wsOf(tab) || {}).find(t => t.cwd)?.cwd || '';
   const isScratchDir = d => /[\\/]\.terminalvibe[\\/]scratch[\\/][^\\/]+[\\/]?$/.test(d || '');
   const chatFolderName = cwd => !cwd || isScratchDir(cwd) ? 'No project' : cwd.split(/[\\/]/).filter(Boolean).pop() || cwd;
+  async function ensureThreadBranch(tab, cwd = chatCwd(tab)) {
+    if (!cwd || !window.electronAPI?.gitBranch) return;
+    if (_chatBranchSwitches.has(cwd)) throw Error('Wait for the project branch switch to finish.');
+    const current = await window.electronAPI.gitBranch(cwd);
+    const saved = tab.chat?.branch;
+    if (saved && saved !== current) {
+      throw Error(`This thread uses ${saved}. ${current ? `The project is on ${current}.` : 'The current branch could not be read.'} Switch to ${saved} before continuing.`);
+    }
+    if (current && !saved) {
+      tab.chat ||= { createdAt: Date.now() };
+      tab.chat.branch = current;
+      saveState();
+      renderThreadsSidebar();
+    }
+  }
   function chatProjectDirs(current) {
-    return [...new Set([current, ...workspaces.map(w => w.cwd), ...allChatTabs().map(chatCwd)]
-      .filter(dir => dir && !isScratchDir(dir)))];
+    const windows = (window.electronAPI?.platform || terminalBackendPlatform) === 'win32';
+    const trailingSeparators = windows ? /[\\/]+$/ : /\/+$/;
+    const projects = new Map();
+    for (const dir of [current, ...workspaces.map(w => w.cwd), ...allChatTabs().map(chatCwd)]) {
+      if (!dir || isScratchDir(dir)) continue;
+      const trimmed = dir.replace(trailingSeparators, '');
+      const key = windows && /^[a-z]:$/i.test(trimmed) && trimmed !== dir
+        ? trimmed + '\\'
+        : trimmed || dir[0];
+      if (!projects.has(key)) projects.set(key, dir);
+    }
+    return [...projects.values()];
   }
   function syncThreadComposer(ws, surface = thrPage) {
     if (!ws) return;
@@ -9471,7 +9504,11 @@
     const branch = thrChip('branch');
     void refreshChatGitBranch(cwd);
     const b = _gitBranch.get(cwd);
-    branch.hidden = !b;
+    const savedBranch = ws.chat?.branch;
+    const shownBranch = savedBranch || b;
+    const branchMismatch = !!savedBranch && _gitBranch.has(cwd) && savedBranch !== b;
+    branch.hidden = !shownBranch;
+    branch.dataset.tip = branchMismatch ? `Thread branch: ${savedBranch}. Project branch: ${b || 'unavailable'}.` : 'Switch branch';
     const pr = thrChip('pr');
     if (b) refreshChatPullRequests(cwd);
     const pulls = b ? _chatPullRequests.get(cwd)?.pulls : undefined;
@@ -9483,7 +9520,7 @@
       pr.title = pullCount === 1 ? `Open ${label}` : `${pullCount} open pull requests`;
       pr.setAttribute('aria-label', pr.title);
     }
-    if (b) branch.innerHTML = `<i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(b)}</span>`;
+    if (shownBranch) branch.innerHTML = `<i class="ph ${branchMismatch ? 'ph-warning' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
     thrInput.placeholder = h && h.id === o.harness ? `Message ${h.name}` : 'Ask anything';
     const editor = threadPart(surface, 'input-links');
     if (editor) editor.dataset.placeholder = thrInput.placeholder;
@@ -9581,10 +9618,32 @@
     })), open, true, false);
   });
   async function setChatBranch(tab, cwd, branch) {
-    const r = await window.electronAPI.gitCheckout(cwd, branch);
-    if (!r.ok) zoomBadge(r.error || 'Could not switch branch');
-    _gitBranch.delete(cwd);
-    syncThreadComposer(tab); renderThreadsSidebar();
+    if (!tab || !cwd || _chatBranchSwitches.has(cwd)) return;
+    if (allChatTabs().some(t => chatCwd(t) === cwd && (chatWorking(t) || _chatSending.has(t.id) || _chatStarting.has(t.id) || t._terminalSessionOpening))) {
+      zoomBadge('Wait for the active thread in this folder to finish before switching branches.');
+      return;
+    }
+    _chatBranchSwitches.add(cwd);
+    try {
+      const current = await window.electronAPI.gitBranch(cwd);
+      if (current !== branch) {
+        const result = await window.electronAPI.gitCheckout(cwd, branch);
+        if (!result.ok) { zoomBadge(result.error || 'Could not switch branch'); return; }
+      }
+      if (chatCwd(tab) === cwd) {
+        tab.chat ||= { createdAt: Date.now() };
+        tab.chat.branch = branch;
+        saveState();
+      }
+    } catch (err) {
+      zoomBadge(err.message || 'Could not switch branch');
+    } finally {
+      _chatBranchSwitches.delete(cwd);
+      await _gitBranchPending.get(cwd);
+      _gitBranch.delete(cwd);
+      syncThreadComposer(curChat());
+      renderThreadsSidebar();
+    }
   }
   function chatFolderIcon(path, open = false) {
     // Both Windows UNC spellings identify WSL folders; ordinary Linux paths do not.
@@ -9597,6 +9656,7 @@
     if (!tab || (!dir && !scratch) || threadHasMessages(tab)) return;
     if (scratch) { if (tab.chat.scratch) return; tab.chat.scratch = true; delete tab.chat.cwd; }
     else { delete tab.chat.scratch; tab.chat.cwd = tab.cwd = dir; }
+    delete tab.chat.branch;
     saveState(); syncThreadComposer(tab); renderThreadsSidebar();
   }
   // ── Model picker: agents at left, their models in the middle, reasoning effort at right ──
@@ -10075,6 +10135,7 @@
     // (and a resumed session in its own folder: Claude keeps sessions per project folder).
     if (ws.chat?.scratch && !ws.chat.cwd && window.electronAPI?.threadScratch) { ws.chat.cwd = ws.cwd = await window.electronAPI.threadScratch(); saveState(); }
     const cwd = resumeSeg?.cwd || replace?.cwd || chatCwd(ws) || undefined;
+    await ensureThreadBranch(ws, cwd);
     // The PTY spawn falls back to ~ for a missing folder: never run a thread's agent somewhere else.
     if (cwd && !cwd.startsWith('~') && window.electronAPI?.resolveLocalPath && !await window.electronAPI.resolveLocalPath(cwd))
       throw Error(`The project folder no longer exists: ${cwd}`);
@@ -10453,8 +10514,8 @@
       const preview = f.image && f.preview;
       return `<span class="thr-file${f.cite ? ' cite' : preview ? ' image' : ' document'}" title="${escHtml(f.cite || f.path)}">`
         + (f.cite ? `<i class="ph ph-quotes" aria-hidden="true"></i><button type="button" class="thr-cite-link" data-i="${i}" aria-label="View citation">${escHtml(f.cite.replace(/\s+/g, ' '))}</button>`
-          : preview ? `<button type="button" class="thr-file-open" data-i="${i}" aria-label="Open ${escHtml(f.name)} fullscreen"><img class="thr-file-preview" src="${escHtml(f.preview)}" alt="${escHtml(f.name)}" decoding="async"><span class="thr-file-name">${escHtml(f.name)}</span></button>`
-          : `<button type="button" class="thr-file-open thr-document-open" data-i="${i}" aria-label="Preview ${escHtml(f.name)}"><span class="thr-file-symbol"><i class="ph ${f.image ? 'ph-image ft-image' : linkFileIcon(f.name || f.path || '')}" aria-hidden="true"></i></span><span class="thr-file-name">${escHtml(f.name)}</span></button>`)
+          : preview ? `<button type="button" class="thr-file-open" data-i="${i}" aria-label="Open ${escHtml(f.name)} fullscreen"><img class="thr-file-preview" src="${escHtml(f.preview)}" alt="" decoding="async"></button>`
+          : `<button type="button" class="thr-file-open thr-document-open" data-i="${i}" aria-label="Preview ${escHtml(f.name)}"><span class="thr-file-symbol"><i class="ph ${f.image ? 'ph-image ft-image' : linkFileIcon(f.name || f.path || '')}" aria-hidden="true"></i></span>${f.image ? '' : `<span class="thr-file-name">${escHtml(f.name)}</span>`}</button>`)
         + `<button type="button" class="thr-file-x" data-i="${i}" aria-label="Remove ${escHtml(f.cite ? 'citation' : f.name)}"><i class="ph ph-x" aria-hidden="true"></i></button></span>`;
     }).join('');
     syncChatInputLinks(surface, files);
@@ -11349,7 +11410,9 @@
       clearChatDraft(ws);
       if (!await deliverChatMessage(ws, message, working)) {
         if (curChat() === ws && !thrInput.value && !_chatFiles.length) {
-          thrInput.value = typed; _chatFiles = files; autosizeThreadInput(); renderChatFiles();
+          thrInput.value = ws._draft = ws.chat.draft = typed;
+          _chatFiles = ws._files = ws.chat.draftFiles = files;
+          autosizeThreadInput(); renderChatFiles(); renderThreadsSidebar();
         } else { (ws.chat.queuedMessages ||= []).unshift(message); ws.chat.queuePaused = true; renderChatQueue(ws); }
         saveState();
       }
@@ -11359,7 +11422,7 @@
   function clearChatDraft(ws) {
     ws._draft = ''; ws._files = [];
     if (ws.chat) ws.chat.draftFiles = [];
-    if (ws.chat?.draft) { ws.chat.draft = ''; renderThreadsSidebar(); }
+    if (ws.chat?.draft) { ws.chat.draft = ''; syncThreadSelection(); renderThreadsSidebar(); }
     if (curChat() === ws) { thrInput.value = ''; _chatFiles = []; autosizeThreadInput(); renderChatFiles(); }
   }
   function syncQueuedEditUI(ws) {
@@ -11478,6 +11541,8 @@
     try {
       if (ws._terminalSessionOpening) await ws._terminalSessionOpening;
       if (findTermById(ws.id)?.term !== ws) return false;
+      try { await ensureThreadBranch(ws, liveThreadAgent(ws)?.cwd || chatCwd(ws)); }
+      catch (err) { noteChatError(ws, err.message || 'Could not check the thread branch'); return false; }
       if (!ws.chat.title && typed) { ws.chat.title = typed.split('\n')[0].slice(0, 80); setChatTabLabel(ws); autoTitleChat(ws, typed); }
       ws.chat.updatedAt = Date.now();
       const flow = thrPage.querySelector('#sbr-thread-flow');
@@ -11711,7 +11776,7 @@
   const allChatTabs = () => [...workspaces.flatMap(ws => getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.chat)), ...closedThreads];
   // Side chats live inside their thread (its chat lists them), never as threads of their own.
   const chatThreads = () => allChatTabs().filter(t => !t.chat?.side)
-    .filter(t => threadHasMessages(t) || (t._closed && threadDraft(t))); // a draft shows once its tab is closed
+    .filter(t => threadHasMessages(t) || threadDraft(t));
   // A thread's id that survives closing and reopening its tab.
   const threadKey = t => t.chat?.storeId || t.id;
   const findThreadByKey = key => key && allChatTabs().find(t => threadKey(t) === key);
@@ -11729,8 +11794,9 @@
     const hs = (used.length ? used : last ? [last.harness] : []).map(harnessOf).filter(Boolean);
     // One per agent the thread used, with its latest session's model (the card shows the same agents).
     const models = hs.map(x => ({ h: x, text: modelLabel(segs.findLast(sg => sg.harness === x.id)) || x.name }));
-    return { w, ws: wsOf(w) || findWs(w.workspaceId), h, hs, cwd, folder: chatFolderName(cwd), branch: _gitBranch.get(cwd) || '',
-      draft: threadDraft(w), unsent: !!(w._closed && !chatWorking(w) && (w.chat.draft || '').trim()), title: w.chat.title || threadDraft(w).split('\n')[0].slice(0, 80) || w.label, updated: w.chat.updatedAt || last?.since || w.chat.createdAt || 0, work: chatWorking(w),
+    const draft = threadDraft(w);
+    return { w, ws: wsOf(w) || findWs(w.workspaceId), h, hs, cwd, folder: chatFolderName(cwd), branch: w.chat?.branch || _gitBranch.get(cwd) || '',
+      draft: !!(w._closed && draft), unsent: !!w.chat.draft?.trim(), title: w.chat.title || draft.split('\n')[0].slice(0, 80) || w.label, updated: w.chat.updatedAt || last?.since || w.chat.createdAt || 0, work: chatWorking(w),
       model: modelLabel(last), models, openIn: w._closed ? null : wsOf(w) };
   }
   function renderThreadsSidebar() {
@@ -11761,11 +11827,13 @@
         : '<button type="button" class="ts-act" data-act="settle" aria-label="Settle thread"><i class="ph ph-check" aria-hidden="true"></i><span class="ts-act-label">Settle</span></button>';
       const pin = x.w.chat.pinned ? '<button type="button" class="ts-pin" data-act="unpin" aria-label="Unpin thread" data-tip="Unpin thread"><i class="ph ph-push-pin" aria-hidden="true"></i></button>' : '';
       const title = `<span class="ts-title${x.w._titling ? ' titling' : ''}"${x.w._titling ? ' aria-busy="true"' : ''}>${escHtml(x.title)}</span>`;
-      const folder = `<span class="ts-folder">${x.draft || x.unsent ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : ''}${projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder')}<span>${escHtml(x.folder)}</span></span>`;
+      const unsent = x.unsent ? ' unsent' : '';
+      const draftIcon = x.unsent ? '<i class="ph ph-note-pencil ts-draft-icon" aria-label="Unsent draft"></i>' : '';
+      const folder = `<span class="ts-folder">${draftIcon}${projectIconHtml(x.cwd, x.folder === 'No project' ? 'ph-selection' : 'ph-folder')}<span>${escHtml(x.folder)}</span></span>`;
       // Pinned / Working / Threads keep the full card (folder · time · status, title, branch · agents); Settled is slim.
       if (shelf !== 'settled') {
         const status = x.work ? '<span class="ts-status working"><i class="ph ph-circle-notch ts-spin" aria-hidden="true"></i></span>' : '';
-        return `<div role="button" tabindex="0" class="ts-card${x.draft ? ' draft' : ''}${x.work ? ' working' : ''}" draggable="${!x.draft}" data-tab="${x.w.id}"`
+        return `<div role="button" tabindex="0" class="ts-card${x.draft ? ' draft' : ''}${unsent}${x.work ? ' working' : ''}" draggable="${!x.draft}" data-tab="${x.w.id}"`
           + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
           + `<span class="ts-row">${folder}${pin}<span class="ts-end">${x.draft || x.work ? '' : '<span class="ts-time"></span>'}${action}</span>${status}</span>`
           + title
@@ -11773,18 +11841,18 @@
             + (x.hs.length || forkBtn ? `<span class="ts-agents">${forkBtn}${x.hs.map(h => `<span class="ts-agent" title="${escHtml(h.name)}"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span>`).join('')}</span>` : '') + '</span>')
           + '</div>';
       }
-      return `<div role="button" tabindex="0" class="ts-card slim" draggable="true" data-tab="${x.w.id}"`
+      return `<div role="button" tabindex="0" class="ts-card slim${unsent}" draggable="true" data-tab="${x.w.id}"`
         + ` aria-label="${escHtml(x.title)}${x.work ? ', working' : ''}" data-tip="${escHtml(x.draft ? 'Draft' : x.title)}" data-tip-rows="${escHtml(JSON.stringify(tipRows))}">`
-        + `<span class="ts-lead">${lead}</span>${title}${pin}`
+        + `<span class="ts-lead">${lead}</span>${draftIcon}${title}${pin}`
         + `<span class="ts-end"><span class="ts-time"></span>${action}</span></div>`;
     };
     const section = (id, label, list, more = 0) => !list.length ? '' : `<div class="ts-section${tsCollapsed.has(id) ? ' collapsed' : ''}" data-sec="${id}">`
       + `<button type="button" class="ts-section-head" aria-expanded="${!tsCollapsed.has(id)}"><span>${label}</span><span class="ts-count">${list.length}</span><i class="ph ph-caret-down ts-caret" aria-hidden="true"></i></button>`
       + `<div class="ts-cards">${tsCollapsed.has(id) ? '' : list.slice(0, more || undefined).map(x => row(x, id)).join('')
         + (more && list.length > more ? `<button type="button" class="ts-more">Show more <span class="ts-count">${list.length - more}</span></button>` : '')}</div></div>`;
-    const drafts = all.filter(x => x.draft || x.unsent); // a closed thread with unsent text counts as a draft too
-    const pinned = all.filter(x => !x.draft && !x.unsent && x.w.chat.pinned);
-    const rest = all.filter(x => !x.draft && !x.unsent && !x.w.chat.pinned);
+    const drafts = all.filter(x => x.draft);
+    const pinned = all.filter(x => !x.draft && x.w.chat.pinned);
+    const rest = all.filter(x => !x.draft && !x.w.chat.pinned);
     const html = all.length
       ? section('drafts', 'Drafts', drafts) + section('pinned', 'Pinned', pinned) + section('working', 'Working', rest.filter(x => x.work))
         + section('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
@@ -13174,7 +13242,10 @@
       });
       ctxEl.appendChild(search);
       if (!branches.length) item('<i class="ph ph-git-branch"></i>', 'No branches', '', () => {});
-      branches.forEach(b => item('<i class="ph ph-git-branch"></i>', escHtml(b) + (b === cur ? ' (current)' : ''), '', () => { if (b !== cur) setChatBranch(tab, cwd, b); }));
+      const saved = tab?.chat?.branch;
+      branches.forEach(b => item('<i class="ph ph-git-branch"></i>', escHtml(b) + (b === cur ? ' (current)' : '') + (b === saved ? ' (thread)' : ''), '', () => {
+        if (b !== cur || b !== saved) void setChatBranch(tab, cwd, b);
+      }));
       // Only the rows scroll; the search field stays above them.
       const list = document.createElement('div');
       list.className = 'ctx-list';
