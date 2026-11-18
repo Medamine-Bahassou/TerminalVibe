@@ -47,6 +47,7 @@
       // data-tip-rows: a heading (data-tip) over rows [{ icon: 'ph-…' | proc: '<process name>', text }].
       const rows = target.dataset.tipRows ? JSON.parse(target.dataset.tipRows) : null;
       tip.classList.toggle('ws-process-tooltip', !!(processes || rows));
+      tip.classList.toggle('ui-tooltip-wrap', target.hasAttribute('data-tip-wrap'));
       tip.textContent = target.dataset.tip;
       if (processes) {
         const heading = document.createElement('div');
@@ -4921,14 +4922,15 @@
       if (tab.dataset.termid === entry.id) syncBrowserTabIcon(entry, tab);
     });
   }
-  function addBrowserTab(wsId, targetGroupId, url) {
+  function addBrowserTab(wsId, targetGroupId, url, title) {
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
 
     const id = uuid();
     const allTerms = getWorkspaceTerminals(wsp);
-    const label = `browser ${allTerms.length + 1}`;
+    const label = title || `browser ${allTerms.length + 1}`;
     const entry = { id, label, type: 'browser', url: url || 'about:blank', iframe: null, el: null, opened: false, _focusUrlOnActivate: true };
+    if (title) entry.pinLabel = true;
 
     if (!wsp.layout) {
       wsp.layout = {
@@ -6819,7 +6821,7 @@
           // Electron records the final (post-redirect) URL via did-navigate → syncUrl.
           if (!(isDesktop() && window.electronAPI)) recordBrowserHistory(url);
           updateNavButtons();
-          entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
+          if (!entry.pinLabel) entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
           renderSidebar();
 
           /* DOM surface slot (reference technique): the page renders in a
@@ -6855,7 +6857,7 @@
         function syncUrl(url) {
           entry.url = url;
           urlInput.value = url;
-          entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
+          if (!entry.pinLabel) entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
           if (entry._history[entry._historyIdx] !== url) {
             entry._history = entry._history.slice(0, entry._historyIdx + 1);
             entry._history.push(url);
@@ -9007,7 +9009,7 @@
   // Small popover list (the chat composer's agent / model / effort / access pickers).
   let _pickMenu = null;
   function closePickMenu() { _pickMenu?.remove(); _pickMenu = null; }
-  function openPickMenu(trigger, items, onPick, alignRight = false) {
+  function openPickMenu(trigger, items, onPick, alignRight = false, focusFirst = true) {
     const reopen = _pickMenu?._trigger === trigger;
     closePickMenu();
     if (reopen) return;
@@ -9020,9 +9022,26 @@
       b.type = 'button';
       b.className = 'tv-pick-item' + (it.selected ? ' selected' : '');
       b.setAttribute('role', 'menuitem');
+      if (it.title) {
+        b.dataset.tip = it.title;
+        b.dataset.tipWrap = '';
+      }
       b.innerHTML = `${it.icon || ''}<span class="tv-pick-label">${escHtml(it.label)}</span>${it.hint ? `<span class="tv-pick-hint">${escHtml(it.hint)}</span>` : ''}`;
       b.addEventListener('click', () => { closePickMenu(); onPick(it.value); });
-      menu.appendChild(b);
+      if (it.action) {
+        const row = document.createElement('div');
+        row.className = 'tv-pick-row';
+        row.setAttribute('role', 'presentation');
+        const action = document.createElement('button');
+        action.type = 'button';
+        action.className = 'tv-pick-action';
+        action.setAttribute('role', 'menuitem');
+        action.setAttribute('aria-label', it.action.label);
+        action.textContent = it.action.text;
+        action.addEventListener('click', () => { closePickMenu(); it.action.run(); });
+        row.append(b, action);
+        menu.appendChild(row);
+      } else menu.appendChild(b);
     }
     document.body.appendChild(menu);
     const r = trigger.getBoundingClientRect();
@@ -9030,11 +9049,20 @@
     menu.style.left = Math.max(8, Math.min(alignRight ? r.right - w : r.left, innerWidth - w - 8)) + 'px';
     menu.style.top = (r.bottom + 6 + menu.offsetHeight > innerHeight ? Math.max(8, r.top - 6 - menu.offsetHeight) : r.bottom + 6) + 'px';
     _pickMenu = menu;
-    (menu.querySelector('.selected') || menu.firstChild)?.focus();
+    if (focusFirst) (menu.querySelector('.selected') || menu.querySelector('[role="menuitem"]'))?.focus();
+    else {
+      menu.tabIndex = -1;
+      menu.focus({ preventScroll: true });
+    }
     menu.addEventListener('keydown', e => {
-      const all = [...menu.children], i = all.indexOf(document.activeElement);
+      const all = [...menu.querySelectorAll('[role="menuitem"]')], i = all.indexOf(document.activeElement);
       if (e.key === 'Escape') { e.stopPropagation(); closePickMenu(); trigger.focus(); }
-      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const down = e.key === 'ArrowDown';
+        const next = i < 0 ? (down ? 0 : all.length - 1) : (i + (down ? 1 : all.length - 1)) % all.length;
+        all[next]?.focus();
+      }
     });
   }
   document.addEventListener('mousedown', e => { if (_pickMenu && !_pickMenu.contains(e.target) && !_pickMenu._trigger.contains(e.target)) closePickMenu(); }, true);
@@ -9340,6 +9368,24 @@
   const _chatStarting = new Map(); // chat tab id -> { text, wait } while its agent boots (shown in the working row)
   const _gitBranch = new Map(); // cwd -> branch | null
   const _gitBranchChecked = new Map(), _gitBranchPending = new Map();
+  const _chatPullRequests = new Map();
+  function refreshChatPullRequests(cwd) {
+    if (!window.electronAPI?.gitPullRequests) return;
+    const cached = _chatPullRequests.get(cwd);
+    if (cached && (cached.pending || Date.now() - cached.checked < 30000)) return;
+    const entry = { pending: true, pulls: cached?.pulls || [] };
+    _chatPullRequests.set(cwd, entry);
+    window.electronAPI.gitPullRequests(cwd).then(({ pulls }) => {
+      entry.pulls = pulls || [];
+    }).catch(() => {
+      entry.pulls = [];
+    }).finally(() => {
+      entry.checked = Date.now();
+      entry.pending = false;
+      const tab = curChat();
+      if (chatCwd(tab) === cwd) syncThreadComposer(tab);
+    });
+  }
   function refreshChatGitBranch(cwd) {
     if (!cwd || !window.electronAPI?.gitBranch) return Promise.resolve();
     if (_gitBranchPending.has(cwd)) return _gitBranchPending.get(cwd);
@@ -9430,6 +9476,17 @@
     void refreshChatGitBranch(cwd);
     const b = _gitBranch.get(cwd);
     branch.hidden = !b;
+    const pr = thrChip('pr');
+    if (b) refreshChatPullRequests(cwd);
+    const pulls = b ? _chatPullRequests.get(cwd)?.pulls : undefined;
+    const pullCount = pulls?.length || 0;
+    pr.hidden = pullCount === 0;
+    if (pullCount) {
+      const label = pullCount === 1 ? `PR #${pulls[0].number}` : `${pullCount} PRs`;
+      pr.querySelector('span').textContent = label;
+      pr.title = pullCount === 1 ? `Open ${label}` : `${pullCount} open pull requests`;
+      pr.setAttribute('aria-label', pr.title);
+    }
     if (b) branch.innerHTML = `<i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(b)}</span>`;
     thrInput.placeholder = h && h.id === o.harness ? `Message ${h.name}` : 'Ask anything';
     const editor = threadPart(surface, 'input-links');
@@ -9490,6 +9547,36 @@
     // The chip sits at the composer's right end: the menu grows leftward from it (right edges aligned).
     showCtxMenu({ pageX: r.right, pageY: r.top - 6, above: true, alignRight: true }, 'chat-branch', { tab, cwd, branches });
     ctxEl._owner = chip;
+  });
+  thrChip('pr').addEventListener('click', e => {
+    const chip = e.currentTarget, tab = curChat(), cwd = chatCwd(tab), ws = wsOf(tab);
+    const pulls = _chatPullRequests.get(cwd)?.pulls;
+    if (!ws || !pulls?.length) return;
+    const open = pr => {
+      if (curChat() === tab && chatCwd(tab) === cwd) {
+        addBrowserTab(ws.id, findGroupContainingTerm(ws.layout, tab.id)?.id, pr.url, `PR #${pr.number}`);
+      }
+    };
+    const merge = async pr => {
+      if (curChat() !== tab || chatCwd(tab) !== cwd) return;
+      const text = `Please merge GitHub PR #${pr.number} (${pr.url}). If GitHub blocks the merge, tell me why.`;
+      const message = { id: uuid(), text, typed: text, files: [], after: _turns.get(tab.id)?.sentAt || Date.now() };
+      const busy = chatWorking(tab) || _chatStarting.has(tab.id) || _chatSending.has(tab.id);
+      if (!busy && await deliverChatMessage(tab, message)) return;
+      if (!findTermById(tab.id)) return;
+      tab.chat ||= { createdAt: Date.now() };
+      (tab.chat.queuedMessages ||= []).push(message);
+      if (!busy) tab.chat.queuePaused = true;
+      renderChatQueue(tab);
+      saveState();
+    };
+    openPickMenu(chip, pulls.map(pr => ({
+      value: pr,
+      label: `#${pr.number} ${pr.draft ? 'Draft · ' : ''}${pr.title}`,
+      title: `#${pr.number} ${pr.draft ? 'Draft · ' : ''}${pr.title}`,
+      icon: '<i class="ph ph-git-pull-request" aria-hidden="true"></i>',
+      action: { text: 'Merge', label: `Ask the agent to merge PR #${pr.number}`, run: () => void merge(pr) },
+    })), open, true, false);
   });
   async function setChatBranch(tab, cwd, branch) {
     const r = await window.electronAPI.gitCheckout(cwd, branch);

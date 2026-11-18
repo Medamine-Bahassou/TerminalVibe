@@ -1317,6 +1317,31 @@ ipcMain.handle('git:branches', async (_e, cwd) => {
   const r = await require('./git-command').runGit(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);
   return r.ok ? r.out.split(/\r?\n/).filter(Boolean) : [];
 });
+function runGitHub(cwd, args) {
+  return new Promise(resolve => {
+    const child = require('child_process').execFile('gh', args,
+      { cwd, env: { ...terminalEnv(), GH_PROMPT_DISABLED: '1' }, timeout: 15000, windowsHide: true },
+      (err, out, stderr) => {
+        if (!err) return resolve({ out });
+        const error = err.code === 'ENOENT' ? 'Install the GitHub CLI (gh) to use pull requests.'
+          : err.killed ? 'The GitHub request timed out.'
+          : stderr.trim().split(/\r?\n/).find(Boolean) || 'The GitHub request failed.';
+        resolve({ error });
+      });
+    child.stdin?.end();
+  });
+}
+ipcMain.handle('git:pull-requests', async (_e, cwd) => {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { error: 'Select a project folder first.' };
+  const result = await runGitHub(cwd, ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url,draft}',
+    'repos/{owner}/{repo}/pulls?state=open&per_page=100']);
+  if (result.error) return result;
+  try {
+    const pulls = result.out.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
+      .filter(pr => /^https:\/\//i.test(pr.url));
+    return { pulls };
+  } catch { return { error: 'Could not read the pull request results.' }; }
+});
 ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
   if (!cwd || typeof cwd !== 'string' || typeof branch !== 'string' || !branch || branch.startsWith('-')) return { ok: false, error: 'Invalid branch' };
   const r = await require('./git-command').runGit(cwd, ['switch', branch]);

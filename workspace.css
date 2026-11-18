@@ -651,6 +651,7 @@ body .pp-add .pp-avatar-ph { background:transparent; border:1px dashed var(--bor
   opacity:0; transition:opacity 120ms;
 }
 .ui-tooltip.show { opacity:1; }
+.ui-tooltip.ui-tooltip-wrap { max-width:min(360px, calc(100vw - 8px)); box-sizing:border-box; white-space:normal; overflow-wrap:anywhere; text-overflow:clip; }
 
 /* Icon button rows: 28px buttons with an even 4px gap (title bar + tab bar). */
 body .term-group-actions { gap:4px; padding:0 6px; }
@@ -1305,7 +1306,16 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 .tv-pick-menu .tv-pick-item { display:flex; align-items:center; gap:8px; width:100%; min-height:32px; padding:6px 10px; background:transparent; border:0; border-radius:6px !important; color:var(--fg); font:400 13px var(--ui-font); text-align:left; cursor:pointer; }
 .tv-pick-menu .tv-pick-item:is(:hover,:focus-visible,.selected) { outline:none; background:var(--ui-hover); }
 .tv-pick-menu .tv-pick-item i, .tv-pick-menu .tv-pick-item .ws-proc-icon { font-size:14px; width:14px; height:14px; fill:currentColor; color:var(--muted-text); flex-shrink:0; }
-.tv-pick-menu .tv-pick-label { flex-shrink:0; }
+.tv-pick-menu .tv-pick-label { min-width:0; overflow-wrap:anywhere; }
+.tv-pick-menu .tv-pick-row { display:flex; align-items:center; border-radius:6px !important; }
+.tv-pick-menu .tv-pick-row:is(:hover,:focus-within) { background:var(--ui-hover); }
+.tv-pick-menu .tv-pick-row .tv-pick-item { flex:1; min-width:0; background:transparent; }
+.tv-pick-menu .tv-pick-item[data-tip-wrap] .tv-pick-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tv-pick-menu .tv-pick-action { flex:none; inline-size:0; overflow:hidden; padding:2px 0; border:0; border-radius:4px !important; background:#2563eb; color:#fff; font:600 10px/14px var(--ui-font); cursor:pointer; opacity:0; pointer-events:none; }
+.tv-pick-menu .tv-pick-row:hover .tv-pick-action,
+.tv-pick-menu .tv-pick-action:focus-visible { inline-size:auto; margin-inline:4px 6px; padding-inline:5px; opacity:1; pointer-events:auto; }
+.tv-pick-menu .tv-pick-action:hover { background:#1d4ed8; }
+.tv-pick-menu .tv-pick-action:focus-visible { outline:2px solid var(--fg); outline-offset:2px; }
 .tv-pick-menu .tv-pick-hint { min-width:0; margin-left:auto; font:400 11px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* ── Chat: a sent message waiting for the transcript ── */
@@ -1342,6 +1352,8 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-foot-item > i { font-size:13px; flex-shrink:0; }
 #sbr-thread .thr-foot-item .thr-caret { font-size:10px; color:var(--dim-text); }
 #sbr-thread .thr-foot-branch { margin-left:auto; font-family:var(--mono-font); font-size:11.5px; }
+#sbr-thread .thr-foot-pr { margin-left:auto; flex-shrink:0; }
+#sbr-thread .thr-foot-pr:not([hidden]) + .thr-foot-branch { margin-left:0; }
 #sbr-thread .thr-foot-btn { background:transparent; border:0; border-radius:6px !important; color:inherit; font:inherit; cursor:pointer; transition:background-color 140ms, color 140ms; }
 #sbr-thread .thr-foot-btn:hover { background:var(--ui-hover); color:var(--fg); }
 #sbr-thread .thr-foot-btn:focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
