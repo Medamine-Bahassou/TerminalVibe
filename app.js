@@ -1898,7 +1898,7 @@
     }
 
     // PHASE 1: Batch READ (Prevents Layout Thrashing)
-    const paneRect = paneArea.getBoundingClientRect();
+    let paneRect;
     const updates = [];
     const viewUpdates = []; // native WebContentsView bounds (viewport coords = contentView coords)
 
@@ -1912,6 +1912,7 @@
             updates.push({ container: t.browserContainer, x: -9999, y: -9999, w: 0, h: 0 });
             if (t._viewCreated) viewUpdates.push({ id: t.id, show: false });
           } else {
+            paneRect ??= paneArea.getBoundingClientRect();
             const slotRect = t.el.getBoundingClientRect();
             // The overlay hides the group's maximized frame; let it draw its own.
             t.browserContainer.classList.toggle('maximized', !!t.el.closest('.term-group.maximized'));
@@ -5089,10 +5090,11 @@
   function activateTerminal(wsId, termId) {
     const wsp = findWs(wsId);
     if (!wsp) return;
-    if (getWorkspaceTerminals(wsp).find(t => t.id === termId)?._closePending) return;
+    const target = getWorkspaceTerminals(wsp).find(t => t.id === termId);
+    if (target?._closePending) return;
     wsp.activeTermId = termId;
     pluginEmit('terminal:activate', { wsId, termId });
-    const chatEntry = getWorkspaceTerminals(wsp).find(x => x.id === termId && x.threadHistory);
+    const chatEntry = target?.threadHistory && target;
     if (chatEntry) queueMicrotask(() => {
       if (activeWsId !== wsId || wsp.activeTermId !== termId || (curChat() === chatEntry && thrPage.parentElement === chatEntry.el)) return;
       _preferChat = chatEntry;
@@ -5112,7 +5114,7 @@
       // Lightweight update: toggle visibility without rebuilding the DOM
       // (preserves browser tab state, iframe content, etc.)
       // Clear focus from ALL slots across all groups
-      clearSlotFocus();
+      if (!target?.el) clearSlotFocus();
 
       if (group) {
         const groupEl = document.getElementById('group-' + group.id);
@@ -5155,8 +5157,7 @@
           syncBrowserSlots();
         }
       }
-      const terms = getWorkspaceTerminals(wsp);
-      const t = terms.find(x => x.id === termId);
+      const t = target;
       if (t && t.el) {
         focusSlot(t);
         if (t.type === 'browser') {
@@ -12948,9 +12949,13 @@
     if (ws.chat?.side && ws.chat.createdAt) for (const h of hist) h.items = h.items.filter(m => !m.ts || Date.parse(m.ts) >= ws.chat.createdAt - 2000);
     // The chat's title (first prompt) and last activity, for its tab and the threads sidebar.
     if (t && !preview) {
-      const all = hist.flatMap(h => h.items);
-      const first = all.find(m => m.role === 'user' && m.text);
-      const lastTs = Math.max(0, ...all.map(m => Date.parse(m.ts) || 0));
+      let first, lastTs = 0;
+      for (const segment of hist) {
+        for (const message of segment.items) {
+          if (!t.title && !first && message.role === 'user' && message.text) first = message;
+          lastTs = Math.max(lastTs, Date.parse(message.ts) || 0);
+        }
+      }
       if ((!t.title && first) || lastTs > (t.updatedAt || 0)) {
         if (!t.title && first) { t.title = first.text.split('\n')[0].slice(0, 80); setChatTabLabel(ws); }
         if (lastTs > (t.updatedAt || 0)) t.updatedAt = lastTs;
@@ -12970,9 +12975,12 @@
     const inTranscript = (text, at, afterTs = 0) => {
       // (Hidden notes, e.g. a dropped thread's, never reach the transcript's text.)
       const head = text.replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
-      return hist.flatMap(h => h.items).find(m => m.role === 'user' && !m.stopped && (Date.parse(m.ts) || Infinity) >= at - 5000
-        && (!afterTs || Date.parse(m.ts) > afterTs)
-        && String(m.text || '').replace(/\s+/g, ' ').includes(head));
+      for (const segment of hist) {
+        const match = segment.items.find(m => m.role === 'user' && !m.stopped && (Date.parse(m.ts) || Infinity) >= at - 5000
+          && (!afterTs || Date.parse(m.ts) > afterTs)
+          && String(m.text || '').replace(/\s+/g, ' ').includes(head));
+        if (match) return match;
+      }
     };
     // Stopped prompts the transcript doesn't have go into the history where they were sent.
     if (!preview && t?.stopped?.length && hist.length) {
