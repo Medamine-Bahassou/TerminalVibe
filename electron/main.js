@@ -1322,6 +1322,31 @@ ipcMain.handle('git:branches', async (_e, cwd) => {
   const r = await require('./git-command').runGit(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);
   return r.ok ? r.out.split(/\r?\n/).filter(Boolean) : [];
 });
+ipcMain.handle('git:pull-requests', async (_e, cwd) => {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { error: 'Select a project folder first.' };
+  return new Promise(resolve => {
+    const child = require('child_process').execFile('gh',
+      ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url}', 'repos/{owner}/{repo}/pulls?state=open&per_page=100'],
+      { cwd, env: { ...terminalEnv(), GH_PROMPT_DISABLED: '1' }, timeout: 15000, windowsHide: true },
+      (err, out, stderr) => {
+        if (err) {
+          const detail = stderr.trim().split(/\r?\n/).find(Boolean);
+          const error = err.code === 'ENOENT' ? 'Install the GitHub CLI (gh) to look up pull requests.'
+            : err.killed ? 'The pull request lookup timed out.'
+            : detail || 'Could not look up pull requests.';
+          resolve({ error });
+          return;
+        }
+        try {
+          const pulls = out.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
+            .filter(pr => /^https:\/\//i.test(pr.url));
+          resolve({ pulls });
+        }
+        catch { resolve({ error: 'Could not read the pull request results.' }); }
+      });
+    child.stdin?.end();
+  });
+});
 ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
   if (!cwd || typeof cwd !== 'string' || typeof branch !== 'string' || !branch || branch.startsWith('-')) return { ok: false, error: 'Invalid branch' };
   const r = await require('./git-command').runGit(cwd, ['switch', branch]);

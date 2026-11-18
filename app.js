@@ -4906,14 +4906,15 @@
       if (tab.dataset.termid === entry.id) syncBrowserTabIcon(entry, tab);
     });
   }
-  function addBrowserTab(wsId, targetGroupId, url) {
+  function addBrowserTab(wsId, targetGroupId, url, title) {
     const wsp = findWs(wsId || activeWsId);
     if (!wsp) return;
 
     const id = uuid();
     const allTerms = getWorkspaceTerminals(wsp);
-    const label = `browser ${allTerms.length + 1}`;
+    const label = title || `browser ${allTerms.length + 1}`;
     const entry = { id, label, type: 'browser', url: url || 'about:blank', iframe: null, el: null, opened: false, _focusUrlOnActivate: true };
+    if (title) entry.pinLabel = true;
 
     if (!wsp.layout) {
       wsp.layout = {
@@ -6804,7 +6805,7 @@
           // Electron records the final (post-redirect) URL via did-navigate → syncUrl.
           if (!(isDesktop() && window.electronAPI)) recordBrowserHistory(url);
           updateNavButtons();
-          entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
+          if (!entry.pinLabel) entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
           renderSidebar();
 
           /* DOM surface slot (reference technique): the page renders in a
@@ -6840,7 +6841,7 @@
         function syncUrl(url) {
           entry.url = url;
           urlInput.value = url;
-          entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
+          if (!entry.pinLabel) entry.label = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].substring(0, 28) || 'browser';
           if (entry._history[entry._historyIdx] !== url) {
             entry._history = entry._history.slice(0, entry._historyIdx + 1);
             entry._history.push(url);
@@ -9313,6 +9314,24 @@
   const _chatStarting = new Map(); // chat tab id -> { text, wait } while its agent boots (shown in the working row)
   const _gitBranch = new Map(); // cwd -> branch | null
   const _gitBranchChecked = new Map(), _gitBranchPending = new Map();
+  const _chatPullRequests = new Map();
+  function refreshChatPullRequests(cwd) {
+    if (!window.electronAPI?.gitPullRequests) return;
+    const cached = _chatPullRequests.get(cwd);
+    if (cached && (cached.pending || Date.now() - cached.checked < 30000)) return;
+    const entry = { pending: true, pulls: cached?.pulls || [] };
+    _chatPullRequests.set(cwd, entry);
+    window.electronAPI.gitPullRequests(cwd).then(({ pulls }) => {
+      entry.pulls = pulls || [];
+    }).catch(() => {
+      entry.pulls = [];
+    }).finally(() => {
+      entry.checked = Date.now();
+      entry.pending = false;
+      const tab = curChat();
+      if (chatCwd(tab) === cwd) syncThreadComposer(tab);
+    });
+  }
   function refreshChatGitBranch(cwd) {
     if (!cwd || !window.electronAPI?.gitBranch) return Promise.resolve();
     if (_gitBranchPending.has(cwd)) return _gitBranchPending.get(cwd);
@@ -9399,6 +9418,17 @@
     void refreshChatGitBranch(cwd);
     const b = _gitBranch.get(cwd);
     branch.hidden = !b;
+    const pr = thrChip('pr');
+    if (b) refreshChatPullRequests(cwd);
+    const pulls = b ? _chatPullRequests.get(cwd)?.pulls : undefined;
+    const pullCount = pulls?.length || 0;
+    pr.hidden = pullCount === 0;
+    if (pullCount) {
+      const label = pullCount === 1 ? `PR #${pulls[0].number}` : `${pullCount} PRs`;
+      pr.querySelector('span').textContent = label;
+      pr.title = pullCount === 1 ? `Open ${label}` : `${pullCount} open pull requests`;
+      pr.setAttribute('aria-label', pr.title);
+    }
     if (b) branch.innerHTML = `<i class="ph ph-git-branch" aria-hidden="true"></i><span>${escHtml(b)}</span>`;
     thrInput.placeholder = h && h.id === o.harness ? `Message ${h.name}` : 'Ask anything';
     const editor = threadPart(surface, 'input-links');
@@ -9459,6 +9489,18 @@
     // The chip sits at the composer's right end: the menu grows leftward from it (right edges aligned).
     showCtxMenu({ pageX: r.right, pageY: r.top - 6, above: true, alignRight: true }, 'chat-branch', { tab, cwd, branches });
     ctxEl._owner = chip;
+  });
+  thrChip('pr').addEventListener('click', e => {
+    const chip = e.currentTarget, tab = curChat(), cwd = chatCwd(tab), ws = wsOf(tab);
+    const pulls = _chatPullRequests.get(cwd)?.pulls;
+    if (!ws || !pulls?.length) return;
+    const open = pr => {
+      if (curChat() === tab && chatCwd(tab) === cwd) {
+        addBrowserTab(ws.id, findGroupContainingTerm(ws.layout, tab.id)?.id, pr.url, `PR #${pr.number}`);
+      }
+    };
+    if (pulls.length === 1) open(pulls[0]);
+    else openPickMenu(chip, pulls.map(pr => ({ value: pr, label: `#${pr.number} ${pr.title}` })), open, true);
   });
   async function setChatBranch(tab, cwd, branch) {
     const r = await window.electronAPI.gitCheckout(cwd, branch);

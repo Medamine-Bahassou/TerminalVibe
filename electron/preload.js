@@ -101,6 +101,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   projectIcon: (cwd) => ipcRenderer.invoke('project:icon', cwd),
   chatTitle: (harness, text) => ipcRenderer.invoke('chat:title', harness, text),
   gitBranches: (cwd) => ipcRenderer.invoke('git:branches', cwd),
+  gitPullRequests: (cwd) => ipcRenderer.invoke('git:pull-requests', cwd),
   gitSnapshot: (cwd) => ipcRenderer.invoke('git:snapshot', cwd),
   gitTurnDiff: (cwd, from, to) => ipcRenderer.invoke('git:turn-diff', cwd, from, to),
   gitCheckout: (cwd, branch) => ipcRenderer.invoke('git:checkout', cwd, branch),
