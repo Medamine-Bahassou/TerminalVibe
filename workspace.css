@@ -341,28 +341,28 @@ body.settings-only #settings-modal { width:100%; height:100%; border:0; border-r
 }
 
 /* Dropdowns: detached popover, left-aligned, plain bright options, subtle selected row. */
-#settings-modal .custom-dropdown { min-width:160px; max-width:100%; }
-#settings-modal .custom-dropdown-btn { padding:7px 12px; gap:12px; font-size:14px; line-height:20px; background:var(--bg); }
-#settings-modal .custom-dropdown-btn.open { border-color:var(--border); border-radius:var(--ui-radius) !important; }
-#settings-modal .custom-dropdown-btn.open .dropdown-arrow { color:var(--muted-text); }
-#settings-modal .custom-dropdown-label { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-#settings-modal .custom-dropdown-btn .dropdown-arrow { flex-shrink:0; color:var(--muted-text); }
-#settings-modal .custom-dropdown-menu {
+:is(#settings-modal, #chat-schedule) .custom-dropdown { min-width:160px; max-width:100%; }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-btn { padding:7px 12px; gap:12px; font-size:14px; line-height:20px; background:var(--bg); }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-btn.open { border-color:var(--border); border-radius:var(--ui-radius) !important; }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-btn.open .dropdown-arrow { color:var(--muted-text); }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-label { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-btn .dropdown-arrow { flex-shrink:0; color:var(--muted-text); }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-menu {
   top:calc(100% + 8px); left:0; right:auto; width:max-content;
   min-width:100%; max-width:min(360px,calc(100vw - 48px)); max-height:280px;
   padding:4px; background:var(--bg); border:1px solid var(--border);
   border-radius:var(--ui-radius) !important; box-shadow:0 8px 24px #0005;
   overscroll-behavior:contain;
 }
-#settings-modal .custom-dropdown-option {
+:is(#settings-modal, #chat-schedule) .custom-dropdown-option {
   min-height:34px; padding:7px 10px; gap:10px; font:400 14px/20px var(--ui-font);
   white-space:nowrap; border-radius:6px !important; color:var(--fg);
 }
-#settings-modal .custom-dropdown-option > span:last-child { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-#settings-modal .custom-dropdown-option:hover,
-#settings-modal .custom-dropdown-option.selected { background:var(--ui-hover); color:var(--fg); }
-#settings-modal .custom-dropdown-option .theme-swatch { flex-shrink:0; gap:3px; }
-#settings-modal .custom-dropdown-option .theme-swatch span { width:7px; height:7px; border-radius:2px !important; }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-option > span:last-child { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-option:hover,
+:is(#settings-modal, #chat-schedule) .custom-dropdown-option.selected { background:var(--ui-hover); color:var(--fg); }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-option .theme-swatch { flex-shrink:0; gap:3px; }
+:is(#settings-modal, #chat-schedule) .custom-dropdown-option .theme-swatch span { width:7px; height:7px; border-radius:2px !important; }
 
 /* Toggle switches stay pill-shaped even in sharp corner mode. */
 body.roundless label > input.peer + div,
@@ -700,6 +700,20 @@ body .ts-item .ts-del:hover { background:color-mix(in srgb,var(--ui-error) 14%,t
 body .ts-empty { font:400 13px/20px var(--ui-font); color:var(--dim-text); }
 body .ts-footer { padding:8px 16px; gap:16px; border-top:1px solid var(--ui-line); font:400 12px/20px var(--ui-font); color:var(--dim-text); }
 body .ts-footer kbd { min-width:20px; margin-right:6px; padding:1px 5px; text-align:center; border:1px solid var(--border); border-radius:4px !important; background:var(--bg); color:var(--muted-text); font:500 11px/16px var(--mono-font); }
+.ts-project-back, .ts-project-heading,
+#tab-search[data-mode="projects"] :is(.ts-modes, .ts-search-icon, .ts-ws) { display:none; }
+#tab-search[data-mode="projects"] .ts-inner { width:min(576px, 100%); }
+#tab-search[data-mode="projects"] .ts-input-row { border-bottom:0; }
+#tab-search[data-mode="projects"] .ts-project-back {
+  display:grid; place-items:center; flex:none; width:24px; height:24px;
+  padding:0; border:0; border-radius:4px; background:transparent; cursor:pointer;
+}
+#tab-search[data-mode="projects"] .ts-project-heading {
+  display:block; padding:8px 16px 2px; color:var(--dim-text); font-size:12px;
+}
+#tab-search[data-mode="projects"] .ts-item { gap:9px; flex-wrap:nowrap; }
+#tab-search[data-mode="projects"] .ts-proj-icon { flex:none; width:15px; height:15px; object-fit:contain; border-radius:3px; }
+.ts-project-path { display:block; overflow:hidden; text-overflow:ellipsis; color:var(--dim-text); font-size:12px; line-height:16px; }
 
 /* Tools panel: the same compact controls and quiet cards as the workspace. */
 #sbr-thread .sbr-btn { width:28px; height:28px; border-radius:6px !important; transition:background-color 150ms,color 150ms; }
@@ -2403,22 +2417,138 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 #sbr-thread .thr-document-open { display:flex; flex-direction:column; cursor:pointer; color:inherit; font:inherit; }
 #sbr-thread .thr-document-open:hover { background:var(--ui-hover); }
 
+/* ── Schedule message dialog ── */
 #chat-schedule {
-  width:min(360px, calc(100% - 32px)); margin:auto; padding:20px;
+  width:min(380px, calc(100% - 32px)); margin:auto; padding:20px;
   background:var(--ui-surface); color:var(--fg); border:1px solid var(--border);
-  border-radius:12px; box-shadow:0 16px 48px #0008; font:13px/1.4 var(--ui-font);
+  border-radius:12px !important; box-shadow:0 16px 48px #0008; font:13px/1.4 var(--ui-font);
 }
-#chat-schedule::backdrop { background:#0008; }
-#chat-schedule form, #chat-schedule label { display:grid; gap:6px; }
-#chat-schedule form { gap:14px; }
-#chat-schedule h2 { margin:0; font-size:15px; }
-#chat-schedule h2 i { margin-right:4px; }
-#chat-schedule input, #chat-schedule select {
-  min-width:0; width:100%; box-sizing:border-box; padding:7px 9px; font:inherit;
-  color:inherit; background:var(--bg); border:1px solid var(--border); border-radius:6px;
+#chat-schedule::backdrop {
+  background:rgba(0,0,0,.5); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
 }
-#chat-schedule .chat-schedule-delay { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+#chat-schedule:not([open]),
+#chat-schedule:not([open])::backdrop { pointer-events:none; }
+@media (prefers-reduced-motion: no-preference) {
+  body.ui-animations #chat-schedule {
+    opacity:0; transform:scale(.96);
+    transition:opacity 180ms ease-out, transform 180ms cubic-bezier(.2,.8,.2,1),
+      display 180ms allow-discrete, overlay 180ms allow-discrete;
+  }
+  body.ui-animations #chat-schedule[open] { opacity:1; transform:scale(1); }
+  body.ui-animations #chat-schedule::backdrop {
+    opacity:0;
+    transition:opacity 180ms ease-out, display 180ms allow-discrete, overlay 180ms allow-discrete;
+  }
+  body.ui-animations #chat-schedule[open]::backdrop { opacity:1; }
+  @starting-style {
+    body.ui-animations #chat-schedule[open] { opacity:0; transform:scale(.96); }
+    body.ui-animations #chat-schedule[open]::backdrop { opacity:0; }
+  }
+}
+#chat-schedule form { display:grid; gap:16px; }
+#chat-schedule label { display:grid; gap:6px; font-size:12px; font-weight:500; color:var(--muted-text); }
+#chat-schedule h2 { display:flex; align-items:center; gap:8px; margin:0; font-size:15px; font-weight:600; }
+#chat-schedule h2 i { font-size:16px; color:var(--muted-text); }
+#chat-schedule .chat-schedule-mode { display:grid; gap:6px; }
+#chat-schedule input {
+  min-width:0; width:100%; height:34px; box-sizing:border-box; padding:0 10px; font:13px var(--ui-font); font-weight:400;
+  color:var(--fg); background:var(--bg); border:1px solid var(--border); border-radius:6px !important;
+  outline:none; transition:border-color 140ms, box-shadow 140ms; color-scheme:dark;
+}
+#chat-schedule .custom-dropdown { min-width:0; }
+#chat-schedule .custom-dropdown-btn { min-height:34px; padding:6px 10px; border-radius:6px !important; font-size:13px; }
+#chat-schedule .custom-dropdown-option { font-size:13px; }
+#chat-schedule input:hover { border-color:var(--muted-text); }
+#chat-schedule input:focus, #chat-schedule .custom-dropdown-btn:focus-visible {
+  outline:none; border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent);
+}
+#chat-schedule :is(.chat-schedule-countdown, .chat-clock-readout) {
+  display:grid; align-items:center; gap:4px; padding:10px;
+  color:var(--fg); background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important;
+}
+#chat-schedule .chat-schedule-countdown { grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr); }
+#chat-schedule .chat-timer-part { min-width:0; display:grid; justify-items:stretch; gap:2px; }
+#chat-schedule .chat-timer-part label { gap:1px; text-align:center; }
+#chat-schedule .chat-time-colon { color:var(--muted-text); font:500 24px var(--mono-font); }
+#chat-schedule .chat-schedule-countdown .chat-time-colon { align-self:start; margin-top:28px; }
+#chat-schedule :is(.chat-timer-part, .chat-clock-readout) input[type="number"] {
+  appearance:textfield; height:40px; padding:0 2px; text-align:center; border-color:transparent;
+  background:transparent; font:500 27px var(--mono-font); font-variant-numeric:tabular-nums;
+}
+#chat-schedule input[type="number"]::-webkit-inner-spin-button { appearance:none; margin:0; }
+#chat-schedule :is(.chat-timer-part, .chat-clock-readout) input[type="number"]:hover { background:var(--ui-hover); }
+#chat-schedule :is(.chat-timer-part, .chat-clock-readout) input[type="number"]:focus { border-color:var(--accent); }
+#chat-schedule .chat-timer-part button, #chat-schedule .chat-clock-tick {
+  display:grid; place-items:center; padding:0; border:0;
+  background:transparent; color:var(--muted-text); cursor:pointer;
+}
+#chat-schedule .chat-timer-part button { width:100%; height:24px; font-size:12px; border-radius:6px !important; }
+#chat-schedule :is(.chat-timer-part button, .chat-clock-tick):hover { background:var(--ui-hover); color:var(--fg); }
+#chat-schedule :is(.chat-timer-part button, .chat-clock-tick):focus-visible,
+#chat-schedule .chat-clock-period input:focus-visible + span { outline:2px solid var(--accent); outline-offset:1px; }
+#chat-schedule .chat-schedule-clock { display:grid; justify-items:center; gap:14px; }
+#chat-schedule .chat-clock-readout { width:100%; box-sizing:border-box; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto; }
+#chat-schedule .chat-clock-readout > label { text-align:center; gap:2px; }
+#chat-schedule .chat-clock-readout input.active { color:var(--accent); background:var(--ui-hover); }
+#chat-schedule .chat-clock-readout .chat-time-colon { align-self:end; margin-bottom:5px; }
+#chat-schedule .chat-clock-period { display:grid; gap:2px; margin-left:8px; }
+#chat-schedule .chat-clock-period label { position:relative; }
+#chat-schedule .chat-clock-period input { position:absolute; width:1px; height:1px; opacity:0; }
+#chat-schedule .chat-clock-period span {
+  min-width:36px; padding:3px 4px; text-align:center; border-radius:6px !important; cursor:pointer;
+}
+#chat-schedule .chat-clock-period span:hover { background:var(--ui-hover); }
+#chat-schedule .chat-clock-period input:checked + span {
+  background:color-mix(in srgb,var(--accent) 15%,var(--bg)); color:var(--accent);
+}
+#chat-schedule .chat-clock-face {
+  position:relative; width:min(216px,100%); aspect-ratio:1; box-sizing:border-box;
+  border:1px solid var(--border); border-radius:50% !important; background:var(--bg);
+}
+#chat-schedule .chat-clock-face::after {
+  content:""; position:absolute; inset:50% auto auto 50%; width:6px; height:6px;
+  translate:-50% -50%; border-radius:50% !important; background:var(--accent); pointer-events:none;
+}
+#chat-schedule .chat-clock-hand {
+  display:none; position:absolute; inset:11% auto 50% 50%; width:2px; margin-left:-1px;
+  transform:rotate(var(--clock-angle, 0deg)); transform-origin:50% 100%;
+  background:var(--accent); border-radius:999px !important; opacity:.7; pointer-events:none;
+}
+#chat-schedule .chat-clock-face.has-hand .chat-clock-hand { display:block; }
+#chat-schedule .chat-clock-ticks { position:absolute; inset:0; }
+#chat-schedule .chat-clock-tick {
+  position:absolute; translate:-50% -50%; width:16%; aspect-ratio:1; border-radius:50% !important;
+  color:var(--fg); font:500 clamp(11px, 2.8vw, 13px) var(--mono-font);
+}
+#chat-schedule .chat-clock-tick[aria-pressed="true"] { color:var(--bg); background:var(--accent); }
+#chat-schedule .chat-clock-hint { color:var(--muted-text); font-size:12px; text-align:center; }
 #chat-schedule [hidden] { display:none; }
-#chat-schedule .prompt-actions { margin-top:2px; }
-#chat-schedule button[type="submit"] { background:var(--accent); border-color:var(--accent); color:#11111b; }
+#chat-schedule .prompt-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
+#chat-schedule .prompt-actions button {
+  display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 14px; font:500 13px var(--ui-font);
+  color:var(--fg); background:transparent; border:1px solid var(--border); border-radius:6px !important; cursor:pointer;
+  transition:background-color 140ms, border-color 140ms, box-shadow 140ms;
+}
+#chat-schedule .prompt-actions button:hover { background:var(--ui-hover); }
+#chat-schedule .prompt-actions button[type="submit"] { background:var(--accent); border-color:var(--accent); color:#0d1017; }
+#chat-schedule .prompt-actions button[type="submit"]:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
+#chat-schedule .prompt-actions button:focus-visible {
+  outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent);
+}
+@media (prefers-reduced-motion: reduce) { #chat-schedule * { transition:none; } }
 #sbr-thread .thr-queued-schedule { display:flex; align-items:center; gap:5px; color:var(--muted-text); font-size:11px; }
+#sbr-thread .thr-queued-schedule [role="timer"] { font-family:var(--mono-font); font-variant-numeric:tabular-nums; }
+
+/* ── Chat composer: controls hidden from its right-click menu, and the context ring ── */
+body.thr-hide-attach .thr-composer .thr-attach,
+body.thr-hide-mode .thr-composer .thr-mode-chip,
+body.thr-hide-ctx .thr-composer .thr-ctx-ring { display:none !important; }
+#ctx [data-composer-part][aria-checked="false"] > .ci-key { visibility:hidden; }
+/* A plain 28px icon button (hover background); the ring is drawn by ::before so the mask doesn't cut the button. */
+.thr-composer .thr-ctx-ring { display:grid; place-items:center; flex-shrink:0; width:28px; height:28px; margin:0 2px; padding:0; background:transparent; border:0; border-radius:8px !important; cursor:default; transition:background-color 140ms; }
+.thr-composer .thr-ctx-ring:hover { background:var(--ui-hover); }
+.thr-composer .thr-ctx-ring::before { content:""; width:16px; height:16px; border-radius:50% !important;
+  background:conic-gradient(color-mix(in srgb,var(--fg) 70%,transparent) calc(var(--p, 0) * 1%), color-mix(in srgb,var(--fg) 14%,transparent) 0);
+  -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px)); mask:radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px)); }
+.thr-composer .thr-ctx-ring[hidden] { display:none; }
+.thr-composer .thr-ctx-ring:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }

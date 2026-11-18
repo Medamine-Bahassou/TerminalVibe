@@ -8,6 +8,7 @@ const input = {
   setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; },
 };
 const context = vm.createContext({
+  isImagePath: path => /\.png$/i.test(path), threadKey: () => 'test-thread',
   curChat: () => current, _chatFiles: [], thrInput: input,
   threadPart: () => null, thrPage: {},
   localPathForFile: async () => '/tmp/paste-' + ++saved + '.png',
@@ -45,5 +46,15 @@ const file = { name: 'image.png', type: 'image/png', size: 3, preview: 'data:ima
   assert(input.value.includes('[File 1]'));
   await context.addChatFiles([{ name: 'report.pdf', type: 'application/pdf', size: 42 }]);
   assert.equal(context._chatFiles.length, 1, 'Repeated document paths must not duplicate attachments');
+  const writes = [];
+  context._chatFiles = [];
+  context.window.electronAPI.saveThreadAttachment = async (id, name, bytes) => {
+    writes.push({ id, name, bytes: [...bytes] });
+    return '/persistent/threads/' + id + '/' + name;
+  };
+  const clipboard = { ...file, name: '', arrayBuffer: async () => new Uint8Array([97, 98, 99]).buffer };
+  await context.addChatFiles([clipboard, clipboard]);
+  assert.deepStrictEqual(writes, [{ id: 'test-thread', name: 'image.png', bytes: [97, 98, 99] }]);
+  assert.strictEqual(context._chatFiles[0].path, '/persistent/threads/test-thread/image.png');
   console.log('Chat image deduplication checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

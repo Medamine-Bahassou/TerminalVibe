@@ -422,12 +422,6 @@ function createWindow() {
       event.preventDefault();
       mainWindow.toggleDevTools();
     }
-    // The hidden default menu still fires its Quit accelerator (Ctrl+Q on
-    // Linux), bypassing the renderer's confirmation. Swallow it so only
-    // Ctrl+Shift+Q — which asks first — can quit.
-    if (input.type === 'keyDown' && input.control && !input.shift && input.key.toLowerCase() === 'q') {
-      event.preventDefault();
-    }
   });
 
   mainWindow.on('closed', () => {
@@ -1180,6 +1174,7 @@ ipcMain.handle('usage:limits', (_e, fresh) => {
   const env = terminalEnv();
   return require('./usage-limits').usageLimits(require('./threads').detectAgents(['claude', 'codex', 'agy'], env), env, fresh === true);
 });
+ipcMain.handle('threads:save-attachment', (_e, id, name, bytes) => require('./threads').saveThreadAttachment(id, name, bytes));
 ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
 ipcMain.handle('threads:fork', (_e, query) => require('./threads').forkThread(query));
@@ -1702,6 +1697,18 @@ ipcMain.on('browser:destroy', (_e, id) => {
 
 // ── App lifecycle ──
 const cliArgs = parseCli();
+
+// Disable the native Close and Quit accelerators while still delivering these
+// keys to the focused terminal, input, or webview.
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('before-input-event', (_inputEvent, input) => {
+    if (input.type !== 'keyDown') return;
+    const key = input.key.toLowerCase();
+    const primaryModifier = (input.control && !input.meta)
+      || (process.platform === 'darwin' && input.meta && !input.control);
+    contents.setIgnoreMenuShortcuts(primaryModifier && !input.shift && !input.alt && (key === 'w' || key === 'q'));
+  });
+});
 
 app.whenReady().then(async () => {
   if (cliArgs.cmd === 'help') { console.log(CLI_USAGE); app.quit(); return; }

@@ -226,9 +226,12 @@ class ClaudeSession extends Session {
     });
     this.asks.get(id).cancel = stopped;
   }
-  send(text) {
+  send(text, { images = [] } = {}) {
+    const content = images.length ? [{ type: 'text', text }, ...images.map(({ mediaType, data }) => ({
+      type: 'image', source: { type: 'base64', media_type: mediaType, data },
+    }))] : text;
     this.setBusy(true);
-    this.write({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, session_id: this.sessionId || '' });
+    this.write({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: this.sessionId || '' });
     return Promise.resolve(true);
   }
   interrupt() {
@@ -310,9 +313,9 @@ class CodexSession extends Session {
     const id = this.addAsk(c.ask, a => reply(c.answer(a.index ?? -1)));
     this.asks.get(id).requestId = m.id;
   }
-  async send(text, { steer, options } = {}) {
+  async send(text, { steer, options, images = [] } = {}) {
     if (options) this.options = options;
-    const input = [{ type: 'text', text, text_elements: [] }];
+    const input = [{ type: 'text', text, text_elements: [] }, ...images.map(path => ({ type: 'localImage', path }))];
     this.setBusy(true);
     try {
       if (steer && this.turnId) {
@@ -639,5 +642,29 @@ if (require.main === module) {
   assert.deepStrictEqual(p.ask.detail, ['echo hi > hi.txt']);
   assert.deepStrictEqual(p.answer(1), { outcome: { outcome: 'selected', optionId: 'deny' } });
   assert.deepStrictEqual(p.answer(-1), { outcome: { outcome: 'cancelled' } });
-  console.log('chat-sdk: ok');
+  const imagePath = '/tmp/terminalvibe-drop/image.png';
+  const claude = new ClaudeSession('test', 'claude', () => {});
+  claude.write = message => assert.deepStrictEqual(message.message.content, [
+    { type: 'text', text: 'Check this image' },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } },
+  ]);
+  claude.send('Check this image', { images: [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }] });
+  const codex = new CodexSession('test', 'codex', () => {});
+  codex.options = {};
+  codex.turnId = 'turn';
+  const methods = [];
+  codex.rpc = async (method, { input }) => {
+    methods.push(method);
+    assert.deepStrictEqual(input, [
+      { type: 'text', text: 'Check this image', text_elements: [] },
+      { type: 'localImage', path: imagePath },
+    ]);
+    return { turn: { id: 'turn' } };
+  };
+  (async () => {
+    await codex.send('Check this image', { images: [imagePath] });
+    await codex.send('Check this image', { images: [imagePath], steer: true });
+    assert.deepStrictEqual(methods, ['turn/start', 'turn/steer']);
+    console.log('chat-sdk: ok');
+  })().catch(error => { console.error(error); process.exitCode = 1; });
 }
