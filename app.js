@@ -9499,8 +9499,7 @@
         addBrowserTab(ws.id, findGroupContainingTerm(ws.layout, tab.id)?.id, pr.url, `PR #${pr.number}`);
       }
     };
-    if (pulls.length === 1) open(pulls[0]);
-    else openPickMenu(chip, pulls.map(pr => ({
+    openPickMenu(chip, pulls.map(pr => ({
       value: pr,
       label: `#${pr.number} ${pr.title}`,
       icon: '<i class="ph ph-git-pull-request" aria-hidden="true"></i>',
