@@ -66,6 +66,7 @@ app.whenReady().then(async () => {
       const tab = { id, el, threadHistory: true, term: { focus() {} } }; ws.tabs.push(tab); return tab;
     };
     const a = makeWs(), b = makeWs(), empty = makeWs();
+    const workspaces = [a, b, empty];
     const first = makeChat(a, 'first'), second = makeChat(a, 'second'), other = makeChat(b, 'other');
     const threadList = document.createElement('div'); threadList.id = 'ts-list';
     threadList.innerHTML = '<button class="ts-card" data-tab="first">First</button><button class="ts-card" data-tab="second">Second</button>';

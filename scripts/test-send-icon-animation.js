@@ -17,6 +17,7 @@ app.whenReady().then(async () => {
     document.body.classList.add('ui-animations');
     const thrSend = document.querySelector('button'), thrInput = { value: 'hello' }, tab = { id: 'a' };
     const curChat = () => tab, syncQueuedEditUI = () => {}, _chatFiles = [], _chatStarting = new Map(), queueIcon = '<svg></svg>';
+    const scheduleDialog = null, _chatAlt = false;
     let working = false, _chatCtrl = false, reduced = false;
     const chatWorking = () => working;
     const iconAnimations = () => [...thrSend.querySelectorAll('.thr-send-icon')].flatMap(icon => icon.getAnimations());
@@ -24,6 +25,12 @@ app.whenReady().then(async () => {
     ${functions}
     syncSendBtn();
     const rect = thrSend.getBoundingClientRect();
+    const checkCentered = selector => {
+      const icon = thrSend.querySelector(selector).getBoundingClientRect();
+      check(Math.abs(icon.left + icon.width / 2 - rect.left - rect.width / 2) < 0.5 &&
+        Math.abs(icon.top + icon.height / 2 - rect.top - rect.height / 2) < 0.5, 'Icon must stay centered');
+    };
+    checkCentered('.ph-arrow-up');
     working = true; syncSendBtn();
     check(thrSend.getAttribute('aria-label') === 'Steer' && thrSend.querySelector('.ph-arrow-elbow-up-right'), 'Steer action and icon update immediately');
     check(thrSend.querySelectorAll('.thr-send-icon').length === 2 && iconAnimations().length === 2, 'Icon switches must crossfade');
@@ -33,6 +40,7 @@ app.whenReady().then(async () => {
     // Hidden Chromium windows may not advance the rendering timeline; finish it explicitly.
     iconAnimations().forEach(animation => animation.finish());
     await wait(0);
+    checkCentered('.ph-stop');
     check(thrSend.querySelectorAll('.thr-send-icon').length === 1 && thrSend.querySelector('.ph-stop'), 'Outgoing icons must be removed after rapid switches');
     check(thrSend.getBoundingClientRect().width === rect.width && thrSend.getBoundingClientRect().height === rect.height, 'Transitions must not shift the button');
     reduced = true; working = false; thrInput.value = 'hello'; syncSendBtn();

@@ -97,6 +97,15 @@ app.whenReady().then(async () => {
     await Promise.all(pendingImages.map(img => img.decode()));
     pendingImages[0].click();
     check(previews.at(-1)[1].path === '/tmp/one/image.png', 'Pending preview should open the image viewer');
+    const winPath = 'C:/attachments/one/image.png';
+    const transcriptPath = 'c:' + ['','attachments','one','image.png'].join(String.fromCharCode(92));
+    scope.innerHTML = chatImageReferenceHtml({ path: transcriptPath }) + chatImageReferenceHtml({ path: 'C:/attachments/two/image.png' });
+    flow.innerHTML = threadImagesHtml([winPath]) + scope.innerHTML;
+    window.electronAPI.readImageFile = async () => ({ mediaType: 'image/png', data: preview.split(',')[1] });
+    await hydrateThreadImage(flow.querySelector('.thr-img'));
+    const [matching, unrelated] = flow.querySelectorAll('.thr-img-link');
+    check(matching.querySelector('img')?.getAttribute('src') === preview, 'Windows path variants must share the attachment preview');
+    check(matching.dataset.path === transcriptPath && !unrelated.querySelector('img'), 'Keep the original link and avoid matching unrelated files by name');
     return 'PASS: sent image links, shared composer/message thumbnail, filename, size, original paths, inline code, spaces, citations and previews before the transcript arrives';
   })()`));
   clearTimeout(timeout); app.exit(0);

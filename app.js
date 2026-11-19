@@ -2953,7 +2953,14 @@
     return commit();
   }
 
+  let navigationSaveTimer;
+  function scheduleNavigationSave() {
+    clearTimeout(navigationSaveTimer);
+    navigationSaveTimer = setTimeout(saveState, 500);
+  }
+
   function saveState() {
+    clearTimeout(navigationSaveTimer);
     // During an in-place profile switch the old profile's final state was
     // already persisted before teardown; suppress any mid-teardown save so the
     // half-torn-down (emptying) state never overwrites it.
@@ -3759,10 +3766,12 @@
       }
       switchWorkspacePane();
     }
-    saveState();
+    scheduleNavigationSave();
   }
 
+  let workspacePaneRevision = 0;
   function switchWorkspacePane() {
+    const revision = ++workspacePaneRevision;
     const area = document.getElementById('pane-area');
     const wsp = activeWs();
 
@@ -3776,11 +3785,12 @@
       _wsDomCache[wsp.id]?.remove();
       delete _wsDomCache[wsp.id];
     }
-    syncThreadPanel();
-    // A workspace is never left empty: it gets a fresh terminal tab (main window only,
-    // and not while a profile switch is tearing workspaces down).
-    if (wsp && !wsp.layout && !SETTINGS_ONLY && !_profileSwitching && (nativePtyReady || wsReady)) { addTerminal(wsp.id); return; }
-    if (!wsp || !wsp.layout) return;
+    if (!wsp?.layout) {
+      syncThreadPanel();
+      // Give empty workspaces a fresh terminal when the backend is ready.
+      if (wsp && !SETTINGS_ONLY && !_profileSwitching && (nativePtyReady || wsReady)) addTerminal(wsp.id);
+      return;
+    }
 
     let container = _wsDomCache[wsp.id];
     if (!container) {
@@ -3828,11 +3838,15 @@
     // delayed resyncs below correct once the flex tree settles.
     syncBrowserSlots();
 
+    const isCurrentPane = () => revision === workspacePaneRevision &&
+      activeWsId === wsp.id && _wsDomCache[wsp.id] === container;
+
     // Let layout settle before measuring: reading rects in the same tick as
     // display:block (or inside a fixed 30ms timeout) can capture a size from
     // before the flex tree settles, making .browser-slot short. Double-RAF runs
     // after the next paint; a late re-sync self-corrects any transient size.
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!isCurrentPane()) return;
       const all = getWorkspaceTerminals(wsp);
       all.forEach(fitTerm);
       clearSlotFocus();
@@ -3845,6 +3859,7 @@
       syncBrowserSlots();
     }));
     setTimeout(() => {
+      if (!isCurrentPane()) return;
       syncBrowserSlots();
       const all = getWorkspaceTerminals(wsp);
       all.forEach(fitTerm);
@@ -3853,6 +3868,7 @@
     // second pass handles cases where the slot was observed while still at
     // zero size (cache restore, nested splits).
     setTimeout(() => {
+      if (!isCurrentPane()) return;
       const all = getWorkspaceTerminals(wsp);
       all.forEach(fitTerm);
       syncBrowserSlots();
@@ -5201,8 +5217,7 @@
         if (urlInput) { urlInput.focus(); urlInput.select(); }
       }
     }, 100);
-    clearTimeout(activateTerminal._saveTimer);
-    activateTerminal._saveTimer = setTimeout(saveState, 500);
+    scheduleNavigationSave();
   }
 
   const _processCheckPending = new Set(); // termIds with an in-flight running-process check
@@ -8798,9 +8813,6 @@
       const status = t.threadHistory ? chatWorking(t) : t._agentWorking && !agentQuestion(t) && !agentLocked(t);
       icon.classList.toggle('working', !!status && !status.wait);
     }
-    // The whole tab shimmers in the agent's color while it works (see .tg-tab.agent-working).
-    el.classList.toggle('agent-working', !!icon?.classList.contains('working'));
-    if (h?.color) el.style.setProperty('--agent-color', h.color);
   }
   function setChatTabLabel(tab) {
     const title = (tab.chat?.title || 'Chat').replace(/\s+/g, ' ');
@@ -8960,9 +8972,12 @@
       if (button.getAttribute('aria-current') !== String(selected)) button.setAttribute('aria-current', String(selected));
     });
     const tabsById = new Map(tabs.map(tab => [tab.id, tab]));
+    for (const other of workspaces) {
+      if (other === ws) continue;
+      for (const tab of getWorkspaceTerminals(other)) tabsById.set(tab.id, tab);
+    }
     document.querySelectorAll('.tg-tab[data-termid]').forEach(button => {
-      const id = button.dataset.termid;
-      const tab = tabsById.get(id) || findTermById(id)?.term;
+      const tab = tabsById.get(button.dataset.termid);
       button.classList.toggle('unsent', !!(tab?.threadHistory && tab.id !== activeId && tab.chat?.draft?.trim()));
     });
   }
@@ -11739,9 +11754,9 @@
     previous.classList.add('leaving');
     thrSend.replaceChildren(previous, next);
     const options = { duration: 160, easing: 'cubic-bezier(.2,.8,.2,1)' };
-    previous.animate([from, { opacity: 0, transform: 'translateY(-3px) scale(.8)' }], { ...options, fill: 'forwards' }).finished
+    previous.animate([from, { opacity: 0, transform: 'scale(.8)' }], { ...options, fill: 'forwards' }).finished
       .then(() => previous.remove()).catch(() => previous.remove());
-    next.animate([{ opacity: 0, transform: 'translateY(3px) scale(.8)' }, { opacity: 1, transform: 'translateY(0) scale(1)' }], options);
+    next.animate([{ opacity: 0, transform: 'scale(.8)' }, { opacity: 1, transform: 'scale(1)' }], options);
   }
   function stopChatTurn(c) {
     c.chat ||= { createdAt: Date.now() };
@@ -13313,10 +13328,15 @@
     const flow = img.closest('.thr-flow'); // the chat may have moved into or out of a snapshot
     if (!flow) return;
     img.src = src;
+    // The transcript and attachment metadata can use different Windows separators.
+    const pathKey = path => /^[a-z]:[\\/]/i.test(path)
+      ? path[0].toLowerCase() + path.slice(1).replace(/[\\/]+/g, '/')
+      : path;
+    const key = pathKey(p);
     const size = _thrImgSize.get(p);
-    if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (el.dataset.sizePath === p) el.textContent = fmtBytes(size).replace(' ', ''); });
-    flow.querySelectorAll('.thr-img-link').forEach(link => {
-      if (link.dataset.path !== p) return;
+    if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (pathKey(el.dataset.sizePath) === key) el.textContent = fmtBytes(size).replace(' ', ''); });
+    flow.querySelectorAll('.thr-img-link[data-path]').forEach(link => {
+      if (pathKey(link.dataset.path) !== key) return;
       link.querySelector('.thr-inline-image-icon').innerHTML = `<img src="${escHtml(src)}" alt="">`;
     });
   }
