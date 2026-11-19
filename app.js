@@ -8800,7 +8800,10 @@
     let icon = el.querySelector('.tg-tab-agent');
     if ((icon?.dataset.agent || '') !== key) {
       icon?.remove(); icon = null;
-      if (!h) return;
+      if (!h) {
+        el.classList.remove('agent-working');
+        return;
+      }
       icon = document.createElement('span');
       icon.className = 'tg-tab-agent'; icon.dataset.agent = key; icon.setAttribute('aria-hidden', 'true');
       if (h.color) icon.style.color = h.color;
@@ -8809,10 +8812,8 @@
     }
     // Gray until the agent is actually running in the tab (a new chat, or one not resumed yet).
     icon?.classList.toggle('idle', !(isLiveTerminal(t) && harnessOf(_tabAgent.get(t.id))));
-    if (icon) {
-      const status = t.threadHistory ? chatWorking(t) : t._agentWorking && !agentQuestion(t) && !agentLocked(t);
-      icon.classList.toggle('working', !!status && !status.wait);
-    }
+    const status = icon && (t.threadHistory ? chatWorking(t) : t._agentWorking && !agentQuestion(t) && !agentLocked(t));
+    el.classList.toggle('agent-working', !!status && !status.wait);
   }
   function setChatTabLabel(tab) {
     const title = (tab.chat?.title || 'Chat').replace(/\s+/g, ' ');
@@ -8901,6 +8902,7 @@
         snapshot.remove();
       } else {
         const flow = threadPart(page, 'flow');
+        flow._imageObserver?.disconnect();
         flow.replaceChildren();
         delete flow.dataset.seen;
         flow._texts = undefined;
@@ -11079,7 +11081,7 @@
     const editor = threadPart(thrPage, 'input-links');
     if (c.items.length) editor?.setAttribute('aria-activedescendant', 'thr-complete-' + c.index);
     else editor?.removeAttribute('aria-activedescendant');
-    thrComplete.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+    thrComplete.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', container: 'nearest' });
   }
   function closeChatComplete() {
     _complete = null;
@@ -11424,8 +11426,6 @@
       const top = flow.scrollTop + target.getBoundingClientRect().top - viewportTop - 8;
       return Math.max(0, Math.min(flow.scrollHeight - flow.clientHeight, top));
     };
-    // Lay out every row from the checkpoint down once, so the destination uses real heights (no drift).
-    for (let row = prompt.parentElement === flow ? prompt : null; row; row = row.nextElementSibling) row.classList.add('thr-seen');
     const key = prompt.dataset.key;
     const started = performance.now();
     const listeners = new AbortController();
@@ -12601,7 +12601,11 @@
     if (tag === 'DEL') return `~~${kids(el)}~~`;
     if (tag === 'CODE' && el.parentNode?.nodeName !== 'PRE') return '`' + el.textContent + '`';
     if (tag === 'PRE' && el.matches('.thr-code')) return block('```' + (el.dataset.lang || '') + '\n' + el.textContent.replace(/\n$/, '') + '\n```');
-    if (el.matches('.thr-link')) { const label = kids(el); return label === el.dataset.href ? label : `[${label}](${el.dataset.href})`; } // a bare URL copies as itself
+    if (el.matches('.thr-link')) {
+      const label = kids(el), href = el.dataset.href;
+      const destination = /[\s()]/.test(href) ? '<' + href + '>' : href;
+      return label === href ? label : '[' + label + '](' + destination + ')';
+    }
     if (el.matches('.thr-h')) return block('#'.repeat(+el.getAttribute('aria-level') || 1) + ' ' + kids(el));
     if (tag === 'HR') return block('---');
     if (tag === 'BLOCKQUOTE') return block(kids(el).trim().split('\n').map(l => '> ' + l).join('\n'));
@@ -12641,8 +12645,10 @@
     // `code` spans become placeholders first, so their contents never turn into emphasis or links, while emphasis
     // can still wrap them (**Create `media.html`**); they are put back as <code> at the end.
     const inlineMd = t => {
-      const codes = [];
+      const codes = [], destinations = [];
       return escHtml(t.replace(/`([^`\n]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`))
+        .replace(/(\]\()&lt;((?:(?!&[lg]t;)[^\n\u0000])+)&gt;(?=\))/g,
+          (_, start, href) => start + '\u0000L' + (destinations.push(href) - 1) + '\u0000')
         .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
         .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1<em>$2</em>')
         .replace(/(^|\W)_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1<em>$2</em>')
@@ -12650,7 +12656,8 @@
         // [label](target): web links open in the browser, images in the viewer, other paths in the file manager.
         // A bare http(s) URL is a link too (labelled with itself); one pass, so a [label](url)'s URL isn't linked twice.
         // A link to a local image (or ![alt](path)) also shows a clickable image preview below.
-        .replace(/(!?)\[([^\]\n]*)\]\(([^()\s\u0000]+)\)|(?<![="'\w/])(https?:\/\/[^\s<>"'`)\]\u0000]*[^\s<>"'`)\].,;:!?\u0000])/g, (_, bang, label, href, bare) => {
+        .replace(/(!?)\[([^\]\n]*)\]\((?:\u0000L(\d+)\u0000|([^()\s\u0000]+))\)|(?<![="'\w/])(https?:\/\/[^\s<>"'`)\]\u0000]*[^\s<>"'`)\].,;:!?\u0000])/g, (_, bang, label, destination, href, bare) => {
+          if (destination !== undefined) href = destinations[Number(destination)];
           if (bare) { href = label = bare; }
           const link = label ? `<button type="button" class="thr-link" data-href="${href}" title="${href}">${linkIconHtml(href)}${label}</button>` : '';
           const raw = href.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
@@ -13056,6 +13063,7 @@
     const outputScroll = new Map([...flow.querySelectorAll('details[open] > .thr-tool-output')].map(el => [el.parentElement.dataset.key, { top: el.scrollTop, left: el.scrollLeft }]));
     if (!segs.length || note) {
       flow._historyChunks = undefined;
+      flow._imageObserver?.disconnect();
       flow.innerHTML = pendingHtml(ws) || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
       flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
       renderChatErrors(ws, flow);
@@ -13065,6 +13073,7 @@
     // An agent is running but nothing was said yet: the same empty state, not a lone session header.
     if (!segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
       flow._historyChunks = undefined;
+      flow._imageObserver?.disconnect();
       flow.innerHTML = pendingHtml(ws) || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
       flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
       renderChatErrors(ws, flow);
@@ -13251,8 +13260,6 @@
     const newImages = content.querySelectorAll('img.thr-img');
     // Keep the open states on replaced rows, without making a toggle invalidate cached markup.
     flow._lazy = lazy;
-    // Lazy-render each row once: after it first scrolls into view it stays laid out (no re-skip jitter).
-    for (const row of flow.children) if (!row.classList.contains('thr-seen')) seenObserver().observe(row);
     for (const details of content.querySelectorAll('details[data-key]')) {
       details.open = open.has(details.dataset.key);
       if (details.open) fillLazyDetails(details, lazy);
@@ -13295,7 +13302,8 @@
       const saved = outputScroll.get(el.parentElement.dataset.key);
       if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
     }
-    newImages.forEach(bindThreadImage);
+    newImages.forEach(img => bindThreadImage(img, img.matches('.thr-msg.user[data-key] > .thr-images .thr-img')));
+    observeThreadImages(flow);
     if (!flow.dataset.seen && ws._scrollState && !ws._scrollState.bottom) { flow.scrollTop = ws._scrollState.top; flow.dataset.seen = '1'; } // back where it was
     else {
       const bottom = Math.max(0, flow.scrollHeight - flow.clientHeight);
@@ -13307,14 +13315,27 @@
     }
     if (surface === thrPage) syncScrollEnd();
   }
-  async function hydrateThreadImage(img) {
-    const p = img.dataset.path;
+  async function hydrateThreadImage(element) {
+    const p = element.dataset.path;
+    if (!p) return;
+    // The transcript and attachment metadata can use different Windows separators.
+    const pathKey = path => /^[a-z]:[\\/]/i.test(path)
+      ? path[0].toLowerCase() + path.slice(1).replace(/[\\/]+/g, '/')
+      : path;
+    const key = pathKey(p);
     let src = _thrImgCache.get(p);
     if (!src) {
-      const r = await window.electronAPI?.readImageFile?.(p).catch(() => null);
+      const reads = hydrateThreadImage.reads ||= new Map();
+      if (!reads.has(key)) {
+        const request = window.electronAPI?.readImageFile?.(p);
+        if (!request) return;
+        reads.set(key, request.catch(() => null).finally(() => reads.delete(key)));
+      }
+      const r = await reads.get(key);
       if (!r?.data) {
-        const tool = img.closest('.thr-tool-image');
-        img.closest('.thr-img-wrap')?.remove();
+        if (!element.matches('img')) return;
+        const tool = element.closest('.thr-tool-image');
+        element.closest('.thr-img-wrap')?.remove();
         if (tool) {
           const label = document.createElement('span'); label.className = 'thr-tool-image-path'; label.textContent = tool.dataset.path;
           tool.append(label); decorateWorkUsernames(tool);
@@ -13325,14 +13346,9 @@
       _thrImgSize.set(p, Math.floor(r.data.length * 3 / 4) - (r.data.endsWith('==') ? 2 : r.data.endsWith('=') ? 1 : 0));
       cacheThreadImage(p, src);
     }
-    const flow = img.closest('.thr-flow'); // the chat may have moved into or out of a snapshot
+    const flow = element.closest('.thr-flow'); // the chat may have moved into or out of a snapshot
     if (!flow) return;
-    img.src = src;
-    // The transcript and attachment metadata can use different Windows separators.
-    const pathKey = path => /^[a-z]:[\\/]/i.test(path)
-      ? path[0].toLowerCase() + path.slice(1).replace(/[\\/]+/g, '/')
-      : path;
-    const key = pathKey(p);
+    if (element.matches('img')) element.src = src;
     const size = _thrImgSize.get(p);
     if (size) flow.querySelectorAll('.thr-img-size').forEach(el => { if (pathKey(el.dataset.sizePath) === key) el.textContent = fmtBytes(size).replace(' ', ''); });
     flow.querySelectorAll('.thr-img-link[data-path]').forEach(link => {
@@ -13340,7 +13356,27 @@
       link.querySelector('.thr-inline-image-icon').innerHTML = `<img src="${escHtml(src)}" alt="">`;
     });
   }
-  function bindThreadImage(img) {
+  function observeThreadImages(flow) {
+    flow._imageObserver?.disconnect();
+    const pending = flow.querySelectorAll('img[data-deferred-preview], .thr-img-link[data-path]:not([data-preview-tried]):has(.thr-inline-image-icon > .ph-image)');
+    if (!pending.length) return;
+    flow._imageObserver ||= new IntersectionObserver(entries => {
+      for (const { target, isIntersecting } of entries) {
+        if (!isIntersecting || target.closest('.thr-flow') !== flow) continue;
+        flow._imageObserver.unobserve(target);
+        if (target.matches('img[data-deferred-preview]')) {
+          target.removeAttribute('data-deferred-preview');
+        } else {
+          if (!target.matches('.thr-img-link:not([data-preview-tried]):has(.thr-inline-image-icon > .ph-image)')) continue;
+          target.setAttribute('data-preview-tried', '');
+        }
+        void hydrateThreadImage(target);
+      }
+    }, { root: flow, rootMargin: '300px 0px' });
+    for (const img of pending) flow._imageObserver.observe(img);
+  }
+
+  function bindThreadImage(img, defer = false) {
     const wrap = img.closest('.thr-img-wrap');
     const open = () => openClaudeRefViewer(null, { kind: 'file', path: img.dataset.path, label: img.dataset.path.split(/[\\/]/).pop() }, '', _thrImgCache.get(img.dataset.path));
     img.addEventListener('click', open);
@@ -13352,7 +13388,9 @@
       } catch { copy.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>'; }
       setTimeout(() => { copy.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
     });
-    void hydrateThreadImage(img);
+    // Historical prompt thumbnails have a fixed-size slot, even before decoding.
+    if (defer === true && !_thrImgCache.has(img.dataset.path)) img.setAttribute('data-deferred-preview', '');
+    else void hydrateThreadImage(img);
   }
   function bindThreadCopy(flow) {
     // A selection across messages copies them as a transcript of their original markdown.
@@ -13389,11 +13427,6 @@
     }
   }
   // Hidden tool bodies and diffs are built on first open: highlighting all of them made long chats slow to show.
-  function seenObserver() {
-    return seenObserver.io ||= new IntersectionObserver(entries => {
-      for (const e of entries) if (e.isIntersecting) { e.target.classList.add('thr-seen'); seenObserver.io.unobserve(e.target); }
-    }, { rootMargin: '600px 0px' });
-  }
   function fillLazyDetails(details, lazy = details.closest('.thr-flow')?._lazy) {
     const html = !details.dataset.filled && lazy?.get(details.dataset.key);
     if (!html) return;

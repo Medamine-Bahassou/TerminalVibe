@@ -6,6 +6,7 @@ const { app, BrowserWindow } = require('electron');
 const timer = setTimeout(() => app.exit(1), 15000);
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false }); await win.loadURL('about:blank');
+  await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname, '..', 'workspace.css'), 'utf8'));
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   const queue = source.slice(source.indexOf('  function renderChatQueue('), source.indexOf('  function updateChatQueue('));
   const start = source.indexOf('      if (curChat() === ws) {', source.indexOf('  async function deliverChatMessage('));
@@ -16,7 +17,7 @@ app.whenReady().then(async () => {
     const thrPage = document.getElementById('chat'), flow = thrPage.querySelector('.thr-flow'), box = document.getElementById('queue');
     const ws = { id: 'chat', chat: { queuedMessages: [] } }, curChat = () => ws;
     const threadPart = (_surface, id) => id === 'flow' ? flow : id === 'queue' ? box : null;
-    const hydrateChatFiles = () => {}, escHtml = String, queuedMessageTextHtml = () => 'Queued content';
+    const hydrateChatFiles = () => {}, updateScheduleCountdowns = () => {}, escHtml = String, queuedMessageTextHtml = () => 'Queued content';
     ${queue}
     flow.scrollTop = flow.scrollHeight - flow.clientHeight - 20;
     let before = flow.scrollTop;
@@ -26,13 +27,20 @@ app.whenReady().then(async () => {
     flow.scrollTop = flow.scrollHeight;
     ws.chat.queuedMessages.push({ id: 'q2', typed: 'Second', files: [] }); renderChatQueue(ws);
     check(flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1, 'Queue updates must follow when already at the bottom');
-    const pendingHtml = () => '<div class="thr-pending" style="height:150px">New message</div>', syncWorking = () => {};
+    const pendingHtml = () => '<div class="thr-pending" style="height:150px">New message</div>', syncWorking = () => {}, bindThreadImage = () => {};
     flow.scrollTop = flow.scrollHeight - flow.clientHeight - 10; before = flow.scrollTop;
     ${pending}
     check(flow.scrollTop === before, 'Sending while reading history must not jump to the end');
     flow.scrollTop = flow.scrollHeight;
     ${pending}
     check(flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1, 'Sending from the bottom must continue following');
-    return 'PASS: queue updates and outgoing messages only follow at the exact bottom, preserving readers near the end';
+    flow.innerHTML = Array.from({ length: 160 }, (_, i) =>
+      '<div><div style="height:' + (i % 2 ? 240 : 32) + 'px">History row</div></div>').join('');
+    const expectedHeight = 80 * (240 + 32);
+    for (const position of [0, 0.25, 0.5, 0.75, 1, 0]) {
+      flow.scrollTo({ top: position * (expectedHeight - flow.clientHeight), behavior: 'instant' });
+      check(flow.scrollHeight === expectedHeight, 'The scrollbar must use real row heights at every scroll position');
+    }
+    return 'PASS: stable history scroll height, queue updates and outgoing messages only follow at the exact bottom, preserving readers near the end';
   })()`)); clearTimeout(timer); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });

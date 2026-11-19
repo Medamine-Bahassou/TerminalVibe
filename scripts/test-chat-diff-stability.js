@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../app.js'), 'utf8');
 const start = source.indexOf('      const changesHtml =');
-const end = source.indexOf('    });\n    flow.innerHTML = html + pendingHtml', start);
+const end = source.indexOf('    });\n    html += forkNote + pendingHtml', start);
 assert(start >= 0 && end > start);
 const code = source.slice(start, end);
 const firstAt = Date.parse('2026-11-17T12:00:00Z'), nextAt = firstAt + 2000;
@@ -13,7 +13,7 @@ const first = [
 const turn = { since: nextAt, awaitingPrompt: true };
 const context = vm.createContext({
   ws: { id: 'chat', chat: {} }, seg: { cwd: '/repo' }, segs: [{}], i: 0,
-  open: new Set(), _turns: new Map([['chat', turn]]),
+  open: new Set(), finishChunk: () => {}, addAgentHeader: () => {}, lazyBody: () => '', _turns: new Map([['chat', turn]]),
   working: false, awaitingTurnPrompt: false, res: { items: first },
   turnGitFiles: (_ws, ts) => Date.parse(ts) === firstAt ? [file] : [],
   escHtml: String, linkFileIcon: () => 'ph-file', hlDiffLine: String, fmtSecs: n => n + 's',

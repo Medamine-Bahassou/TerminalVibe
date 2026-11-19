@@ -542,7 +542,7 @@ ipcMain.handle('shell:open-external', (_e, url) => {
 });
 // Reveal only (never open): a chat link's target could be an executable.
 ipcMain.handle('shell:show-in-folder', (_e, file) => {
-  if (typeof file === 'string' && path.isAbsolute(file)) shell.showItemInFolder(file);
+  if (typeof file === 'string' && path.isAbsolute(file)) shell.showItemInFolder(path.normalize(file));
 });
 // "path" or "path:line"; false when the `code` CLI isn't installed.
 ipcMain.handle('shell:open-in-vscode', (_e, target) => new Promise(resolve => {
@@ -1269,9 +1269,7 @@ ipcMain.handle('git:branch', async (_e, cwd) => {
     if (path.dirname(dir) === dir) return null;
   }
 });
-// Local branches of a folder's repo, and switching to one (git refuses when local changes would be lost).
-const git = (cwd, args, env) => new Promise(res => require('child_process').execFile('git', args, { cwd, env, timeout: 15000, maxBuffer: 64 << 20 }, (err, out, errOut) =>
-  res({ ok: !err, out: String(out), error: err && (String(errOut).trim().split('\n').pop() || err.message) })));
+const { runGit, gitHostPath } = require('./git-command');
 
 // A chat turn's changes, whatever made them (edit tools, sed, scripts, formatters): the folder's working
 // tree is snapshotted as a git tree when the turn starts and diffed against its state when it ends.
@@ -1279,15 +1277,15 @@ const git = (cwd, args, env) => new Promise(res => require('child_process').exec
 // the user's staging area is never touched. Untracked files count, ignored ones don't.
 async function gitSnapshot(cwd) {
   if (!cwd || typeof cwd !== 'string') return null;
-  const r = await git(cwd, ['rev-parse', '--show-toplevel', '--git-path', 'index']);
+  const r = await runGit(cwd, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-path', 'index']);
   if (!r.ok) return null;
-  const [root, index] = r.out.trim().split('\n');
+  const [root, index] = r.out.trimEnd().split(/\r?\n/);
   const tmp = path.join(require('os').tmpdir(), `terminalvibe-index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   try {
-    await fs.promises.copyFile(path.resolve(cwd, index), tmp).catch(() => {}); // no index yet: starts empty
+    await fs.promises.copyFile(gitHostPath(cwd, index), tmp).catch(() => {}); // no index yet: starts empty
     const env = { ...process.env, GIT_INDEX_FILE: tmp };
-    if (!(await git(root, ['add', '-A'], env)).ok) return null;
-    const tree = await git(root, ['write-tree'], env);
+    if (!(await runGit(cwd, ['add', '-A'], env)).ok) return null;
+    const tree = await runGit(cwd, ['write-tree'], env);
     return tree.ok ? { root, tree: tree.out.trim() } : null;
   } finally { fs.promises.rm(tmp, { force: true }).catch(() => {}); }
 }
@@ -1320,10 +1318,10 @@ ipcMain.handle('git:turn-diff', async (_e, cwd, from, to) => {
   return files;
 });
 async function turnDiff(cwd, from, to) {
-  const r = await git(cwd, ['rev-parse', '--show-toplevel']);
+  const r = await runGit(cwd, ['rev-parse', '--show-toplevel']);
   if (!r.ok) return null;
-  const root = r.out.trim();
-  const d = await git(root, ['diff', '--no-color', '--no-ext-diff', '--no-renames', from, to]);
+  const root = gitHostPath(cwd, r.out.trimEnd());
+  const d = await runGit(cwd, ['diff', '--no-color', '--no-ext-diff', '--no-renames', from, to]);
   if (!d.ok) return null;
   const files = [];
   let cur = null;
@@ -1339,7 +1337,7 @@ async function turnDiff(cwd, from, to) {
 }
 ipcMain.handle('git:branches', async (_e, cwd) => {
   if (!cwd || typeof cwd !== 'string') return [];
-  const r = await require('./git-command').runGit(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);
+  const r = await runGit(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);
   return r.ok ? r.out.split(/\r?\n/).filter(Boolean) : [];
 });
 function runGitHub(cwd, args) {
@@ -1369,7 +1367,7 @@ ipcMain.handle('git:pull-requests', async (_e, cwd) => {
 });
 ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
   if (!cwd || typeof cwd !== 'string' || typeof branch !== 'string' || !branch || branch.startsWith('-')) return { ok: false, error: 'Invalid branch' };
-  const r = await require('./git-command').runGit(cwd, ['switch', branch]);
+  const r = await runGit(cwd, ['switch', branch]);
   return { ok: r.ok, error: r.error };
 });
 // A short title for a new chat, from its first message, by the small model of the agent the chat uses

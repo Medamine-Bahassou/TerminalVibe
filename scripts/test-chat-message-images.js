@@ -7,7 +7,7 @@ if (!process.versions.electron) {
 const { app, BrowserWindow } = require('electron');
 const timeout = setTimeout(() => app.exit(1), 20000);
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ show: false });
+  const win = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
   await win.loadURL('about:blank');
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   const imageReference = source.slice(source.indexOf('  function cacheThreadImage('), source.indexOf('  function syncChatInputLinks('));
@@ -33,6 +33,12 @@ app.whenReady().then(async () => {
     ${hydrate}
     const _pendingMsgs = new Map();
     ${composerImages}
+    const example = '//wsl.localhost/Ubuntu/home/med/release/windows-retest/TerminalVibe 0.9.0.exe';
+    const markdownLink = document.createElement('div');
+    markdownLink.innerHTML = mdLite('Built [Windows x64](<' + example + '>) and [report](</tmp/a _draft_ (2).txt>).');
+    const [buildLink, reportLink] = markdownLink.querySelectorAll('.thr-link');
+    check(buildLink?.textContent === 'Windows x64' && buildLink.dataset.href === example, 'A WSL artifact link with spaces must render as a clickable label');
+    check(reportLink?.dataset.href === '/tmp/a _draft_ (2).txt', 'Link destinations must preserve spaces, parentheses and underscores');
     const scope = document.createElement('div');
     const render = text => { const result = userTextHtml(text); scope.innerHTML = result.html; return result; };
     const preview = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=';
@@ -106,7 +112,39 @@ app.whenReady().then(async () => {
     const [matching, unrelated] = flow.querySelectorAll('.thr-img-link');
     check(matching.querySelector('img')?.getAttribute('src') === preview, 'Windows path variants must share the attachment preview');
     check(matching.dataset.path === transcriptPath && !unrelated.querySelector('img'), 'Keep the original link and avoid matching unrelated files by name');
-    return 'PASS: sent image links, shared composer/message thumbnail, filename, size, original paths, inline code, spaces, citations and previews before the transcript arrives';
+    flow.style.cssText = 'height:150px;overflow:auto';
+    flow.innerHTML = '<div style="height:1500px"></div>' + threadImagesHtml(['/tmp/older/image.png']);
+    const older = flow.querySelector('.thr-img');
+    older.parentElement.style.height = '64px';
+    let deferredReads = 0;
+    window.electronAPI.readImageFile = async () => {
+      deferredReads++;
+      return { mediaType: 'image/png', data: preview.split(',')[1] };
+    };
+    bindThreadImage(older, true);
+    observeThreadImages(flow);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    check(deferredReads === 0, 'Opening a long thread must avoid reading offscreen thumbnails');
+    const height = flow.scrollHeight;
+    flow.scrollTop = height;
+    for (let i = 0; i < 40 && !older.src; i++) await new Promise(resolve => setTimeout(resolve, 25));
+    check(deferredReads === 1 && older.getAttribute('src') === preview, 'A nearby historical thumbnail must load once');
+    check(flow.scrollHeight === height, 'Loading the thumbnail must preserve the scroll range');
+    _thrImgCache.clear();
+    const restoredPath = '/tmp/restored/inline.png';
+    flow.innerHTML = chatImageReferenceHtml({ path: restoredPath }) + chatImageReferenceHtml({ path: '/tmp/restored/notes.txt' });
+    const restored = flow.querySelector('.thr-img-link');
+    check(!restored.querySelector('img') && !flow.querySelector('.thr-img'), 'A restored link should start with a cold cache and no standalone preview');
+    let restoredReads = 0;
+    window.electronAPI.readImageFile = async path => {
+      check(path === restoredPath, 'Only an image link should request a preview');
+      restoredReads++;
+      return { mediaType: 'image/png', data: preview.split(',')[1] };
+    };
+    observeThreadImages(flow);
+    for (let i = 0; i < 40 && !restored.querySelector('img'); i++) await new Promise(resolve => setTimeout(resolve, 25));
+    check(restoredReads === 1 && restored.querySelector('img')?.getAttribute('src') === preview, 'A restored inline link must load its own thumbnail');
+    return 'PASS: restored inline thumbnails, deferred history thumbnails, sent image links, shared composer/message thumbnail, filename, size, original paths, inline code, spaces, citations and previews before the transcript arrives';
   })()`));
   clearTimeout(timeout); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });
