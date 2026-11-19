@@ -49,4 +49,6 @@ vm.runInContext(source.slice(matchStart, matchEnd) + '\nthis.matchesPrompt = inT
 assert.equal(matching.matchesPrompt('First request', nextAt, firstAt), undefined, 'repeating a recent query must not match its previous transcript entry');
 matching.hist[0].items = [...first, { role: 'user', text: 'First request', ts: new Date(nextAt).toISOString() }];
 assert.equal(matching.matchesPrompt('First request', nextAt, firstAt).ts, new Date(nextAt).toISOString(), 'a new instance of the same query must match its own transcript entry');
+assert.equal(matching.matchesPrompt('First request', nextAt - 1000, firstAt, nextAt - 1), undefined,
+  'a later identical prompt must not replace a stopped prompt from an earlier send');
 console.log('PASS: completed diffs remain visible during pending queries, rapid follow-ups and snapshot updates');

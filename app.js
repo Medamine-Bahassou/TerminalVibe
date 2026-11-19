@@ -8111,7 +8111,17 @@
   // ── Threads sidebar footer: one quota window per agent, with a shared display preference;
   // the tooltip lists every window. Read through the agents' own CLIs (main process, cached 1 min). ──
   const fmtLeft = ms => { const m = Math.max(0, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`; };
+  const usageCacheKey = 'tv-usage-limits';
   let _usageAt = 0, _usageLimits = null, _usageRequestId = 0;
+  function readUsageCache() {
+    try {
+      const cached = JSON.parse(localStorage.getItem(usageCacheKey));
+      const entries = Object.entries(cached || {}).filter(([id, usage]) =>
+        usageProviderIds.includes(id) && Array.isArray(usage?.windows) && usage.windows.length &&
+        usage.windows.every(w => typeof w?.label === 'string' && Number.isFinite(w.used)));
+      return entries.length ? Object.fromEntries(entries) : null;
+    } catch { return null; }
+  }
   async function refreshUsageLimits(force = false, fresh = false) {
     const api = window.electronAPI;
     if (!api?.usageLimits || SETTINGS_ONLY || (!force && Date.now() - _usageAt < 60000)) return _usageLimits;
@@ -8119,10 +8129,13 @@
     const limits = await api.usageLimits(fresh).catch(() => null);
     if (requestId !== _usageRequestId) return _usageLimits;
     _usageAt = limits ? Date.now() : 0;
-    _usageLimits = limits;
+    if (limits && Object.keys(limits).length) {
+      _usageLimits = { ..._usageLimits, ...limits };
+      try { localStorage.setItem(usageCacheKey, JSON.stringify(_usageLimits)); } catch {}
+    }
     if (_usageModal) renderUsageModal();
-    renderUsageSidebar();
-    return limits;
+    if (_usageLimits) renderUsageSidebar();
+    return _usageLimits;
   }
   const usageRemaining = () => threadSettings.usageDisplay === 'remaining';
   const usagePercent = used => usageRemaining() ? 100 - Math.min(100, Math.max(0, used)) : Math.min(100, Math.max(0, used));
@@ -8279,7 +8292,11 @@
       usageButton.hidden = false;
     }
   }
-  if (!SETTINGS_ONLY && window.electronAPI?.usageLimits) renderUsagePlaceholders();
+  if (!SETTINGS_ONLY && window.electronAPI?.usageLimits) {
+    _usageLimits = readUsageCache();
+    if (_usageLimits) renderUsageSidebar();
+    else renderUsagePlaceholders();
+  }
   if (!SETTINGS_ONLY) { setTimeout(() => refreshUsageLimits(true), 3000); setInterval(() => refreshUsageLimits(false), 60000); }
 
   // A terminal running an agent becomes a Chat tab over that agent (the chat button in its tab bar).
@@ -8644,11 +8661,18 @@
     return paths.length ? `<div class="thr-images">${[...new Set(paths)].map(path =>
       `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(path)}" alt="Pasted image"></div>`).join('')}</div>` : '';
   }
-  const pendingHtml = ws => pendingMessages(ws).map(p => {
+  const resumePrompt = 'continue from where you left';
+  const resumeStatusHtml = (at, pending = false) =>
+    '<div class="thr-status-line thr-resumed' + (pending ? ' thr-pending' : '') + '" data-ts="' + at + '" role="status">'
+    + '<i class="ph ph-play" aria-hidden="true"></i><span class="thr-status-title">'
+    + (pending ? 'Resuming thread…' : 'Thread resumed') + '</span></div>';
+  const pendingMessageHtml = (p, stopped = false) => {
+    if (p.resume) return resumeStatusHtml(p.at, !stopped);
     const user = userTextHtml(p.text);
     const images = threadImagesHtml([...(p.imagePaths || []), ...user.paths]);
-    return `<div class="thr-msg user thr-pending" data-ts="${p.at}">${p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}${images}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}</div>`;
-  }).join('');
+    return `<div class="thr-msg user${stopped ? '' : ' thr-pending'}" data-ts="${p.at}">${stopped ? '<span class="thr-pending-kind">Stopped</span>' : p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}${images}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}</div>`;
+  };
+  const pendingHtml = ws => pendingMessages(ws).map(p => pendingMessageHtml(p)).join('');
   const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
   // A chat is a tab (its history + a message box); a workspace can hold any number of them.
   // ponytail: it is a terminal tab whose shell sits under the page until the chat starts its agent
@@ -9951,7 +9975,8 @@
   document.addEventListener('mousedown', e => { if (_modelPicker && !_modelPicker.contains(e.target) && !thrChip('model').contains(e.target) && !e.target.closest?.('.tv-pick-menu')) closeModelPicker(false); }, true);
 
   // Paste-style write, then Enter on its own: sent together, Codex treats the text as a paste and Enter as a newline.
-  function sendToAgent(t, text, steer = false, files = []) {
+  function sendToAgent(t, text, steer = false, files = [], pending) {
+    if (pending?.cancelled) return false;
     // The history note rides on the first real message: after a slash command it would become its argument.
     if (t._handoff && !/^\s*\//.test(text)) { text += _handoffNote(t._handoff); t._handoff = null; }
     if (t._sideNote && !/^\s*\//.test(text)) { text += SIDE_NOTE; t._sideNote = false; }
@@ -9980,6 +10005,8 @@
             if (image.mediaType !== 'image/bmp') attachments.push({ mediaType: image.mediaType, data: image.data });
           }
         }
+        if (pending?.cancelled) return false;
+        if (pending) pending.submitted = true;
         const r = await window.electronAPI.chatSdkSend(t.id, text, {
           steer, options: sdkTurnOptions(o), ...(attachments.length ? { images: attachments } : {}),
         });
@@ -9989,11 +10016,11 @@
     }
     if (_tabAgent.get(t.id) === 'opencode' && /(?:^|[\s([{])\$[\w:.-]/.test(text)) {
       return openCodeSkillText(t, text).then(text =>
-        _tabAgent.get(t.id) === 'opencode' && isLiveTerminal(t) && sendToTerminalAgent(t, text, steer));
+        _tabAgent.get(t.id) === 'opencode' && isLiveTerminal(t) && !pending?.cancelled && sendToTerminalAgent(t, text, steer, pending));
     }
-    return sendToTerminalAgent(t, text, steer);
+    return sendToTerminalAgent(t, text, steer, pending);
   }
-  function sendToTerminalAgent(t, text, steer) {
+  function sendToTerminalAgent(t, text, steer, pending) {
     const enc = str => new TextEncoder().encode(str), body = text.replace(/\r?\n/g, '\r');
     sendStdin(t.id, enc(t.term.modes?.bracketedPasteMode ? `\x1b[200~${body}\x1b[201~` : body));
     t._chatSent = true;
@@ -10001,7 +10028,8 @@
     const turn = _turns.get(t.id);
     if (turn) turn.sentAt = Date.now();
     return new Promise(resolve => setTimeout(() => {
-      if (!isLiveTerminal(t)) { resolve(false); return; }
+      if (pending?.cancelled || !isLiveTerminal(t)) { resolve(false); return; }
+      if (pending) pending.submitted = true;
       sendStdin(t.id, enc(steer && _tabAgent.get(t.id) === 'claude' ? '\x18\x13' : '\r'));
       resolve(true);
     }, _tabAgent.get(t.id) === 'codex' ? 300 : 50));
@@ -10271,7 +10299,9 @@
   }
   async function startChatAgent(ws, chatTab, text, replace, launch = {}) {
     const o = launch.options || chatOpts(ws), h = harnessOf(o.harness);
+    const cancelled = () => launch.pending?.cancelled;
     const { found = {}, threadsDir } = await loadChatAgents();
+    if (cancelled()) return false;
     if (!found[h.bin]) { zoomBadge(`${h.name} was not found on PATH`); return false; }
     const segs = threadSegments(ws);
     const oldSeg = replace?._chatSeg;
@@ -10299,6 +10329,7 @@
     // The PTY spawn falls back to ~ for a missing folder: never run a thread's agent somewhere else.
     if (cwd && !cwd.startsWith('~') && window.electronAPI?.resolveLocalPath && !await window.electronAPI.resolveLocalPath(cwd))
       throw Error(`The project folder no longer exists: ${cwd}`);
+    if (cancelled()) return false;
     _chatStarting.set(ws.id, { text: `${resumeSid ? 'Resuming' : 'Starting'} ${modelName(o, false, ws)}` }); syncThreadComposer(ws);
     try {
       // The agent runs in the Chat tab's own terminal (the chat page sits over it; the footer
@@ -10309,7 +10340,9 @@
         if (await checkTerminalRunning(entry.id) !== null) throw Error('The terminal became busy before the session could resume.');
         if (findTermById(entry.id)?.term !== entry) return false;
       }
-      if (!await stopTabAgent(entry)) { zoomBadge('The agent in this tab did not quit; stop it in its terminal first'); return false; }
+      const stopped = await stopTabAgent(entry);
+      if (cancelled()) return false;
+      if (!stopped) { zoomBadge('The agent in this tab did not quit; stop it in its terminal first'); return false; }
       if (launch.terminalOnly && findTermById(entry.id)?.term !== entry) return false;
       // Claude Code / Codex chats run as structured sessions (not in the terminal); the terminal view runs the real CLI.
       const viaSdk = !launch.terminalOnly && sdkHarness(o.harness);
@@ -10317,6 +10350,7 @@
         const r = await window.electronAPI.chatSdkStart(entry.id, { harness: o.harness, bin: found[h.bin], cwd, access: o.access,
           argv: o.harness === 'claude' ? CHAT_AGENTS.claude.argv(o, sid, !!resumeSid, forkSid, threadsDir) : [],
           options: sdkTurnOptions(o), resume: o.harness !== 'claude' ? resumeSid : null, fork: o.harness === 'codex' ? forkSid : null });
+        if (cancelled()) { if (r?.ok) await window.electronAPI.chatSdkStop(entry.id); return false; }
         if (!r?.ok) throw Error(r?.error || `Could not start ${h.name}`);
         if (findTermById(entry.id)?.term !== entry) { window.electronAPI.chatSdkStop(entry.id); return false; }
         entry._sdk = { alive: true, harness: o.harness, busy: false, ask: null, sessionId: r.sessionId || sid };
@@ -10325,6 +10359,7 @@
         entry.term.reset(); // the agent draws on a clean screen (and readiness never reads the old one)
         const started = await createAgentTerminal({ id: entry.id, ...getSlotDimensions(entry), cwd, executable: found[h.bin],
           argv: CHAT_AGENTS[o.harness].argv(o, sid, !!resumeSid, forkSid, threadsDir), returnToShell: true, replaceIdle: true });
+        if (cancelled()) { if (started) await stopTabAgent(entry); return false; }
         if (!started) { noteChatError(chatTab, `Could not start ${h.name}`); return false; }
         entry.dead = false;
         entry.term.options.disableStdin = false;
@@ -10362,18 +10397,21 @@
       // consume trust/permission prompts; the terminal is already visible for the user.
       if (launch.terminalOnly) return true;
       // A structured session takes messages at once: no screen to wait for, no trust or lock screen.
-      if (viaSdk) return text == null ? true : await sendToAgent(entry, text, false, launch.files);
-      if (await waitAgentReady(entry) === 'trust') {
+      if (viaSdk) return text == null ? true : await sendToAgent(entry, text, false, launch.files, launch.pending);
+      const readiness = await waitAgentReady(entry);
+      if (cancelled()) return false;
+      if (readiness === 'trust') {
         // The question shows in the chat's answer tray (chatWorking → ask); a screen it can't read shows the terminal.
         // Send once it is answered (or the agent quits, or 5 minutes pass).
         const inUi = !!agentQuestion(entry);
         _chatStarting.set(ws.id, { text: inUi ? `Answer ${h.name}'s question` : `Answer ${h.name}'s question in its terminal`, wait: true }); syncThreadComposer(ws);
         if (inUi) { if (curChat() === ws) syncWorking(ws); } else setChatView(entry, true);
         const t0 = Date.now();
-        while (isLiveTerminal(entry) && TRUST_RE.test(screenText(entry)) && Date.now() - t0 < 300000) {
+        while (!cancelled() && isLiveTerminal(entry) && TRUST_RE.test(screenText(entry)) && Date.now() - t0 < 300000) {
           await sleep(500);
           if (!await agentRunning(entry, h)) break;
         }
+        if (cancelled()) return false;
         if (await agentRunning(entry, h)) await waitAgentReady(entry, 10000);
         setChatView(entry, false);
       }
@@ -10384,8 +10422,8 @@
       // Never type the message into the shell left behind by an agent that quit.
       if (!isLiveTerminal(entry) || !await agentRunning(entry, h)) { zoomBadge(`${h.name} exited before the message was sent`); return false; }
       if (text == null) return true; // a restart with new flags only: the notes ride on the next message
-      return await sendToAgent(entry, text);
-    } catch (err) { noteChatError(chatTab, err.message || `Could not start ${h.name}`); return false; }
+      return await sendToAgent(entry, text, false, launch.files, launch.pending);
+    } catch (err) { if (!cancelled()) noteChatError(chatTab, err.message || `Could not start ${h.name}`); return false; }
     finally { _chatStarting.delete(ws.id); if (curChat() === ws) syncThreadPanel(true); }
   }
   // ── Attachments: picked, dropped or pasted. Keep file references in the draft and transcript.
@@ -11072,9 +11110,16 @@
       const icon = c.kind === 'skill' ? 'ph-lightning' : c.kind === 'slash' ? (it.custom || it.skill ? 'ph-lightning' : 'ph-terminal') : it.dir ? 'ph-folder' : linkFileIcon(it.rel);
       const name = c.kind === 'at' ? it.rel.slice(it.rel.lastIndexOf('/') + 1) : (c.kind === 'skill' ? '$' : '/') + it.name;
       const meta = c.kind === 'at' ? it.rel.slice(0, Math.max(0, it.rel.lastIndexOf('/'))) : it.description || '';
-      return `<div class="thr-complete-item" role="option" id="thr-complete-${i}" data-i="${i}" aria-selected="${i === c.index}">`
+      const isSkill = c.kind === 'skill' || it.skill;
+      const [sourceIcon, sourceLabel] = ({
+        personal: ['ph-user', 'Personal'], app: ['ph-squares-four', 'App'], system: ['ph-gear', 'System'],
+        project: ['ph-folder', 'Project'], account: ['ph-cloud', 'Account'],
+      })[it.source] || (isSkill ? ['ph-lightning', harnessOf(c.harness)?.name] : []);
+      const tip = meta && isSkill ? ` data-tip="${escHtml(meta)}" data-tip-wrap` : '';
+      return `<div class="thr-complete-item"${tip} role="option" id="thr-complete-${i}" data-i="${i}" aria-selected="${i === c.index}">`
         + `<i class="ph ${icon}" aria-hidden="true"></i><span class="thr-complete-name">${escHtml(name)}</span>`
-        + (meta ? `<span class="thr-complete-meta">${escHtml(meta)}</span>` : '') + '</div>';
+        + (meta ? `<span class="thr-complete-meta">${escHtml(meta)}</span>` : '')
+        + (sourceLabel ? `<span class="thr-complete-source"><i class="ph ${sourceIcon}" aria-hidden="true"></i>${escHtml(sourceLabel)}</span>` : '') + '</div>';
     }).join('') + (c.status && (!c.items.length || c.loading)
       ? `<div class="thr-complete-status" role="status">${c.loading ? '<span class="tv-loading-spinner" aria-hidden="true"></span>' : ''}${escHtml(c.status)}</div>` : '');
     thrComplete.hidden = false;
@@ -11764,12 +11809,18 @@
     (c.chat.interruptions ||= []).push({ at: c.chat.interruptedAt });
     saveState();
     if (c.chat?.queuedMessages?.length) { c.chat.queuePaused = true; renderChatQueue(c); saveState(); }
+    const pending = pendingMessages(c);
+    for (const message of pending) message.cancelled = true;
     const t = liveThreadAgent(c);
-    if (_chatStarting.has(c.id)) { if (c._sdk) { c._sdk.alive = false; window.electronAPI.chatSdkStop(c.id); } stopTabAgent(c); }
+    if (_chatStarting.has(c.id)) {
+      if (c._sdk) c._sdk.alive = false;
+      window.electronAPI?.chatSdkStop?.(c.id);
+      stopTabAgent(c);
+    }
     else if (t?._sdk?.alive) window.electronAPI.chatSdkInterrupt(t.id);
     else if (t) sendStdin(t.id, new TextEncoder().encode('\x1b'));
     // The stopped prompt stays in the chat even if the agent never writes it to its transcript.
-    const stopped = pendingMessages(c).map(p => ({ text: p.text, at: p.at }));
+    const stopped = pending.map(p => ({ text: p.text, at: p.at, afterTs: p.afterTs, interruptionAt: c.chat.interruptedAt, submitted: !!p.submitted, resume: p.resume }));
     if (stopped.length) { c.chat ||= { createdAt: Date.now() }; (c.chat.stopped ||= []).push(...stopped); saveState(); }
     _turns.delete(c.id); _pendingMsgs.delete(c.id);
     _flowSig = '';
@@ -11954,6 +12005,7 @@
     if (_chatSending.has(ws.id) || _chatStarting.has(ws.id) || !findTermById(ws.id)) return false;
     _chatSending.add(ws.id);
     const { text, typed } = message;
+    let pending;
     ws.chat ||= { createdAt: Date.now() };
     try {
       if (ws._terminalSessionOpening) await ws._terminalSessionOpening;
@@ -11969,7 +12021,11 @@
         imagePaths.push(file.path);
         if (file.preview) cacheThreadImage(file.path, file.preview);
       }
-      _pendingMsgs.set(ws.id, [...pendingMessages(ws), { id: message.id, text, imagePaths, at: Date.now(), afterTs: ws._lastUserTs || 0, steer, options: { ...(steer ? liveThreadAgent(ws)?._chatCfg || chatOpts(ws) : chatOpts(ws)) } }]);
+      pending = { id: message.id, text, imagePaths, at: Date.now(), afterTs: ws._lastUserTs || 0, steer,
+        resume: message.resume, options: { ...(steer ? liveThreadAgent(ws)?._chatCfg || chatOpts(ws) : chatOpts(ws)) } };
+      // A later message can repeat a stopped prompt verbatim, but belongs to a different send.
+      for (const stopped of ws.chat.stopped || []) stopped.nextAt ??= pending.at;
+      _pendingMsgs.set(ws.id, [...pendingMessages(ws), pending]);
       const newTurn = !steer || !_turns.has(ws.id);
       if (newTurn) _turns.set(ws.id, { since: Date.now(), awaitingPrompt: true });
       if (curChat() === ws) {
@@ -11996,11 +12052,14 @@
         && (!cfg || (sdk && sdkPerTurn(o.harness, cfg.access, o.access))
           || (picksSame && ((sdk && o.harness !== 'antigravity') || cfg.access === o.access)))));
       if (same && agentLocked(t) && !await waitUnlocked(t)) throw Error('The conversation is still open in another app');
+      if (pending.cancelled) return false;
       const back = ws.chat.bringBack && !/^\s*\//.test(text) ? _bringBackNote(ws.chat.bringBack) : '';
-      if (same) { if (!await sendToAgent(t, text + back, steer, message.files)) throw Error('The agent closed before the message was sent'); }
-      else if (!await startChatAgent(ws, ws, text + back, cfg && cfg.harness === o.harness ? t : null, { files: message.files })) throw Object.assign(Error('Could not start the agent'), { shown: true });
+      if (same) { if (!await sendToAgent(t, text + back, steer, message.files, pending)) throw Error('The agent closed before the message was sent'); }
+      else if (!await startChatAgent(ws, ws, text + back, cfg && cfg.harness === o.harness ? t : null, { files: message.files, pending })) throw Object.assign(Error('Could not start the agent'), { shown: true });
+      if (pending.cancelled) return false;
       if (back) { delete ws.chat.bringBack; saveState(); }
       if (ws.chat.interruptedAt && !(ws.chat.interruptions || []).some(item => item.at === ws.chat.interruptedAt)) (ws.chat.interruptions ||= []).push({ at: ws.chat.interruptedAt });
+      if (pending.resume) (ws.chat.resumes ||= []).push({ at: pending.at, afterTs: pending.afterTs, ts: pending.resumeTs });
       delete ws.chat.interruptedAt; ws.chat.lastContinueAt = Date.now(); saveState();
       if (curChat() === ws) syncThreadComposer(ws);
       for (const ms of [400, 1200]) setTimeout(() => { if (curChat() === ws) refreshThreadFlow(ws); }, ms);
@@ -12011,7 +12070,7 @@
       if (!steer) _turns.delete(ws.id);
       _flowSig = '';
       if (curChat() === ws) refreshThreadFlow(ws);
-      if (!err.shown) noteChatError(ws, err.message || 'Could not send message');
+      if (!err.shown && !pending?.cancelled) noteChatError(ws, err.message || 'Could not send message');
       return false;
     } finally { _chatSending.delete(ws.id); }
   }
@@ -12846,9 +12905,8 @@
   async function continueInterruptedChat(tab) {
     if (!tab?.chat?.interruptedAt || tab._resuming || chatWorking(tab) || _chatStarting.has(tab.id) || _chatSending.has(tab.id)) return;
     tab._resuming = true;
-    const text = 'continue from where you left';
     try {
-      await deliverChatMessage(tab, { id: uuid(), text, typed: text, files: [], after: Date.now() });
+      await deliverChatMessage(tab, { id: uuid(), text: resumePrompt, typed: resumePrompt, files: [], resume: true, after: Date.now() });
     } finally {
       delete tab._resuming;
       if (curChat() === tab) syncWorking(tab);
@@ -12862,9 +12920,9 @@
     // Keep locally stopped turns even after the active Continue state is cleared.
     const interruptions = [...(tab.chat?.interruptions || [])];
     if (tab.chat?.interruptedAt && !interruptions.some(item => item.at === tab.chat.interruptedAt)) interruptions.push({ at: tab.chat.interruptedAt });
-    const prompts = interruptions.length ? [...flow.querySelectorAll('.thr-msg.user[data-ts]')] : [];
-    for (const { at } of interruptions.sort((a, b) => a.at - b.at)) {
-      const next = prompts.find(el => Number(el.dataset.ts) > at);
+    const prompts = interruptions.length ? [...flow.querySelectorAll(':is(.thr-msg.user, .thr-resumed)[data-ts]')] : [];
+    for (const { at, promptTs } of interruptions.sort((a, b) => a.at - b.at)) {
+      const next = prompts.find(el => Number(el.dataset.ts) > Math.max(at, promptTs || 0));
       let anchor = next;
       // A model header introduces the next prompt. Keep the previous turn's
       // interruption outside that header and any intervening session notes.
@@ -12872,7 +12930,7 @@
         if (row.matches('.thr-seg')) anchor = row;
       }
       const previous = anchor ? anchor.previousElementSibling : [...flow.children].filter(el => !el.matches('.thr-queue, .thr-working')).at(-1);
-      if (previous?.matches('.thr-status-line')) continue;
+      if (previous?.matches('.thr-status-line:not(.thr-resumed)')) continue;
       const status = document.createElement('div');
       status.className = 'thr-status-line thr-interruption-status';
       status.setAttribute('role', 'status');
@@ -12994,12 +13052,12 @@
       saveState();
     });
     // A sent message is in the transcript: the user message at or after it was sent, starting with its text.
-    const inTranscript = (text, at, afterTs = 0) => {
+    const inTranscript = (text, at, afterTs = 0, beforeTs = Infinity) => {
       // (Hidden notes, e.g. a dropped thread's, never reach the transcript's text.)
       const head = text.replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
       for (const segment of hist) {
         const match = segment.items.find(m => m.role === 'user' && !m.stopped && (Date.parse(m.ts) || Infinity) >= at - 5000
-          && (!afterTs || Date.parse(m.ts) > afterTs)
+          && (!afterTs || Date.parse(m.ts) > afterTs) && (beforeTs === Infinity || Date.parse(m.ts) < beforeTs)
           && String(m.text || '').replace(/\s+/g, ' ').includes(head));
         if (match) return match;
       }
@@ -13007,13 +13065,19 @@
     // Stopped prompts the transcript doesn't have go into the history where they were sent.
     if (!preview && t?.stopped?.length && hist.length) {
       const before = t.stopped.length;
-      t.stopped = t.stopped.filter(x => !inTranscript(x.text, x.at));
+      t.stopped = t.stopped.filter(x => {
+        const prompt = x.submitted === false ? null : inTranscript(x.text, x.at, x.afterTs, x.nextAt);
+        if (!prompt) return true;
+        const interruption = t.interruptions?.find(item => item.at === x.interruptionAt);
+        if (interruption) interruption.promptTs = Date.parse(prompt.ts);
+        return false;
+      });
       if (t.stopped.length !== before) saveState();
       for (const x of t.stopped) {
         let i = segs.findLastIndex(sg => (sg.since || 0) <= x.at);
         if (i < 0 || !hist[i]) i = hist.length - 1;
         const items = hist[i].items, j = items.findIndex(m => (Date.parse(m.ts) || 0) > x.at);
-        const k = j < 0 ? items.length : j, item = { role: 'user', text: x.text, ts: new Date(x.at).toISOString(), stopped: true };
+        const k = j < 0 ? items.length : j, item = { role: 'user', text: x.text, ts: new Date(x.at).toISOString(), stopped: true, resume: x.resume };
         items.splice(k, 0, item);
         // The interrupt that stopped it was flagged on the step before (the transcript never got this prompt):
         // when it came after this prompt was sent, it's this prompt's, so the "Interrupted" line follows it.
@@ -13034,8 +13098,19 @@
       + '|' + hist.map(h => { let n = 0, len = 0; for (const m of h.items) if (m.role === 'tool') { n++; len += typeof m.output === 'string' ? m.output.length : (m.output ? JSON.stringify(m.output).length : 0); } return n + ':' + len; }).join(',');
     // The sent message shows until the transcript has it (or 60s pass).
     const pending = pendingMessages(ws);
+    const resumed = new Set();
+    for (const entry of t?.resumes || []) {
+      const ts = entry.ts || inTranscript(resumePrompt, entry.at, entry.afterTs)?.ts;
+      if (!ts) continue;
+      resumed.add(ts);
+      if (!preview && !entry.ts) { entry.ts = ts; saveState(); }
+    }
     const remaining = pending.filter(pend => {
       const got = inTranscript(pend.text, pend.at, pend.afterTs);
+      if (got && pend.resume) {
+        pend.resumeTs = got.ts;
+        resumed.add(got.ts);
+      }
       if (got && !pend.steer) {
         const turn = _turns.get(ws.id);
         if (turn && pend.at >= turn.since - 1000) { turn.promptTs = got.ts; turn.awaitingPrompt = false; }
@@ -13053,7 +13128,7 @@
     ws._lastUserTs = Math.max(ws._lastUserTs || 0, ...hist.flatMap(h => h.items).filter(m => m.role === 'user').map(m => Date.parse(m.ts) || 0));
     const working = !!chatWorking(ws);
     const awaitingTurnPrompt = !!_turns.get(ws.id)?.awaitingPrompt || remaining.some(p => !p.steer);
-    const sigP = sig + '|p' + remaining.length + (working ? '|w' : '') + (awaitingTurnPrompt ? '|awaiting-prompt' : '');
+    const sigP = sig + '|r' + [...resumed].join(',') + '|p' + remaining.length + (working ? '|w' : '') + (awaitingTurnPrompt ? '|awaiting-prompt' : '');
     if (sigP === (surface === thrPage ? _flowSig : flow.dataset.signature)) return;
     if (surface === thrPage) _flowSig = sigP; else flow.dataset.signature = sigP;
     const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
@@ -13064,8 +13139,8 @@
     if (!segs.length || note) {
       flow._historyChunks = undefined;
       flow._imageObserver?.disconnect();
-      flow.innerHTML = pendingHtml(ws) || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
-      flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
+      flow.innerHTML = (t?.stopped || []).map(p => pendingMessageHtml(p, true)).join('') + pendingHtml(ws) || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
+      flow.querySelectorAll('img.thr-img').forEach(bindThreadImage);
       renderChatErrors(ws, flow);
       syncWorking(ws, surface);
       return;
@@ -13074,8 +13149,8 @@
     if (!segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
       flow._historyChunks = undefined;
       flow._imageObserver?.disconnect();
-      flow.innerHTML = pendingHtml(ws) || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
-      flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
+      flow.innerHTML = (t?.stopped || []).map(p => pendingMessageHtml(p, true)).join('') + pendingHtml(ws) || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
+      flow.querySelectorAll('img.thr-img').forEach(bindThreadImage);
       renderChatErrors(ws, flow);
       syncWorking(ws, surface);
       return;
@@ -13136,6 +13211,7 @@
           + '</div></details>';
       };
       const msgHtml = (m, key, showActions = true, extra = '') => {
+        if (m.role === 'user' && (m.resume || resumed.has(m.ts))) return resumeStatusHtml(Date.parse(m.ts) || 0);
         const cls = `thr-msg ${m.role}`;
         texts.set(key, m.text);
         // Copy + time under the message, shown on hover.
@@ -15622,7 +15698,8 @@
     // Threads
     refreshThreadHarnessSetting();
     for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown'], ['set-thread-usernames', 'usernames']]) {
-      document.getElementById(id).value = threadSettings[key];
+      if (key === 'usernames') document.getElementById(id).checked = threadSettings.usernames === 'blur';
+      else document.getElementById(id).value = threadSettings[key];
       const dd = document.querySelector(`.custom-dropdown[data-for="${id}"]`);
       if (dd) initCustomDropdown(dd);
     }
@@ -16965,7 +17042,7 @@
   });
   for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown'], ['set-thread-usernames', 'usernames']])
     document.getElementById(id).addEventListener('change', e => {
-      threadSettings = { ...threadSettings, [key]: e.target.value };
+      threadSettings = { ...threadSettings, [key]: key === 'usernames' ? (e.target.checked ? 'blur' : 'show') : e.target.value };
       if (key === 'usernames') {
         document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
         applyWorkUsernamePrivacy(document);
@@ -17559,6 +17636,7 @@
       }
       await loadCustomThemes();
       restored = await restoreState();
+      if (_usageLimits) renderUsageSidebar();
       applyTheme(currentThemeName);
       applySidebarMode();
       applyWsProcsSetting();

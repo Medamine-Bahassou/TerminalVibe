@@ -1905,6 +1905,8 @@ body .term-group .tg-tab.unsent:hover { background:color-mix(in srgb,var(--ui-wa
 #sbr-thread :is(.thr-complete-item, .thr-change > summary) > i.ph-file-pdf { color:#ec8585; }
 #sbr-thread .thr-complete-name { flex-shrink:0; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
 #sbr-thread .thr-complete-meta { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--dim-text); }
+#sbr-thread .thr-complete-source { display:inline-flex; align-items:center; flex:none; gap:4px; margin-inline-start:auto;
+  padding:2px 5px; border-radius:4px !important; background:var(--ui-hover); color:var(--muted-text); white-space:nowrap; }
 #sbr-thread .thr-at-ref > i { font-size:13px; align-self:center; }
 #sbr-thread .thr-at-ref > span { max-width:min(240px,44vw); overflow:hidden; text-overflow:ellipsis; }
 

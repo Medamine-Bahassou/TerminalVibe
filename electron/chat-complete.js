@@ -246,7 +246,7 @@ function pluginCommands(config) {
     // The manifest can point commands/skills at other folders (string or list), else the default ones.
     const paths = (v, def) => [def, ...[].concat(v || [])].map(p => path.resolve(dir, p));
     const found = [...paths(manifest.commands, 'commands').flatMap(d => mdCommands(d)), ...paths(manifest.skills, 'skills').flatMap(skills)];
-    for (const c of found) out.push({ ...c, name: `${name}:${c.name}` });
+    for (const c of found) out.push({ ...c, source: 'app', name: `${name}:${c.name}` });
   }
   return out;
 }
@@ -268,8 +268,10 @@ function projectDirs(cwd, home) {
   return dirs;
 }
 function claudeCustomCommands(cwd, home, config) {
-  return [...projectDirs(cwd, home).flatMap(p => [...mdCommands(path.join(p, 'commands')), ...skills(path.join(p, 'skills'))]),
-    ...mdCommands(path.join(config, 'commands')), ...skills(path.join(config, 'skills')), ...syncedSkills(config), ...pluginCommands(config)];
+  const from = (dir, source) => [...mdCommands(path.join(dir, 'commands')), ...skills(path.join(dir, 'skills'))]
+    .map(item => ({ ...item, source }));
+  return [...projectDirs(cwd, home).flatMap(dir => from(dir, 'project')), ...from(config, 'personal'),
+    ...syncedSkills(config).map(item => ({ ...item, source: 'account' })), ...pluginCommands(config)];
 }
 function listClaudeSkills(cwd, home = os.homedir(), env = process.env) {
   const config = env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
@@ -279,7 +281,7 @@ function listClaudeSkills(cwd, home = os.homedir(), env = process.env) {
   const bundled = settings.some(s => s?.disableBundledSkills === true) ? []
     : BUILTIN.claude.filter(c => ['batch', 'claude-api', 'code-review', 'debug', 'loop', 'run', 'simplify', 'verify'].includes(c.name));
   const seen = new Set();
-  return [...claudeCustomCommands(cwd, home, config), ...bundled]
+  return [...claudeCustomCommands(cwd, home, config), ...bundled.map(item => ({ ...item, source: 'system' }))]
     .filter(c => /^[\w:.-]+$/.test(c.name) && overrides[c.name] !== 'off' && !seen.has(c.name) && seen.add(c.name));
 }
 function listCommands(harness, cwd, home = os.homedir(), env = process.env) {
@@ -288,7 +290,7 @@ function listCommands(harness, cwd, home = os.homedir(), env = process.env) {
     const config = env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
     own = claudeCustomCommands(cwd, home, config);
   } else if (harness === 'codex') {
-    own = mdCommands(path.join(env.CODEX_HOME || path.join(home, '.codex'), 'prompts')).map(c => ({ ...c, name: 'prompts:' + c.name }));
+    own = mdCommands(path.join(env.CODEX_HOME || path.join(home, '.codex'), 'prompts')).map(c => ({ ...c, name: 'prompts:' + c.name, source: 'personal' }));
   }
   const seen = new Set(['model', 'effort']); // the chat's model picker sets these
   // The chat's own: a side question opens a side chat (forked from this one) instead of the TUI overlay.
@@ -330,7 +332,7 @@ if (require.main === module) {
     assert.deepEqual(files, ['src/lib/a.js'], 'Walk skips node_modules');
     assert.deepEqual(dirs.sort(), ['src', 'src/lib']);
     const claude = listCommands('claude', project, home, {});
-    assert.deepEqual(claude.find(c => c.name === 'git:ship'), { name: 'git:ship', description: 'Ship it', custom: true });
+    assert.deepEqual(claude.find(c => c.name === 'git:ship'), { name: 'git:ship', description: 'Ship it', source: 'personal', custom: true });
     assert.equal(claude.find(c => c.name === 'lint').description, 'Lint the code');
     assert(claude.some(c => c.name === 'compact' && !c.custom));
     assert(['resume', 'permissions', 'help', 'rewind'].every(n => claude.some(c => c.name === n)), 'TUI-only built-ins listed');
@@ -341,6 +343,10 @@ if (require.main === module) {
     assert.equal(claude.find(c => c.name === 'pdf').description, 'Read PDFs', 'Synced account skills');
     const picker = listClaudeSkills(project, home, {});
     assert(['lint', 'git:ship', 'pl:go', 'pdf', 'debug'].every(name => picker.some(c => c.name === name)));
+    assert.deepEqual(Object.fromEntries(picker.map(c => [c.name, c.source])), {
+      'git:ship': 'personal', lint: 'personal', 'pl:go': 'app', pdf: 'account',
+      ...Object.fromEntries(picker.filter(c => ['batch', 'claude-api', 'code-review', 'debug', 'loop', 'run', 'simplify', 'verify'].includes(c.name)).map(c => [c.name, 'system'])),
+    });
     assert(!picker.some(c => c.name === 'off:x' || c.name === 'compact'));
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({
       disableBundledSkills: true, skillOverrides: { lint: 'off' },

@@ -225,6 +225,29 @@ app.whenReady().then(async () => {
     resolveLive([{ items: [{ role: 'user', text: 'Older history', ts: '2026-11-15T00:00:00Z' }, saved] }]);
     await winTick();
     check(thrPage.textContent.includes('Older history') && thrPage.textContent.includes('Recent saved message'), 'Full history did not replace the preview');
+    const resumedAt = '2026-11-15T00:01:00Z', typedAt = '2026-11-15T00:02:00Z';
+    cold.chat.resumes = JSON.parse(JSON.stringify([{ at: Date.parse(resumedAt) - 500, afterTs: Date.parse(saved.ts) }]));
+    _pendingMsgs.set(cold.id, { at: Date.parse(resumedAt), text: resumePrompt, resume: true });
+    check(pendingHtml(cold).includes('Resuming thread') && !pendingHtml(cold).includes(resumePrompt), 'Pending resume shows a status instead of the generated message');
+    window.electronAPI.threadHistory = async () => [{ items: [
+      saved, { role: 'user', text: resumePrompt, ts: resumedAt },
+      { role: 'assistant', text: 'Continued reply', ts: '2026-11-15T00:01:02Z' },
+      { role: 'user', text: resumePrompt, ts: typedAt },
+    ] }];
+    await refreshThreadFlow(cold);
+    const resumed = thrPage.querySelector('.thr-resumed');
+    check(resumed?.textContent === 'Thread resumed' && Number(resumed.dataset.ts) === Date.parse(resumedAt), 'Restored resume prompt shows its status');
+    check(thrPage.querySelectorAll('.thr-resumed').length === 1 && thrPage.querySelectorAll('.thr-msg.user')[1].textContent.includes(resumePrompt), 'An identical manually typed prompt remains visible');
+    const stoppedAt = Date.parse(typedAt) + 1000, nextAt = stoppedAt + 2000;
+    cold.chat.stopped = [{ text: 'same message', at: stoppedAt, submitted: false, nextAt }];
+    window.electronAPI.threadHistory = async () => [{ items: [
+      { role: 'user', text: 'same message', ts: new Date(nextAt).toISOString() },
+      { role: 'assistant', text: 'Reply to the new message', ts: new Date(nextAt + 1000).toISOString() },
+    ] }];
+    await refreshThreadFlow(cold);
+    const repeated = [...thrPage.querySelectorAll('.thr-msg.user')];
+    check(repeated.length === 2 && repeated[0].textContent.includes('Stopped') && !repeated[1].textContent.includes('Stopped'),
+      'Sending the same text again must preserve the stopped message above it');
     if (historyErrors.length) throw historyErrors[0];
     clearInterval(_threadPoll);
     return 'Chat view regressions passed: immediate thread selection, rapid switching, first-click actions, startup, split focus, drafts, scroll restoration, hidden tabs, bottom position.';

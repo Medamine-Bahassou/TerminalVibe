@@ -305,7 +305,13 @@ class CodexSession extends Session {
     const seen = new Set();
     return (result.data?.[0]?.skills || [])
       .filter(skill => skill.enabled && /^[\w:.-]+$/.test(skill.name) && skill.path && !seen.has(skill.name) && seen.add(skill.name))
-      .map(({ name, description, path }) => ({ name, description, path }));
+      .map(({ name, description, path, scope }) => {
+        const location = path.replace(/\\/g, '/');
+        const source = /\/plugins\/cache\//i.test(location) ? 'app'
+          : /\/skills\/\.system\//i.test(location) ? 'system'
+          : ({ user: 'personal', repo: 'project', system: 'system', admin: 'system' })[scope];
+        return { name, description, path, source };
+      });
   }
   onMessage(m) {
     if (m.id !== undefined && !m.method) { // a response to our request
@@ -350,6 +356,7 @@ class CodexSession extends Session {
   async send(text, { steer, options, images = [] } = {}) {
     if (options) this.options = options;
     const input = [{ type: 'text', text, text_elements: [] }, ...images.map(path => ({ type: 'localImage', path }))];
+    const revision = this.interruptRevision || 0;
     this.setBusy(true);
     try {
       const names = new Set([...skillReferences(text)].map(match => match[1]));
@@ -360,16 +367,23 @@ class CodexSession extends Session {
           if (path) input.push({ type: 'skill', name, path });
         }
       }
+      if (revision !== (this.interruptRevision || 0)) { if (!this.turnId) this.setBusy(false); return false; }
       if (steer && this.turnId) {
         try { await this.rpc('turn/steer', { threadId: this.sessionId, expectedTurnId: this.turnId, input }); return true; }
         catch { /* the turn ended meanwhile: start a new one */ }
       }
+      if (revision !== (this.interruptRevision || 0)) return false;
       const r = await this.rpc('turn/start', { threadId: this.sessionId, input, ...codexTurnParams(this.options) });
       this.turnId = r.turn?.id || this.turnId;
+      if (revision !== (this.interruptRevision || 0)) { this.interruptTurn(); return false; }
       return true;
     } catch (err) { this.setBusy(false, { error: err.message }); throw err; }
   }
-  interrupt() { if (this.turnId) this.rpc('turn/interrupt', { threadId: this.sessionId, turnId: this.turnId }).catch(() => {}); }
+  interrupt() {
+    this.interruptRevision = (this.interruptRevision || 0) + 1;
+    this.interruptTurn();
+  }
+  interruptTurn() { if (this.turnId) this.rpc('turn/interrupt', { threadId: this.sessionId, turnId: this.turnId }).catch(() => {}); }
   setAccess(access) { this.options = { ...this.options, access }; } // applies from the next turn
 }
 
@@ -787,7 +801,7 @@ if (require.main === module) {
       if (method === 'skills/list') {
         assert.deepStrictEqual(params, { cwds: ['/project'] });
         return { data: [{ skills: [
-          { name: 'project-skill', enabled: true, path: '/project/.agents/skills/project-skill/SKILL.md' },
+          { name: 'project-skill', enabled: true, scope: 'repo', path: '/project/.agents/skills/project-skill/SKILL.md' },
           { name: 'project-skill', enabled: true, path: '/other/SKILL.md' },
           { name: 'disabled', enabled: false, path: '/disabled/SKILL.md' },
         ] }] };
@@ -799,7 +813,24 @@ if (require.main === module) {
       ]);
       return { turn: { id: 'turn' } };
     };
+    assert.equal((await codex.listSkills())[0].source, 'project');
     await codex.send(text);
+    const starting = new CodexSession('stop-first', 'codex', () => {});
+    starting.sessionId = 'thread';
+    let finishStart;
+    const interrupted = [];
+    starting.rpc = (method, params) => {
+      if (method === 'turn/start') return new Promise(resolve => { finishStart = resolve; });
+      assert.equal(method, 'turn/interrupt');
+      interrupted.push(params.turnId);
+      return Promise.resolve();
+    };
+    const sending = starting.send('First message');
+    starting.interrupt();
+    assert.deepEqual(interrupted, []);
+    finishStart({ turn: { id: 'first' } });
+    assert.equal(await sending, false);
+    assert.deepEqual(interrupted, ['first'], 'Stop must interrupt a first turn whose ID arrives late');
     const agy = new AcpSession('test', 'antigravity', () => {});
     agy.queue = Promise.resolve();
     agy.waiting = 0;

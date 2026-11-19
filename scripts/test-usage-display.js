@@ -4,6 +4,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'app.js'), 'utf8');
 const sidebar = { innerHTML: '', setAttribute() {}, classList: { contains: () => false, remove() {}, toggle() {} } }, body = { innerHTML: '' };
 const threadSettings = { usageDisplay: 'consumed' };
+const storage = new Map();
 let reads = 0;
 let windows = [{ label: 'Session', used: 97 }, { label: 'Weekly', used: 23 }];
 const context = vm.createContext({
@@ -13,6 +14,7 @@ const context = vm.createContext({
     return { codex: { windows } };
   } } },
   document: { getElementById: () => sidebar },
+  localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
   harnessOf: () => ({ name: 'Codex', bin: 'codex' }), procIconHtml: () => '', escHtml: String,
 });
 vm.runInContext(source.slice(source.indexOf('  const fmtLeft ='), source.indexOf('  async function loadUsageModal(')), context);
@@ -54,5 +56,14 @@ vm.runInContext('_usageModal = { querySelector: selector => selector === ".um-bo
   finishNew({ codex: { windows: [{ label: 'Weekly', used: 40 }] } }); await newRequest;
   finishOld({ codex: { windows: [{ label: 'Weekly', used: 1 }] } }); await oldRequest;
   assert(sidebar.innerHTML.includes('--p:60"'), 'a slow older reading must not overwrite a fresh reading');
-  console.log('Usage display checks passed');
+  vm.runInContext('_usageLimits = readUsageCache(); renderUsageSidebar();', context);
+  assert(sidebar.innerHTML.includes('--p:60"'), 'a restart must show the last saved quota before refreshing');
+  context.window.electronAPI.usageLimits = async () => ({});
+  await context.refreshUsageLimits(true);
+  assert(sidebar.innerHTML.includes('--p:60"'), 'an empty refresh must keep the last known quota');
+  context.window.electronAPI.usageLimits = async () => ({ codex: { windows: [{ label: 'Weekly', used: 25 }] } });
+  await context.refreshUsageLimits(true);
+  assert(sidebar.innerHTML.includes('--p:75"'), 'a successful refresh must replace the restored quota');
+  assert.equal(JSON.parse(storage.get('tv-usage-limits')).codex.windows[0].used, 25);
+  console.log('Usage display and restart cache checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
