@@ -1,11 +1,12 @@
 // A settings change must reach disk before Electron tells the main window to read it.
 const assert=require('node:assert/strict'),fs=require('fs'),path=require('path'),vm=require('vm');
 const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
-const save=source.slice(source.indexOf('  function saveState()'),source.indexOf('  async function restoreState()'));
+const save=source.slice(source.indexOf('  let navigationSaveTimer;'),source.indexOf('  async function restoreState()'));
 (async()=>{
   let complete,writes=0,notifications=0,disk={showWsProcs:false},observed;
   const live={workspaces:[{id:'live-workspace',layout:{id:'live-layout'}}],folders:[{id:'folder'}],sideOrder:[{type:'ws',id:'live-workspace'}]};
   const context=vm.createContext({
+    clearTimeout,setTimeout,
     _profileSwitching:false,SETTINGS_ONLY:true,STATE_KEY:'test-state',
     currentThemeName:'dark',currentColorScheme:'dark',currentFontSize:13,currentFontFamily:'mono',customFonts:{},
     currentLineHeight:1.2,currentCursorStyle:'block',currentCursorBlink:true,currentScrollback:1000,
