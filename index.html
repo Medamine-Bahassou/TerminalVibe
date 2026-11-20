@@ -151,7 +151,7 @@
         <button type="button" class="ts-icon-btn" id="ts-new" title="New thread" aria-label="New thread" aria-haspopup="dialog"><i class="ph ph-note-pencil"></i></button>
       </div>
       <div class="ts-list" id="ts-list" role="list"></div>
-      <button type="button" class="ts-usage" id="ts-usage" title="Usage limits · Right-click for display options" aria-haspopup="menu" hidden></button>
+      <div class="ts-foot" hidden><button type="button" class="ts-pulls" id="ts-pulls" title="Pull requests" aria-label="Pull requests" aria-haspopup="dialog"><i class="ph ph-git-pull-request" aria-hidden="true"></i></button><button type="button" class="ts-pulls" id="ts-issues" title="Issues" aria-label="Issues" aria-haspopup="dialog"><i class="ph ph-circle issue-icon" aria-hidden="true"></i></button><button type="button" class="ts-usage" id="ts-usage" title="Usage limits" aria-label="Usage limits" aria-haspopup="dialog"><i class="ph ph-chart-bar" aria-hidden="true"></i></button></div>
     </aside>
   </div>
 
@@ -353,6 +353,10 @@
             <i class="ph ph-keyboard shrink-0"></i>
             <span>Shortcuts</span>
           </div>
+          <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="providers">
+            <i class="ph ph-robot shrink-0"></i>
+            <span>Providers</span>
+          </div>
           <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="skills">
             <i class="ph ph-sparkle shrink-0"></i>
             <span>Skills</span>
@@ -503,7 +507,7 @@
               <div data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <label for="set-thread-usage" class="text-[12.5px] font-medium text-[var(--fg)]">Usage display</label>
-                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show remaining or consumed quota in the sidebar and usage limits</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show remaining or consumed quota in usage limits</span>
                 </div>
                 <div class="flex-1 flex items-center justify-end gap-3">
                   <select id="set-thread-usage" class="native-select-hidden">
@@ -853,6 +857,15 @@
                   data-setting="restore keyboard shortcuts" id="shortcuts-reset">Reset to defaults</span>
               </div>
             </div>
+          </div>
+          <!-- Providers: built by renderProvidersSettings() in app.js -->
+          <div class="settings-section" data-cat="providers">
+            <div class="prov-head">
+              <div data-setting="providers agents claude codex antigravity opencode enable binary path config folder CLAUDE_CONFIG_DIR CODEX_HOME launch arguments environment variables account" class="settings-section-label">Providers</div>
+              <button type="button" id="providers-refresh" class="prov-refresh" aria-label="Refresh provider status" title="Refresh provider status"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i><span id="providers-checked"></span></button>
+            </div>
+            <div id="providers-panel"></div>
+            <p id="providers-status" class="skills-description" role="status" aria-live="polite"></p>
           </div>
           <div class="settings-section select-none" data-cat="skills">
             <div data-setting="agent splits panes" class="settings-section-label mt-0 mb-1.5 ml-1">TerminalVibe orchestration</div>

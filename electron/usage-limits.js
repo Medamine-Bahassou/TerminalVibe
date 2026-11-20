@@ -40,11 +40,14 @@ const resetTime = value => {
 };
 
 async function claudeUsage(bin, env) {
+  let email = null; // the signed-in account, from the initialize reply
   const res = await ask(bin, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--no-session-persistence'], env,
     [{ type: 'control_request', request_id: 'init', request: { subtype: 'initialize' } },
       { type: 'control_request', request_id: 'usage', request: { subtype: 'get_usage', skip_behaviors: true } }],
-    j => j.type === 'control_response' && j.response?.request_id === 'usage' ? (j.response.response || null) : undefined);
-  return parseClaudeUsage(res);
+    j => j.type === 'control_response' && j.response?.request_id === 'usage' ? (j.response.response || null) : undefined,
+    j => { if (j.type === 'control_response' && j.response?.request_id === 'init') email = j.response.response?.account?.email || null; });
+  const usage = parseClaudeUsage(res);
+  return usage && { ...usage, email };
 }
 function parseClaudeUsage(res) {
   if (!res?.rate_limits_available || !res.rate_limits) return null;
@@ -62,11 +65,23 @@ function parseClaudeUsage(res) {
 }
 
 async function codexUsage(bin, env) {
+  // Rate limits (id 2) and the signed-in account (id 3); an error reply to either still counts as answered.
+  let limits, email = null, replies = 0;
   const res = await ask(bin, ['app-server'], env,
     [{ method: 'initialize', id: 1, params: { clientInfo: { name: 'terminalvibe', title: 'TerminalVibe', version: '1.0.0' } } }],
-    j => j.id === 2 ? (j.result || null) : undefined,
-    (j, p) => { if (j.id === 1) { p.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n'); p.stdin.write(JSON.stringify({ method: 'account/rateLimits/read', id: 2, params: null }) + '\n'); } });
-  return parseCodexUsage(res);
+    j => {
+      if (j.id === 2) { limits = j.result || null; replies++; }
+      else if (j.id === 3) { email = j.result?.account?.email || null; replies++; }
+      return replies === 2 ? limits : undefined;
+    },
+    (j, p) => {
+      if (j.id !== 1) return;
+      p.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n');
+      p.stdin.write(JSON.stringify({ method: 'account/rateLimits/read', id: 2, params: null }) + '\n');
+      p.stdin.write(JSON.stringify({ method: 'account/read', id: 3, params: { refreshToken: false } }) + '\n');
+    });
+  const usage = parseCodexUsage(res);
+  return usage && { ...usage, email };
 }
 function parseCodexUsage(res) {
   // The keyed Codex bucket is authoritative when multiple quota pools exist.
@@ -110,22 +125,33 @@ async function agyUsage(bin, env) {
   });
   let res;
   try { res = JSON.parse(out); } catch { res = out.split('\n').map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
-  return parseAgyUsage(res);
+  const usage = parseAgyUsage(res), email = agyEmail();
+  // No quotas but signed in: still report the account (the Usage modal skips entries without windows).
+  return usage || email ? { ...(usage || { plan: null, windows: [] }), email } : null;
+}
+// The signed-in account, from agy's own login file (read locally; the tokens in it are never used).
+function agyEmail() {
+  try {
+    const file = require('path').join(require('os').homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+    const email = JSON.parse(require('fs').readFileSync(file, 'utf8')).id_token_email;
+    return typeof email === 'string' && email.includes('@') ? email : null;
+  } catch { return null; }
 }
 
 // { claude?: {plan, windows}, codex?: … } for the installed agents that report limits.
 // ponytail: cached for a minute; every refresh spawns each CLI briefly (~1-2s, no model call).
 let cache = null, pending = null, readSequence = 0;
-async function usageLimits(found, env, fresh = false) {
-  const scope = JSON.stringify([found, env.CLAUDE_CONFIG_DIR, env.CODEX_HOME, env.HOME, env.USERPROFILE]);
+// envFor(id): each provider's env (its config folder and env vars from Settings > Providers).
+async function usageLimits(found, envFor, fresh = false) {
+  const scope = JSON.stringify([found, ...['claude', 'codex', 'antigravity'].map(id => envFor(id))]);
   if (pending?.scope === scope) return pending.promise;
   if (!fresh && cache?.scope === scope && Date.now() - cache.at < 60000) return cache.value;
   const sequence = ++readSequence;
   const promise = (async () => {
     const [claude, codex, antigravity] = await Promise.all([
-      found.claude ? claudeUsage(found.claude, env).catch(() => null) : null,
-      found.codex ? codexUsage(found.codex, env).catch(() => null) : null,
-      found.agy ? agyUsage(found.agy, env).catch(() => null) : null,
+      found.claude ? claudeUsage(found.claude, envFor('claude')).catch(() => null) : null,
+      found.codex ? codexUsage(found.codex, envFor('codex')).catch(() => null) : null,
+      found.agy ? agyUsage(found.agy, envFor('antigravity')).catch(() => null) : null,
     ]);
     const value = { ...(claude ? { claude } : {}), ...(codex ? { codex } : {}), ...(antigravity ? { antigravity } : {}) };
     if (sequence === readSequence) cache = { scope, at: Date.now(), value };

@@ -148,10 +148,21 @@ function parseClaude(list) {
       queued.push(text);
       continue;
     }
+    // Claude Code's own running totals for the session (cumulative; the latest row wins).
+    if (row.type === 'cost-state' && row.modelUsage && typeof row.modelUsage === 'object') {
+      const t = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+      for (const m of Object.values(row.modelUsage)) {
+        t.input += m?.inputTokens || 0; t.cacheRead += m?.cacheReadInputTokens || 0;
+        t.cacheWrite += m?.cacheCreationInputTokens || 0; t.output += m?.outputTokens || 0;
+      }
+      items.session = { ...t, cost: Number.isFinite(row.totalCostUSD) ? row.totalCostUSD : null };
+      continue;
+    }
     if (!['user', 'assistant'].includes(row.type) || row.isMeta || row.isSidechain) continue;
-    // The context in use: the latest reply's prompt size (fresh + cached input).
+    // The context in use: the latest reply's prompt (fresh + cached input) plus what it wrote, which the next prompt carries.
     const u = row.type === 'assistant' && row.message?.model !== '<synthetic>' && row.message?.usage;
-    if (u) items.ctx = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+    if (u) items.last = { model: row.message.model || '', input: u.input_tokens || 0, cacheRead: u.cache_read_input_tokens || 0,
+      cacheWrite: u.cache_creation_input_tokens || 0, output: u.output_tokens || 0 };
     const content = row.message?.content;
     const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
     const start = items.length;
@@ -206,7 +217,10 @@ function parseCodex(list) {
   for (const r of list) {
     const p = r.payload;
     if (r.type === 'event_msg' && p?.type === 'token_count' && p.info?.last_token_usage) {
-      ctx = { used: p.info.last_token_usage.input_tokens || 0, max: p.info.model_context_window || 0 };
+      // Codex's input_tokens include the cached ones: split them so the tooltip reads like Claude's.
+      const split = t => t && { input: Math.max(0, (t.input_tokens || 0) - (t.cached_input_tokens || 0)), cacheRead: t.cached_input_tokens || 0, cacheWrite: 0, output: t.output_tokens || 0 };
+      ctx = { used: p.info.last_token_usage.input_tokens || 0, max: p.info.model_context_window || 0,
+        last: split(p.info.last_token_usage), ...(p.info.total_token_usage ? { session: { ...split(p.info.total_token_usage), cost: null } } : {}) };
     }
     if (r.type === 'event_msg' && ['task_started', 'task_complete', 'turn_aborted'].includes(p?.type)) {
       turnState = { status: p.type === 'task_started' ? 'working' : p.type === 'task_complete' ? 'completed' : 'aborted', at: Date.parse(r.timestamp) || 0 };
@@ -277,8 +291,21 @@ async function claudeSegment({ sessionId, cwd, since, exclude = [] }, home) {
     claudeFiles.set(sessionId, file);
   }
   const items = await parseFile(file, parseClaude);
-  // ponytail: Claude's window isn't in the transcript; 200k, or 1M once a prompt outgrows that.
-  return { sessionId, items, ...(items.ctx ? { ctx: { used: items.ctx, max: items.ctx > 200000 ? 1000000 : 200000 } } : {}) };
+  return { sessionId, items, ...(items.last ? { ctx: claudeContext(items.last, items.session) } : {}) };
+}
+// Claude's window isn't in the transcript: it follows the model. Every current model has 1M; Haiku 4.5 and
+// models before the 4.6 generation have 200k ("[1m]" ids opt into 1M).
+function claudeWindow(model) {
+  const m = String(model).toLowerCase();
+  if (/\[1m\]/.test(m)) return 1000000;
+  // claude-3*, haiku-4-5, and opus/sonnet 4, 4.0, 4.1, 4.5 (optionally dated: claude-sonnet-4-5-20250929)
+  return /claude-3|haiku-4-5|(?:opus|sonnet)-4(?:-[015])?(?:-\d{8})?$/.test(m) ? 200000 : 1000000;
+}
+function claudeContext(last, session) {
+  const used = last.input + last.cacheRead + last.cacheWrite + last.output;
+  // A prompt can only outgrow a 200k guess if the window is really 1M.
+  const max = Math.max(claudeWindow(last.model), used > 200000 ? 1000000 : 0);
+  return { used, max, model: last.model, last, ...(session ? { session } : {}) };
 }
 
 // Claude keeps a folder per project (its path with every other character as "-"):
@@ -572,3 +599,19 @@ async function deleteThread(id, home = os.homedir(), root = threadsRoot(home)) {
 }
 
 module.exports = { detectAgents, saveThreadAttachment, syncThread, threadHistory, threadHistoryPreview, writeHandoff, forkThread, deleteThread, toolSummary, toolOutput, parseClaude, parseCodex, parseAcp, acpFile, fileChange };
+
+if (require.main === module) {
+  const assert = require('assert');
+  // Context windows: 1M for current models, 200k for Haiku 4.5 and pre-4.6 models, and never below a prompt that outgrew 200k.
+  for (const [m, w] of [['claude-opus-5-5', 1e6], ['claude-haiku-5-5', 1e6], ['claude-opus-4-6', 1e6], ['claude-haiku-4-5-20251001', 2e5],
+    ['claude-sonnet-4-5-20250929', 2e5], ['claude-opus-4-1-20250805', 2e5], ['claude-sonnet-4-20250514', 2e5], ['claude-sonnet-4-5[1m]', 1e6]]) assert.strictEqual(claudeWindow(m), w, m);
+  const ctx = claudeContext({ model: 'claude-haiku-4-5', input: 5, cacheRead: 210000, cacheWrite: 0, output: 10 });
+  assert.deepStrictEqual([ctx.used, ctx.max], [210015, 1e6]);
+  const items = parseClaude([
+    { type: 'assistant', message: { model: 'claude-opus-5-5', content: [], usage: { input_tokens: 2, cache_read_input_tokens: 1000, cache_creation_input_tokens: 50, output_tokens: 30 } } },
+    { type: 'cost-state', totalCostUSD: 1.5, modelUsage: { 'claude-opus-5-5': { inputTokens: 10, outputTokens: 30, cacheReadInputTokens: 1000, cacheCreationInputTokens: 50 } } },
+  ]);
+  assert.deepStrictEqual(items.session, { input: 10, cacheRead: 1000, cacheWrite: 50, output: 30, cost: 1.5 });
+  assert.strictEqual(claudeContext(items.last, items.session).used, 1082);
+  console.log('threads: ok');
+}

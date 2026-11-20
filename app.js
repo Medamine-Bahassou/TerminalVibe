@@ -66,6 +66,23 @@
         tip.replaceChildren(heading);
         for (const r of rows) {
           const row = document.createElement('div'); row.className = 'ws-process-tooltip-row';
+          // { bar: 0-100, text }: a meter with its caption. { label, text }: an aligned key/value row.
+          if (r.bar != null) {
+            row.className = 'ui-tip-meter';
+            const track = document.createElement('div'); track.className = 'ui-tip-track';
+            track.setAttribute('role', 'img'); track.setAttribute('aria-label', r.text || `${r.bar}%`);
+            const fill = document.createElement('div'); fill.className = 'ui-tip-fill'; fill.style.width = `${Math.max(0, Math.min(100, r.bar))}%`;
+            if (r.bar >= 90) fill.classList.add('high'); else if (r.bar >= 75) fill.classList.add('warn');
+            track.append(fill);
+            const caption = document.createElement('span'); caption.textContent = r.text || '';
+            row.append(track, caption); tip.append(row); continue;
+          }
+          if (r.label) {
+            row.className = 'ui-tip-kv';
+            const k = document.createElement('span'); k.textContent = r.label;
+            const v = document.createElement('span'); v.textContent = r.text;
+            row.append(k, v); tip.append(row); continue;
+          }
           row.innerHTML = r.proc ? procIconHtml(r.proc, 'ph-robot') : `<i class="ph ${/^ph-[\w-]+$/.test(r.icon || '') ? r.icon : 'ph-dot'}" aria-hidden="true"></i>`;
           const text = document.createElement('span'); text.textContent = r.text; row.append(text);
           tip.append(row);
@@ -133,6 +150,7 @@
         }
         else for (const node of record.addedNodes) normalize(node);
       }
+      if (pinned && !pinned.isConnected) pinned = null; // its trigger was re-rendered away
       if (target && !target.isConnected) release();
     }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'data-tip', 'data-tip-processes', 'data-tip-rows'] });
     const schedule = () => { clearTimeout(timer); timer = setTimeout(show, Date.now() < warmUntil ? SKIP_DELAY : DELAY); };
@@ -152,20 +170,37 @@
       }
       return el.closest?.('[data-tip]');
     };
-    document.addEventListener('mouseover', e => { if (take(closestTip(e.target))) schedule(); });
+    // data-tip-pin: a click keeps that tooltip open (live, as its rows update) until a click outside, a second click or Esc.
+    let pinned = null;
+    const unpin = () => { if (!pinned) return; pinned.removeAttribute('aria-expanded'); pinned = null; release(); };
+    document.addEventListener('click', e => {
+      const el = e.target.closest?.('[data-tip-pin][data-tip]');
+      if (!el) return;
+      if (pinned === el) { unpin(); return; }
+      unpin(); release();
+      target = pinned = el; el.setAttribute('aria-expanded', 'true'); show();
+    });
+    document.addEventListener('mouseover', e => { if (!pinned && take(closestTip(e.target))) schedule(); });
     document.addEventListener('mouseout', e => {
-      if (target && (!e.relatedTarget || !target.contains(e.relatedTarget))) release();
+      if (!pinned && target && (!e.relatedTarget || !target.contains(e.relatedTarget))) release();
     });
-    document.addEventListener('mousemove', () => { if (target && !dismissed && !tip.classList.contains('show')) schedule(); }, { passive: true });
-    document.addEventListener('mousedown', () => { if (target) { close(); dismissed = true; } }, true);
-    document.addEventListener('focusin', e => { if (e.target.matches?.(':focus-visible') && take(closestTip(e.target))) schedule(); });
+    document.addEventListener('mousemove', () => { if (!pinned && target && !dismissed && !tip.classList.contains('show')) schedule(); }, { passive: true });
+    document.addEventListener('mousedown', e => {
+      if (pinned) { if (!pinned.contains(e.target)) unpin(); return; } // a press on the pinned trigger is its toggle click
+      if (target?.matches('[data-tip-pin]') && target.contains(e.target)) return; // about to pin: don't dismiss
+      if (target) { close(); dismissed = true; }
+    }, true);
+    document.addEventListener('focusin', e => { if (!pinned && e.target.matches?.(':focus-visible') && take(closestTip(e.target))) schedule(); });
     document.addEventListener('focusout', e => {
-      if (target?.contains(e.target) && !target.contains(e.relatedTarget)) release();
+      if (!pinned && target?.contains(e.target) && !target.contains(e.relatedTarget)) release();
     });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && tip.classList.contains('show')) { close(); dismissed = true; } }, true);
-    document.addEventListener('wheel', () => { if (target) { close(); dismissed = true; } }, { capture: true, passive: true });
-    document.documentElement.addEventListener('mouseleave', release);
-    window.addEventListener('blur', release);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && pinned) { e.stopPropagation(); unpin(); return; }
+      if (e.key === 'Escape' && tip.classList.contains('show')) { close(); dismissed = true; }
+    }, true);
+    document.addEventListener('wheel', () => { if (!pinned && target) { close(); dismissed = true; } }, { capture: true, passive: true });
+    document.documentElement.addEventListener('mouseleave', () => { if (!pinned) release(); });
+    window.addEventListener('blur', () => { unpin(); release(); }); // a click in another window is a click outside
   }
 
   window.addEventListener('error', e => console.error('[UNCAUGHT]', e.error || e.message, e.filename, e.lineno));
@@ -1746,11 +1781,10 @@
   let notificationSound = true;     // play the chime for finish notifications and agent questions
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
-  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageWindow: 'weekly', usageDisplay: 'consumed', markdown: 'on', usernames: 'show' };
+  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed', markdown: 'on', usernames: 'show' };
   const _workUsernameRecords = new Map(), _workUsernameMarkup = new WeakMap();
   const loadThreadSettings = s => {
     if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s };
-    if (threadSettings.usageWindow === 'mostUsed') threadSettings.usageWindow = 'weekly';
     document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
     applyWorkUsernamePrivacy(document);
     applyComposerParts();
@@ -4145,7 +4179,8 @@
   function setupTerminalTitles(entry) {
     for (const code of [0, 2]) entry.term.parser.registerOscHandler(code, title => {
       entry._atShellPrompt = false;
-      if (/claude/i.test(title)) entry._claudeRunning = true;
+      // Claude Code's own titles ("✳ topic", "◐ topic") rarely say "claude".
+      if (/claude/i.test(title) || /^[◐-◓✳]/.test(title)) entry._claudeRunning = true;
       // Claude Code titles: "◐◓◑◒ <topic>" while working, "✳ <topic>" when idle.
       if (/^[\u25D0-\u25D3]/.test(title)) { if (!entry._agentWorking) entry._workSince = Date.now(); entry._agentWorking = true; }
       else if (/^\u2733/.test(title)) entry._idleAt = Date.now();
@@ -4231,7 +4266,10 @@
       if (r?.data) return { src: `data:${r.mediaType};base64,${r.data}` };
     }
     // Not Claude (Codex, …): never fall back to Claude's transcripts, they'd show another session's content.
-    const other = entry._claudeRunning === false;
+    // The process watcher knows the tab's agent; the title/prompt guess only covers tabs it hasn't seen
+    // (a thread's Claude starts behind a shell prompt and may never title itself "claude").
+    const agent = _tabAgent.get(entry.id);
+    const other = agent ? agent !== 'claude' : entry._claudeRunning === false;
     if (other && ref.kind !== 'image') return null;
     // Cache hits only: a miss may be something the CLI hasn't written to disk yet.
     // `later` counts from the newest message, so it shifts when a new one is sent; the prompt's
@@ -4297,7 +4335,123 @@
     }
     place();
   }
-  async function openClaudeRefViewer(entry, ref, prompt, previewSrc) {
+  // Annotate an image that hasn't been sent yet: boxes, arrows and freehand marks, drawn at the image's own
+  // resolution, saved as a PNG. Returns { el, keys, undo } for the viewer; save(bytes, dataUrl) stores the result.
+  function startImageAnnotator(img, save, exit) {
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const wrap = document.createElement('div'); wrap.className = 'civ-edit';
+    const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H; canvas.className = 'civ-edit-canvas';
+    canvas.setAttribute('aria-label', 'Image being annotated');
+    const ctx = canvas.getContext('2d');
+    // Mark colours are part of the picture, not the UI: fixed, high-contrast on screenshots.
+    const COLORS = [['#ef4444', 'Red'], ['#f59e0b', 'Amber'], ['#22c55e', 'Green'], ['#3b82f6', 'Blue'], ['#ffffff', 'White'], ['#111111', 'Black']];
+    const st = { tool: 'rect', color: COLORS[0][0], shapes: [], cur: null };
+    const lw = Math.max(3, Math.round(Math.min(W, H) / 220)); // a stroke that reads at any image size
+    const fs = Math.max(16, Math.round(Math.min(W, H) / 26)); // text size, in image pixels
+    const font = `600 ${fs}px ${getComputedStyle(document.body).getPropertyValue('--ui-font').trim() || 'sans-serif'}`;
+    const drawShape = s => {
+      ctx.strokeStyle = ctx.fillStyle = s.color; ctx.lineWidth = lw; ctx.lineCap = ctx.lineJoin = 'round';
+      if (s.tool === 'text') { // a dark (or, for black text, light) outline keeps it readable on any background
+        ctx.font = font; ctx.textBaseline = 'top';
+        ctx.lineWidth = Math.max(2, fs / 7); ctx.strokeStyle = s.color === '#111111' ? '#ffffffcc' : '#000000aa';
+        s.text.split('\n').forEach((line, i) => { ctx.strokeText(line, s.x0, s.y0 + i * fs * 1.2); ctx.fillText(line, s.x0, s.y0 + i * fs * 1.2); });
+        return;
+      }
+      ctx.beginPath();
+      if (s.tool === 'rect') ctx.rect(Math.min(s.x0, s.x1), Math.min(s.y0, s.y1), Math.abs(s.x1 - s.x0), Math.abs(s.y1 - s.y0));
+      else if (s.tool === 'pen') s.pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+      else { // arrow: a line ending in a filled head
+        const a = Math.atan2(s.y1 - s.y0, s.x1 - s.x0), head = lw * 4.5;
+        ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x1 - Math.cos(a) * head * .8, s.y1 - Math.sin(a) * head * .8); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(s.x1, s.y1);
+        ctx.lineTo(s.x1 - head * Math.cos(a - .45), s.y1 - head * Math.sin(a - .45));
+        ctx.lineTo(s.x1 - head * Math.cos(a + .45), s.y1 - head * Math.sin(a + .45)); ctx.closePath(); ctx.fill();
+        return;
+      }
+      ctx.stroke();
+    };
+    const redraw = () => { ctx.clearRect(0, 0, W, H); ctx.drawImage(img, 0, 0, W, H); st.shapes.forEach(drawShape); if (st.cur) drawShape(st.cur); };
+    const at = e => { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; };
+    // Text: a box typed in place over the image; Enter (or clicking elsewhere) places it, Esc drops it.
+    let typing = null;
+    const commitText = (keep = true) => {
+      if (!typing) return;
+      const { input, x, y } = typing; typing = null;
+      const text = input.value.trim(); input.remove();
+      if (keep && text) st.shapes.push({ tool: 'text', color: st.color, x0: x, y0: y, text });
+      redraw(); sync();
+    };
+    const startText = e => {
+      const [x, y] = at(e), r = canvas.getBoundingClientRect(), scale = r.width / W;
+      const input = document.createElement('input');
+      input.type = 'text'; input.className = 'civ-text-input'; input.setAttribute('aria-label', 'Annotation text');
+      Object.assign(input.style, { left: `${e.clientX}px`, top: `${e.clientY}px`, color: st.color, font: font.replace(`${fs}px`, `${fs * scale}px`) });
+      input.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') { ev.preventDefault(); commitText(); }
+        else if (ev.key === 'Escape') { ev.preventDefault(); commitText(false); }
+        ev.stopPropagation();
+      });
+      input.addEventListener('blur', () => commitText());
+      wrap.appendChild(input); typing = { input, x, y };
+      requestAnimationFrame(() => input.focus());
+    };
+    canvas.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      if (typing) { commitText(); return; } // the first click away places the text
+      if (st.tool === 'text') { startText(e); return; }
+      canvas.setPointerCapture(e.pointerId);
+      const [x, y] = at(e); st.cur = { tool: st.tool, color: st.color, x0: x, y0: y, x1: x, y1: y, pts: [[x, y]] };
+    });
+    canvas.addEventListener('pointermove', e => {
+      if (!st.cur) return;
+      const [x, y] = at(e); Object.assign(st.cur, { x1: x, y1: y }); if (st.cur.tool === 'pen') st.cur.pts.push([x, y]);
+      redraw();
+    });
+    canvas.addEventListener('pointerup', () => {
+      const s = st.cur; st.cur = null;
+      if (s && Math.hypot(s.x1 - s.x0, s.y1 - s.y0) > lw * 2) st.shapes.push(s); // a click without a drag adds nothing
+      redraw(); sync();
+    });
+    wrap.addEventListener('click', e => e.stopPropagation());
+    const bar = document.createElement('div'); bar.className = 'civ-bar civ-edit-bar'; bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'Annotate');
+    const button = (html, title, fn, cls = '') => {
+      const b = document.createElement('button'); b.type = 'button'; b.title = title; b.setAttribute('aria-label', title);
+      b.className = cls; b.innerHTML = html; b.onclick = fn; bar.appendChild(b); return b;
+    };
+    const sep = () => bar.appendChild(Object.assign(document.createElement('span'), { className: 'civ-sep' }));
+    const tools = [['rect', 'square', 'Box (B)'], ['arrow', 'arrow-up-right', 'Arrow (A)'], ['pen', 'pencil-simple-line', 'Pen (P)'], ['text', 'text-t', 'Text (T)']]
+      .map(([id, icon, title]) => [id, button(`<i class="ph ph-${icon}"></i>`, title, () => { st.tool = id; sync(); })]);
+    sep();
+    const swatches = COLORS.map(([c, name]) => [c, button(`<span class="civ-swatch" style="--swatch:${c}"></span>`, name, () => { st.color = c; sync(); }, 'civ-color')]);
+    // Picking a colour mid-text keeps the caret in the text box (so the text takes the new colour when placed).
+    for (const [, b] of swatches) b.addEventListener('mousedown', e => e.preventDefault());
+    sep();
+    const undoBtn = button('<i class="ph ph-arrow-u-up-left"></i>', 'Undo (Ctrl+Z)', () => undo());
+    sep();
+    button('Cancel', 'Cancel (Esc)', () => exit(), 'civ-text');
+    const saveBtn = button('<i class="ph ph-check"></i>Save', 'Save the annotated image', async () => {
+      commitText(); // text still being typed is part of the save
+      saveBtn.disabled = true;
+      try {
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        await save(new Uint8Array(await blob.arrayBuffer()), canvas.toDataURL('image/png'));
+      } catch (err) { zoomBadge(err.message || 'Could not save the image'); saveBtn.disabled = false; }
+    }, 'civ-text civ-save');
+    bar.onclick = e => e.stopPropagation();
+    const undo = () => { st.shapes.pop(); redraw(); sync(); };
+    function sync() {
+      for (const [id, b] of tools) b.setAttribute('aria-pressed', String(st.tool === id));
+      for (const [c, b] of swatches) b.setAttribute('aria-pressed', String(st.color === c));
+      undoBtn.disabled = !st.shapes.length;
+      saveBtn.disabled = !st.shapes.length && !typing;
+      if (typing) typing.input.style.color = st.color; // a colour picked while typing applies to that text
+    }
+    wrap.append(canvas, bar);
+    redraw(); sync();
+    return { el: wrap, undo, keys: { b: () => { st.tool = 'rect'; sync(); }, a: () => { st.tool = 'arrow'; sync(); }, p: () => { st.tool = 'pen'; sync(); }, t: () => { st.tool = 'text'; sync(); } } };
+  }
+  async function openClaudeRefViewer(entry, ref, prompt, previewSrc, opts = {}) {
     hideClaudeRefPop();
     const found = previewSrc ? { src: previewSrc } : await loadClaudeRef(entry, ref, prompt).catch(() => null);
     if (!found?.src && found?.text == null) { zoomBadge(found?.error || 'Preview unavailable'); return; }
@@ -4305,6 +4459,7 @@
     const overlay = document.createElement('div'); overlay.className = 'claude-image-viewer';
     overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-label', ref.label); overlay.tabIndex = -1;
     let keys = null; // image viewer shortcuts
+    let editing = null; // the annotator, while open
     if (found.src) {
       const img = document.createElement('img'); img.src = found.src; img.alt = ref.label; img.draggable = false;
       // Wheel zooms at the cursor, drag pans, toolbar/keys rotate and flip.
@@ -4357,13 +4512,23 @@
       btn('arrow-clockwise', 'Rotate right (R)', () => rotate(90));
       btn('flip-horizontal', 'Flip (F)', flip);
       sep();
-      btn('x', 'Close (Esc)', () => close());
-      keys = { '+': () => zoomAt(v.s * 1.25), '=': () => zoomAt(v.s * 1.25), '-': () => zoomAt(v.s / 1.25), '0': fit,
+      // Only an image that hasn't been sent yet can be annotated (the caller passes onEdit for those).
+      const viewKeys = { '+': () => zoomAt(v.s * 1.25), '=': () => zoomAt(v.s * 1.25), '-': () => zoomAt(v.s / 1.25), '0': fit,
         r: () => rotate(90), R: () => rotate(-90), f: flip, F: flip };
+      const stage = document.createElement('div'); stage.className = 'civ-stage';
+      const startEdit = () => {
+        if (editing) return;
+        const stop = () => { editing?.el.remove(); editing = null; keys = viewKeys; stage.hidden = bar.hidden = false; overlay.focus(); };
+        editing = startImageAnnotator(img, async (bytes, dataUrl) => { await opts.onEdit(bytes, dataUrl); close(); }, stop);
+        keys = editing.keys; stage.hidden = bar.hidden = true;
+        overlay.append(editing.el);
+      };
+      if (opts.onEdit) { btn('pencil-simple', 'Annotate (E)', startEdit); viewKeys.e = startEdit; sep(); }
+      btn('x', 'Close (Esc)', () => close());
+      keys = viewKeys;
       apply();
       // The zoomed image stays inside a frame (at most 92vw x 84vh, centered like the overlay, so the
       // zoom math is unchanged); past it, the image is cropped and panned inside.
-      const stage = document.createElement('div'); stage.className = 'civ-stage';
       stage.appendChild(img);
       overlay.append(stage, bar);
     } else {
@@ -4373,11 +4538,15 @@
     }
     // Capture on document: xterm refocuses itself after the click, and a stray Esc would interrupt Claude.
     const onKey = e => {
-      const k = e.key === 'Escape' ? close : !e.ctrlKey && !e.metaKey && !e.altKey && keys?.[e.key];
+      if (e.target.closest?.('.civ-text-input')) return; // typing annotation text: its own keys (Enter, Esc) handle it
+      // While annotating, Esc leaves the annotator (not the viewer) and Ctrl/Cmd+Z undoes the last mark.
+      const undo = editing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && editing.undo;
+      const k = undo || (e.key === 'Escape' ? (editing ? () => editing.el.querySelector('.civ-text')?.click() : close)
+        : !e.ctrlKey && !e.metaKey && !e.altKey && keys?.[e.key]);
       if (k) { e.preventDefault(); e.stopPropagation(); k(); }
     };
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); if (entry?.term) entry.term.focus(); else previousFocus?.focus(); };
-    overlay.onclick = close;
+    overlay.onclick = () => { if (!editing) close(); }; // a stray click on the backdrop never throws away marks
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(overlay);
   }
@@ -4502,7 +4671,9 @@
     let text = '', pos = [];
     const glues = [];
     rows.forEach((row, i) => {
-      if (i && !row.wrapped) {
+      // A full-width row (Claude's highlighted prompt) makes the CLI's indented continuation look
+      // soft-wrapped; its indent must be dropped too, or the path gets "  " in the middle.
+      if (i && (!row.wrapped || /^\s/.test(row.text))) {
         const tail = /(\S+)\s*$/.exec(text)?.[1] || '';
         const lead = row.text.length - row.text.trimStart().length;
         const pathStart = /^['"(]?(?:~|[A-Za-z]:)?[\\/][^\s'"`()<>[\]{}|]*$/.test(tail) && !/\.(?:png|jpe?g|gif|webp|bmp)$/i.test(tail);
@@ -4513,7 +4684,7 @@
           text += row.text.slice(lead); pos.push(...row.pos.slice(lead));
           return;
         }
-        text += '\n'; pos.push(null);
+        if (!row.wrapped) { text += '\n'; pos.push(null); }
       }
       text += row.text; pos.push(...row.pos);
     });
@@ -5983,12 +6154,20 @@
 
   function renderPaneArea() {
     const wsp = activeWs();
+    // The rebuild moves each tab's element, which resets scroll: chats go back where they were (closing settings,
+    // a theme change). The open chat uses the shared page; chats beside it have their own snapshot surface.
+    if (_curChat && thrPage.isConnected) rememberThreadScroll(_curChat);
+    const chats = wsp ? getWorkspaceTerminals(wsp).filter(t => t._scrollState) : [];
     // Invalidate cache for current workspace so switchWorkspacePane rebuilds it
     if (wsp && _wsDomCache[wsp.id]) {
       _wsDomCache[wsp.id].remove();
       delete _wsDomCache[wsp.id];
     }
     switchWorkspacePane();
+    for (const t of chats) {
+      const surface = t === _curChat ? thrPage : t.el?.querySelector(':scope > .thr-snapshot');
+      if (surface?.isConnected && surface.querySelector('.thr-flow')?.clientHeight) restoreThreadScroll(t, surface);
+    }
     applyBackground();
   }
 
@@ -8170,70 +8349,15 @@
       try { localStorage.setItem(usageCacheKey, JSON.stringify(_usageLimits)); } catch {}
     }
     if (_usageModal) renderUsageModal();
-    if (_usageLimits) renderUsageSidebar();
     return _usageLimits;
   }
   const usageRemaining = () => threadSettings.usageDisplay === 'remaining';
   const usagePercent = used => usageRemaining() ? 100 - Math.min(100, Math.max(0, used)) : Math.min(100, Math.max(0, used));
-  const usageWindows = { weekly: 'Weekly', session: 'Session', monthly: 'Monthly' };
   const usageProviderIds = ['claude', 'codex', 'antigravity'];
-  const hiddenUsageProviders = () => new Set(Array.isArray(threadSettings.hiddenUsageProviders) ? threadSettings.hiddenUsageProviders : []);
-  const usageChartIcon = '<i class="ph ph-chart-bar sb-usage-open" aria-hidden="true"></i>';
-  const monthlyUsage = w => w.mins === 43200 || /^monthly$/i.test(w.label);
-  function sidebarUsageWindow(windows, preferred) {
-    const weekly = windows.find(w => w.mins === 10080 && /^weekly$/i.test(w.label))
-      || windows.find(w => /^weekly$/i.test(w.label))
-      || windows.find(w => w.mins === 10080 || /^weekly\b/i.test(w.label));
-    if (preferred === 'session') {
-      const session = windows.find(w => w.mins === 300 || /^session$/i.test(w.label));
-      if (session) return session;
-    }
-    if (preferred === 'monthly') {
-      const monthly = windows.find(monthlyUsage);
-      if (monthly) return monthly;
-    }
-    return weekly || windows.reduce((a, b) => b.used > a.used ? b : a);
-  }
-  function renderUsageSidebar(animate = false) {
-    const left = document.getElementById('ts-usage');
-    if (!left) return;
-    const previous = new Map();
-    if (animate && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      for (const ring of left.querySelectorAll('.sb-usage-item[data-usage-agent]')) {
-        previous.set(ring.dataset.usageAgent, getComputedStyle(ring).getPropertyValue('--p'));
-      }
-    }
-    const label = usageRemaining() ? 'remaining' : 'consumed';
-    const windowLabel = usageWindows[threadSettings.usageWindow] || usageWindows.weekly;
-    left.setAttribute('aria-label', `Usage limits, ${windowLabel.toLowerCase()}, ${label}`);
-    const ids = Object.entries(_usageLimits || {}).filter(([id, u]) => harnessOf(id) && u.windows?.length).map(([id]) => id);
-    const hidden = hiddenUsageProviders();
-    const items = ids.filter(id => !hidden.has(id)).map(id => {
-      const h = harnessOf(id), u = _usageLimits[id];
-      const top = sidebarUsageWindow(u.windows, threadSettings.usageWindow);
-      const rows = u.windows.map(w => ({ icon: 'ph-clock', text: `${w.label}: ${usagePercent(w.used)}% ${label}${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
-      const plan = u.plan ? ' · ' + u.plan[0].toUpperCase() + u.plan.slice(1) : '';
-      // Gauge and percentage use the selected mode; warnings always reflect consumed quota.
-      return `<span class="sb-usage-item${top.used >= 90 ? ' full' : top.used >= 75 ? ' high' : ''}" style="--p:${usagePercent(top.used)}" data-usage-agent="${escHtml(id)}" data-tip="${escHtml(h.name + plan + ' · ' + top.label + ': ' + usagePercent(top.used) + '% ' + label)}" data-tip-rows="${escHtml(JSON.stringify(rows))}">`
-        + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
-        + `<span class="sb-usage-pct">${usagePercent(top.used)}%</span></span>`;
-    }).join('');
-    // Keep the menu reachable even when every provider is hidden.
-    left.hidden = !ids.length && !hidden.size;
-    left.innerHTML = left.hidden ? '' : items + usageChartIcon;
-    if (previous.size) {
-      for (const ring of left.querySelectorAll('.sb-usage-item[data-usage-agent]')) {
-        const from = previous.get(ring.dataset.usageAgent);
-        const to = ring.style.getPropertyValue('--p');
-        if (from !== undefined && Number(from) !== Number(to)) {
-          ring.animate([{ '--p': from }, { '--p': to }], { duration: 360, easing: 'cubic-bezier(.2,.8,.2,1)' });
-        }
-      }
-    }
-  }
   // Usage modal: every agent's limit windows, shown in the selected display mode,
   // with an even-pace marker, reset time, and trend based on the remaining quota.
   let _usageModal = null, _usageReturnFocus = null, _usageLoading = false;
+  const _usageEmailsShown = new Set(); // agent ids whose email is revealed; cleared on each open
   function renderUsageModal() {
     const body = _usageModal?.querySelector('.um-body');
     if (!body) return;
@@ -8252,8 +8376,11 @@
           + (w.resetsAt ? `<span class="um-reset"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>${fmtLeft(w.resetsAt - Date.now())}</span>` : '') + '</div></div>';
       }).join('');
       const plan = u.plan ? `<span class="um-plan">${escHtml(u.plan[0].toUpperCase() + u.plan.slice(1))}</span>` : '';
+      // Blurred until clicked, so the account doesn't leak on a shared screen.
+      const shown = _usageEmailsShown.has(id);
+      const email = u.email ? `<button type="button" class="um-email" data-act="email" data-id="${escHtml(id)}" aria-pressed="${shown}" title="${shown ? 'Hide' : 'Show'} email">${escHtml(u.email)}</button>` : '';
       // Antigravity has no brand color of its own (its logo is an image): a lavender whose bar fill is #39334f.
-      return `<section class="um-agent" style="--um-agent:${h.color || (id === 'antigravity' ? '#9784db' : 'var(--fg)')}"><div class="um-agent-head"><span class="um-logo">${procIconHtml(h.bin, 'ph-robot')}</span><span>${escHtml(h.name)}</span>${plan}</div>${cards}</section>`;
+      return `<section class="um-agent" style="--um-agent:${h.color || (id === 'antigravity' ? '#9784db' : 'var(--fg)')}"><div class="um-agent-head"><span class="um-logo">${procIconHtml(h.bin, 'ph-robot')}</span><span>${escHtml(h.name)}</span>${plan}${email}</div>${cards}</section>`;
     }).join('');
     body.innerHTML = sections || (_usageLoading
       ? '<div class="um-empty"><i class="ph ph-circle-notch um-spin" aria-hidden="true"></i>Reading usage…</div>'
@@ -8283,9 +8410,14 @@
         <button type="button" class="um-icon" data-act="close" title="Close (Esc)" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></div>
       <div class="um-body"></div></div>`;
     overlay.addEventListener('mousedown', e => { if (e.target === overlay) closeUsageModal(); });
+    _usageEmailsShown.clear();
     overlay.addEventListener('click', e => {
-      const act = e.target.closest('[data-act]')?.dataset.act;
-      if (act === 'close') closeUsageModal();
+      const btn = e.target.closest('[data-act]'), act = btn?.dataset.act;
+      if (act === 'email') {
+        const shown = !_usageEmailsShown.delete(btn.dataset.id);
+        if (shown) _usageEmailsShown.add(btn.dataset.id);
+        btn.setAttribute('aria-pressed', shown); btn.title = `${shown ? 'Hide' : 'Show'} email`;
+      } else if (act === 'close') closeUsageModal();
       else if (act === 'refresh' && !_usageLoading) void loadUsageModal(true);
     });
     overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeUsageModal(); } });
@@ -8296,25 +8428,135 @@
   }
   const usageButton = document.getElementById('ts-usage');
   usageButton?.addEventListener('click', openUsageModal);
-  function openUsageMenu(e) {
-    e.preventDefault();
-    usageButton.focus({ preventScroll: true });
-    const rect = usageButton.getBoundingClientRect();
-    const keyboard = e.type === 'keydown' || (!e.pageX && !e.pageY);
-    showCtxMenu({ pageX: keyboard ? rect.right : e.pageX, pageY: keyboard ? rect.top : e.pageY, above: true, alignRight: true }, 'usage');
-    ctxEl.querySelector('.ctx-item')?.focus();
+  // ── Pull requests page: every open PR of the GitHub repos your threads work in. An overlay like Usage, one at a time. ──
+  const PR_SORTS = { updated: ['ph-clock-counter-clockwise', 'Recently updated'], newest: ['ph-sort-descending', 'Newest'], oldest: ['ph-sort-ascending', 'Oldest'] };
+  const PR_FILTERS = { all: ['ph-git-pull-request', 'All open'], mine: ['ph-user', 'Created by me'], review: ['ph-eye', 'Review requested'],
+    ready: ['ph-check-circle', 'Ready for review'], drafts: ['ph-note-pencil', 'Drafts'] };
+  // The same page lists issues when opened from the Issues button (kind 'issues').
+  const ISSUE_FILTERS = { all: ['ph-circle issue-icon', 'All open'], mine: ['ph-user', 'Created by me'], assigned: ['ph-user-circle', 'Assigned to me'] };
+  const pageFilters = () => _pulls.kind === 'issues' ? ISSUE_FILTERS : PR_FILTERS;
+  const pageNoun = () => _pulls.kind === 'issues' ? 'issues' : 'pull requests';
+  const _pulls = { el: null, data: null, loading: false, q: '', sort: 'updated', filter: 'all', repo: '', returnFocus: null, kind: 'pulls' };
+  const pullsButton = document.getElementById('ts-pulls');
+  // Search: free text over title, repo, #number, author and branch, plus label:, author:, repo: and is:draft tokens.
+  function prMatches(pr, q) {
+    for (const word of q.toLowerCase().split(/\s+/).filter(Boolean)) {
+      const [, key, value] = /^(label|author|repo|is):(.+)$/.exec(word) || [];
+      const ok = key === 'label' ? pr.labels?.some(l => l.name.toLowerCase().includes(value))
+        : key === 'author' ? (pr.author?.login || '').toLowerCase().includes(value)
+        : key === 'repo' ? pr.repo.toLowerCase().includes(value)
+        : key === 'is' ? (value === 'draft' ? pr.isDraft : value === 'ready' ? !pr.isDraft : true)
+        : `${pr.title} ${pr.repo} #${pr.number} ${pr.author?.login || ''} ${pr.headRefName || ''}`.toLowerCase().includes(word);
+      if (!ok) return false;
+    }
+    return true;
   }
-  usageButton?.addEventListener('contextmenu', openUsageMenu);
-  usageButton?.addEventListener('keydown', e => {
-    if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) openUsageMenu(e);
-  });
+  function visiblePulls() {
+    const { data, q, sort, filter, repo } = _pulls, me = data?.me;
+    const keep = pr => (!repo || pr.repo === repo) && prMatches(pr, q)
+      && (filter === 'mine' ? pr.author?.login === me : filter === 'review' ? pr.reviewRequests?.some(r => r.login === me)
+        : filter === 'assigned' ? pr.assignees?.some(a => a.login === me)
+        : filter === 'ready' ? !pr.isDraft : filter === 'drafts' ? pr.isDraft : true);
+    const time = pr => Date.parse(sort === 'updated' ? pr.updatedAt : pr.createdAt) || 0;
+    return (data?.pulls || []).filter(keep).sort((a, b) => sort === 'oldest' ? time(a) - time(b) : time(b) - time(a));
+  }
+  function renderPullsPage() {
+    const el = _pulls.el;
+    if (!el) return;
+    const { data, loading, sort, filter, repo } = _pulls;
+    el.querySelector('[data-act="sort"] span').textContent = PR_SORTS[sort][1];
+    el.querySelector('[data-act="filter"] span').textContent = pageFilters()[filter][1];
+    el.querySelector('[data-act="repo"] span').textContent = repo || 'All repos';
+    el.querySelector('[data-act="refresh"]').classList.toggle('busy', loading);
+    const list = visiblePulls();
+    el.querySelector('.pr-count').textContent = data?.pulls ? String(list.length) : '';
+    const empty = (icon, text) => `<div class="um-empty"><i class="ph ${icon}" aria-hidden="true"></i><span>${escHtml(text)}</span></div>`;
+    const errors = data?.errors?.length ? `<div class="pr-errors"><i class="ph ph-warning-circle" aria-hidden="true"></i><span>${escHtml(data.errors.join(' · '))}</span></div>` : '';
+    el.querySelector('.um-body').innerHTML = loading && !data ? empty('ph-circle-notch um-spin', `Loading ${pageNoun()}…`)
+      : data?.error ? empty('ph-warning-circle', data.error)
+      : !data?.repos?.length ? empty('ph-git-pull-request', 'None of your threads use a GitHub repo yet.')
+      : errors + (list.length ? `<div class="pr-list" role="list">${list.map(pr => {
+        const review = pr.reviewDecision === 'APPROVED' ? '<i class="ph ph-check-circle pr-approved" title="Approved" aria-label="Approved"></i>'
+          : pr.reviewDecision === 'CHANGES_REQUESTED' ? '<i class="ph ph-warning-circle pr-changes" title="Changes requested" aria-label="Changes requested"></i>' : '';
+        const labels = (pr.labels || []).slice(0, 3).map(l => `<span class="pr-label">${escHtml(l.name)}</span>`).join('');
+        const icon = _pulls.kind === 'issues' ? 'ph-circle issue-icon' : 'ph-git-pull-request';
+        return `<a href="#" class="pr-row" role="listitem" data-url="${escHtml(pr.url)}" data-number="${pr.number}">`
+          + `<i class="ph ${icon} pr-state${pr.isDraft ? ' draft' : ''}" title="${pr.isDraft ? 'Draft' : 'Open'}" aria-label="${pr.isDraft ? 'Draft' : 'Open'}"></i>`
+          + `<span class="pr-main"><span class="pr-title">${escHtml(pr.title)}</span><span class="pr-meta"><span class="pr-repo">${escHtml(pr.repo)}#${pr.number}</span>`
+          + `<span>${escHtml(pr.author?.login || '')}</span><span>updated ${escHtml(ago(Date.parse(pr.updatedAt)))}${ago(Date.parse(pr.updatedAt)) === 'now' ? '' : ' ago'}</span>`
+          + (pr.headRefName ? `<span class="pr-branch"><i class="ph ph-git-branch" aria-hidden="true"></i>${escHtml(pr.headRefName)}</span>` : '') + '</span></span>'
+          + `<span class="pr-side">${labels}${review}</span></a>`;
+      }).join('')}</div>` : empty('ph-funnel-simple', `No ${pageNoun()} match.`));
+  }
+  async function loadPullsPage() {
+    if (_pulls.loading) return;
+    _pulls.loading = true; renderPullsPage();
+    try {
+      const data = await window.electronAPI.githubAllPullRequests(allChatTabs().map(chatCwd), _pulls.kind).catch(() => ({ error: `Could not load ${pageNoun()}.` }));
+      if (data.auth) { const kind = _pulls.kind; closePullsPage(); showGitHubLogin(() => openPullsPage(kind)); return; }
+      _pulls.data = data;
+      if (_pulls.repo && !data.repos?.includes(_pulls.repo)) _pulls.repo = '';
+    } finally { _pulls.loading = false; renderPullsPage(); }
+  }
+  function closePullsPage() {
+    const el = _pulls.el;
+    if (!el) return;
+    _pulls.el = null;
+    el.classList.add('closing'); // fades out when UI animations are on, like the Usage modal
+    setTimeout(() => el.remove(), parseFloat(getComputedStyle(el).transitionDuration) * 1000 || 0);
+    _pulls.returnFocus?.focus?.(); _pulls.returnFocus = null;
+  }
+  function pullsMenu(btn, options, current, pick) {
+    if (ctxEl.classList.contains('open') && ctxEl._owner === btn) { hideCtxMenu(); return; } // a toggle
+    const r = btn.getBoundingClientRect();
+    showCtxMenu({ pageX: r.right, pageY: r.bottom + 6, alignRight: true }, 'choice', { options, current, pick: value => { pick(value); renderPullsPage(); } });
+    ctxEl._owner = btn;
+  }
+  function openPullsPage(kind = 'pulls') {
+    if (_pulls.el && _pulls.kind === kind) { _pulls.el.querySelector('.pr-search input').focus(); return; }
+    if (_pulls.el) { _pulls.el.remove(); _pulls.el = null; }
+    if (_pulls.kind !== kind) Object.assign(_pulls, { kind, data: null, q: '', filter: 'all', repo: '' });
+    if (!window.electronAPI?.githubAllPullRequests) { zoomBadge('Pull requests need the desktop app'); return; }
+    _pulls.returnFocus = document.activeElement;
+    const el = document.createElement('div');
+    el.id = 'pulls-overlay';
+    el.innerHTML = `<div id="pulls-modal" role="dialog" aria-modal="true" aria-labelledby="pulls-title">
+      <div class="um-head"><span class="um-crumb current" id="pulls-title">${kind === 'issues' ? 'Issues' : 'Pull requests'}</span><span class="pr-count"></span>
+        <button type="button" class="um-icon pr-close" data-act="close" title="Close (Esc)" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></div>
+      <div class="pr-toolbar">
+        <label class="pr-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search ${pageNoun()}, or label:bug" aria-label="Search ${pageNoun()}" spellcheck="false" autocomplete="off"></label>
+        <button type="button" class="pr-tool" data-act="sort" aria-haspopup="menu"><i class="ph ph-arrows-down-up" aria-hidden="true"></i><span></span></button>
+        <button type="button" class="pr-tool" data-act="filter" aria-haspopup="menu"><i class="ph ph-funnel-simple" aria-hidden="true"></i><span></span></button>
+        <button type="button" class="pr-tool" data-act="repo" aria-haspopup="menu"><i class="ph ph-git-fork" aria-hidden="true"></i><span></span><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+        <button type="button" class="um-icon" data-act="refresh" title="Refresh" aria-label="Refresh"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
+      </div>
+      <div class="um-body"></div></div>`;
+    const input = el.querySelector('.pr-search input');
+    input.value = _pulls.q;
+    input.addEventListener('input', () => { _pulls.q = input.value; renderPullsPage(); });
+    el.addEventListener('mousedown', e => { if (e.target === el) closePullsPage(); });
+    el.addEventListener('keydown', e => { if (e.key === 'Escape' && !ctxEl.classList.contains('open')) { e.preventDefault(); e.stopPropagation(); closePullsPage(); } });
+    el.addEventListener('click', e => {
+      const row = e.target.closest('.pr-row');
+      if (row) { e.preventDefault(); closePullsPage(); addBrowserTab(activeWsId, null, row.dataset.url, `${_pulls.kind === 'issues' ? 'Issue' : 'PR'} #${row.dataset.number}`); return; }
+      const btn = e.target.closest('[data-act]'), act = btn?.dataset.act;
+      if (act === 'close') closePullsPage();
+      else if (act === 'refresh') void loadPullsPage();
+      else if (act === 'sort') pullsMenu(btn, Object.entries(PR_SORTS), _pulls.sort, v => { _pulls.sort = v; });
+      else if (act === 'filter') pullsMenu(btn, Object.entries(pageFilters()), _pulls.filter, v => { _pulls.filter = v; });
+      else if (act === 'repo') pullsMenu(btn, [['', ['ph-stack', 'All repos']], ...(_pulls.data?.repos || []).map(r => [r, ['ph-git-fork', r]])], _pulls.repo, v => { _pulls.repo = v; });
+    });
+    document.body.appendChild(el);
+    _pulls.el = el;
+    renderPullsPage();
+    input.focus();
+    void loadPullsPage(); // opening the page always checks GitHub again
+  }
+  pullsButton?.addEventListener('click', () => openPullsPage());
+  document.getElementById('ts-issues')?.addEventListener('click', () => openPullsPage('issues'));
   if (!SETTINGS_ONLY && window.electronAPI?.usageLimits) {
     _usageLimits = readUsageCache();
-    if (_usageLimits) renderUsageSidebar();
-    else if (usageButton) {
-      usageButton.innerHTML = 'Usage limits' + usageChartIcon;
-      usageButton.hidden = false;
-    }
+    if (usageButton) usageButton.parentElement.hidden = false;
   }
 
   // A terminal running an agent becomes a Chat tab over that agent (the chat button in its tab bar).
@@ -8402,8 +8644,15 @@
       quotes.push(block.join('\n'));
       while (lines.length && !lines[0].trim()) lines.shift();
     }
-    text = lines.join('\n');
-    const cites = quotes.map(q => `<span class="thr-cite" title="${escHtml(q)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(q.replace(/\s+/g, ' '))}</span></span>`).join('');
+    const citeHtml = q => `<a href="#" class="thr-cite" title="${escHtml(q)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(q.replace(/\s+/g, ' '))}</span></a>`;
+    // A citation placed mid-message is sent as "\n> …\n" at its spot: show it inline there, not as a blockquote.
+    // shortcut: also catches "> " lines the user typed inside a code fence; skip fences if that ever matters.
+    const inlineCites = [];
+    text = lines.join('\n').replace(/(?:^|\n)((?:> .*(?:\n|$))+)/g, (_, block) => {
+      inlineCites.push(block.trimEnd().split('\n').map(line => line.replace(/^> ?/, '')).join('\n'));
+      return `\u0000C${inlineCites.length - 1}\u0000`;
+    });
+    const cites = quotes.map(citeHtml).join('');
     const paths = [], attachments = [];
     const marked = String(text).replace(new RegExp(ATTACHMENT_PATH_RE.source, 'gi'), (m, q, quoted, bare) => {
       const path = quoted || bare;
@@ -8418,7 +8667,7 @@
       return `<a href="#" class="thr-thread-mention" data-thread-key="${escHtml(key)}" title="Thread: ${escHtml(r.title)}"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(r.title)}</span></a>`;
     }).replace(/\u0000I(\d+)\u0000/g, (_, n) => {
       return `<span class="thr-inline-ref">${chatImageReferenceHtml({ path: attachments[n] })}</span>`;
-    }).trim();
+    }).replace(/\u0000C(\d+)\u0000/g, (_, n) => citeHtml(inlineCites[n])).trim();
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
   }
   const _pendingMsgs = new Map(); // chat tab id -> { text, at }: sent, not in the transcript yet
@@ -9343,6 +9592,8 @@
     return _chatAgents;
   }
   if (!SETTINGS_ONLY) loadChatAgents();
+  // Settings > Providers changed (enabled, binary path): look the agents up again.
+  function reloadChatAgents() { _chatAgents = null; if (!SETTINGS_ONLY) loadChatAgents().then(() => syncThreadComposer(curChat())); }
   let agyModelsRequest;
   function loadAgyModels(bin) {
     agyModelsRequest ||= window.electronAPI.chatSdkModels('antigravity', bin).then(setAgyModels).catch(() => {
@@ -9359,8 +9610,9 @@
   };
   const chatOpts = ws => {
     const seg = threadSegments(ws || {}).findLast(x => x.used);
-    const own = ws?.chat?.opts || (seg ? { harness: seg.harness, model: seg.model, effort: seg.effort } : lastChatOpts());
-    const o = { harness: 'claude', model: 'default', effort: 'default', access: 'default', ...Object.fromEntries(Object.entries(own).filter(([, v]) => v != null)) };
+    // A new thread keeps the last model picks but always starts in Full access.
+    const own = ws?.chat?.opts || (seg ? { harness: seg.harness, model: seg.model, effort: seg.effort } : { ...lastChatOpts(), access: null });
+    const o = { harness: 'claude', model: 'default', effort: 'default', access: null, ...Object.fromEntries(Object.entries(own).filter(([, v]) => v != null)) };
     if (!CHAT_AGENTS[o.harness]) o.harness = 'claude';
     const models = chatModels(o.harness, ws);
     // Always a real model when the agent lists some (shown on the chip, ticked in the picker, passed on start):
@@ -9371,7 +9623,8 @@
     // A model with a known default effort lists real levels only; an unknown one has a "Default" row.
     const mm = m || models[0];
     if (!mm.efforts.includes(o.effort)) o.effort = mm.efforts.includes(mm.defaultEffort) ? mm.defaultEffort : 'default';
-    if (!CHAT_AGENTS[o.harness].access.some(a => a[0] === o.access)) o.access = 'default';
+    // Unset or not offered by this agent: its Full access mode (an agent without one keeps its default).
+    if (!CHAT_AGENTS[o.harness].access.some(a => a[0] === o.access)) o.access = CHAT_AGENTS[o.harness].access.find(a => a[1] === 'Full access')?.[0] || 'default';
     // Fast / Ultracode only where the agent and model have them.
     const caps = chatCaps(o);
     o.fast = !!o.fast && caps.fast; o.ultra = !!o.ultra && caps.ultra;
@@ -9513,6 +9766,8 @@
       if (t) openChatTab(t); else zoomBadge('That thread was deleted');
       return;
     }
+    const cite = e.target.closest('.thr-cite');
+    if (cite) { e.preventDefault(); jumpToCitation({ cite: cite.title }); return; }
     const lockBtn = e.target.closest('[data-lock-act]');
     if (lockBtn) {
       const ws = curChat(), t = ws && (liveThreadAgent(ws) || ws);
@@ -9573,15 +9828,14 @@
   const _chatPullRequests = new Map();
   function loadChatPullRequests(cwd) {
     const cached = _chatPullRequests.get(cwd);
-    if (cached && (cached.pending || Date.now() - cached.checked < 30000)) return cached.pending || Promise.resolve(cached);
-    const entry = { pulls: cached?.pulls || [], checked: 0 };
+    // Loaded in the background to show or hide the chip; 2 min keeps a signed-out public repo under GitHub's 60 requests/hour.
+    if (cached && (cached.pending || Date.now() - cached.checked < 120000)) return cached.pending || Promise.resolve(cached);
+    const entry = { pulls: cached?.pulls || [], auth: cached?.auth, checked: 0 };
     _chatPullRequests.set(cwd, entry);
-    entry.pending = window.electronAPI.gitPullRequests(cwd).then(result => {
-      if (result.error) return result;
-      entry.pulls = result.pulls || [];
-      entry.checked = Date.now();
+    entry.pending = window.electronAPI.gitPullRequests(cwd).catch(() => ({ error: 'Could not load pull requests.' })).then(result => {
+      Object.assign(entry, { pulls: result.pulls || [], error: result.error, auth: !!result.auth, checked: Date.now() });
       return entry;
-    }).catch(() => ({ error: 'Could not load pull requests.' })).finally(() => { entry.pending = null; });
+    }).finally(() => { entry.pending = null; syncThreadComposer(curChat()); });
     return entry.pending;
   }
   function refreshChatGitBranch(cwd) {
@@ -9706,11 +9960,13 @@
     branch.hidden = !shownBranch;
     branch.dataset.tip = branchMismatch ? `Thread branch: ${savedBranch}. Project branch: ${b || 'unavailable'}.` : 'Switch branch';
     const pr = thrChip('pr');
-    const pulls = _chatPullRequests.get(cwd)?.pulls || [];
-    pr.hidden = !b || !window.electronAPI?.gitPullRequests;
+    const prs = _chatPullRequests.get(cwd), pulls = prs?.pulls || [];
+    if (b && window.electronAPI?.gitPullRequests) void loadChatPullRequests(cwd);
+    // Only when there's something to show: open PRs, or a sign-in needed to see them.
+    pr.hidden = !b || !window.electronAPI?.gitPullRequests || !(pulls.length || prs?.auth);
     if (!pr.hidden) {
       pr.querySelector('span').textContent = pulls.length === 1 ? `PR #${pulls[0].number}` : pulls.length > 1 ? `${pulls.length} PRs` : 'Pull requests';
-      pr.title = 'Show open pull requests';
+      pr.title = prs?.auth ? 'Sign in to GitHub to see pull requests' : 'Show open pull requests';
       pr.setAttribute('aria-label', pr.title);
     }
     if (shownBranch) branch.innerHTML = `<i class="ph ${branchMismatch ? 'ph-warning' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
@@ -9780,11 +10036,53 @@
     showCtxMenu({ pageX: r.right, pageY: r.top - 6, above: true, alignRight: true }, 'chat-branch', { tab, cwd, branches });
     ctxEl._owner = chip;
   });
+  // GitHub sign-in without a terminal: gh's browser login gives a one-time code to enter on GitHub.
+  let _ghLoginDialog = null;
+  function showGitHubLogin(onSignedIn) {
+    const api = window.electronAPI;
+    const d = _ghLoginDialog ||= document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'gh-login' }));
+    d.setAttribute('aria-labelledby', 'gh-login-title');
+    d.innerHTML = `<div class="gh-login-icon"><i class="ph ph-github-logo" aria-hidden="true"></i></div>
+      <h2 id="gh-login-title">Sign in to GitHub</h2>
+      <p class="gh-login-text">Pull requests need a GitHub sign-in. Copy the code, then paste it on GitHub.</p>
+      <div class="gh-login-code"><code>····-····</code><button type="button" class="gh-login-copy" aria-label="Copy code" disabled><i class="ph ph-copy" aria-hidden="true"></i></button></div>
+      <div class="gh-login-status" role="status"></div>
+      <div class="prompt-actions"><button type="button" class="gh-login-cancel">Cancel</button><button type="button" class="gh-login-open" disabled>Copy code and open GitHub</button></div>`;
+    const q = s => d.querySelector(s);
+    const status = (icon, text, error) => {
+      q('.gh-login-status').classList.toggle('error', !!error);
+      q('.gh-login-status').innerHTML = `<i class="ph ${icon}" aria-hidden="true"></i><span>${escHtml(text)}</span>`;
+    };
+    let live = true;
+    d.onclose = () => { if (live) { live = false; api.githubLoginCancel(); } }; // Cancel, Esc
+    q('.gh-login-cancel').onclick = () => d.close();
+    status('ph-circle-notch gh-spin', 'Getting a sign-in code…');
+    d.showModal();
+    api.githubLoginStart().then(r => {
+      if (!live) return;
+      if (r.error) return status('ph-warning-circle', r.error, true);
+      const copy = () => navigator.clipboard.writeText(r.code).catch(() => {});
+      q('code').textContent = r.code;
+      q('.gh-login-copy').disabled = q('.gh-login-open').disabled = false;
+      q('.gh-login-copy').onclick = () => { copy(); zoomBadge('Code copied'); };
+      q('.gh-login-open').onclick = () => { copy(); api.githubLoginOpen(); };
+      q('.gh-login-open').focus();
+      status('ph-circle-notch gh-spin', 'Waiting for you to authorize on GitHub…');
+      return api.githubLoginWait().then(w => {
+        if (!live) return;
+        if (!w.ok) return status('ph-warning-circle', w.error, true);
+        live = false; d.close();
+        zoomBadge('Signed in to GitHub');
+        onSignedIn();
+      });
+    });
+  }
   thrChip('pr').addEventListener('click', async e => {
     const chip = e.currentTarget, tab = curChat(), cwd = chatCwd(tab), ws = wsOf(tab);
-    if (!ws || !window.electronAPI?.gitPullRequests || _chatPullRequests.get(cwd)?.pending) return;
-    const { pulls, error } = await loadChatPullRequests(cwd);
+    if (!ws || !window.electronAPI?.gitPullRequests) return;
+    const { pulls, error, auth } = await loadChatPullRequests(cwd);
     if (curChat() !== tab || chatCwd(tab) !== cwd) return;
+    if (auth && window.electronAPI.githubLoginStart) { showGitHubLogin(() => { _chatPullRequests.delete(cwd); chip.click(); }); return; }
     if (!pulls?.length) { zoomBadge(error || 'No open pull requests'); return; }
     syncThreadComposer(tab);
     const open = pr => {
@@ -10349,7 +10647,7 @@
         }
         const segs = threadSegments(tab);
         let latest = [...segs].reverse().find(s => s.used || s.sessionId || s === tab._chatSeg) || segs[segs.length - 1];
-        const process = await checkTerminalRunning(tab.id);
+        const process = await shellSettled(tab.id);
         const running = THREAD_HARNESSES.find(h => h.bin === String(process || '').toLowerCase().replace(/\.exe$/, ''));
         if (running && (!latest || (running.id === latest.harness && (tab._chatSeg === latest || tab._chatSeg?.sessionId === latest.sessionId && latest.sessionId)))) {
           _tabAgent.set(tab.id, running.id);
@@ -10373,17 +10671,38 @@
           access: current.harness === latest.harness ? current.access : 'default' } : current;
         if (!harnessOf(options.harness) || !CHAT_AGENTS[options.harness]) throw Error('This chat’s agent harness is unavailable.');
         if (latest?.sessionId && !['claude', 'codex', 'antigravity'].includes(options.harness)) throw Error(`Session resume is not supported for ${harnessOf(options.harness).name} yet.`);
-        return await startChatAgent(tab, tab, null, null, { terminalOnly: true, resumeSegment: latest?.sessionId ? latest : null, options });
-      } catch (err) { zoomBadge(err.message || 'Could not resume this chat session'); return false; }
+        const started = await startChatAgent(tab, tab, null, null, { terminalOnly: true, resumeSegment: latest?.sessionId ? latest : null, options });
+        if (!started) noteInTerminal(tab, `Could not start ${harnessOf(options.harness)?.name || 'the agent'} here. Check Settings › Providers, then switch views to try again.`);
+        return started;
+      } catch (err) {
+        zoomBadge(err.message || 'Could not resume this chat session');
+        noteInTerminal(tab, err.message || 'Could not resume this chat session');
+        return false;
+      }
     })().finally(() => { delete tab._terminalSessionOpening; });
     return tab._terminalSessionOpening;
+  }
+  // The terminal view hides the chat (and its error line): say why the agent didn't start where the user is looking.
+  function noteInTerminal(tab, message) {
+    if (!tab._cliView || findTermById(tab.id)?.term !== tab) return;
+    tab.term.write(`\r\n\x1b[33m[TerminalVibe] ${String(message).replace(/[\x00-\x1f]/g, ' ')}\x1b[0m\r\n`);
+  }
+  // A fresh shell runs short-lived prompt helpers (git, oh-my-posh…) that look like a busy terminal for a moment:
+  // read it fresh a few times before calling it busy. Returns the running process name, or null when idle.
+  async function shellSettled(id) {
+    let name = await checkTerminalRunning(id, true);
+    for (let i = 0; i < 6 && name !== null && !THREAD_HARNESSES.some(h => h.bin === String(name).toLowerCase().replace(/\.exe$/, '')); i++) {
+      await sleep(250);
+      name = await checkTerminalRunning(id, true);
+    }
+    return name;
   }
   async function startChatAgent(ws, chatTab, text, replace, launch = {}) {
     const o = launch.options || chatOpts(ws), h = harnessOf(o.harness);
     const cancelled = () => launch.pending?.cancelled;
     const { found = {}, threadsDir } = await loadChatAgents();
     if (cancelled()) return false;
-    if (!found[h.bin]) { zoomBadge(`${h.name} was not found on PATH`); return false; }
+    if (!found[h.bin]) { zoomBadge(`${h.name} is disabled or was not found (Settings > Providers)`); return false; }
     const segs = threadSegments(ws);
     const oldSeg = replace?._chatSeg;
     const lastUsed = [...segs].reverse().find(x => x.used);
@@ -10418,7 +10737,7 @@
       const entry = chatTab;
       if (launch.terminalOnly) {
         if (findTermById(entry.id)?.term !== entry) return false;
-        if (await checkTerminalRunning(entry.id) !== null) throw Error('The terminal became busy before the session could resume.');
+        if (await shellSettled(entry.id) !== null) throw Error('The terminal became busy before the session could resume.');
         if (findTermById(entry.id)?.term !== entry) return false;
       }
       const stopped = await stopTabAgent(entry);
@@ -10438,7 +10757,7 @@
       } else {
         if (entry._sdk?.alive) { entry._sdk.alive = false; await window.electronAPI.chatSdkStop(entry.id); }
         entry.term.reset(); // the agent draws on a clean screen (and readiness never reads the old one)
-        const started = await createAgentTerminal({ id: entry.id, ...getSlotDimensions(entry), cwd, executable: found[h.bin],
+        const started = await createAgentTerminal({ id: entry.id, ...getSlotDimensions(entry), cwd, executable: found[h.bin], provider: o.harness,
           argv: CHAT_AGENTS[o.harness].argv(o, sid, !!resumeSid, forkSid, threadsDir), returnToShell: true, replaceIdle: true });
         if (cancelled()) { if (started) await stopTabAgent(entry); return false; }
         if (!started) { noteChatError(chatTab, `Could not start ${h.name}`); return false; }
@@ -10603,20 +10922,25 @@
   }
   // Live markdown in the composer: styles the text but keeps every character (markers dimmed),
   // so the draft, caret offsets and what is sent stay exactly as typed.
+  const ultrathinkWord = /(\bultrathink\b)/;
+  function chatDraftTextHtml(text) {
+    return text.split(ultrathinkWord).map((part, i) => i % 2
+      ? '<span class="thr-ultrathink">ultrathink</span>' : escHtml(part)).join('');
+  }
   function mdInputHtml(s, lineStart = true) {
     const mark = t => `<span class="md-mark">${escHtml(t)}</span>`;
     const inline = t => {
       const re = /(`+)([^`\n]+?)\1|(\*\*|__)(?=\S)([^\n]*?\S)\3|~~(?=\S)([^\n]*?\S)~~|(?<![\w*])(\*|_)(?=[^\s*_])([^\n*_]*?[^\s*_])\6(?![\w*])|\[([^\]\n]+)\]\(([^)\s]+)\)/g;
       let out = '', last = 0;
       for (const x of t.matchAll(re)) {
-        out += escHtml(t.slice(last, x.index)); last = x.index + x[0].length;
+        out += chatDraftTextHtml(t.slice(last, x.index)); last = x.index + x[0].length;
         if (x[1]) out += `<span class="md-code">${mark(x[1])}${escHtml(x[2])}${mark(x[1])}</span>`;
         else if (x[3]) out += `<span class="md-strong">${mark(x[3])}${inline(x[4])}${mark(x[3])}</span>`;
         else if (x[5]) out += `<span class="md-del">${mark('~~')}${inline(x[5])}${mark('~~')}</span>`;
         else if (x[6]) out += `<span class="md-em">${mark(x[6])}${inline(x[7])}${mark(x[6])}</span>`;
-        else out += `<span class="md-link">${mark('[')}${escHtml(x[8])}${mark('](')}<span class="md-url">${escHtml(x[9])}</span>${mark(')')}</span>`;
+        else out += `<span class="md-link">${mark('[')}${chatDraftTextHtml(x[8])}${mark('](')}<span class="md-url">${escHtml(x[9])}</span>${mark(')')}</span>`;
       }
-      return out + escHtml(t.slice(last));
+      return out + chatDraftTextHtml(t.slice(last));
     };
     let fence = false;
     return s.split('\n').map((line, i) => {
@@ -10665,10 +10989,20 @@
     const icon = image ? 'ph-image' : linkFileIcon(path);
     return `<a href="#" class="thr-image-ref thr-img-link" tabindex="${tabIndex}" data-path="${escHtml(path)}" title="${escHtml(path)}"><span class="thr-inline-image-icon">${image && preview ? `<img src="${escHtml(preview)}" alt="">` : `<i class="ph ${icon}" aria-hidden="true"></i>`}</span><span class="thr-img-link-name">${escHtml(name)}</span><small class="thr-img-size" data-size-path="${escHtml(path)}">${size ? escHtml(fmtBytes(size).replace(' ', '')) : ''}</small></a>`;
   }
-  function openChatAttachment(file) {
+  // draftTab: the chat whose composer holds this not-yet-sent file; only then can an image be annotated.
+  function openChatAttachment(file, draftTab = null) {
     if (!file?.path) return;
     const image = file.image ?? /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.path);
-    if (image) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name || file.path.split(/[\\/]/).pop() }, '', file.preview);
+    // The annotated copy is a new file in the thread's attachments; the draft then sends it instead.
+    const onEdit = draftTab && window.electronAPI?.saveThreadAttachment ? async (bytes, dataUrl) => {
+      const path = await window.electronAPI.saveThreadAttachment(threadKey(draftTab), `${(file.name || 'image').replace(/\.[^.]+$/, '')}-annotated.png`, bytes);
+      if (!path) throw Error('Could not save the annotated image');
+      Object.assign(file, { path, preview: dataUrl, size: bytes.length, image: true });
+      cacheThreadImage(path, dataUrl);
+      if (curChat() === draftTab) renderChatFiles();
+      saveState();
+    } : null;
+    if (image) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name || file.path.split(/[\\/]/).pop() }, '', file.preview, { onEdit });
     else openClaudeRefViewer(null, { kind: 'text-file', path: file.path, label: file.name || file.path }, '');
   }
   function hydrateChatAttachmentSizes(surface) {
@@ -10707,7 +11041,7 @@
     const markup = (tokens.length ? input.value.split(new RegExp(`(${tokens.join('|')})`, 'g')) : [input.value]).map(part => {
       const file = references.get(part), lineStart = !at || input.value[at - 1] === '\n';
       at += part.length;
-      if (!file) return md ? mdInputHtml(part, lineStart) : escHtml(part);
+      if (!file) return md ? mdInputHtml(part, lineStart) : chatDraftTextHtml(part);
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
         + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
@@ -10899,7 +11233,7 @@
     const cite = e.target.closest('.thr-cite-link'), citation = cite && _chatFiles[+cite.dataset.i];
     if (citation?.cite) { jumpToCitation(citation); return; }
     const open = e.target.closest('.thr-file-open'), file = open && _chatFiles[+open.dataset.i];
-    if (file) openChatAttachment(file);
+    if (file) openChatAttachment(file, curChat()); // a composer chip: not sent yet, so it can be annotated
   });
   const thrFileInput = thrPage.querySelector('#sbr-thread-file');
   thrPage.querySelector('#sbr-thread-attach')?.addEventListener('click', () => thrFileInput.click());
@@ -10915,7 +11249,7 @@
     const file = _chatFiles.find(f => f.mention === reference.dataset.mention);
     if (file?.cite) jumpToCitation(file);
     else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
-    else if (file && !file.at) openChatAttachment(file);
+    else if (file && !file.at) openChatAttachment(file, curChat());
   });
   {
     const editor = threadPart(thrPage, 'input-links');
@@ -10971,7 +11305,9 @@
         const count = _chatFiles.length;
         _chatFiles = _chatFiles.filter(file => !(file.cite || file.at || file.thread) || !file.mention || thrInput.value.includes(file.mention));
         editor._draftValue = thrInput.value;
-        if (threadSettings.markdown !== 'off' && !e.isComposing) { editor._draftValue = null; syncChatInputLinks(); }
+        if (!e.isComposing && (threadSettings.markdown !== 'off' || ultrathinkWord.test(thrInput.value) || editor.querySelector('.thr-ultrathink'))) {
+          editor._draftValue = null; syncChatInputLinks();
+        }
         if (!thrInput.value) { editor.replaceChildren(); restoreChatEditorSelection(editor); }
         if (_chatFiles.length !== count) renderChatFiles();
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -11145,13 +11481,16 @@
     let items, status, loading, catalog, source, skillCatalog, slashSkills;
     if (trig.kind === 'at') {
       if (!cwd || !window.electronAPI?.chatFiles) { closeChatComplete(); return; }
-      const list = await cachedList('f|' + cwd, 15000, () => window.electronAPI.chatFiles(cwd));
+      // `@../..` / `@../foo`: list the parent folder the query climbs to, and rank the rest within it.
+      const up = trig.query.match(/^((?:\.\.\/)*\.\.)(?:\/(.*))?$/);
+      const root = up ? `${cwd.replace(/[\\/]$/, '')}/${up[1]}` : cwd;
+      const list = await cachedList('f|' + root, 15000, () => window.electronAPI.chatFiles(root));
       if (curChat() !== ws || chatCwd(ws) !== cwd || !sameChatCompleteTrigger(chatCompleteTrigger(), trig)) return;
       source = list;
       if (same && _complete?.source === source) return;
       if (list) {
         list._entries ||= [...list.dirs.map(rel => ({ rel, dir: true })), ...list.files.map(rel => ({ rel, dir: false }))];
-        items = rankPaths(list._entries, trig.query).map(e => ({ ...e, cwd }));
+        items = rankPaths(list._entries, up ? up[2] || '' : trig.query).map(e => ({ ...e, rel: up ? `${up[1]}/${e.rel}` : e.rel, cwd }));
       } else items = [];
     } else {
       catalog = chatCatalog(trig.kind, harness, cwd, ws.id);
@@ -12176,7 +12515,6 @@
     const html = header + queue.map(m => {
       const mergePr = mergePrNumber(m.text);
       const label = mergePr ? `Merge queued for PR #${mergePr}` : queuedMessageTextHtml(m);
-
       const schedule = m.scheduleMode === 'countdown' && m.sendAt
         ? `<div class="thr-queued-schedule"><i class="ph ph-timer" aria-hidden="true"></i><span data-countdown-at="${m.sendAt}" role="timer" aria-label="Time remaining"></span></div>`
         : m.sendAt ? `<div class="thr-queued-schedule"><i class="ph ph-clock" aria-hidden="true"></i><span>Scheduled for ${escHtml(new Date(m.sendAt).toLocaleString())}</span></div>` : '';
@@ -13035,22 +13373,32 @@
     if (surface === thrPage && curChat() === tab) syncSendBtn();
   }
 
+  // The start of an error without its "Agent: " prefix or a trailing "…", to find the same text in a reply.
+  const chatErrorNeedle = message => String(message).replace(/^[^:]*?: /, '').replace(/…$/, '').replace(/\s+/g, ' ').trim().slice(0, 120);
   function renderChatErrors(tab, flow) {
     flow.querySelectorAll('.thr-chat-error').forEach(el => el.remove());
+    const boundaries = [...flow.querySelectorAll(':is(.thr-msg.user, .thr-resumed, .thr-merge-status)[data-ts], .thr-interruption-status')];
     for (const error of tab.chat?.errors || []) {
       flow.querySelector('.thr-empty')?.remove();
+      let next = boundaries.find(el => el.dataset.interruptedAt
+        ? Number(el.dataset.interruptedAt) >= error.at
+        : Number(el.dataset.ts) > error.at);
+      while (next?.previousElementSibling?.matches('.thr-seg, .thr-note')) next = next.previousElementSibling;
+      // Claude Code also writes an API error into the transcript as a reply: show that reply in red, not the error twice.
+      const reply = [...flow.querySelectorAll('.thr-msg.assistant')].filter(el => !next || el.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1);
+      const needle = chatErrorNeedle(error.message);
+      if (needle && reply?.querySelector(':scope > .thr-msg-text')?.textContent.replace(/\s+/g, ' ').includes(needle)) { reply.classList.add('thr-msg-error'); continue; }
       const row = document.createElement('div'); row.className = 'thr-chat-error'; row.setAttribute('role', 'alert');
       row.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i><span></span>';
       row.querySelector('span').textContent = error.message;
-      const next = [...flow.querySelectorAll('.thr-msg.user[data-ts]')].find(el => Number(el.dataset.ts) > error.at);
-      if (next) next.before(row); else flow.insertBefore(row, flow.querySelector('.thr-queue'));
+      flow.insertBefore(row, next || flow.querySelector('.thr-working, .thr-queue'));
     }
   }
   function noteChatError(tab, message) {
     if (!tab) return;
     tab.chat ||= { createdAt: Date.now() };
-    tab.chat.interruptedAt = Date.now();
     const errors = tab.chat.errors ||= [], last = errors.at(-1), at = Date.now();
+    tab.chat.interruptedAt = at;
     if (!last || last.message !== message || at - last.at > 2000) errors.push({ at, message: String(message) });
     _flowSig = '';
     const surface = curChat() === tab ? thrPage : tab.el?.querySelector('.thr-snapshot');
@@ -13065,7 +13413,17 @@
     if (el.hidden) return;
     const p = Math.min(100, Math.round(ctx.used / ctx.max * 100));
     el.style.setProperty('--p', p);
-    el.setAttribute('aria-label', `Context: ${p}% used`);
+    const n = v => v >= 1e6 ? `${+(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${+(v / 1e3).toFixed(1)}k` : String(v);
+    el.setAttribute('aria-label', `Context: ${n(ctx.used)} of ${n(ctx.max)} tokens (${p}%)`);
+    el.dataset.tip = 'Context window';
+    el.dataset.tipPin = '1'; // click to keep the details open
+    const rows = [{ bar: p, text: `${p}% · ${n(ctx.used)} of ${n(ctx.max)} · ${n(Math.max(0, ctx.max - ctx.used))} left` }];
+    const l = ctx.last, s = ctx.session, io = u => `${n(u.input + u.cacheWrite)} new · ${n(u.cacheRead)} cached · ${n(u.output)} out`;
+    if (l) rows.push({ label: 'Last reply', text: io(l) });
+    if (s) rows.push({ label: 'Session', text: io(s) });
+    if (s?.cost != null) rows.push({ label: 'Cost', text: `$${s.cost.toFixed(2)} at API rates` });
+    if (ctx.model) rows.push({ label: 'Model', text: ctx.model });
+    el.dataset.tipRows = JSON.stringify(rows);
   }
   // Right-click the composer (outside the text) to pick which controls it shows.
   document.addEventListener('contextmenu', e => {
@@ -13308,9 +13666,9 @@
           other && `${commands ? 'used' : 'Used'} ${other} tool${other === 1 ? '' : 's'}`,
           files && `changed ${files} file${files === 1 ? '' : 's'}`,
         ].filter(Boolean).join(' and ');
-        const title = completed ? label : `${last.name} ${last.summary}`;
+        const title = completed ? escHtml(label) : `<span class="thr-shimmer">${escHtml(`${last.name} ${last.summary}`)}</span>`;
         return `<details class="thr-tools" data-key="${key}"><summary><i class="ph ${completed ? 'ph-hammer' : toolIcon(last.name)}" aria-hidden="true"></i>`
-          + `<span class="thr-tools-text">${escHtml(title)}</span>${!completed && tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
+          + `<span class="thr-tools-text">${title}</span>${!completed && tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
           + `${completed ? '' : `<span class="thr-tools-time">${clockTime(last.ts)}</span>`}<i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><template><div class="thr-tool-list">`
           // Each call expands to its command, arguments, or recorded file changes.
           + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${toolTimestampHtml(x.ts)}${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
@@ -13905,66 +14263,6 @@
         el.dataset.composerPart = k;
         el.setAttribute('aria-checked', String(shown()));
       }
-    } else if (type === 'usage') {
-      const choice = (icon, label, key, value) => {
-        const el = item(`<i class="ph ${icon}" aria-hidden="true"></i>`, label,
-          '<i class="ph ph-check" aria-hidden="true"></i>', () => {
-            threadSettings = { ...threadSettings, [key]: value };
-            if (key === 'usageDisplay') document.getElementById('set-thread-usage').value = value;
-            renderUsageSidebar(true);
-            renderUsageModal();
-            saveState();
-          });
-        el.dataset.usageSetting = key;
-        el.setAttribute('role', 'menuitemradio');
-        el.setAttribute('aria-checked', String(threadSettings[key] === value));
-      };
-      const hasMonthly = Object.values(_usageLimits || {}).some(u => u.windows?.some(monthlyUsage));
-      choice('ph-clock', usageWindows.session, 'usageWindow', 'session');
-      choice('ph-calendar-blank', usageWindows.weekly, 'usageWindow', 'weekly');
-      if (hasMonthly || threadSettings.usageWindow === 'monthly')
-        choice('ph-calendar', usageWindows.monthly, 'usageWindow', 'monthly');
-      sep();
-      choice('ph-hourglass', 'Remaining', 'usageDisplay', 'remaining');
-      choice('ph-gauge', 'Consumed', 'usageDisplay', 'consumed');
-      sep();
-      const trigger = document.createElement('div');
-      trigger.className = 'ctx-item has-sub ctx-usage-providers';
-      trigger.setAttribute('aria-haspopup', 'menu');
-      trigger.innerHTML = '<span><i class="ph ph-robot" aria-hidden="true"></i></span><span>Sidebar providers</span><span class="ci-sub-caret"><i class="ph ph-caret-right" aria-hidden="true"></i></span>';
-      const submenu = document.createElement('div');
-      submenu.className = 'ctx-sub';
-      submenu.setAttribute('role', 'menu');
-      submenu.setAttribute('aria-label', 'Sidebar providers');
-      trigger.appendChild(submenu);
-      ctxEl.appendChild(trigger);
-      trigger.addEventListener('click', e => {
-        if (e.target.closest('.ctx-item') === trigger) {
-          trigger.focus();
-          submenu.querySelector('.ctx-item')?.focus();
-        }
-      });
-      const hidden = hiddenUsageProviders();
-      for (const id of new Set([...usageProviderIds, ...Object.keys(_usageLimits || {})])) {
-        const provider = harnessOf(id);
-        if (!provider) continue;
-        const el = item(procIconHtml(provider.bin, 'ph-robot'), escHtml(provider.name),
-          '<i class="ph ph-check" aria-hidden="true"></i>', () => {
-            if (hidden.has(id)) hidden.delete(id); else hidden.add(id);
-            el.setAttribute('aria-checked', String(!hidden.has(id)));
-            el.focus({ preventScroll: true });
-            threadSettings = { ...threadSettings, hiddenUsageProviders: [...hidden] };
-            if (usageButton.classList.contains('loading')) renderUsagePlaceholders();
-            else renderUsageSidebar();
-            saveState();
-          }, false, submenu, true);
-        const icon = el.firstElementChild;
-        icon.classList.add('ctx-agent-icon');
-        icon.setAttribute('aria-hidden', 'true');
-        if (provider.color) icon.style.color = provider.color;
-        el.setAttribute('role', 'menuitemcheckbox');
-        el.setAttribute('aria-checked', String(!hidden.has(id)));
-      }
     } else if (type === 'workspace') {
       const wsId = data;
       const wsPinned = findWs(wsId)?.pinned;
@@ -14042,6 +14340,13 @@
       if (window.electronAPI?.selectDirectory) {
         if (dirs.length) sep();
         item('<i class="ph ph-folder-plus"></i>', 'Choose folder…', '', async () => setChatCwd(tab, await window.electronAPI.selectDirectory(cur || undefined)));
+      }
+    } else if (type === 'choice') {
+      // A single-choice list: options are [value, [icon, label]] (the Pull requests page's Sort / Filter / Repo).
+      for (const [value, [icon, label]] of data.options) {
+        const el = item(`<i class="ph ${icon}" aria-hidden="true"></i>`, escHtml(label), '<i class="ph ph-check" aria-hidden="true"></i>', () => data.pick(value));
+        el.setAttribute('role', 'menuitemradio');
+        el.setAttribute('aria-checked', String(value === data.current));
       }
     } else if (type === 'chat-branch') {
       const { tab, cwd, branches } = data, cur = _gitBranch.get(cwd);
@@ -14338,7 +14643,7 @@
     if (!ctxEl.classList.contains('open') || ctxEl.contains(e.target) || ctxEl._owner?.contains(e.target)) return;
     hideCtxMenu();
   }, true);
-  document.addEventListener('click', e => { if (!e.target.closest('#ctx')) hideCtxMenu(); });
+  document.addEventListener('click', e => { if (!ctxEl.contains(e.target) && !ctxEl._owner?.contains(e.target)) hideCtxMenu(); });
   // Clicks inside a browser pane (webview / iframe / native view) never reach
   // this document: close when focus moves into one or the window loses focus.
   document.addEventListener('focusin', e => { if (e.target.matches?.('webview, iframe') && ctxEl.classList.contains('open')) hideCtxMenu(); });
@@ -14679,10 +14984,17 @@
     }
     if (!notifyOnCommandFinish) return;
     if (notificationSound) playNotifySound();
-    const agent = /^claude/i.test(name || '') ? 'Claude Code' : /^codex/i.test(name || '') ? 'Codex' : null;
-    const title = kind === 'agent' ? `${agent || name} finished responding` : (name ? `${name} finished` : 'Command finished');
-    try {
-      const n = new Notification(title, { body: `${found.term.label} · ${found.ws.label}`, silent: true, icon: 'logo.png' });
+    const t = found.term, agent = kind === 'agent' ? (harnessOf(name)?.name || (/^claude/i.test(name || '') ? 'Claude Code' : /^codex/i.test(name || '') ? 'Codex' : name || 'The agent')) : null;
+    // How long the turn took: a thread's sent message, else the terminal agent's first "working" title.
+    const since = _turns.get(id)?.since || (kind === 'agent' ? t._workSince : null);
+    const secs = since ? Math.round((Date.now() - since) / 1000) : 0;
+    const took = secs < 1 ? '' : ` in ${secs < 60 ? `${secs}s` : secs < 3600 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${Math.floor(secs / 3600)}h ${Math.floor(secs % 3600 / 60)}m`}`;
+    const what = kind === 'agent' ? (completed ? `${agent} finished${took}` : `${agent} stopped${took}`) : `${name || 'Command'} finished${took}`;
+    // The thread's name leads (it says which work is done); the agent, the time and the reply's opening follow.
+    const title = t.chat?.title || t.label;
+    const meta = `${what} · ${found.ws.label}`;
+    const show = preview => { try {
+      const n = new Notification(title, { body: preview ? `${meta}\n${preview}` : meta, silent: true, icon: 'logo.png' });
       n.onclick = () => {
         window.electronAPI?.focusWindow?.();
         const now = findTermById(id);
@@ -14690,7 +15002,14 @@
         if (now.ws.id !== activeWsId) activateWorkspace(now.ws.id);
         activateTerminal(now.ws.id, id);
       };
-    } catch { }
+    } catch { } };
+    if (!(completed && t.threadHistory && t.chat && window.electronAPI?.threadHistory)) { show(''); return; }
+    // The reply's opening line, as plain text (no markdown marks, code blocks or links).
+    window.electronAPI.threadHistory(threadMeta(t)).then(hist => {
+      const reply = hist.flatMap(h => h.items).findLast(m => m.role === 'assistant' && m.text)?.text || '';
+      const plain = reply.replace(/```[\s\S]*?```/g, ' ').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*_#>|]+/g, '').replace(/\s+/g, ' ').trim();
+      show(plain.length > 140 ? plain.slice(0, 139).trimEnd() + '…' : plain);
+    }, () => show(''));
   }
 
   // Count live terminals with a running process (excluding idle shells)
@@ -16122,6 +16441,205 @@
     }
   }
 
+  // ── Settings > Providers (T3 Code's layout): a list of the agent CLIs beside the selected one's editor.
+  // Overrides live in the main process (electron/providers.js) and apply to chats started after a change.
+  const PROVIDER_CONFIG_ENV = { claude: ['CLAUDE_CONFIG_DIR', '~/.claude'], codex: ['CODEX_HOME', '~/.codex'] };
+  let _prov = null, _provSelected = null, _provLoading = false, _provEmails = {};
+  const _provEmailShown = new Set();
+  const provHarnesses = () => THREAD_HARNESSES.filter(h => !h.retired)
+    .sort((a, b) => !_prov?.agents[a.bin]?.path - !_prov?.agents[b.bin]?.path); // installed first, stable
+  const provCfg = id => (_prov.config[id] ||= {});
+  const provSwitch = (h, on) => `<label class="prov-switch"><input type="checkbox" role="switch" data-act="enable" data-id="${h.id}"${on ? ' checked' : ''} aria-label="Enable ${escHtml(h.name)}"><span aria-hidden="true"></span></label>`;
+  // Unset: on when installed, so agents that are not installed start switched off.
+  const provOn = h => _prov.config[h.id]?.enabled ?? !!_prov.agents[h.bin]?.path;
+  function provState(h) {
+    const a = _prov.agents[h.bin] || {}, c = _prov.config[h.id] || {};
+    if (!a.path) return { icon: 'ph-warning-circle', tone: 'error', text: c.bin ? 'Binary not found' : 'Not installed' };
+    if (!provOn(h)) return { icon: 'ph-minus-circle', tone: 'dim', text: 'Disabled' };
+    return { icon: 'ph-check-circle', tone: 'success', text: 'Ready' };
+  }
+  async function renderProvidersSettings(fresh = false) {
+    const api = window.electronAPI, panel = document.getElementById('providers-panel');
+    if (!api?.providersStatus) { panel.innerHTML = '<div class="prov-empty">Provider settings need the desktop app.</div>'; return; }
+    if (_provLoading) return;
+    _provLoading = true; drawProvidersHead(); if (!_prov) panel.innerHTML = '<div class="prov-empty"><i class="ph ph-circle-notch prov-spin" aria-hidden="true"></i>Checking providers…</div>';
+    try {
+      // The account comes with the usage read (it spawns the CLIs): cached unless refreshing.
+      const [status, usage] = await Promise.all([api.providersStatus(THREAD_HARNESSES.map(h => h.bin)), fresh && api.usageLimits ? api.usageLimits(true).catch(() => null) : null]);
+      const keep = _prov?.config; // edits made while it loaded win
+      _prov = { ...status, config: keep || status.config || {}, at: Date.now() };
+      _provEmails = Object.fromEntries(Object.entries(usage || _usageLimits || readUsageCache() || {}).map(([id, u]) => [id, u?.email]).filter(([, e]) => e));
+      document.getElementById('providers-status').textContent = '';
+    } catch (e) {
+      document.getElementById('providers-status').textContent = `Could not check providers: ${e.message}`;
+    } finally { _provLoading = false; }
+    if (!_prov) { panel.innerHTML = '<div class="prov-empty">Could not read providers.</div>'; drawProvidersHead(); return; }
+    if (!provHarnesses().some(h => h.id === _provSelected)) _provSelected = provHarnesses()[0].id;
+    drawProviders();
+  }
+  function drawProvidersHead() {
+    const btn = document.getElementById('providers-refresh');
+    btn.classList.toggle('busy', _provLoading); btn.disabled = _provLoading; btn.setAttribute('aria-busy', String(_provLoading));
+    document.getElementById('providers-checked').textContent = _provLoading ? 'Refreshing providers' : _prov?.at ? `Checked ${ago(_prov.at) === 'now' ? 'just now' : ago(_prov.at) + ' ago'}` : '';
+  }
+  function drawProviders() {
+    const panel = document.getElementById('providers-panel');
+    panel.innerHTML = `<div class="prov-list" role="list"></div><div class="prov-editor"><div class="prov-ed-status"></div><div class="prov-form"></div></div>`;
+    drawProvidersHead(); drawProviderList(); drawProviderStatus(); drawProviderForm();
+  }
+  function drawProviderList() {
+    document.querySelector('#providers-panel .prov-list').innerHTML = provHarnesses().map(h => {
+      const a = _prov.agents[h.bin] || {}, st = provState(h), sel = h.id === _provSelected, on = provOn(h);
+      return `<div class="prov-row${sel ? ' selected' : ''}${on && a.path ? '' : ' off'}" role="listitem">`
+        + `<button type="button" class="prov-select" data-act="select" data-id="${h.id}" aria-pressed="${sel}" aria-label="Select ${escHtml(h.name)}"></button>`
+        + `<span class="prov-logo" style="--prov-color:${h.color || 'var(--fg)'}">${procIconHtml(h.bin, 'ph-robot')}</span>`
+        + `<span class="prov-row-text"><span class="prov-row-name">${escHtml(h.name)}${a.version ? `<code>${escHtml(a.version)}</code>` : ''}</span>`
+        + `<span class="prov-row-sub"><i class="ph ${st.icon} prov-${st.tone}" aria-hidden="true"></i>${st.text}</span></span>`
+        + provSwitch(h, on) + '</div>';
+    }).join('');
+  }
+  function drawProviderStatus() {
+    const h = harnessOf(_provSelected), a = _prov.agents[h.bin] || {}, st = provState(h), email = _provEmails[h.id], shown = _provEmailShown.has(h.id);
+    const row = (label, value) => value ? `<div class="prov-kv"><span class="prov-label">${label}</span><span class="prov-value">${value}</span></div>` : '';
+    document.querySelector('#providers-panel .prov-ed-status').innerHTML =
+      `<div class="prov-ed-head"><span class="prov-logo" style="--prov-color:${h.color || 'var(--fg)'}">${procIconHtml(h.bin, 'ph-robot')}</span><span class="prov-ed-title">${escHtml(h.name)}</span>${provSwitch(h, provOn(h))}</div>`
+      + row('Status', `<i class="ph ${st.icon} prov-${st.tone}" aria-hidden="true"></i>${st.text}`)
+      + row('Path', a.path ? `<code>${escHtml(a.path)}</code>` : '')
+      + row('Version', a.version ? `<code>${escHtml(a.version)}</code>` : '')
+      + row('Account', email ? `<button type="button" class="prov-email" data-act="email" data-id="${h.id}" aria-pressed="${shown}" title="Click to ${shown ? 'hide' : 'reveal'} email">${escHtml(email)}</button>`
+        : a.path && provOn(h) && PROV_LOGIN[h.id] ? `<button type="button" class="prov-add" data-act="login" title="Opens the CLI's own sign-in in a new terminal tab"><i class="ph ph-sign-in" aria-hidden="true"></i>Sign in</button>` : '');
+  }
+  // Each CLI's own sign-in, run in a terminal tab (they're interactive: a browser link, a pasted code).
+  const PROV_LOGIN = { claude: ['/login'], codex: ['login'], antigravity: [], opencode: ['auth', 'login'], 'cursor-agent': ['login'] };
+  function startProviderLogin(h) {
+    const bin = _prov.agents[h.bin]?.path || h.bin;
+    // shortcut: typed into the default shell; `& "…"` is PowerShell's call syntax (the Windows default shell).
+    const exe = /\s/.test(bin) ? (window.electronAPI?.platform === 'win32' ? `& "${bin}"` : `"${bin}"`) : bin;
+    closeSettings();
+    addTerminal(activeWsId, null, { label: `${h.name} sign-in`, cmd: [exe, ...PROV_LOGIN[h.id]].join(' ') });
+  }
+  const PROV_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  // One launch argument: an input and its remove button.
+  const provArgHtml = (i, v = '') => `<div class="prov-item" role="listitem">`
+    + `<input type="text" class="prov-input" data-f="arg-${i}" value="${escHtml(v)}" placeholder="--flag" spellcheck="false" autocomplete="off" aria-label="Argument ${i + 1}">`
+    + `<button type="button" class="prov-icon-btn" data-act="arg-remove" aria-label="Remove argument ${i + 1}" title="Remove"><i class="ph ph-x" aria-hidden="true"></i></button></div>`;
+  // One variable: a card with its name (and remove) above its value (and the sensitive toggle, which hides it).
+  const provVarHtml = (i, k = '', v = '', secret = false) => `<div class="prov-item prov-var" role="listitem">`
+    + `<input type="text" class="prov-input" data-f="envk-${i}" value="${escHtml(k)}" placeholder="VARIABLE_NAME" spellcheck="false" autocomplete="off" aria-label="Variable name ${i + 1}"${k && !PROV_ENV_NAME.test(k) ? ' aria-invalid="true"' : ''}>`
+    + `<button type="button" class="prov-icon-btn" data-act="env-remove" aria-label="Remove variable ${escHtml(k) || i + 1}" title="Remove"><i class="ph ph-x" aria-hidden="true"></i></button>`
+    + `<input type="${secret ? 'password' : 'text'}" class="prov-input" data-f="envv-${i}" value="${escHtml(v)}" placeholder="value" spellcheck="false" autocomplete="off" aria-label="Variable value ${i + 1}">`
+    + `<button type="button" class="prov-icon-btn prov-secret" data-act="env-secret" aria-pressed="${secret}" aria-label="Sensitive value" title="${secret ? 'Sensitive: hidden. Click to show' : 'Mark as sensitive'}"><i class="ph ${secret ? 'ph-lock-simple' : 'ph-lock-simple-open'}" aria-hidden="true"></i></button></div>`;
+  function drawProviderForm(focus) {
+    const h = harnessOf(_provSelected), c = _prov.config[h.id] || {}, cfgEnv = PROVIDER_CONFIG_ENV[h.id];
+    // A row: label and description on the left, the control on the right (stacks when narrow).
+    const field = (key, label, desc, control) => `<div class="prov-field"><div class="prov-field-text">`
+      + `<label class="prov-label" for="prov-${key}">${label}</label><p class="prov-desc">${desc}</p></div><div class="prov-control">${control}</div></div>`;
+    // A list: label left, its Add button right, the items full width below.
+    const listField = (label, desc, act, addText, items, foot = '') => `<div class="prov-field prov-list-field"><div class="prov-field-text">`
+      + `<span class="prov-label">${label}</span><p class="prov-desc">${desc}</p></div>`
+      + `<div class="prov-control"><button type="button" class="prov-add" data-act="${act}"><i class="ph ph-plus" aria-hidden="true"></i>${addText}</button></div>`
+      + `<div class="prov-items${act === 'arg-add' ? ' prov-args' : ''}" role="list" aria-label="${label}">${items}</div>${foot ? `<p class="prov-desc prov-foot">${foot}</p>` : ''}</div>`;
+    const input = (key, value, placeholder) => `<input type="text" id="prov-${key}" class="prov-input" data-f="${key}" value="${escHtml(value || '')}" placeholder="${escHtml(placeholder)}" spellcheck="false" autocomplete="off">`;
+    const secret = new Set(c.secret || []);
+    document.querySelector('#providers-panel .prov-form').innerHTML =
+      '<div class="prov-sec-title">Runtime</div>'
+      + field('bin', 'Binary path', 'A command name or full path. Empty: found on PATH.', input('bin', c.bin, h.bin))
+      + (cfgEnv ? field('config', `${cfgEnv[0]} path`, 'Leave empty for the default. Agents you start in a terminal use it too.', input('config', c.configDir, cfgEnv[1])) : '')
+      + listField('Launch arguments', 'One literal argument per row, in launch order.', 'arg-add', 'Add argument',
+        (c.args || []).map((v, i) => provArgHtml(i, v)).join(''))
+      + '<div class="prov-sec-title">Environment</div>'
+      + listField('Variables', 'API keys, base URLs and other settings for this CLI.', 'env-add', 'Add variable',
+        Object.entries(c.env || {}).map(([k, v], i) => provVarHtml(i, k, v, secret.has(k))).join(''),
+        'Sensitive values are hidden here. All values are saved as plain text in ~/.terminalvibe/providers.json.')
+      + `<p class="prov-desc prov-note">Changes apply to chats started after you save.</p>`;
+    if (focus) document.querySelector(`#providers-panel [data-f="${focus}"]`)?.focus();
+  }
+  // The form's values into the selected provider's config (rows kept as typed; the main process drops empty ones).
+  function readProviderForm() {
+    const form = document.querySelector('#providers-panel .prov-form'), c = provCfg(_provSelected);
+    const val = key => form.querySelector(`[data-f="${key}"]`)?.value.trim() ?? '';
+    c.bin = val('bin') || undefined;
+    if (PROVIDER_CONFIG_ENV[_provSelected]) c.configDir = val('config') || undefined;
+    c.args = [...form.querySelectorAll('[data-f^="arg-"]')].map(x => x.value);
+    const vars = [...form.querySelectorAll('.prov-var')].map(row => ({ k: row.querySelector('[data-f^="envk-"]').value.trim(),
+      v: row.querySelector('[data-f^="envv-"]').value, secret: row.querySelector('.prov-secret').getAttribute('aria-pressed') === 'true' })).filter(x => x.k);
+    c.env = Object.fromEntries(vars.map(x => [x.k, x.v]));
+    c.secret = vars.filter(x => x.secret).map(x => x.k);
+  }
+  async function saveProviders(redrawStatus = true) {
+    try {
+      await window.electronAPI.providersSave(_prov.config);
+      if (SETTINGS_ONLY) window.electronAPI.settingsChanged?.(); // the main window looks its agents up again
+      else reloadChatAgents();
+      document.getElementById('providers-status').textContent = '';
+    } catch (e) { document.getElementById('providers-status').textContent = `Could not save: ${e.message}`; return; }
+    if (!redrawStatus) return;
+    // A binary change moves the path and version: re-check without touching the form being edited.
+    try {
+      const status = await window.electronAPI.providersStatus(THREAD_HARNESSES.map(h => h.bin));
+      _prov.agents = status.agents; _prov.at = Date.now();
+      drawProvidersHead(); drawProviderList(); drawProviderStatus();
+    } catch {}
+  }
+  {
+    const panel = document.getElementById('providers-panel');
+    document.getElementById('providers-refresh')?.addEventListener('click', () => renderProvidersSettings(true));
+    panel?.addEventListener('change', e => {
+      if (e.target.dataset.act === 'enable') {
+        const where = e.target.closest('.prov-list') ? '.prov-list' : '.prov-ed-status';
+        provCfg(e.target.dataset.id).enabled = e.target.checked;
+        drawProviderList(); drawProviderStatus();
+        panel.querySelector(`${where} [data-act="enable"][data-id="${e.target.dataset.id}"]`)?.focus();
+        void saveProviders(false);
+      } else if (e.target.dataset.f) { readProviderForm(); void saveProviders(e.target.dataset.f === 'bin'); }
+    });
+    // A variable name the CLI could not read is flagged as you type (the main process drops it on save).
+    panel?.addEventListener('input', e => {
+      if (!e.target.dataset.f?.startsWith('envk-')) return;
+      const name = e.target.value.trim(), bad = !!name && !PROV_ENV_NAME.test(name);
+      if (bad) e.target.setAttribute('aria-invalid', 'true'); else e.target.removeAttribute('aria-invalid');
+      e.target.title = bad ? 'Use letters, digits and _, not starting with a digit' : '';
+    });
+    // Enter in an argument adds the next one.
+    panel?.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || e.isComposing || !e.target.dataset.f?.startsWith('arg-')) return;
+      e.preventDefault(); panel.querySelector('[data-act="arg-add"]')?.click();
+    });
+    panel?.addEventListener('click', e => {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      const act = btn.dataset.act, c = _prov && provCfg(_provSelected);
+      if (act === 'select') {
+        _provSelected = btn.dataset.id;
+        drawProviderList(); drawProviderStatus(); drawProviderForm();
+        panel.querySelector(`.prov-select[data-id="${btn.dataset.id}"]`)?.focus();
+      } else if (act === 'email') {
+        const shown = !_provEmailShown.delete(btn.dataset.id);
+        if (shown) _provEmailShown.add(btn.dataset.id);
+        btn.setAttribute('aria-pressed', shown); btn.title = `Click to ${shown ? 'hide' : 'reveal'} email`;
+      } else if (act === 'login') startProviderLogin(harnessOf(_provSelected));
+      else if (act === 'arg-add') { readProviderForm(); c.args.push(''); drawProviderForm('arg-' + (c.args.length - 1)); }
+      else if (act === 'env-add') {
+        // A new variable has no name yet, so it lives only in the form until one is typed.
+        readProviderForm();
+        const items = btn.closest('.prov-list-field').querySelector('.prov-items');
+        items.insertAdjacentHTML('beforeend', provVarHtml(items.children.length));
+        items.lastElementChild.querySelector('input').focus();
+      } else if (act === 'env-secret') {
+        const on = btn.getAttribute('aria-pressed') !== 'true', value = btn.parentElement.querySelector('[data-f^="envv-"]');
+        btn.setAttribute('aria-pressed', on); value.type = on ? 'password' : 'text';
+        btn.title = on ? 'Sensitive: hidden. Click to show' : 'Mark as sensitive';
+        btn.querySelector('i').className = `ph ${on ? 'ph-lock-simple' : 'ph-lock-simple-open'}`;
+        readProviderForm(); void saveProviders(false);
+      } else if (act === 'arg-remove' || act === 'env-remove') {
+        // Drop the row itself, then read what is left (an unnamed variable has no entry to splice).
+        btn.closest('.prov-item').remove(); readProviderForm(); drawProviderForm();
+        panel.querySelector(`[data-act="${act === 'arg-remove' ? 'arg-add' : 'env-add'}"]`)?.focus();
+        void saveProviders(false);
+      }
+    });
+  }
+
   function switchSettingsCat(cat) {
     closeActiveDropdown?.();
     settingsSearchInput.value = '';
@@ -16141,6 +16659,7 @@
     saveState();
     if (cat === 'plugins') renderPluginsSettings();
     if (cat === 'skills') renderSkillsSettings();
+    if (cat === 'providers') renderProvidersSettings();
     if (prevCat === 'plugins' && cat !== 'plugins') _pluginsView = { mode: 'list' };
   }
 
@@ -16219,7 +16738,6 @@
       if (state.notificationSound !== undefined) notificationSound = !!state.notificationSound;
       if (['tab', 'external'].includes(state.terminalLinkTarget)) terminalLinkTarget = state.terminalLinkTarget;
       loadThreadSettings(state.threadSettings);
-      renderUsageSidebar();
       renderUsageModal();
       if (state.backgroundMode) backgroundMode = state.backgroundMode;
       if (state.globalBackgroundImage) globalBackgroundImage = state.globalBackgroundImage;
@@ -17171,7 +17689,7 @@
         document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
         applyWorkUsernamePrivacy(document);
       }
-      if (key === 'usageDisplay') { renderUsageSidebar(true); renderUsageModal(); }
+      if (key === 'usageDisplay') renderUsageModal();
       if (key === 'markdown') syncChatInputLinks();
       saveState();
     });
@@ -17760,7 +18278,6 @@
       }
       await loadCustomThemes();
       restored = await restoreState();
-      if (_usageLimits) renderUsageSidebar();
       applySidebarMode();
       applyTheme(currentThemeName); // Also renders the sidebar and workspace pane.
       paneRendered = true;
@@ -17803,6 +18320,7 @@
           renderSidebar();
           syncBrowserSlots();
           syncPlugins();
+          reloadChatAgents();
         });
       });
     }
