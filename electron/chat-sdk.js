@@ -9,6 +9,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const ASK_INPUT = 'Type something';
 const skillReferences = text => text.matchAll(/(?:^|[\s([{])\$([\w:.-]+?)(?=$|[\s,!?;)\]}]|\.(?=$|\s))/g);
@@ -175,12 +176,13 @@ class Session {
 }
 
 class ClaudeSession extends Session {
-  start({ bin, cwd, env, argv, access }) {
+  steers = new Set(); // uuids of messages sent mid-turn that Claude has not taken in yet
+  start({ bin, cwd, env, argv, access, extraArgs = [] }) {
     // The chat's own flags (model, effort, session, settings) plus headless mode; permission prompts come back over
     // stdio. Full access can be switched on later in the session (a pick in the chat is the user's consent).
-    this.launch(bin, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    this.launch(bin, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
       '--permission-prompt-tool', 'stdio', '--allow-dangerously-skip-permissions', ...argv.filter((x, i, a) => x !== '--permission-mode' && a[i - 1] !== '--permission-mode'),
-      '--permission-mode', CLAUDE_MODE(access)], cwd, env);
+      '--permission-mode', CLAUDE_MODE(access), ...extraArgs], cwd, env);
     this.access = access;
     this.cwd = cwd;
     this.env = env;
@@ -192,7 +194,11 @@ class ClaudeSession extends Session {
     if (m.type === 'system' && m.subtype === 'init' && m.session_id && m.session_id !== this.sessionId) { this.sessionId = m.session_id; this.emit('session', { sessionId: m.session_id }); }
     if (m.type === 'system' && m.subtype === 'status' && m.status === 'requesting') this.setBusy(true);
     if (m.type === 'assistant') this.setBusy(true);
-    if (m.type === 'result') this.setBusy(false, m.is_error ? { error: short(m.result || (m.errors || []).join('\n') || m.subtype, 400) } : {});
+    // Claude echoes each input once it takes it in. A steer that came too late for the running turn becomes its own
+    // turn after this result, so the session stays busy until every steer is taken (else the queue sends early).
+    if (m.type === 'user' && m.isReplay) this.steers.delete(m.uuid);
+    if (m.type === 'result' && m.is_error) this.steers.clear();
+    if (m.type === 'result' && !this.steers.size) this.setBusy(false, m.is_error ? { error: String(m.result || (m.errors || []).join('\n') || m.subtype) } : {});
     if (m.type === 'control_request') this.onControl(m);
   }
   onControl(m) {
@@ -247,13 +253,16 @@ class ClaudeSession extends Session {
     const content = images.length ? [{ type: 'text', text }, ...images.map(({ mediaType, data }) => ({
       type: 'image', source: { type: 'base64', media_type: mediaType, data },
     }))] : text;
+    const uuid = crypto.randomUUID();
+    if (this.busy) this.steers.add(uuid);
     this.setBusy(true);
-    this.write({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: this.sessionId || '' });
+    this.write({ type: 'user', message: { role: 'user', content }, uuid, parent_tool_use_id: null, session_id: this.sessionId || '' });
     return Promise.resolve(true);
   }
   interrupt() {
     // An open permission / question request would keep the turn waiting on its answer: deny it (and interrupt) first.
     for (const [id, a] of this.asks) { a.cancel?.(); this.asks.delete(id); this.emit('ask-done', { id }); }
+    this.steers.clear(); // Stop always ends the turn, even if Claude never takes a steer in
     this.control({ subtype: 'interrupt' });
   }
   setAccess(access) {
@@ -264,19 +273,19 @@ class ClaudeSession extends Session {
 }
 
 class CodexSession extends Session {
-  async initialize({ bin, cwd, env, clientVersion }) {
-    this.launch(bin, ['app-server'], cwd, env);
+  async initialize({ bin, cwd, env, clientVersion, extraArgs = [] }) {
+    this.launch(bin, ['app-server', ...extraArgs], cwd, env);
     this.rpcId = 0; this.pending = new Map(); this.turnId = null; this.cwd = cwd;
     this.rejectPending = err => { for (const p of this.pending.values()) p.reject(err); this.pending.clear(); };
     await this.rpc('initialize', { clientInfo: { name: 'terminalvibe', title: 'TerminalVibe', version: clientVersion || '0' } });
     this.write({ method: 'initialized', params: {} });
   }
-  async start({ bin, cwd, env, options = {}, resume, fork, clientVersion }) {
+  async start({ bin, cwd, env, options = {}, resume, fork, clientVersion, extraArgs }) {
     this.options = options;
     const a = codexAccess(options.access);
     const params = { cwd, ...(options.model && options.model !== 'default' ? { model: options.model } : {}), ...(a.approvalPolicy ? { approvalPolicy: a.approvalPolicy, sandbox: a.sandbox } : {}),
       ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}) };
-    await this.initialize({ bin, cwd, env, clientVersion });
+    await this.initialize({ bin, cwd, env, clientVersion, extraArgs });
     const r = resume ? await this.rpc('thread/resume', { ...params, threadId: resume, excludeTurns: true })
       : fork ? await this.rpc('thread/fork', { ...params, threadId: fork, excludeTurns: true })
       : await this.rpc('thread/start', params);
@@ -325,7 +334,7 @@ class CodexSession extends Session {
     if (m.method === 'turn/started') { this.turnId = p.turn?.id || this.turnId; this.setBusy(true); }
     else if (m.method === 'turn/completed') {
       if (!p.turn?.id || p.turn.id === this.turnId) this.turnId = null;
-      const err = p.turn?.status === 'failed' ? short(p.turn.error?.message || 'The turn failed', 400) : null;
+      const err = p.turn?.status === 'failed' ? String(p.turn.error?.message || 'The turn failed') : null;
       this.setBusy(false, err ? { error: err } : {});
     }
     else if (m.method === 'error' && p.willRetry === false) this.lastError = short(p.error?.message || 'Codex error', 400);
@@ -412,13 +421,13 @@ const ACP_TOOL_DETAIL = 4000;
 // ACP advertises custom slash actions and skills together with these built-in controls.
 const AGY_CONTROLS = new Set(['goal', 'compact', 'schedule', 'browser', 'plan', 'swarm']);
 class AcpSession extends Session {
-  start({ bin, cwd, env, options = {}, resume, clientVersion, transcriptDir }) {
+  start({ bin, cwd, env, options = {}, resume, clientVersion, transcriptDir, extraArgs = [] }) {
     this.options = options; this.dir = transcriptDir; this.tools = new Map(); this.buf = null; this.waiting = 0;
     this.cwd = cwd;
     this.commandsReady = new Promise(resolve => { this.resolveCommands = resolve; });
     // Full access is a start flag (it auto-approves every request); the other permissions are the session's modes.
     this.full = options.access === 'full';
-    this.launch(bin, ['acp', ...(this.full ? ['--dangerously-skip-permissions'] : [])], cwd, env);
+    this.launch(bin, ['acp', ...(this.full ? ['--dangerously-skip-permissions'] : []), ...extraArgs], cwd, env);
     this.rpcId = 0; this.pending = new Map(); this.queue = Promise.resolve();
     this.rejectPending = err => { for (const p of this.pending.values()) p.reject(err); this.pending.clear(); };
     return (async () => {
@@ -641,7 +650,8 @@ const toolSummaryOf = input => { try { return require('./threads').toolSummary(i
 const SESSIONS = { claude: ClaudeSession, codex: CodexSession, antigravity: AcpSession };
 const sessions = new Map();
 
-function register(ipcMain, { send, env: makeEnv, version, dataDir }) {
+// env(key, harness) / args(harness): the provider's env vars and extra launch arguments (Settings > Providers).
+function register(ipcMain, { send, env: makeEnv, args: launchArgs = () => [], version, dataDir }) {
   // Cache Antigravity's catalog and coalesce concurrent OpenCode probes for the same project.
   const modelCache = new Map();
   ipcMain.handle('chat-sdk:models', async (_e, harness, bin, cwd) => {
@@ -649,12 +659,12 @@ function register(ipcMain, { send, env: makeEnv, version, dataDir }) {
       const home = require('os').homedir();
       const directory = typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : home;
       const key = JSON.stringify([bin, directory]);
-      if (!modelCache.has(key)) modelCache.set(key, openCodeModels(bin, makeEnv('models-probe'), directory)
+      if (!modelCache.has(key)) modelCache.set(key, openCodeModels(bin, makeEnv('models-probe', harness), directory)
         .catch(() => null).finally(() => modelCache.delete(key)));
       return modelCache.get(key);
     }
     if (harness !== 'antigravity' || typeof bin !== 'string') return [];
-    if (!modelCache.has(bin)) modelCache.set(bin, acpProbeModels(bin, makeEnv('models-probe'), require('os').tmpdir()).catch(() => { modelCache.delete(bin); return []; }));
+    if (!modelCache.has(bin)) modelCache.set(bin, acpProbeModels(bin, makeEnv('models-probe', harness), require('os').tmpdir()).catch(() => { modelCache.delete(bin); return []; }));
     return modelCache.get(bin);
   });
   const emit = (key, ev) => send('chat-sdk:event', { key, ...ev });
@@ -662,25 +672,25 @@ function register(ipcMain, { send, env: makeEnv, version, dataDir }) {
   ipcMain.handle('chat-sdk:skills', async (_e, harness, key, bin, cwd) => {
     const live = get(key);
     if (harness === 'claude') {
-      return require('./chat-complete').listClaudeSkills(cwd || live?.cwd, undefined, makeEnv(key));
+      return require('./chat-complete').listClaudeSkills(cwd || live?.cwd, undefined, makeEnv(key, harness));
     }
     if (live?.harness === harness && live.sessionId && (!cwd || cwd === live.cwd)
       && (live instanceof CodexSession || live instanceof AcpSession)) return live.listSkills();
     if (typeof bin !== 'string') throw Error('Agent executable was not found on PATH');
     const directory = typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : require('os').homedir();
     if (harness === 'opencode') {
-      return withOpenCodeServer(bin, makeEnv(key), directory, async (client, signal) => {
+      return withOpenCodeServer(bin, makeEnv(key, harness), directory, async (client, signal) => {
         const { data } = await client.app.skills({ directory }, { signal });
         return data.filter(skill => /^[\w:.-]+$/.test(skill.id || skill.name))
           .map(skill => ({ name: skill.id || skill.name, description: skill.description }));
       });
     }
-    if (harness === 'antigravity') return acpProbe(bin, makeEnv(key), directory, session => session.listSkills());
+    if (harness === 'antigravity') return acpProbe(bin, makeEnv(key, harness), directory, session => session.listSkills());
     if (harness !== 'codex') return [];
     const probe = new CodexSession(key, 'codex', () => {});
     const timer = setTimeout(() => probe.stop(), 10000);
     try {
-      await probe.initialize({ bin, cwd: directory, env: makeEnv(key), clientVersion: version });
+      await probe.initialize({ bin, cwd: directory, env: makeEnv(key, harness), clientVersion: version });
       return await probe.listSkills();
     } finally {
       clearTimeout(timer);
@@ -695,7 +705,7 @@ function register(ipcMain, { send, env: makeEnv, version, dataDir }) {
     const s = new S(key, opts.harness, emit);
     sessions.set(key, s);
     try {
-      return await s.start({ ...opts, env: makeEnv(key), clientVersion: version, transcriptDir: dataDir && path.join(dataDir, 'acp') });
+      return await s.start({ ...opts, env: makeEnv(key, opts.harness), extraArgs: launchArgs(opts.harness), clientVersion: version, transcriptDir: dataDir && path.join(dataDir, 'acp') });
     } catch (err) {
       s.stop();
       return { ok: false, error: err.message || 'Could not start the agent' };
@@ -764,6 +774,19 @@ if (require.main === module) {
     { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } },
   ]);
   claude.send('Check this image', { images: [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }] });
+  // A steer too late for the running turn runs as its own turn: busy until Claude takes it in and that turn ends.
+  const events = [], steerer = new ClaudeSession('test', 'claude', (_k, e) => events.push(e.type)), inputs = [];
+  steerer.write = message => inputs.push(message.uuid);
+  steerer.send('first'); steerer.send('steer'); steerer.send('second steer');
+  steerer.onMessage({ type: 'user', isReplay: true, uuid: inputs[0] });
+  steerer.onMessage({ type: 'result' });
+  assert.ok(steerer.busy && !events.includes('idle'), 'a result before the steer is taken must not end the turn');
+  steerer.onMessage({ type: 'user', isReplay: true, uuid: inputs[1] });
+  steerer.onMessage({ type: 'result' });
+  assert.ok(steerer.busy && !events.includes('idle'), 'a second pending steer must also keep the queue waiting');
+  steerer.onMessage({ type: 'user', isReplay: true, uuid: inputs[2] });
+  steerer.onMessage({ type: 'result' });
+  assert.ok(!steerer.busy && events.at(-1) === 'idle');
   const claudeConfig = fs.mkdtempSync(path.join(require('os').tmpdir(), 'tv-claude-skills-'));
   try {
     const skillDir = path.join(claudeConfig, 'skills', 'lint');

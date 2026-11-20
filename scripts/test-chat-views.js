@@ -20,7 +20,7 @@ app.whenReady().then(async () => {
   const view = source.slice(source.indexOf('  function setChatView(tab, cli)'), source.indexOf('  // An agent finished its turn:', source.indexOf('  function setChatView(tab, cli)')));
   const refresh = source.slice(source.indexOf('  async function refreshThreadFlow('), source.indexOf('  // ── Find in the thread history:', source.indexOf('  async function refreshThreadFlow(')));
   const pending = source.slice(source.indexOf('  const pendingMessages ='), source.indexOf('  const _thrImgCache ='));
-  const chatErrors = source.slice(source.indexOf('  function renderChatErrors('), source.indexOf('  function noteChatError('));
+  const chatErrors = source.slice(source.indexOf('  const chatErrorNeedle ='), source.indexOf('  function noteChatError('));
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     document.body.innerHTML = '<div id="sbr-thread" style="display:none"><div class="thr-flow" id="sbr-thread-flow"></div><textarea id="sbr-thread-input"></textarea><div class="attachments" id="sbr-thread-attachments"></div><button id="sbr-thread-model"><span>Model</span></button></div>';

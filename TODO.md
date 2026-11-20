@@ -16,3 +16,4 @@
 - [ ] multiple select one command 
 <!-- - [ ] persist the state of commands (but must be toggle in setting enable/disable) -->
 
+- [ ] make the tab detect the agent harness to show the switch to interface button

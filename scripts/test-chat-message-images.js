@@ -65,6 +65,8 @@ app.whenReady().then(async () => {
     check(scope.querySelectorAll('.thr-img-link').length === 2 && scope.querySelector('.thr-img-link').dataset.path === '/tmp/folder with spaces/image.png', 'Quoted image path lost');
     render('> quoted context\\n\\nSee /tmp/one/image.png');
     check(scope.querySelector('.thr-cite') && scope.querySelector('.thr-img-link'), 'Citation and image references interfere');
+    render('instead of force use \\n> gh auth login\\n, for example');
+    check(!scope.querySelector('blockquote') && scope.querySelector('.thr-cite')?.title === 'gh auth login' && scope.textContent.includes('force use gh auth login, for example'), 'Mid-message citation must render inline, not as a blockquote: ' + scope.innerHTML);
     const docs = render("Review '/tmp/report final.pdf' /tmp/notes.txt '/tmp/README'");
     check(scope.querySelectorAll('.thr-img-link').length === 3 && docs.paths.length === 0, 'Documents must render as links without image previews');
     check(scope.querySelector('.thr-img-link-name').textContent === 'report final.pdf', 'Document filename missing');

@@ -43,6 +43,8 @@ const devPort = 7769; // dev-mode app server port
 
 // ── Config directory (~/.terminalvibe/) ──
 const CONFIG_DIR = path.join(require('os').homedir(), '.terminalvibe');
+const providers = require('./providers');
+providers.load(); // sets CLAUDE_CONFIG_DIR / CODEX_HOME before anything reads transcripts
 const CONFIG_THEMES_DIR = path.join(CONFIG_DIR, 'themes');
 const CONFIG_IMAGES_DIR = path.join(CONFIG_DIR, 'images');
 const CONFIG_PLUGINS_DIR = path.join(CONFIG_DIR, 'plugins');
@@ -1154,7 +1156,7 @@ ipcMain.handle('history:codex-image', (_e, query) => require('./claude-sessions'
 // Codex's own model list (what its /model picker shows), for the chat tab's model picker.
 ipcMain.handle('chat:models', () => {
   try {
-    const d = JSON.parse(fs.readFileSync(path.join(require('os').homedir(), '.codex', 'models_cache.json'), 'utf8'));
+    const d = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex'), 'models_cache.json'), 'utf8'));
     return { codex: (Array.isArray(d.models) ? d.models : []).filter(x => x && x.slug && x.visibility === 'list').map(x => ({
       id: String(x.slug), name: String(x.display_name || x.slug),
       efforts: (x.supported_reasoning_levels || []).map(l => String(l.effort)).filter(e => /^[a-z]+$/.test(e)),
@@ -1167,12 +1169,12 @@ ipcMain.handle('chat:models', () => {
 ipcMain.handle('threads:agents', (_e, names) => {
   const threadsDir = path.join(CONFIG_DIR, 'threads');
   try { fs.mkdirSync(threadsDir, { recursive: true }); } catch {}
-  return { found: require('./threads').detectAgents(names, terminalEnv()), threadsDir };
+  return { found: providers.detect(names, terminalEnv()), threadsDir };
 });
 // The agents' plan usage (status bar): asked through each installed CLI with its own login.
 ipcMain.handle('usage:limits', (_e, fresh) => {
   const env = terminalEnv();
-  return require('./usage-limits').usageLimits(require('./threads').detectAgents(['claude', 'codex', 'agy'], env), env, fresh === true);
+  return require('./usage-limits').usageLimits(providers.detect(['claude', 'codex', 'agy'], env), id => providers.envFor(id, env), fresh === true);
 });
 ipcMain.handle('threads:save-attachment', (_e, id, name, bytes) => require('./threads').saveThreadAttachment(id, name, bytes));
 ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
@@ -1354,17 +1356,86 @@ function runGitHub(cwd, args) {
     child.stdin?.end();
   });
 }
+// "owner/repo" of a folder's github.com origin remote, or null.
+async function githubRepo(cwd) {
+  const r = await runGit(cwd, ['remote', 'get-url', 'origin']);
+  const m = r.ok && /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(r.out.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+// gh needs a login even for public repos; GitHub's API doesn't (60 requests/hour per IP), so try it when gh can't.
+async function publicPullRequests(cwd) {
+  const repo = await githubRepo(cwd);
+  if (!repo) return null;
+  try {
+    // shortcut: first 100 open PRs only (no Link-header paging); page through if a public repo needs more.
+    const res = await require('electron').net.fetch(`https://api.github.com/repos/${repo}/pulls?state=open&per_page=100`,
+      { credentials: 'omit', headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return null; // private repo (404) or rate limited
+    return (await res.json()).map(pr => ({ number: pr.number, title: pr.title, url: pr.html_url, draft: pr.draft }));
+  } catch { return null; }
+}
 ipcMain.handle('git:pull-requests', async (_e, cwd) => {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { error: 'Select a project folder first.' };
   const result = await runGitHub(cwd, ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url,draft}',
     'repos/{owner}/{repo}/pulls?state=open&per_page=100']);
-  if (result.error) return result;
-  try {
-    const pulls = result.out.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
-      .filter(pr => /^https:\/\//i.test(pr.url));
-    return { pulls };
-  } catch { return { error: 'Could not read the pull request results.' }; }
+  let pulls;
+  if (result.error) {
+    pulls = await publicPullRequests(cwd);
+    if (!pulls) return /gh auth login/.test(result.error) ? { error: 'Sign in to GitHub to see pull requests for this repo.', auth: true } : result;
+  } else {
+    try { pulls = result.out.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)); }
+    catch { return { error: 'Could not read the pull request results.' }; }
+  }
+  return { pulls: pulls.filter(pr => /^https:\/\//i.test(pr.url)) };
 });
+// GitHub sign-in from the UI: gh's browser login without a TTY prints a one-time code, then waits until it's entered on GitHub.
+let ghLogin = null; // { child, done }
+ipcMain.handle('github:login-start', () => new Promise(resolve => {
+  ghLogin?.child.kill();
+  const child = require('child_process').spawn('gh', ['auth', 'login', '--web', '--hostname', 'github.com'],
+    { env: { ...terminalEnv(), GH_PROMPT_DISABLED: '1' }, windowsHide: true });
+  let out = '';
+  const login = ghLogin = { child };
+  login.done = new Promise(done => {
+    const finish = r => { resolve(r); done(r); };
+    child.on('error', err => finish({ error: err.code === 'ENOENT' ? 'Install the GitHub CLI (gh) to sign in.' : err.message }));
+    child.on('close', code => finish(code === 0 ? { ok: true } : { error: out.trim().split(/\r?\n/).pop() || 'Sign-in was cancelled.' }));
+  });
+  const onData = d => {
+    out += d;
+    const m = /\b([A-Z0-9]{4}-[A-Z0-9]{4})\b/.exec(out);
+    if (m) resolve({ code: m[1] }); // later calls are no-ops
+  };
+  child.stdout.on('data', onData); child.stderr.on('data', onData);
+  child.stdin.end();
+}));
+// The Pull requests page: every open PR of the GitHub repos behind the given project folders (the threads' projects).
+const PR_FIELDS = 'number,title,url,author,isDraft,createdAt,updatedAt,headRefName,labels,reviewDecision,reviewRequests';
+ipcMain.handle('github:all-pull-requests', async (_e, cwds) => {
+  if (!Array.isArray(cwds)) return { error: 'No projects.' };
+  const dirs = [...new Set(cwds.filter(d => typeof d === 'string' && path.isAbsolute(d)))];
+  const discovered = new Set();
+  for (let i = 0; i < dirs.length; i += 20) {
+    for (const repo of await Promise.all(dirs.slice(i, i + 20).map(githubRepo))) {
+      if (repo) discovered.add(repo);
+    }
+  }
+  const repos = [...discovered].sort();
+  if (!repos.length) return { repos, pulls: [] };
+  const home = require('os').homedir();
+  const me = await runGitHub(home, ['api', 'user', '--jq', '.login']);
+  if (me.error) return /gh auth login/.test(me.error) ? { auth: true, error: 'Sign in to GitHub to see pull requests.' } : { error: me.error };
+  const results = await Promise.all(repos.map(repo => runGitHub(home, ['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])));
+  const pulls = [], errors = [];
+  results.forEach((r, i) => {
+    try { if (r.error) throw Error(r.error); for (const pr of JSON.parse(r.out)) if (/^https:\/\//i.test(pr.url)) pulls.push({ ...pr, repo: repos[i] }); }
+    catch (err) { errors.push(`${repos[i]}: ${err.message}`); }
+  });
+  return { me: me.out.trim(), repos, pulls, errors };
+});
+ipcMain.handle('github:login-wait', () => ghLogin?.done || { error: 'No sign-in in progress.' });
+ipcMain.handle('github:login-cancel', () => { ghLogin?.child.kill(); });
+ipcMain.handle('github:login-open', () => shell.openExternal('https://github.com/login/device'));
 ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
   if (!cwd || typeof cwd !== 'string' || typeof branch !== 'string' || !branch || branch.startsWith('-')) return { ok: false, error: 'Invalid branch' };
   const r = await runGit(cwd, ['switch', branch]);
@@ -1375,12 +1446,13 @@ ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
 ipcMain.handle('chat:title', async (_e, harness, text) => {
   if (typeof text !== 'string' || !text.trim()) return null;
   const prompt = 'Write a 3-6 word title for a coding chat that starts with the message below. Reply with the title only: no quotes, no trailing period.\n\nMessage:\n' + text.slice(0, 2000);
-  const env = terminalEnv(), bin = require('./threads').detectAgents([harness], env)[harness];
+  if (harness !== 'claude' && harness !== 'codex') return null;
+  const env = providers.envFor(harness, terminalEnv()), bin = providers.detect([harness], env)[harness];
   let args;
   if (harness === 'claude') args = ['-p', '--output-format', 'text', '--model', 'haiku', '--effort', 'low', '--tools', '', '--no-session-persistence', '--setting-sources', '', prompt];
   else if (harness === 'codex') {
     let small = null;
-    try { small = JSON.parse(fs.readFileSync(path.join(require('os').homedir(), '.codex', 'models_cache.json'), 'utf8')).models
+    try { small = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex'), 'models_cache.json'), 'utf8')).models
       .find(m => m.visibility === 'list' && /luna|mini|nano/.test(m.slug))?.slug; } catch {}
     args = ['exec', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '-c', 'model_reasoning_effort="low"', ...(small ? ['-m', small] : []), prompt];
   }
@@ -1410,7 +1482,7 @@ let defaultShellId = '';
 ipcMain.on('shell:set-default', (_e, id) => { defaultShellId = String(id || ''); });
 ipcMain.handle('shell:list', () => listShells(true).map(({ id, label }) => ({ id, label })));
 
-function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId, shell: shellId, restoreOnly }) {
+function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId, shell: shellId, restoreOnly, provider }) {
   if (restoreOnly === true && ptys.has(id)) return true;
   let startup;
   try {
@@ -1450,7 +1522,10 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
     // A tab opened with a specific shell (tab bar menu): only ids of detected shells resolve.
     const profile = executable || argv?.length ? null : findShell(typeof shellId === 'string' ? shellId : '') || findShell(defaultShellId);
     const shell = profile?.command || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
-    const env = terminalEnv();
+    // An agent the chat starts gets its provider's env vars and launch arguments (Settings > Providers).
+    const agent = executable && typeof provider === 'string' ? provider : null;
+    const env = agent ? providers.envFor(agent, terminalEnv()) : terminalEnv();
+    if (agent) argv = [...(argv || []), ...providers.argsFor(agent)];
     startup = executable || argv?.length ? { args: [], env: {}, tmpDir: null } : prepareShellStartup(shell, env);
     const shellArgs = [...(profile?.args || []), ...(!cwdRequested && profile?.homeArgs || []), ...startup.args];
     const t = pty.spawn(resolveExecutable(executable || shell), argv && argv.length ? argv : shellArgs, {
@@ -1564,8 +1639,12 @@ ipcMain.handle('terminal:hasRunningProcess', (_e, id, fresh) => {
 // Chat tabs' Claude Code / Codex sessions, driven through their structured protocols (chat-sdk.js).
 require('./chat-sdk').register(ipcMain, {
   send: sendToRenderer, version: app.getVersion(), dataDir: CONFIG_DIR,
-  env: key => ({ ...terminalEnv(), TERMINALVIBE_PANE_ID: key, ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}) }),
+  env: (key, harness) => ({ ...providers.envFor(harness, terminalEnv()), TERMINALVIBE_PANE_ID: key, ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}) }),
+  args: harness => providers.argsFor(harness),
 });
+// Settings > Providers (providers.js).
+ipcMain.handle('providers:status', (_e, names) => providers.status(names, terminalEnv()));
+ipcMain.handle('providers:save', (_e, config) => providers.save(config));
 ipcMain.on('terminal:kill-all', () => {
   require('./chat-sdk').stopAll();
   notifyBusy.clear(); ptyIO.clear();

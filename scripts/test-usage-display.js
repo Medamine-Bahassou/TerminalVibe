@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'app.js'), 'utf8');
-const sidebar = { innerHTML: '', setAttribute() {}, classList: { contains: () => false, remove() {}, toggle() {} } }, body = { innerHTML: '' };
+const body = { innerHTML: '' };
 const threadSettings = { usageDisplay: 'consumed' };
 const storage = new Map();
 let reads = 0;
@@ -13,41 +13,19 @@ const context = vm.createContext({
     reads++;
     return { codex: { windows } };
   } } },
-  document: { getElementById: () => sidebar },
   localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
   harnessOf: () => ({ name: 'Codex', bin: 'codex' }), procIconHtml: () => '', escHtml: String,
 });
 vm.runInContext(source.slice(source.indexOf('  const fmtLeft ='), source.indexOf('  async function loadUsageModal(')), context);
 vm.runInContext('_usageModal = { querySelector: selector => selector === ".um-body" ? body : null };', context);
+const shows = pct => body.innerHTML.includes(`um-num">${pct}%</span>`);
 (async () => {
   await context.refreshUsageLimits(true);
-  assert(sidebar.innerHTML.includes('--p:23') && sidebar.innerHTML.includes('23%'));
-  assert(sidebar.innerHTML.includes('97% consumed'));
-  assert(body.innerHTML.includes('97%</span>') && body.innerHTML.includes('consumed'));
+  assert(shows(97) && shows(23) && body.innerHTML.includes('consumed'), 'the modal shows every window, consumed');
   threadSettings.usageDisplay = 'remaining';
-  context.renderUsageSidebar(); context.renderUsageModal();
-  assert(sidebar.innerHTML.includes('--p:77') && sidebar.innerHTML.includes('77% remaining'));
-  assert(sidebar.innerHTML.includes('77% remaining'), 'tooltip converts every window');
-  assert(!sidebar.innerHTML.includes('sb-usage-item full'), 'warnings reflect the displayed weekly quota');
-  assert(body.innerHTML.includes('3%</span>') && body.innerHTML.includes('width:3%'));
-  assert(body.innerHTML.includes('remaining'));
+  context.renderUsageModal();
+  assert(shows(3) && shows(77) && body.innerHTML.includes('width:3%') && body.innerHTML.includes('remaining'), 'remaining mode converts every window');
   assert.equal(reads, 1, 'changing display reuses cached limits');
-  windows = [{ label: 'Session', used: 2 }, { label: 'Weekly', used: 97 }];
-  threadSettings.usageDisplay = 'consumed';
-  await context.refreshUsageLimits(true);
-  assert(sidebar.innerHTML.includes('--p:97"') && sidebar.innerHTML.includes('sb-usage-pct">97%'), 'sidebar must show weekly usage even when session usage is lower');
-  assert(sidebar.innerHTML.includes('Session: 2% consumed') && sidebar.innerHTML.includes('Weekly: 97% consumed'), 'tooltip must identify the displayed window and retain weekly limits');
-  assert(sidebar.innerHTML.includes('sb-usage-item full'), 'ring warnings must match the displayed weekly quota');
-  threadSettings.usageDisplay = 'remaining'; context.renderUsageSidebar();
-  assert(sidebar.innerHTML.includes('--p:3"') && sidebar.innerHTML.includes('sb-usage-pct">3%'), 'remaining mode must show remaining weekly quota');
-  windows = [{ label: 'Weekly · Opus', used: 100, mins: 10080 }, { label: 'Weekly', used: 15, mins: 10080 }, { label: 'Session', used: 90, mins: 300 }];
-  threadSettings.usageDisplay = 'consumed';
-  await context.refreshUsageLimits(true);
-  assert(sidebar.innerHTML.includes('--p:15"'), 'shared weekly quota takes precedence over model-specific weekly limits');
-  threadSettings.usageDisplay = 'remaining';
-  windows = [{ label: 'Model A', used: 5 }, { label: 'Model B', used: 70 }];
-  await context.refreshUsageLimits(true);
-  assert(sidebar.innerHTML.includes('Model B: 30% remaining'), 'model-only providers must identify their selected model window');
   let finishOld, finishNew;
   context.window.electronAPI.usageLimits = () => new Promise(resolve => { finishOld = resolve; });
   const oldRequest = context.refreshUsageLimits(true);
@@ -55,15 +33,15 @@ vm.runInContext('_usageModal = { querySelector: selector => selector === ".um-bo
   const newRequest = context.refreshUsageLimits(true, true);
   finishNew({ codex: { windows: [{ label: 'Weekly', used: 40 }] } }); await newRequest;
   finishOld({ codex: { windows: [{ label: 'Weekly', used: 1 }] } }); await oldRequest;
-  assert(sidebar.innerHTML.includes('--p:60"'), 'a slow older reading must not overwrite a fresh reading');
-  vm.runInContext('_usageLimits = readUsageCache(); renderUsageSidebar();', context);
-  assert(sidebar.innerHTML.includes('--p:60"'), 'a restart must show the last saved quota before refreshing');
+  assert(shows(60), 'a slow older reading must not overwrite a fresh reading');
+  vm.runInContext('_usageLimits = readUsageCache(); renderUsageModal();', context);
+  assert(shows(60), 'a restart must show the last saved quota before refreshing');
   context.window.electronAPI.usageLimits = async () => ({});
   await context.refreshUsageLimits(true);
-  assert(sidebar.innerHTML.includes('--p:60"'), 'an empty refresh must keep the last known quota');
+  assert(shows(60), 'an empty refresh must keep the last known quota');
   context.window.electronAPI.usageLimits = async () => ({ codex: { windows: [{ label: 'Weekly', used: 25 }] } });
   await context.refreshUsageLimits(true);
-  assert(sidebar.innerHTML.includes('--p:75"'), 'a successful refresh must replace the restored quota');
+  assert(shows(75), 'a successful refresh must replace the restored quota');
   assert.equal(JSON.parse(storage.get('tv-usage-limits')).codex.windows[0].used, 25);
   console.log('Usage display and restart cache checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
