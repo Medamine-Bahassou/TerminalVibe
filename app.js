@@ -10714,20 +10714,25 @@
   }
   // Live markdown in the composer: styles the text but keeps every character (markers dimmed),
   // so the draft, caret offsets and what is sent stay exactly as typed.
+  const ultrathinkWord = /(\bultrathink\b)/;
+  function chatDraftTextHtml(text) {
+    return text.split(ultrathinkWord).map((part, i) => i % 2
+      ? '<span class="thr-ultrathink">ultrathink</span>' : escHtml(part)).join('');
+  }
   function mdInputHtml(s, lineStart = true) {
     const mark = t => `<span class="md-mark">${escHtml(t)}</span>`;
     const inline = t => {
       const re = /(`+)([^`\n]+?)\1|(\*\*|__)(?=\S)([^\n]*?\S)\3|~~(?=\S)([^\n]*?\S)~~|(?<![\w*])(\*|_)(?=[^\s*_])([^\n*_]*?[^\s*_])\6(?![\w*])|\[([^\]\n]+)\]\(([^)\s]+)\)/g;
       let out = '', last = 0;
       for (const x of t.matchAll(re)) {
-        out += escHtml(t.slice(last, x.index)); last = x.index + x[0].length;
+        out += chatDraftTextHtml(t.slice(last, x.index)); last = x.index + x[0].length;
         if (x[1]) out += `<span class="md-code">${mark(x[1])}${escHtml(x[2])}${mark(x[1])}</span>`;
         else if (x[3]) out += `<span class="md-strong">${mark(x[3])}${inline(x[4])}${mark(x[3])}</span>`;
         else if (x[5]) out += `<span class="md-del">${mark('~~')}${inline(x[5])}${mark('~~')}</span>`;
         else if (x[6]) out += `<span class="md-em">${mark(x[6])}${inline(x[7])}${mark(x[6])}</span>`;
-        else out += `<span class="md-link">${mark('[')}${escHtml(x[8])}${mark('](')}<span class="md-url">${escHtml(x[9])}</span>${mark(')')}</span>`;
+        else out += `<span class="md-link">${mark('[')}${chatDraftTextHtml(x[8])}${mark('](')}<span class="md-url">${escHtml(x[9])}</span>${mark(')')}</span>`;
       }
-      return out + escHtml(t.slice(last));
+      return out + chatDraftTextHtml(t.slice(last));
     };
     let fence = false;
     return s.split('\n').map((line, i) => {
@@ -10818,7 +10823,7 @@
     const markup = (tokens.length ? input.value.split(new RegExp(`(${tokens.join('|')})`, 'g')) : [input.value]).map(part => {
       const file = references.get(part), lineStart = !at || input.value[at - 1] === '\n';
       at += part.length;
-      if (!file) return md ? mdInputHtml(part, lineStart) : escHtml(part);
+      if (!file) return md ? mdInputHtml(part, lineStart) : chatDraftTextHtml(part);
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
         + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
@@ -11082,7 +11087,9 @@
         const count = _chatFiles.length;
         _chatFiles = _chatFiles.filter(file => !(file.cite || file.at || file.thread) || !file.mention || thrInput.value.includes(file.mention));
         editor._draftValue = thrInput.value;
-        if (threadSettings.markdown !== 'off' && !e.isComposing) { editor._draftValue = null; syncChatInputLinks(); }
+        if (!e.isComposing && (threadSettings.markdown !== 'off' || ultrathinkWord.test(thrInput.value) || editor.querySelector('.thr-ultrathink'))) {
+          editor._draftValue = null; syncChatInputLinks();
+        }
         if (!thrInput.value) { editor.replaceChildren(); restoreChatEditorSelection(editor); }
         if (_chatFiles.length !== count) renderChatFiles();
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));

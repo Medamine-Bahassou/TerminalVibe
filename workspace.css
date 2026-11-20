@@ -1810,6 +1810,14 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 #sbr-thread .thr-input-wrap textarea { display:none; }
 #sbr-thread .thr-input-links { position:relative; inset:auto; min-height:44px; max-height:240px; padding:0 6px 0 0; overflow:auto; outline:none; white-space:pre-wrap; overflow-wrap:break-word; pointer-events:auto; }
 #sbr-thread .thr-input-links[data-empty="true"]::before { content:attr(data-placeholder); color:var(--dim-text); pointer-events:none; }
+#sbr-thread .thr-ultrathink {
+  color:transparent; caret-color:var(--fg); background:linear-gradient(90deg,
+    #f28ca8, #f6b477, #f1d880, #a9d78c, #89ccea, #bf9aeb, #f28ca8);
+  background-size:200% 100%; background-clip:text;
+  animation:thr-ultrathink 2s linear infinite;
+}
+@keyframes thr-ultrathink { to { background-position:200% 0; } }
+@media (prefers-reduced-motion:reduce) { #sbr-thread .thr-ultrathink { animation:none; background-size:100% 100%; } }
 #sbr-thread .thr-inline-ref { display:inline-flex; align-items:baseline; vertical-align:baseline; gap:4px; max-width:100%; white-space:nowrap; color:var(--accent); }
 #sbr-thread .thr-inline-ref a { display:inline-flex; align-items:baseline; gap:4px; min-width:0; color:var(--accent); text-decoration:none; cursor:pointer; }
 #sbr-thread .thr-inline-ref a:hover { text-decoration:underline; text-underline-offset:3px; }
