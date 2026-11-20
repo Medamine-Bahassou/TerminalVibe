@@ -8657,19 +8657,30 @@
     }
     let el = flow.querySelector('.thr-working');
     if (!w) { el?.remove(); renderChatQueue(ws, surface); renderChatResume(ws, surface); return; }
-    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
-    if (!el) { el = document.createElement('div'); el.className = 'thr-working'; el.setAttribute('role', 'status'); }
     const queue = threadPart(surface, 'queue');
-    if (queue) { if (el.nextElementSibling !== queue) flow.insertBefore(el, queue); }
-    else if (el !== flow.lastElementChild) flow.appendChild(el);
-    el.classList.toggle('wait', !!w.wait);
-    el.classList.toggle('lock', !!w.lock);
+    const moved = !el || (queue ? el.nextElementSibling !== queue : el !== flow.lastElementChild);
     const html = w.lock ? `<i class="ph ph-lock-simple" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
         + `<span class="thr-lock-actions">${window.electronAPI?.releaseAgentSession ? '<button type="button" class="thr-lock-btn primary" data-lock-act="take">Take over</button>' : ''}`
-        + `<button type="button" class="thr-lock-btn" data-lock-act="retry">Retry</button></span>`
+        + '<button type="button" class="thr-lock-btn" data-lock-act="retry">Retry</button></span>'
       : w.wait ? `<i class="ph ph-hand-pointing" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
-      : `<span class="thr-shimmer">${escHtml(w.label)}</span><span class="thr-working-time">${fmtSecs(Math.max(0, Math.round((Date.now() - w.since) / 1000)))}</span>`;
-    if (el._html !== html) { el._html = html; el.innerHTML = html; }
+      : `<span class="thr-shimmer">${escHtml(w.label)}</span><span class="thr-working-time"></span>`;
+    const changed = !el || el._html !== html || el.classList.contains('wait') !== !!w.wait || el.classList.contains('lock') !== !!w.lock;
+    // An existing timer tick doesn't change the row's height. Reading scroll geometry
+    // here would force a layout of the newly selected transcript.
+    const atBottom = (moved || changed) && flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
+    if (!el) { el = document.createElement('div'); el.className = 'thr-working'; el.setAttribute('role', 'status'); }
+    if (moved) flow.insertBefore(el, queue);
+    if (changed) {
+      el.classList.toggle('wait', !!w.wait);
+      el.classList.toggle('lock', !!w.lock);
+      el._html = html;
+      el.innerHTML = html;
+    }
+    const timer = el.querySelector('.thr-working-time');
+    if (timer) {
+      const elapsed = fmtSecs(Math.max(0, Math.round((Date.now() - w.since) / 1000)));
+      if (timer.textContent !== elapsed) timer.textContent = elapsed;
+    }
     if (atBottom) flow.scrollTop = flow.scrollHeight;
     renderChatQueue(ws, surface);
     renderChatResume(ws, surface);
@@ -8955,17 +8966,12 @@
     page.dataset.chat = tab.id;
     if (force) _flowSig = '';
     const cached = !!_flowSig && (prev === tab || !!snapshot);
-    const refreshWorkingChat = prev !== tab && cached && !!chatWorking(tab);
-    const updateFind = prev !== tab && !!thrFind.q;
-    if (refreshWorkingChat || updateFind) {
-      // Give Chromium a rendering opportunity before scanning or refreshing the transcript.
+    if (prev !== tab && thrFind.q) {
       requestAnimationFrame(() => setTimeout(() => {
-        if (page._threadRefreshToken !== refreshToken || page.parentElement !== tab.el) return;
-        if (updateFind && thrFind.q) thrFindRun(true);
-        if (refreshWorkingChat) refreshThreadFlow(tab);
+        if (page._threadRefreshToken === refreshToken && page.parentElement === tab.el && thrFind.q) thrFindRun(true);
       }, 0));
     }
-    // The regular poll refreshes idle cached chats if they stay selected.
+    // Refresh a cached transcript on the normal poll if its tab stays selected.
     if (!cached) refreshThreadFlow(tab);
     syncThreadComposer(tab);
     // On startup, sibling Chat panes have never owned the shared page. Give each its own
@@ -11851,22 +11857,25 @@
     thrSend.disabled = !stop && !typed && !resume;
     const scheduled = !editing && !typed && !working && !resume && c?.chat?.queuedMessages?.some(message => message.sendAt);
     const label = scheduling ? 'Schedule message' : scheduled ? 'Message scheduled' : editing ? 'Save queued message' : queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : resume ? 'Continue' : 'Send';
+    const sameTab = thrSend._tab === c;
+    thrSend._tab = c;
     if (thrSend.dataset.mode !== label) {
       thrSend.dataset.mode = label;
-      setSendIcon(queue ? queueIcon : `<i class="ph ${scheduling || scheduled ? 'ph-clock' : editing ? 'ph-check' : stop ? 'ph-stop' : working ? 'ph-arrow-elbow-up-right' : resume ? 'ph-play' : 'ph-arrow-up'}" aria-hidden="true"></i>`);
+      setSendIcon(queue ? queueIcon : `<i class="ph ${scheduling || scheduled ? 'ph-clock' : editing ? 'ph-check' : stop ? 'ph-stop' : working ? 'ph-arrow-elbow-up-right' : resume ? 'ph-play' : 'ph-arrow-up'}" aria-hidden="true"></i>`, sameTab);
       thrSend.setAttribute('aria-label', label);
       thrSend.dataset.tip = scheduling ? 'Schedule message (Alt+Enter)' : scheduled ? 'Message scheduled' : editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter) · Schedule (Alt+Enter)' : resume ? 'Continue (Enter)' : 'Send (Enter) · Schedule (Alt+Enter)';
     }
   }
-  function setSendIcon(html) {
-    const previous = thrSend.querySelector('.thr-send-icon:not(.leaving)');
-    const animate = previous && document.body.classList.contains('ui-animations') && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const state = animate ? getComputedStyle(previous) : null;
-    const from = state ? { opacity: state.opacity, transform: state.transform } : null;
-    thrSend.querySelectorAll('.thr-send-icon').forEach(icon => icon.getAnimations().forEach(animation => animation.cancel()));
-    thrSend.querySelectorAll('.thr-send-icon.leaving').forEach(icon => icon.remove());
+  function setSendIcon(html, animateChange = true) {
     const next = document.createElement('span'); next.className = 'thr-send-icon'; next.setAttribute('aria-hidden', 'true'); next.innerHTML = html;
-    if (!animate) { thrSend.replaceChildren(next); return; }
+    const previous = animateChange && thrSend.querySelector('.thr-send-icon:not(.leaving)');
+    if (!previous || !document.body.classList.contains('ui-animations') || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      thrSend.replaceChildren(next);
+      return;
+    }
+    const state = getComputedStyle(previous);
+    const from = { opacity: state.opacity, transform: state.transform };
+    thrSend.querySelectorAll('.thr-send-icon').forEach(icon => icon.getAnimations().forEach(animation => animation.cancel()));
     previous.classList.add('leaving');
     thrSend.replaceChildren(previous, next);
     const options = { duration: 160, easing: 'cubic-bezier(.2,.8,.2,1)' };
@@ -12152,15 +12161,12 @@
     const queue = ws.chat?.queuedMessages || [], paused = !!ws.chat?.queuePaused;
     let box = threadPart(surface, 'queue');
     if (!queue.length && (!box || box.hidden)) return;
-    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     if (!box) {
       box = document.createElement('div'); box.className = 'thr-queue';
       if (surface === thrPage) box.id = 'sbr-thread-queue'; else box.dataset.thrId = 'sbr-thread-queue';
       box.setAttribute('aria-label', 'Queued messages');
     }
-    if (box.parentElement !== flow || box !== flow.lastElementChild) flow.appendChild(box);
     hydrateChatFiles(queue.flatMap(message => message.files || []), () => updateChatQueue(ws));
-    box.hidden = !queue.length;
     const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
     const html = header + queue.map(m => {
       const label = queuedMessageTextHtml(m);
@@ -12171,7 +12177,15 @@
       return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"><div class="thr-queued-bubble">${schedule}${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${label}</div></div>`
         + '<div class="thr-queued-actions"><button type="button" data-queue-act="send" aria-label="Send queued message now"><i class="ph ph-arrow-up" aria-hidden="true"></i><span>Send now</span></button><button type="button" data-queue-act="edit" aria-label="Edit queued message"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button><button type="button" data-queue-act="remove" aria-label="Remove queued message"><i class="ph ph-x" aria-hidden="true"></i></button></div></div>';
     }).join('');
-    if (box._queueHtml !== html) { box.innerHTML = html; box._queueHtml = html; }
+    const moved = box.parentElement !== flow || box !== flow.lastElementChild;
+    const changed = box._queueHtml !== html || box.hidden !== !queue.length;
+    const atBottom = (moved || changed) && flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
+    if (moved) flow.appendChild(box);
+    if (changed) {
+      box.hidden = !queue.length;
+      box.innerHTML = html;
+      box._queueHtml = html;
+    }
     updateScheduleCountdowns(box);
     if (atBottom) flow.scrollTop = flow.scrollHeight;
   }
@@ -13069,7 +13083,8 @@
     const api = window.electronAPI;
     const segs = threadSegments(ws);
     const current = () => flow.parentElement === surface && ws.chat?.storeId === storeId
-      && (surface === thrPage ? curChat() === ws : surface.isConnected && surface.parentElement === ws.el);
+      && (surface === thrPage ? curChat() === ws : surface.isConnected && surface.parentElement === ws.el
+        && ws.el.style.display !== 'none' && ws.el.closest('.ws-pane-container')?.style.display !== 'none');
     let hist = [], note = '';
     if (segs.length && !api?.threadHistory) note = 'The history preview needs the desktop app.';
     else if (segs.length) {
