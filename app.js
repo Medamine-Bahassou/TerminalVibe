@@ -13305,9 +13305,9 @@
           other && `${commands ? 'used' : 'Used'} ${other} tool${other === 1 ? '' : 's'}`,
           files && `changed ${files} file${files === 1 ? '' : 's'}`,
         ].filter(Boolean).join(' and ');
-        const title = completed ? label : `${last.name} ${last.summary}`;
+        const title = completed ? escHtml(label) : `<span class="thr-shimmer">${escHtml(`${last.name} ${last.summary}`)}</span>`;
         return `<details class="thr-tools" data-key="${key}"><summary><i class="ph ${completed ? 'ph-hammer' : toolIcon(last.name)}" aria-hidden="true"></i>`
-          + `<span class="thr-tools-text">${escHtml(title)}</span>${!completed && tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
+          + `<span class="thr-tools-text">${title}</span>${!completed && tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
           + `${completed ? '' : `<span class="thr-tools-time">${clockTime(last.ts)}</span>`}<i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><template><div class="thr-tool-list">`
           // Each call expands to its command, arguments, or recorded file changes.
           + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${toolTimestampHtml(x.ts)}${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
