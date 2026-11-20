@@ -1394,12 +1394,6 @@ ipcMain.handle('chat:title', async (_e, harness, text) => {
   const title = out.trim().split('\n').pop().trim().replace(/^["'`*#\s]+|["'`*.\s]+$/g, '');
   return title && title.length <= 80 ? title : null;
 });
-// Warm the transcript image indexes after launch, so the first "[Image #N]" hover is quick too.
-setTimeout(() => {
-  const sessions = require('./claude-sessions');
-  sessions.findClaudeImage({ n: 1, prompt: ' ' }).catch(() => {});
-  sessions.findCodexImage({ n: 1, prompt: '-' }).catch(() => {});
-}, 5000).unref?.();
 ipcMain.handle('terminal:session-context', (event, id, sessionId) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized chat target');
   return require('./session-context').attachSessionContext({sessionId,
@@ -1416,7 +1410,8 @@ let defaultShellId = '';
 ipcMain.on('shell:set-default', (_e, id) => { defaultShellId = String(id || ''); });
 ipcMain.handle('shell:list', () => listShells(true).map(({ id, label }) => ({ id, label })));
 
-function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId, shell: shellId }) {
+function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId, shell: shellId, restoreOnly }) {
+  if (restoreOnly === true && ptys.has(id)) return true;
   let startup;
   try {
     if (replaceIdle && ptys.has(id) && !canReplaceSession(runningProcessInfo(ptys.get(id).pid), replaceClaude === true)) return false;

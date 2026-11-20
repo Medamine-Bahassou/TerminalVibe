@@ -31,7 +31,7 @@ console.log('PASS: pre-exec Electron/Node filtering, idle shells, foreground Cla
   const close=async()=>{
     if(!terminal)return;
     const current=terminal;terminal=null;
-    await new Promise(resolve=>{const timer=setTimeout(resolve,1000);current.onExit(()=>{clearTimeout(timer);resolve();});current.kill();});
+    await new Promise(resolve=>{const timer=setTimeout(resolve,1000);current.onExit(()=>{clearTimeout(timer);resolve();});current.kill('SIGKILL');});
   };
   const ready=async marker=>{
     let output='';

@@ -1760,6 +1760,15 @@ body.ui-animations.resizing #threads-sidebar { transition:none; }
 .term-slot.chat-tab:not(.chat-cli) > .term-wrap { visibility:hidden; pointer-events:none; }
 .term-slot.chat-tab > #sbr-thread { position:absolute; inset:0; z-index:2; }
 .term-slot.chat-cli > .thr-snapshot { display:none !important; }
+/* Keep only the last inactive chat's layout. Its absolute slot takes no pane space. */
+.term-slot.chat-keep-layout:not(.chat-cli)[style*="display: none"] {
+  display:block !important;
+  visibility:hidden;
+  pointer-events:none;
+}
+.term-slot.chat-keep-layout[style*="display: none"] > :not(.thr-snapshot) {
+  display:none !important;
+}
 
 /* Follow-up messages stay above the draft until their turn is ready. */
 #sbr-thread .thr-queue { display:flex; flex-direction:column; gap:4px; max-height:180px; overflow:auto; padding-bottom:8px; border-bottom:1px solid var(--ui-line); }
@@ -2336,18 +2345,8 @@ body #settings-modal .custom-dropdown-menu {
 #usage-modal .um-bar { height:36px; }
 @media (max-width:640px) { #usage-modal .um-card { grid-template-columns:1fr; gap:12px; padding:16px; } }
 
-/* Usage widget: shown from startup with empty rings (.loading); the first reading fades in (.reveal) — the % fades,
-   the ring sweeps from empty (--p is registered so it can animate). */
+/* Register the ring value so usage changes can animate. */
 @property --p { syntax:'<number>'; inherits:true; initial-value:0; }
-#threads-sidebar .ts-usage.loading .sb-usage-logo { opacity:.55; }
-/* Loading: no % line, so the rings sit centered in the row. On reveal the line grows open (its negative margin
-   cancels the item's 4px gap at the start), so the rings glide up as the % fades in. */
-#threads-sidebar .ts-usage.loading .sb-usage-pct { display:none; }
-@keyframes sb-usage-pct-in { from { opacity:0; max-height:0; margin-top:-4px; } to { opacity:1; max-height:12px; margin-top:0; } }
-@keyframes sb-usage-ring-in { from { --p:0; } }
-#threads-sidebar .ts-usage.reveal .sb-usage-pct { overflow:hidden; animation:sb-usage-pct-in 360ms cubic-bezier(.2,.8,.2,1) both; }
-#threads-sidebar .ts-usage.reveal .sb-usage-item { animation:sb-usage-ring-in 600ms cubic-bezier(.2,.8,.2,1) both; }
-@media (prefers-reduced-motion: reduce) { #threads-sidebar .ts-usage.reveal :is(.sb-usage-pct, .sb-usage-item) { animation:none; } }
 
 /* Side chats tray: each row is the chat + a delete button at its right (shown on row hover / focus). */
 #sbr-thread .thr-sides:not(.collapsed) .thr-side-row { grid-column:1 / -1; display:flex; align-items:center; gap:2px; min-width:0; }

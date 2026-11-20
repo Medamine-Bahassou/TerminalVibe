@@ -9,6 +9,63 @@ const { prepareShellStartup } = require('../electron/shell-startup');
 // the PTY must not depend on a timer or animation frame (throttled offscreen).
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+const restoreLayout = vm.createContext({
+  _createTermEntry: (_, id) => ({ id, term: { options: {} } }),
+  shortTitle: cwd => cwd,
+});
+const deserializeStart = source.indexOf('  function deserializeLayout(');
+vm.runInContext(source.slice(deserializeStart, source.indexOf('  /* Backgrounds', deserializeStart)), restoreLayout);
+const [exited, running] = restoreLayout.deserializeLayout({ type: 'group', terminals: [
+  { id: 'exited', dead: true, keepOnExit: true },
+  { id: 'running' },
+] }, {}).terminals;
+assert(exited.dead && exited.term.options.disableStdin && !exited.pending, 'An exited pane kept on screen must not start a new shell on restore');
+assert(running.pending, 'Live shells must still restore');
+
+async function checkRestoredStartup() {
+  const visible = { id: 'visible', pending: true };
+  const background = { id: 'background', pending: true };
+  const typed = { id: 'typed', pending: true };
+  const closed = { id: 'closed', pending: true };
+  const command = { id: 'command', pending: true, runCmd: 'echo ready' };
+  const tabs = new Map([visible, background, typed, closed, command].map(tab => [tab.id, tab]));
+  const workspaces = [{ id: 'main' }];
+  const starts = [], writes = [], timers = [];
+  let finishTyped;
+  const fixture = vm.createContext({
+    workspaces, nativePtyReady: true, isDesktop: () => true,
+    window: { electronAPI: { terminalWrite: entry => writes.push(entry.id) } },
+    getWorkspaceTerminals: () => [...tabs.values()], activeWs: () => workspaces[0],
+    isTermOnScreen: (_, id) => id === visible.id,
+    findTermById: id => tabs.has(id) ? { term: tabs.get(id) } : null,
+    getSlotDimensions: () => ({ cols: 120, rows: 40 }),
+    sendControl: entry => {
+      starts.push(entry);
+      return entry.id === typed.id ? new Promise(resolve => { finishTyped = resolve; }) : Promise.resolve();
+    },
+    setTimeout: fn => timers.push(fn), clearTimeout() {},
+  });
+  const start = source.indexOf('  function restorePendingTerminal(');
+  vm.runInContext(source.slice(start, source.indexOf('  /* ', start)), fixture);
+  vm.runInContext(source.slice(source.indexOf('  function _sendStdinRaw('), source.indexOf('  function sendStdin(')), fixture);
+  fixture.restoreOrCreateInitial();
+  assert.deepEqual(starts.map(entry => entry.id), ['visible', 'command'], 'Visible and auto-run tabs start immediately');
+  fixture._sendStdinRaw(typed.id, new Uint8Array([65]));
+  assert.deepEqual(starts.map(entry => entry.id), ['visible', 'command', 'typed'], 'Input starts a pending hidden shell immediately');
+  assert.equal(writes.length, 0, 'Input waits for the restored shell');
+  finishTyped();
+  await typed._restoringPty;
+  assert.deepEqual(writes, ['typed'], 'Input reaches the restored shell');
+  tabs.delete(closed.id);
+  while (timers.length) timers.shift()();
+  assert.deepEqual(starts.map(entry => entry.id), ['visible', 'command', 'typed', 'background'], 'The background queue skips closed and started tabs');
+  assert.equal(starts.at(-1).cols, 80, 'Hidden startup does not measure a hidden terminal');
+}
+checkRestoredStartup().then(() => console.log('PASS: visible-first shell restore, deferred hidden shells and queued input')).catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
 const workspace = { id: 'workspace', layout: null };
 const controls = [], frames = [];
 let sequence = 0;

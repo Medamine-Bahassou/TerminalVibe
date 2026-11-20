@@ -2150,13 +2150,14 @@
     const entry = obj.type === 'create' ? findTermById(obj.id)?.term : null;
     const runCmd = entry && entry.runCmd;
     if (runCmd) delete entry.runCmd;
-    const typeCmd = () => {
+    const typeCmd = (write = _sendStdinRaw) => {
       if (entry) fitTerm(entry, true);
-      if (runCmd) _sendStdinRaw(obj.id, new TextEncoder().encode(runCmd + '\r'));
+      if (runCmd) write(obj.id, new TextEncoder().encode(runCmd + '\r'));
     };
     if (isDesktop() && window.electronAPI && nativePtyReady) {
       const api = window.electronAPI;
-      if (obj.type === 'create') api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null, inheritFromId: obj.inheritFromId, shell: entry?.shell || null }).then(typeCmd);
+      if (obj.type === 'create') return api.terminalCreate({ id: obj.id, cols: obj.cols, rows: obj.rows, cwd: obj.cwd || null, inheritFromId: obj.inheritFromId, shell: entry?.shell || null, restoreOnly: obj.restoreOnly })
+        .then(created => { if (created) typeCmd((id, data) => api.terminalWrite({ id, data })); });
       else if (obj.type === 'resize') api.terminalResize({ id: obj.id, cols: obj.cols, rows: obj.rows });
       else if (obj.type === 'close') api.terminalClose(obj.id);
       return;
@@ -2169,7 +2170,13 @@
 
   function _sendStdinRaw(sid, data) {
     if (isDesktop() && window.electronAPI && nativePtyReady) {
-      window.electronAPI.terminalWrite({ id: sid, data });
+      const entry = findTermById(sid)?.term;
+      if (entry?.pending) restorePendingTerminal(entry);
+      if (entry?._restoringPty) {
+        entry._restoringPty.then(() => {
+          if (findTermById(sid)?.term === entry) window.electronAPI.terminalWrite({ id: sid, data });
+        });
+      } else window.electronAPI.terminalWrite({ id: sid, data });
       return;
     }
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -2269,25 +2276,43 @@
     restoreOrCreateInitial();
   }
 
-  // Create initial workspace or restore pending terminals after the PTY backend is ready
+  function restorePendingTerminal(entry, hidden = false) {
+    if (!entry?.pending) return;
+    entry.pending = false;
+    const { cols, rows } = hidden ? { cols: 80, rows: 24 } : getSlotDimensions(entry);
+    const started = sendControl({ type: 'create', id: entry.id, cols, rows, cwd: entry.cwd || null, argv: entry.argv || [], restoreOnly: true });
+    if (started) entry._restoringPty = started.catch(error => {
+      console.error('[terminal] Could not restore terminal', error);
+    }).finally(() => { delete entry._restoringPty; });
+  }
+
+  // Restore visible shells first, then spread hidden shell launches across ticks.
+  let backgroundRestoreTimer;
   function restoreOrCreateInitial() {
-    if (workspaces.length) {
-      for (const wsp of workspaces) {
-        const terms = getWorkspaceTerminals(wsp);
-        for (const t of terms) {
-          if (t.pending) {
-            const slot = getSlotDimensions(t);
-            sendControl({ type: 'create', id: t.id, cols: slot.cols, rows: slot.rows, cwd: t.cwd || null, argv: t.argv || [] });
-            t.pending = false;
-          }
-        }
-      }
-      // Never start on an empty workspace: give it its terminal now that the backend is up.
-      if (!workspaces.length) { try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); } }
-      else if (!getWorkspaceTerminals(activeWs() || {}).length) renderPaneArea();
-    } else {
+    clearTimeout(backgroundRestoreTimer);
+    if (!workspaces.length) {
       try { createWorkspace('Main'); } catch (e) { console.error('createWorkspace failed:', e); }
+      return;
     }
+    const background = [];
+    for (const wsp of workspaces) {
+      for (const entry of getWorkspaceTerminals(wsp)) {
+        if (!entry.pending) continue;
+        if (!nativePtyReady || isTermOnScreen(wsp, entry.id) || entry.runCmd || entry.argv?.length) restorePendingTerminal(entry);
+        else background.push(entry);
+      }
+    }
+    const startNext = () => {
+      while (background.length) {
+        const entry = background.shift();
+        if (!entry.pending || findTermById(entry.id)?.term !== entry) continue;
+        restorePendingTerminal(entry, true);
+        if (background.length) backgroundRestoreTimer = setTimeout(startNext, 100);
+        break;
+      }
+    };
+    if (background.length) backgroundRestoreTimer = setTimeout(startNext, 180);
+    if (!getWorkspaceTerminals(activeWs() || {}).length) renderPaneArea();
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -2802,7 +2827,7 @@
           // before rendering, without waiting for shell startup or PTY output.
           const label = tData.pinLabel || tData.argv ? tData.label : shortTitle(tData.cwd || 'Terminal');
           entry = _createTermEntry(ws, tData.id, label);
-          entry.pending = true;
+          entry.pending = !tData.dead;
         }
         if (tData.color) entry.color = tData.color;
         if (tData.cwd) entry.cwd = tData.cwd;
@@ -2810,7 +2835,10 @@
         if (typeof tData.shell === 'string') entry.shell = tData.shell;
         if (tData.cmd) entry.runCmd = tData.cmd; // auto-run launch only; never serialized
         if (tData.bgImage) entry.bgImage = tData.bgImage;
-        if (tData.dead) entry.dead = true;
+        if (tData.dead) {
+          entry.dead = true;
+          if (entry.term) entry.term.options.disableStdin = true;
+        }
         if (tData.agentManaged) entry.agentManaged = true;
         if (tData.keepOnExit) entry.keepOnExit = true;
         if (tData.locked) entry.locked = true;
@@ -3824,6 +3852,11 @@
     }
 
     container.style.display = 'block';
+    if (nativePtyReady) {
+      for (const entry of getWorkspaceTerminals(wsp)) {
+        if (entry.pending && isTermOnScreen(wsp, entry.id)) restorePendingTerminal(entry);
+      }
+    }
     syncThreadPanel(); // restore chat surfaces after their slots have been reattached
 
     // A freshly built container (or a cached one from a previous session) has no
@@ -3848,7 +3881,7 @@
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (!isCurrentPane()) return;
       const all = getWorkspaceTerminals(wsp);
-      all.forEach(fitTerm);
+      all.forEach(term => fitTerm(term));
       clearSlotFocus();
       const active = all.find(x => x.id === wsp.activeTermId);
       if (active && active.el) {
@@ -3862,7 +3895,7 @@
       if (!isCurrentPane()) return;
       syncBrowserSlots();
       const all = getWorkspaceTerminals(wsp);
-      all.forEach(fitTerm);
+      all.forEach(term => fitTerm(term));
     }, 120);
     // Fallback: _termFitObserver catches most flex settles, but a forced
     // second pass handles cases where the slot was observed while still at
@@ -3870,7 +3903,7 @@
     setTimeout(() => {
       if (!isCurrentPane()) return;
       const all = getWorkspaceTerminals(wsp);
-      all.forEach(fitTerm);
+      all.forEach(term => fitTerm(term));
       syncBrowserSlots();
     }, 350);
   }
@@ -5110,13 +5143,6 @@
     if (target?._closePending) return;
     wsp.activeTermId = termId;
     pluginEmit('terminal:activate', { wsId, termId });
-    const chatEntry = target?.threadHistory && target;
-    if (chatEntry) queueMicrotask(() => {
-      if (activeWsId !== wsId || wsp.activeTermId !== termId || (curChat() === chatEntry && thrPage.parentElement === chatEntry.el)) return;
-      _preferChat = chatEntry;
-      syncThreadPanel();
-    });
-
     const group = findGroupContainingTerm(wsp.layout, termId);
     if (group) {
       // Track activation history (stack) for LIFO tab switching
@@ -5126,6 +5152,7 @@
       group.activeTermId = termId;
     }
 
+    let activeGroupEl;
     if (activeWsId === wsId) {
       // Lightweight update: toggle visibility without rebuilding the DOM
       // (preserves browser tab state, iframe content, etc.)
@@ -5139,8 +5166,7 @@
           groupEl.querySelectorAll('.tg-tab').forEach(tab => {
             tab.classList.toggle('active', tab.dataset.termid === termId);
           });
-          updateTabBarOverflow(groupEl);
-          scrollTabIntoView(groupEl, termId);
+          activeGroupEl = groupEl;
           // Sync group color from active tab
           const activeTab = groupEl.querySelector('.tg-tab.active');
           if (activeTab && activeTab.dataset.color) {
@@ -5169,11 +5195,16 @@
               }
             }
           });
-          // Sync overlays in the same tick: hiding must never wait for a RAF.
-          syncBrowserSlots();
         }
       }
       const t = target;
+      if (nativePtyReady) restorePendingTerminal(t);
+      if (t?.threadHistory && t.el && (curChat() !== t || thrPage.parentElement !== t.el)) {
+        _preferChat = t;
+        syncThreadPanel();
+      }
+      // Read overlay geometry only after the incoming chat surface is attached.
+      if (activeGroupEl) syncBrowserSlots();
       if (t && t.el) {
         focusSlot(t);
         if (t.type === 'browser') {
@@ -5197,6 +5228,10 @@
     // can still read a pre-settle size on a busy frame right after display toggle.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (activeWsId !== wsId || wsp.activeTermId !== termId) return;
+      if (activeGroupEl?.isConnected) {
+        updateTabBarOverflow(activeGroupEl);
+        scrollTabIntoView(activeGroupEl, termId);
+      }
       const terms = getWorkspaceTerminals(wsp);
       syncBrowserSlots();
       const t = terms.find(x => x.id === termId);
@@ -5391,6 +5426,7 @@
         if (entry.term._fitObserverRaf) cancelAnimationFrame(entry.term._fitObserverRaf);
         delete entry.term._fitObserverRaf;
       }
+      if (_warmChatSlot === entry.el) _warmChatSlot = null;
       entry.el.remove();
     }
 
@@ -8171,11 +8207,6 @@
     const windowLabel = usageWindows[threadSettings.usageWindow] || usageWindows.weekly;
     left.setAttribute('aria-label', `Usage limits, ${windowLabel.toLowerCase()}, ${label}`);
     const ids = Object.entries(_usageLimits || {}).filter(([id, u]) => harnessOf(id) && u.windows?.length).map(([id]) => id);
-    if (_usageLimits) try { localStorage.setItem('tv-usage-agents', JSON.stringify(ids)); } catch {}
-    // The first reading after the startup placeholders fades in (rings sweep from empty); later refreshes don't.
-    const reveal = left.classList.contains('loading');
-    left.classList.remove('loading');
-    left.classList.toggle('reveal', reveal);
     const hidden = hiddenUsageProviders();
     const items = ids.filter(id => !hidden.has(id)).map(id => {
       const h = harnessOf(id), u = _usageLimits[id];
@@ -8277,27 +8308,14 @@
   usageButton?.addEventListener('keydown', e => {
     if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) openUsageMenu(e);
   });
-  // From startup: the agents seen last time, as logos in empty rings, until the first reading arrives.
-  function renderUsagePlaceholders() {
-    if (!usageButton) return;
-    let ids = null;
-    try { ids = JSON.parse(localStorage.getItem('tv-usage-agents')); } catch {}
-    const hidden = hiddenUsageProviders();
-    const known = (Array.isArray(ids) ? ids : usageProviderIds).map(harnessOf).filter(Boolean);
-    if (known.length || hidden.size) {
-      usageButton.innerHTML = known.filter(h => !hidden.has(h.id)).map(h => `<span class="sb-usage-item" style="--p:0" data-tip="${escHtml(h.name)}: loading usage…">`
-        + `<span class="sb-usage-ring"><span class="sb-usage-logo"${h.color ? ` style="color:${h.color}"` : ''}>${procIconHtml(h.bin, 'ph-robot')}</span></span>`
-        + '<span class="sb-usage-pct">&nbsp;</span></span>').join('') + usageChartIcon;
-      usageButton.classList.add('loading');
-      usageButton.hidden = false;
-    }
-  }
   if (!SETTINGS_ONLY && window.electronAPI?.usageLimits) {
     _usageLimits = readUsageCache();
     if (_usageLimits) renderUsageSidebar();
-    else renderUsagePlaceholders();
+    else if (usageButton) {
+      usageButton.innerHTML = 'Usage limits' + usageChartIcon;
+      usageButton.hidden = false;
+    }
   }
-  if (!SETTINGS_ONLY) { setTimeout(() => refreshUsageLimits(true), 3000); setInterval(() => refreshUsageLimits(false), 60000); }
 
   // A terminal running an agent becomes a Chat tab over that agent (the chat button in its tab bar).
   function openTerminalAsChat(t) {
@@ -8452,7 +8470,7 @@
     if (thrPage.parentElement === tab.el) thrPage.style.display = cli ? 'none' : 'flex';
     if (cli) {
       requestAnimationFrame(() => {
-        if (!tab._cliView || !tab.el?.offsetParent) return;
+        if (!tab._cliView || !tab.el?.offsetParent || tab.el.style.display === 'none') return;
         _syncWebgl(tab, true);
         fitTerm(tab); tab.term.refresh(0, tab.term.rows - 1); tab.term.focus();
       });
@@ -8597,7 +8615,7 @@
   document.addEventListener('keydown', e => {
     if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.key.toLowerCase() !== 'j') return;
     const owner = activeTerminal();
-    if (!owner?.threadHistory || owner._cliView || !owner.el?.offsetParent) return;
+    if (!owner?.threadHistory || owner._cliView || !owner.el?.offsetParent || owner.el.style.display === 'none') return;
     e.preventDefault(); e.stopImmediatePropagation();
     if (!e.repeat) toggleChatBottomTerminal(owner);
   }, true);
@@ -8719,8 +8737,10 @@
     if (activeWsId !== ws.id) activateWorkspace(ws.id);
     activateTerminal(ws.id, tab.id);
     if (tab._cliView) setChatView(tab, false); // opened from the threads list: show the chat, not its shell
-    _preferChat = tab;
-    syncThreadPanel();
+    if (curChat() !== tab) {
+      _preferChat = tab;
+      syncThreadPanel();
+    }
   }
   function rememberClosedThread(tab, ws) {
     if (_profileSwitching || !tab.threadHistory || !tab.chat) return;
@@ -8850,27 +8870,29 @@
     if (name) name.textContent = label;
     saveState();
   }
-  // The chat page is a single element: it moves into the Chat tab in view (the focused one, or
-  // the one just opened), and is looked up through thrPage (a restored tab can hold it before the
-  // tab is in the document). Another Chat tab in view at the same time (a split) keeps a
-  // snapshot of its chat; clicking it brings the live page over and forwards the action.
-  // With no Chat tab in view the page
-  // is parked (hidden) at the end of the body.
-  const thrPage = document.getElementById('sbr-thread');
-  let _curChat = null, _preferChat = null;
+  // Each chat owns its transcript. The live controls move between their surfaces.
+  let thrPage = document.getElementById('sbr-thread');
+  const threadPageListeners = [];
+  function onThreadPage(type, listener, options) {
+    const args = [type, listener, options];
+    threadPageListeners.push(args);
+    thrPage.addEventListener(...args);
+  }
+  let observeThreadPage = () => {};
+  let _curChat = null, _preferChat = null, _warmChatSlot = null;
   // Safety net (startup restores and starts tabs in an order that can miss the move): a Chat tab in view
   // that doesn't hold the page gets it.
   setInterval(() => {
     const ws = activeWs();
     if (!ws?.layout || SETTINGS_ONLY) return;
     const shown = getWorkspaceTerminals(ws).find(t => t.threadHistory && t.el?.offsetParent && findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id);
-    if (shown && thrPage.parentElement !== shown.el && !(_curChat && thrPage.parentElement === _curChat.el && _curChat.el.offsetParent)) { _preferChat = shown; syncThreadPanel(); }
+    if (shown && thrPage.parentElement !== shown.el && !(_curChat && thrPage.parentElement === _curChat.el && _curChat.el.style.display !== 'none' && _curChat.el.offsetParent)) { _preferChat = shown; syncThreadPanel(); }
   }, 500);
   const curChat = () => _curChat;
   function syncThreadPanel(force) {
-    const page = thrPage;
+    let page = thrPage;
     if (!page) return;
-    const refreshToken = page._threadRefreshToken = {};
+    const refreshToken = {};
     const ws = activeWs();
     clearInterval(_threadPoll); _threadPoll = null;
     const chats = ws ? getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.el) : [];
@@ -8883,7 +8905,7 @@
       t.term.focus = () => {
         if (t._cliView) return Object.getPrototypeOf(t.term).focus.call(t.term);
         if (_curChat !== t) { _preferChat = t; syncThreadPanel(); }
-        if (!page.contains(document.activeElement)) thrInput.focus({ preventScroll: true });
+        if (!thrPage.contains(document.activeElement)) thrInput.focus({ preventScroll: true });
       };
     }
     const shown = chats.filter(t => !t._closePending && findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id);
@@ -8895,60 +8917,56 @@
       rememberThreadScroll(prev);
       prev._draft = thrInput.value; prev._files = _chatFiles;
     }
-    // Keep a chat surface even when its workspace was hidden before this call. Its slot may
-    // become visible again without taking focus (for example, above a terminal in a split).
-    if (prev && prev !== tab && !prev._closePending && prev.el) {
-      const snap = createThreadSnapshot(prev);
-      const hidden = !shown.includes(prev);
-      moveThreadHistory(page, snap, hidden);
-      if (!hidden) restoreThreadScroll(prev, snap);
+    const snapshot = tab && prev !== tab ? tab.el.querySelector(':scope > .thr-snapshot') : null;
+    if (prev !== tab && (prev || snapshot)) {
+      // Keep one inactive transcript laid out for quick back-and-forth switches.
+      const warmSlot = prev?.el?.style.display === 'none' && !prev._cliView && !prev._closePending
+        && ws && getWorkspaceTerminals(ws).includes(prev) ? prev.el : null;
+      if (_warmChatSlot !== warmSlot) {
+        _warmChatSlot?.classList.remove('chat-keep-layout');
+        warmSlot?.classList.add('chat-keep-layout');
+        _warmChatSlot = warmSlot;
+      }
+      const next = snapshot || createThreadSurface();
+      if (tab && !snapshot) tab.el.append(next);
+      switchThreadSurface(page, next, prev?.el && !prev._closePending ? prev : null, !shown.includes(prev));
+      page = next;
     }
+    page._threadRefreshToken = refreshToken;
     if (!tab) {
       _curChat = null;
       syncThreadSelection();
       page.style.display = 'none';
-      if (page.parentElement !== document.body) document.body.append(page); // parked until a Chat tab takes it
+      if (page.parentElement !== document.body) document.body.append(page);
       return;
     }
-    const snapshot = prev !== tab ? tab.el.querySelector(':scope > .thr-snapshot') : null;
     if (page.parentElement !== tab.el) tab.el.appendChild(page);
     // Each chat keeps its own unsent draft and attachments.
     if (prev !== tab) {
       thrInput.value = (tab._draft ?? tab.chat?.draft) || ''; _chatFiles = tab._files || tab.chat?.draftFiles || [];
     }
     _curChat = tab;
-    if (prev !== tab) { autosizeThreadInput(); renderChatFiles(); }
+    if (prev !== tab) {
+      if (!threadPart(page, 'input-links')) autosizeThreadInput();
+      renderChatFiles();
+    }
     syncThreadSelection();
     page.style.display = tab._cliView ? 'none' : 'flex';
-    if (prev !== tab) {
-      if (snapshot) {
-        moveThreadHistory(snapshot, page);
-        snapshot.remove();
-      } else {
-        const flow = threadPart(page, 'flow');
-        flow._imageObserver?.disconnect();
-        flow.replaceChildren();
-        delete flow.dataset.seen;
-        flow._texts = undefined;
-        flow._historyChunks = undefined;
-        flow._historyPreviewTried = false;
-        flow._showingHistoryPreview = false;
-        _flowSig = '';
-      }
-      if (thrFind.q) thrFindRun(true);
-    }
     page.dataset.chat = tab.id;
     if (force) _flowSig = '';
-    // Restore only after replacing the previous chat's markup, which can reset/clamp scrollTop.
-    if (page.querySelector('.thr-flow').dataset.seen) restoreThreadScroll(tab);
-    if (snapshot && _flowSig) {
-      // Let the switch paint first; re-reading the transcript waits for idle time so rapid
-      // tab switching stays smooth (a working chat still refreshes within 150ms).
-      const later = window.requestIdleCallback || (fn => setTimeout(fn, 50));
-      later(() => {
-        if (page._threadRefreshToken === refreshToken && page.parentElement === tab.el) refreshThreadFlow(tab);
-      }, { timeout: chatWorking(tab) ? 150 : 600 });
-    } else refreshThreadFlow(tab);
+    const cached = !!_flowSig && (prev === tab || !!snapshot);
+    const refreshWorkingChat = prev !== tab && cached && !!chatWorking(tab);
+    const updateFind = prev !== tab && !!thrFind.q;
+    if (refreshWorkingChat || updateFind) {
+      // Give Chromium a rendering opportunity before scanning or refreshing the transcript.
+      requestAnimationFrame(() => setTimeout(() => {
+        if (page._threadRefreshToken !== refreshToken || page.parentElement !== tab.el) return;
+        if (updateFind && thrFind.q) thrFindRun(true);
+        if (refreshWorkingChat) refreshThreadFlow(tab);
+      }, 0));
+    }
+    // The regular poll refreshes idle cached chats if they stay selected.
+    if (!cached) refreshThreadFlow(tab);
     syncThreadComposer(tab);
     // On startup, sibling Chat panes have never owned the shared page. Give each its own
     // initialized surface and load its history without moving focus or borrowing another chat.
@@ -8957,10 +8975,12 @@
       const existing = sibling.el.querySelector(':scope > .thr-snapshot');
       if (existing) {
         const flow = threadPart(existing, 'flow');
-        if (flow.inert) {
+        if (!flow._snapshotTabIndexes) {
           disableSnapshotHistoryFocus(flow);
+          if (flow.inert) restoreThreadScroll(sibling, existing);
+        }
+        if (flow.inert) {
           flow.inert = false;
-          restoreThreadScroll(sibling, existing);
         }
         continue;
       }
@@ -9011,7 +9031,7 @@
   function rememberThreadScroll(tab, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow');
     // Hiding or detaching a tab can report zero geometry; keep its last visible position.
-    if (!tab || !flow.dataset.seen || !flow.clientHeight || !flow.getClientRects().length) return;
+    if (!tab || tab.el?.style.display === 'none' || !flow.dataset.seen || !flow.clientHeight || !flow.getClientRects().length) return;
     tab._scrollState = { top: flow.scrollTop, bottom: flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1 };
   }
   function restoreThreadScroll(tab, surface = thrPage) {
@@ -9022,45 +9042,60 @@
   function threadPart(surface, id) {
     return surface.querySelector('#sbr-thread-' + id) || surface.querySelector('[data-thr-id="sbr-thread-' + id + '"]');
   }
-  function moveThreadHistory(fromSurface, toSurface, hiddenSnapshot = false) {
-    const from = threadPart(fromSurface, 'flow'), to = threadPart(toSurface, 'flow');
-    const live = toSurface === thrPage;
-    // Keep the transcript, its indexes, and its rendered turns together when
-    // switching surfaces. The empty flow just fills the slot it leaves behind.
-    const next = to.nextSibling;
-    from.replaceWith(to);
-    toSurface.insertBefore(from, next);
-    if (live) {
-      to.removeAttribute('id');
-      to.dataset.thrId = 'sbr-thread-flow';
-      from.id = 'sbr-thread-flow';
-      delete from.dataset.thrId;
-    } else {
-      from.removeAttribute('id');
-      from.dataset.thrId = 'sbr-thread-flow';
-      to.id = 'sbr-thread-flow';
-      delete to.dataset.thrId;
+  function switchThreadSurface(from, to, owner, hidden) {
+    const previous = threadPart(from, 'flow'), flow = threadPart(to, 'flow');
+    const controls = [...from.children].filter(el => el !== previous);
+    const before = [...from.children].indexOf(previous);
+    if (owner) cloneThreadControls(from, from);
+    [...to.children].filter(el => el !== flow).forEach(el => el.remove());
+    const move = to.moveBefore && from.isConnected && to.isConnected ? to.moveBefore : to.insertBefore;
+    for (const [index, control] of controls.entries()) {
+      move.call(to, control, index < before ? flow : null);
     }
-    if (live && from._snapshotTabIndexes) {
-      for (const [el, tabindex] of from._snapshotTabIndexes) {
+    if (owner) {
+      from.style.display = 'flex';
+      from.classList.add('thr-snapshot');
+      from.setAttribute('aria-hidden', 'true');
+      watchThreadSnapshot(from, owner);
+    } else from.remove();
+    previous.removeAttribute('id');
+    previous.dataset.thrId = 'sbr-thread-flow';
+    previous.dataset.signature = _flowSig;
+    const previousQueue = previous.querySelector(':scope > .thr-queue');
+    if (previousQueue) {
+      previousQueue.removeAttribute('id');
+      previousQueue.dataset.thrId = 'sbr-thread-queue';
+    }
+    if (owner) {
+      // A warm slot is already hidden by CSS. Changing inert also invalidates
+      // style for every descendant when coming back to it.
+      previous.inert = !!hidden && owner.el !== _warmChatSlot;
+      if (!hidden) disableSnapshotHistoryFocus(previous);
+    }
+    to.classList.remove('thr-snapshot');
+    to.removeAttribute('aria-hidden');
+    flow.id = 'sbr-thread-flow';
+    delete flow.dataset.thrId;
+    const queue = flow.querySelector(':scope > .thr-queue');
+    if (queue) {
+      queue.id = 'sbr-thread-queue';
+      delete queue.dataset.thrId;
+    }
+    if (flow._snapshotTabIndexes) {
+      for (const [el, tabindex] of flow._snapshotTabIndexes) {
         if (tabindex === null) el.removeAttribute('tabindex'); else el.setAttribute('tabindex', tabindex);
       }
-      from._snapshotTabIndexes = undefined;
+      flow._snapshotTabIndexes = undefined;
     }
-    if (live) {
-      _flowSig = from.dataset.signature || '';
-      from.inert = false;
-      bindThreadCopy(from);
-    } else {
-      from.dataset.signature = _flowSig;
-      if (hiddenSnapshot) from.inert = true;
-      else disableSnapshotHistoryFocus(from);
+    flow.inert = false;
+    _flowSig = flow.dataset.signature || '';
+    from._threadRefreshToken = null;
+    for (const args of threadPageListeners) {
+      from.removeEventListener(...args);
+      to.addEventListener(...args);
     }
-    const queue = from.querySelector(':scope > .thr-queue');
-    if (queue) {
-      queue.id = live ? 'sbr-thread-queue' : '';
-      if (live) delete queue.dataset.thrId; else queue.dataset.thrId = 'sbr-thread-queue';
-    }
+    thrPage = to;
+    queueMicrotask(() => { if (thrPage === to) observeThreadPage(); });
   }
   function disableSnapshotHistoryFocus(flow) {
     const previous = flow._snapshotTabIndexes;
@@ -9070,20 +9105,50 @@
       el.tabIndex = -1;
     }
   }
-  function createThreadSnapshot(owner) {
+  function cloneThreadControls(source, target) {
+    const flow = threadPart(target, 'flow');
+    let beforeFlow = true;
+    for (const part of [...source.children]) {
+      if (part.classList.contains('thr-flow')) { beforeFlow = false; continue; }
+      const clone = part.cloneNode(true);
+      for (const el of [clone, ...clone.querySelectorAll('[id]')]) {
+        if (el.id) { el.dataset.thrId = el.id; el.removeAttribute('id'); }
+      }
+      const focusable = 'textarea, input, button, a[href], [tabindex], [contenteditable]';
+      for (const el of [clone, ...clone.querySelectorAll(focusable)]) {
+        if (el.matches(focusable)) el.tabIndex = -1;
+        if (el.hasAttribute('contenteditable')) el.contentEditable = 'false';
+      }
+      target.insertBefore(clone, beforeFlow ? flow : null);
+    }
+  }
+  function createThreadSurface() {
     const snap = thrPage.cloneNode(false);
-    for (const part of thrPage.children) snap.append(part.cloneNode(!part.classList.contains('thr-flow')));
-    snap.querySelectorAll('[id]').forEach(el => { el.dataset.thrId = el.id; el.removeAttribute('id'); });
+    const flow = threadPart(thrPage, 'flow').cloneNode(false);
+    flow.removeAttribute('id');
+    flow.dataset.thrId = 'sbr-thread-flow';
+    for (const key of ['seen', 'signature']) delete flow.dataset[key];
+    snap.append(flow);
+    return snap;
+  }
+  function createThreadSnapshot(owner) {
+    const snap = createThreadSurface();
+    cloneThreadControls(thrPage, snap);
     snap.classList.add('thr-snapshot');
     snap.style.display = 'flex';
     snap.setAttribute('aria-hidden', 'true');
-    snap.querySelectorAll('textarea, input, button, a[href], [tabindex]').forEach(el => { el.tabIndex = -1; });
-    snap.querySelectorAll('[contenteditable]').forEach(el => { el.contentEditable = 'false'; el.tabIndex = -1; });
+    watchThreadSnapshot(snap, owner);
+    owner.el.appendChild(snap);
+    return snap;
+  }
+  function watchThreadSnapshot(snap, owner) {
+    if (snap._snapshotOwner === owner) return;
+    snap._snapshotOwner = owner;
     // Keep the pressed element in place until click. Moving the shared page on mousedown
     // removes the target before mouseup, so the browser drops the intended action.
-    snap.addEventListener('mousedown', e => { if (e.button === 0) { e.preventDefault(); e.stopPropagation(); } }, true);
+    snap.addEventListener('mousedown', e => { if (snap !== thrPage && e.button === 0) { e.preventDefault(); e.stopPropagation(); } }, true);
     snap.addEventListener('click', e => {
-      if (e.button !== 0) return;
+      if (snap === thrPage || e.button !== 0) return;
       e.preventDefault(); e.stopImmediatePropagation();
       const action = e.target.closest('button, summary, a, img, textarea, input, [data-thr-id="sbr-thread-input-links"]');
       const anchor = action?.closest('[data-thr-id], [data-key], [data-queue-id]') || snap;
@@ -9121,11 +9186,8 @@
       else run();
     }, true);
     snap.addEventListener('scroll', e => {
-      if (e.target.matches?.('.thr-flow')) rememberThreadScroll(owner, snap);
+      if (snap !== thrPage && e.target.matches?.('.thr-flow')) rememberThreadScroll(owner, snap);
     }, { capture: true, passive: true });
-    owner.el.querySelectorAll(':scope > .thr-snapshot').forEach(el => el.remove());
-    owner.el.appendChild(snap);
-    return snap;
   }
 
   // Small popover list (the chat composer's agent / model / effort / access pickers).
@@ -9270,10 +9332,13 @@
     return _chatAgents;
   }
   if (!SETTINGS_ONLY) loadChatAgents();
-  // Antigravity's models come from a session (opened and closed at once in the background): fresh once per run.
-  // (After loadChatAgents' state above: calling it earlier throws during startup and the app never leaves its splash.)
-  if (!SETTINGS_ONLY && window.electronAPI?.chatSdkModels) loadChatAgents().then(({ found = {} }) => found.agy
-    && window.electronAPI.chatSdkModels('antigravity', found.agy).then(m => { setAgyModels(m); syncThreadComposer(curChat()); })).catch(() => {});
+  let agyModelsRequest;
+  function loadAgyModels(bin) {
+    agyModelsRequest ||= window.electronAPI.chatSdkModels('antigravity', bin).then(setAgyModels).catch(() => {
+      agyModelsRequest = null;
+    });
+    return agyModelsRequest;
+  }
   // A workspace keeps its own picks; one that has none starts from the last picks made anywhere.
   const lastChatOpts = () => {
     try {
@@ -9376,8 +9441,9 @@
   // The floating composer covers the bottom of the history: pad the history by its height so
   // the last message can always scroll clear of it (it grows with the text and attachments).
   {
-    const wrap = thrPage.querySelector('.thr-composer-wrap'), flow = thrPage.querySelector('#sbr-thread-flow');
+    const wrap = thrPage.querySelector('.thr-composer-wrap');
     new ResizeObserver(() => {
+      const flow = threadPart(thrPage, 'flow');
       const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
       flow.style.paddingBottom = wrap.offsetHeight + 12 + 'px';
       if (atBottom) flow.scrollTop = flow.scrollHeight;
@@ -9427,7 +9493,7 @@
       if (!toggle) tray._q = '';
     }
   }
-  thrPage.addEventListener('click', e => {
+  onThreadPage('click', e => {
     if (!e.target.closest('#sbr-thread-flow')) return;
     const mention = e.target.closest('.thr-thread-mention');
     if (mention) {
@@ -9457,7 +9523,7 @@
     else window.electronAPI?.showInFolder?.(path);
   });
   // Right-click in the chat: a link, an image, or a message (its text).
-  thrPage.addEventListener('contextmenu', e => {
+  onThreadPage('contextmenu', e => {
     if (!e.target.closest('#sbr-thread-flow')) return;
     citeBtn.hidden = true; // the menu takes over (its "Cite selection" does the same)
     const img = e.target.closest('img.thr-img');
@@ -9494,22 +9560,18 @@
   const _gitBranchChecked = new Map(), _gitBranchPending = new Map();
   const _chatBranchSwitches = new Set();
   const _chatPullRequests = new Map();
-  function refreshChatPullRequests(cwd) {
-    if (!window.electronAPI?.gitPullRequests) return;
+  function loadChatPullRequests(cwd) {
     const cached = _chatPullRequests.get(cwd);
-    if (cached && (cached.pending || Date.now() - cached.checked < 30000)) return;
-    const entry = { pending: true, pulls: cached?.pulls || [] };
+    if (cached && (cached.pending || Date.now() - cached.checked < 30000)) return cached.pending || Promise.resolve(cached);
+    const entry = { pulls: cached?.pulls || [], checked: 0 };
     _chatPullRequests.set(cwd, entry);
-    window.electronAPI.gitPullRequests(cwd).then(({ pulls }) => {
-      entry.pulls = pulls || [];
-    }).catch(() => {
-      entry.pulls = [];
-    }).finally(() => {
+    entry.pending = window.electronAPI.gitPullRequests(cwd).then(result => {
+      if (result.error) return result;
+      entry.pulls = result.pulls || [];
       entry.checked = Date.now();
-      entry.pending = false;
-      const tab = curChat();
-      if (chatCwd(tab) === cwd) syncThreadComposer(tab);
-    });
+      return entry;
+    }).catch(() => ({ error: 'Could not load pull requests.' })).finally(() => { entry.pending = null; });
+    return entry.pending;
   }
   function refreshChatGitBranch(cwd) {
     if (!cwd || !window.electronAPI?.gitBranch) return Promise.resolve();
@@ -9633,14 +9695,11 @@
     branch.hidden = !shownBranch;
     branch.dataset.tip = branchMismatch ? `Thread branch: ${savedBranch}. Project branch: ${b || 'unavailable'}.` : 'Switch branch';
     const pr = thrChip('pr');
-    if (b) refreshChatPullRequests(cwd);
-    const pulls = b ? _chatPullRequests.get(cwd)?.pulls : undefined;
-    const pullCount = pulls?.length || 0;
-    pr.hidden = pullCount === 0;
-    if (pullCount) {
-      const label = pullCount === 1 ? `PR #${pulls[0].number}` : `${pullCount} PRs`;
-      pr.querySelector('span').textContent = label;
-      pr.title = pullCount === 1 ? `Open ${label}` : `${pullCount} open pull requests`;
+    const pulls = _chatPullRequests.get(cwd)?.pulls || [];
+    pr.hidden = !b || !window.electronAPI?.gitPullRequests;
+    if (!pr.hidden) {
+      pr.querySelector('span').textContent = pulls.length === 1 ? `PR #${pulls[0].number}` : pulls.length > 1 ? `${pulls.length} PRs` : 'Pull requests';
+      pr.title = 'Show open pull requests';
       pr.setAttribute('aria-label', pr.title);
     }
     if (shownBranch) branch.innerHTML = `<i class="ph ${branchMismatch ? 'ph-warning' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
@@ -9710,10 +9769,13 @@
     showCtxMenu({ pageX: r.right, pageY: r.top - 6, above: true, alignRight: true }, 'chat-branch', { tab, cwd, branches });
     ctxEl._owner = chip;
   });
-  thrChip('pr').addEventListener('click', e => {
+  thrChip('pr').addEventListener('click', async e => {
     const chip = e.currentTarget, tab = curChat(), cwd = chatCwd(tab), ws = wsOf(tab);
-    const pulls = _chatPullRequests.get(cwd)?.pulls;
-    if (!ws || !pulls?.length) return;
+    if (!ws || !window.electronAPI?.gitPullRequests || _chatPullRequests.get(cwd)?.pending) return;
+    const { pulls, error } = await loadChatPullRequests(cwd);
+    if (curChat() !== tab || chatCwd(tab) !== cwd) return;
+    if (!pulls?.length) { zoomBadge(error || 'No open pull requests'); return; }
+    syncThreadComposer(tab);
     const open = pr => {
       if (curChat() === tab && chatCwd(tab) === cwd) {
         addBrowserTab(ws.id, findGroupContainingTerm(ws.layout, tab.id)?.id, pr.url, `PR #${pr.number}`);
@@ -9807,7 +9869,7 @@
     const currentHarness = chatOpts(ws).harness;
     let filter = favs.size || !chatAgentIds().includes(currentHarness) ? 'fav' : currentHarness, query = '';
     const openCodeCwd = chatCwd(ws);
-    let openCodeRequested = false, openCodeLoading = false, openCodeStatus = '';
+    let agyRequested = false, openCodeRequested = false, openCodeLoading = false, openCodeStatus = '';
     const pop = document.createElement('div');
     pop.className = 'tv-model-picker';
     pop.setAttribute('role', 'dialog');
@@ -9877,6 +9939,14 @@
         .map(([id, icon, label]) => `<button type="button" role="tab" class="mp-rail-btn${(filter || '') === id ? ' active' : ''}" data-f="${id}" title="${escHtml(label)}" aria-label="${escHtml(label)}" aria-selected="${(filter || '') === id}">${icon}</button>`).join('');
       const q = query.toLowerCase();
       if (q || filter === 'opencode' || (filter === 'fav' && [...favs].some(key => key.startsWith('opencode:')))) requestOpenCode();
+      if (!agyRequested && found?.agy && window.electronAPI?.chatSdkModels
+        && (q || filter === 'antigravity' || (filter === 'fav' && [...favs].some(key => key.startsWith('antigravity:'))))) {
+        agyRequested = true;
+        loadAgyModels(found.agy).then(() => {
+          if (curChat() === ws) syncThreadComposer(ws);
+          if (_modelPicker === pop) render();
+        });
+      }
       // Search looks through every agent; otherwise the rail picks favorites or one agent.
       rows = !q && filter === 'fav' ? favorites : ids.filter(id => q || id === filter).flatMap(id => {
         const h = harnessOf(id);
@@ -10612,7 +10682,8 @@
     if (!input || !editor) return;
     const references = new Map(files.filter(f => f.mention).map(f => [f.mention, f]));
     const signature = JSON.stringify([...references].map(([key, f]) => [key, f.cite, f.name, f.size, !!f.preview]));
-    editor.contentEditable = surface === thrPage && !input.disabled ? 'true' : 'false';
+    const editable = surface === thrPage && !input.disabled ? 'true' : 'false';
+    if (editor.contentEditable !== editable) editor.contentEditable = editable;
     editor.dataset.placeholder = input.placeholder || 'Ask anything';
     editor.dataset.empty = String(!input.value);
     editor.setAttribute('aria-disabled', String(input.disabled));
@@ -11357,7 +11428,7 @@
   citeBtn.innerHTML = '<i class="ph ph-quotes" aria-hidden="true"></i><span>Cite</span>';
   document.body.appendChild(citeBtn);
   const hideCite = () => { citeBtn.hidden = true; };
-  thrPage.addEventListener('mouseup', e => {
+  onThreadPage('mouseup', e => {
     const flow = e.target.closest('#sbr-thread-flow');
     if (e.button !== 0 || !flow) return;
     setTimeout(() => { // a right-click opens the menu instead (it has Cite)
@@ -11561,9 +11632,9 @@
     renderPromptNav();
     scheduleScrollEnd();
   }
-  new MutationObserver(observeLiveFlow).observe(thrPage, { childList: true });
+  observeThreadPage = observeLiveFlow;
   observeLiveFlow();
-  for (const event of ['load', 'toggle']) thrPage.addEventListener(event, e => {
+  for (const event of ['load', 'toggle']) onThreadPage(event, e => {
     if (e.target.closest?.('#sbr-thread-flow')) scheduleScrollEnd();
   }, true);
   scrollEndBtn?.addEventListener('click', () => {
@@ -11572,7 +11643,7 @@
     flowEl.scrollTo({ top: flowEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   });
   // Each chat remembers where it was scrolled (restored after a tab or chat switch).
-  thrPage.addEventListener('scroll', e => {
+  onThreadPage('scroll', e => {
     if (e.target.id !== 'sbr-thread-flow') return;
     hideCite();
     rememberThreadScroll(_curChat);
@@ -11827,8 +11898,8 @@
     refreshThreadFlow(c); syncThreadComposer(c);
   }
   function autosizeThreadInput() {
-    const editor = threadPart(thrPage, 'input-links');
-    if (editor?.isContentEditable) { syncChatInputLinks(); return; }
+    // The rich composer sizes itself in CSS, including when temporarily read-only.
+    if (threadPart(thrPage, 'input-links')) { syncChatInputLinks(); return; }
     thrInput.style.height = 'auto';
     thrInput.style.height = Math.min(thrInput.scrollHeight, 240) + 'px';
     syncChatInputLinks();
@@ -12078,15 +12149,16 @@
     if (surface === thrPage && curChat() !== ws) return;
     const flow = threadPart(surface, 'flow');
     if (!flow) return;
-    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
+    const queue = ws.chat?.queuedMessages || [], paused = !!ws.chat?.queuePaused;
     let box = threadPart(surface, 'queue');
+    if (!queue.length && (!box || box.hidden)) return;
+    const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     if (!box) {
       box = document.createElement('div'); box.className = 'thr-queue';
       if (surface === thrPage) box.id = 'sbr-thread-queue'; else box.dataset.thrId = 'sbr-thread-queue';
       box.setAttribute('aria-label', 'Queued messages');
     }
     if (box.parentElement !== flow || box !== flow.lastElementChild) flow.appendChild(box);
-    const queue = ws.chat?.queuedMessages || [], paused = !!ws.chat?.queuePaused;
     hydrateChatFiles(queue.flatMap(message => message.files || []), () => updateChatQueue(ws));
     box.hidden = !queue.length;
     const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
@@ -12124,7 +12196,8 @@
       updateChatQueue(ws); saveState();
     } finally { _queueDraining.delete(ws.id); }
   }
-  threadPart(thrPage, 'flow')?.addEventListener('click', e => {
+  onThreadPage('click', e => {
+    if (!e.target.closest('#sbr-thread-flow')) return;
     const button = e.target.closest('[data-queue-act]'), ws = curChat();
     if (!button || !ws?.chat) return;
     const id = button.closest('[data-queue-id]')?.dataset.queueId;
@@ -12981,9 +13054,20 @@
   });
   async function refreshThreadFlow(ws, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow');
+    const storeId = ws.chat?.storeId;
+    const pending = flow._historyLoad;
+    if (pending?.tab === ws && pending.storeId === storeId) return pending.promise;
+    const load = { tab: ws, storeId, promise: loadThreadFlow(ws, surface, flow, storeId) };
+    flow._historyLoad = load;
+    try {
+      return await load.promise;
+    } finally {
+      if (flow._historyLoad === load) delete flow._historyLoad;
+    }
+  }
+  async function loadThreadFlow(ws, surface, flow, storeId) {
     const api = window.electronAPI;
     const segs = threadSegments(ws);
-    const storeId = ws.chat?.storeId;
     const current = () => flow.parentElement === surface && ws.chat?.storeId === storeId
       && (surface === thrPage ? curChat() === ws : surface.isConnected && surface.parentElement === ws.el);
     let hist = [], note = '';
@@ -13135,6 +13219,7 @@
     const scrollTop = flow.scrollTop;
     const distanceFromBottom = replacingPreview ? flow.scrollHeight - flow.clientHeight - scrollTop : 0;
     const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
+    const mountedTools = new Set(Array.from(flow.querySelectorAll('.thr-tools:has(> .thr-tool-list)'), el => el.dataset.key));
     const outputScroll = new Map([...flow.querySelectorAll('details[open] > .thr-tool-output')].map(el => [el.parentElement.dataset.key, { top: el.scrollTop, left: el.scrollLeft }]));
     if (!segs.length || note) {
       flow._historyChunks = undefined;
@@ -13204,11 +13289,11 @@
         const title = completed ? label : `${last.name} ${last.summary}`;
         return `<details class="thr-tools" data-key="${key}"><summary><i class="ph ${completed ? 'ph-hammer' : toolIcon(last.name)}" aria-hidden="true"></i>`
           + `<span class="thr-tools-text">${escHtml(title)}</span>${!completed && tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
-          + `${completed ? '' : `<span class="thr-tools-time">${clockTime(last.ts)}</span>`}<i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><div class="thr-tool-list">`
+          + `${completed ? '' : `<span class="thr-tools-time">${clockTime(last.ts)}</span>`}<i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><template><div class="thr-tool-list">`
           // Each call expands to its command, arguments, or recorded file changes.
           + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${toolTimestampHtml(x.ts)}${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
             + lazyBody(`${key}:${n}`, () => toolDetailsHtml(x)) + '</details>').join('')
-          + '</div></details>';
+          + '</div></template></details>';
       };
       const msgHtml = (m, key, showActions = true, extra = '') => {
         if (m.role === 'user' && (m.resume || resumed.has(m.ts))) return resumeStatusHtml(Date.parse(m.ts) || 0);
@@ -13332,14 +13417,14 @@
     html += forkNote + pendingHtml(ws);
     finishChunk();
     const content = updateThreadHistory(flow, chunks);
-    const newOutputs = content.querySelectorAll('.thr-tool-output');
     const newImages = content.querySelectorAll('img.thr-img');
     // Keep the open states on replaced rows, without making a toggle invalidate cached markup.
     flow._lazy = lazy;
-    for (const details of content.querySelectorAll('details[data-key]')) {
+    expandThreadDetails(content, details => {
       details.open = open.has(details.dataset.key);
-      if (details.open) fillLazyDetails(details, lazy);
-    }
+      return details.open || mountedTools.has(details.dataset.key);
+    }, lazy);
+    const newOutputs = content.querySelectorAll('.thr-tool-output');
     decorateWorkUsernames(content);
     flow._texts = texts;
     hydrateChatAttachmentSizes(content);
@@ -13502,8 +13587,23 @@
       });
     }
   }
-  // Hidden tool bodies and diffs are built on first open: highlighting all of them made long chats slow to show.
+  // A collapsed tool group keeps its rows in a template, outside the live transcript DOM.
+  function expandThreadDetails(root, shouldOpen, lazy) {
+    for (const details of root.querySelectorAll('details[data-key]')) {
+      if (!shouldOpen(details)) continue;
+      const mounted = fillLazyDetails(details, lazy);
+      if (mounted) expandThreadDetails(mounted, shouldOpen, lazy);
+    }
+  }
   function fillLazyDetails(details, lazy = details.closest('.thr-flow')?._lazy) {
+    const template = details.querySelector(':scope > template');
+    if (template) {
+      const list = template.content.firstElementChild;
+      template.replaceWith(template.content);
+      decorateWorkUsernames(list);
+      return list;
+    }
+    // Build tool output and diffs on demand to avoid highlighting hidden content.
     const html = !details.dataset.filled && lazy?.get(details.dataset.key);
     if (!html) return;
     details.dataset.filled = '1';
@@ -13543,7 +13643,7 @@
   function thrFindRun(keepIndex) {
     const flow = thrPage.querySelector('#sbr-thread-flow'), q = thrFind.q.toLowerCase(), ranges = [];
     if (q && flow) {
-      flow.querySelectorAll('details[data-key]:not([data-filled])').forEach(d => fillLazyDetails(d));
+      expandThreadDetails(flow, details => !details.dataset.filled);
       const walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT, { acceptNode: n =>
         n.parentElement?.closest('.thr-actions, .thr-tools-time, .thr-seg-time, .thr-img-actions') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
       for (let n; (n = walker.nextNode());) {
@@ -13588,7 +13688,7 @@
     thrPage.querySelector('#sbr-thread-flow')?.focus();
   }
   // Plain Ctrl+F in the history panel (the app-wide Ctrl+Shift+F leaves Ctrl+F to terminal programs).
-  thrPage?.addEventListener('keydown', e => {
+  onThreadPage('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); e.stopPropagation(); openThreadFind(); }
   });
   thrFindEl('-input')?.addEventListener('input', e => { thrFind.q = e.target.value; thrFindRun(false); });
@@ -17629,7 +17729,7 @@
       if (tb) tb.classList.add('active');
     }
 
-    let restored = false;
+    let restored = false, paneRendered = false;
     try {
       if (!SETTINGS_ONLY) {
         await profileGate();
@@ -17637,17 +17737,20 @@
       await loadCustomThemes();
       restored = await restoreState();
       if (_usageLimits) renderUsageSidebar();
-      applyTheme(currentThemeName);
       applySidebarMode();
+      applyTheme(currentThemeName); // Also renders the sidebar and workspace pane.
+      paneRendered = true;
       applyWsProcsSetting();
     } catch (bootErr) {
       console.error('[BOOT-ERROR]', bootErr);
     }
     try {
-      applyBackground();
-      if (restored) {
-        renderSidebar();
-        renderPaneArea();
+      if (!paneRendered) {
+        applyBackground();
+        if (restored) {
+          renderSidebar();
+          renderPaneArea();
+        }
       }
       if (isDesktop()) connectNativePTY();
       else {
