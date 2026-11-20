@@ -131,7 +131,8 @@ secrets/
 
 # Local tooling and AI assistant settings
 .openclaude/
-.claude/
+.claude/*
+!.claude/rules/
 settings.local.json
 
 # Node

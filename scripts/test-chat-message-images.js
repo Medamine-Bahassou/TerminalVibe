@@ -10,6 +10,8 @@ app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
   await win.loadURL('about:blank');
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname, '..', 'workspace.css'), 'utf8'));
+  const composerText = source.slice(source.indexOf('  const ultrathinkWord ='), source.indexOf('  function openMdTokens('));
   const imageReference = source.slice(source.indexOf('  function cacheThreadImage('), source.indexOf('  function syncChatInputLinks('));
   const composerImages = source.slice(source.indexOf('  function syncChatInputLinks('), source.indexOf('  function insertChatMention('));
   const userHtml = source.slice(source.indexOf('  function userTextHtml('), source.indexOf('  const _pendingMsgs ='));
@@ -28,6 +30,7 @@ app.whenReady().then(async () => {
     ${imageRegex}
     ${markdown}
     ${imageReference}
+    ${composerText}
     ${userHtml}
     ${pending}
     ${hydrate}
@@ -50,6 +53,17 @@ app.whenReady().then(async () => {
     threadPart(thrPage, 'input').value = '[Image 1]';
     syncChatInputLinks();
     const inputLink = thrPage.querySelector('.thr-image-ref').outerHTML;
+    const draft = threadPart(thrPage, 'input'), editor = threadPart(thrPage, 'input-links');
+    draft.value = '<ultrathink> ultrathinking [Image 1]';
+    syncChatInputLinks();
+    const keyword = editor.querySelector('.thr-ultrathink');
+    check(editor.querySelectorAll('.thr-ultrathink').length === 1 && keyword.textContent === 'ultrathink', 'Only the standalone keyword should animate');
+    check(editor.textContent.startsWith('<ultrathink> ultrathinking ') && editor.querySelector('.thr-image-ref'), 'Highlighting must preserve draft text and image references');
+    check(getComputedStyle(keyword).animationName === 'thr-ultrathink', 'The composer keyword should use the rainbow animation');
+    threadSettings.markdown = 'on';
+    draft.value = '**ultrathink**';
+    syncChatInputLinks();
+    check(editor.querySelector('.md-strong .thr-ultrathink'), 'Markdown formatting must preserve the keyword highlight');
     const images = render('fix that i copy this /tmp/one/image.png , but i do not get the source text /tmp/two/image.png');
     check(scope.querySelectorAll('.thr-img-link').length === 2, 'Sent image references vanished');
     check(scope.querySelector('.thr-img-link-name').textContent === 'image.png', 'Image filename missing');
@@ -65,6 +79,8 @@ app.whenReady().then(async () => {
     check(scope.querySelectorAll('.thr-img-link').length === 2 && scope.querySelector('.thr-img-link').dataset.path === '/tmp/folder with spaces/image.png', 'Quoted image path lost');
     render('> quoted context\\n\\nSee /tmp/one/image.png');
     check(scope.querySelector('.thr-cite') && scope.querySelector('.thr-img-link'), 'Citation and image references interfere');
+    render('instead of force use \\n> gh auth login\\n, for example');
+    check(!scope.querySelector('blockquote') && scope.querySelector('.thr-cite')?.title === 'gh auth login' && scope.textContent.includes('force use gh auth login, for example'), 'Mid-message citation must render inline, not as a blockquote: ' + scope.innerHTML);
     const docs = render("Review '/tmp/report final.pdf' /tmp/notes.txt '/tmp/README'");
     check(scope.querySelectorAll('.thr-img-link').length === 3 && docs.paths.length === 0, 'Documents must render as links without image previews');
     check(scope.querySelector('.thr-img-link-name').textContent === 'report final.pdf', 'Document filename missing');
