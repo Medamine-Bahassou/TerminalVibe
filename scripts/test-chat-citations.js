@@ -70,6 +70,8 @@ app.whenReady().then(async () => {
     document.body.classList.add('ui-animations');
     document.body.innerHTML = '<div id="sbr-thread" style="position:relative;display:flex;width:500px;height:400px"><div class="thr-flow" id="sbr-thread-flow" tabindex="-1" style="height:300px;flex:none;overflow:auto"></div><div class="thr-composer-wrap" style="height:80px"></div><textarea id="draft"></textarea></div><div id="neighbor" style="height:100px;overflow:auto"><div style="height:500px">Other pane</div></div>';
     const thrPage = document.getElementById('sbr-thread'), flow = document.getElementById('sbr-thread-flow'), thrInput = document.getElementById('draft');
+    const onThreadPage = (...args) => thrPage.addEventListener(...args);
+    let observeThreadPage;
     const chat = { id: 'tab', chat: { storeId: 'stable-chat' } }, curChat = () => chat;
     const threadPart = (_, id) => document.getElementById('sbr-thread-' + id);
     const notices = [], zoomBadge = text => notices.push(text), rememberThreadScroll = () => {};

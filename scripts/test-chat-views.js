@@ -23,8 +23,11 @@ app.whenReady().then(async () => {
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     document.body.innerHTML = '<div id="sbr-thread" style="display:none"><div class="thr-flow" id="sbr-thread-flow"></div><textarea id="sbr-thread-input"></textarea><div class="attachments" id="sbr-thread-attachments"></div><button id="sbr-thread-model"><span>Model</span></button></div>';
-    const thrPage = document.getElementById('sbr-thread'), thrInput = document.getElementById('sbr-thread-input');
-    let _curChat = null, _preferChat = null, _threadPoll = null, _flowSig = '', _chatFiles = [];
+    let thrPage = document.getElementById('sbr-thread');
+    const thrInput = document.getElementById('sbr-thread-input');
+    const threadPageListeners = [], observeThreadPage = () => {};
+    const onThreadPage = (...args) => { threadPageListeners.push(args); thrPage.addEventListener(...args); };
+    let _curChat = null, _preferChat = null, _warmChatSlot = null, _threadPoll = null, _flowSig = '', _chatFiles = [];
     const curChat = () => _curChat;
     const autosizeThreadInput = () => {};
     const renderChatFiles = (files = _chatFiles, surface = thrPage) => { surface.querySelector('.attachments').textContent = files.map(f => f.name).join(','); };
@@ -34,6 +37,8 @@ app.whenReady().then(async () => {
     const decorateWorkUsernames = () => {}; // Privacy rendering is covered by test-work-usernames.
     const renderChatErrors = () => {}, renderChatResume = () => {}, syncChatInterruption = () => {}, syncScrollEnd = () => {}, syncContextRing = () => {};
     const turnGitFiles = () => [];
+    const toolIcon = () => '', toolTimestampHtml = () => '';
+    const toolDetailsHtml = () => '<pre class="thr-tool-output">Tool output</pre>';
     const hydrateChatAttachmentSizes = () => {};
     const threadSegments = tab => tab.chat?.segments || [], threadMeta = tab => ({ id: tab.id });
     const chatWorking = () => false, saveState = () => {}, setChatTabLabel = () => {};
@@ -53,6 +58,7 @@ app.whenReady().then(async () => {
       return [{ items: [
         { role: 'user', text: 'History for ' + meta.id, ts: '2026-11-15T00:00:00Z' },
         { role: 'thinking', text: 'Thinking for ' + meta.id, ts: '2026-11-15T00:00:01Z' },
+        { role: 'tool', name: 'shell', summary: 'List files', ts: '2026-11-15T00:00:01Z' },
         { role: 'assistant', text: 'Reply for ' + meta.id + replySuffix, ts: '2026-11-15T00:00:02Z' }
       ] }];
     }, clipboardWrite: text => copies.push(text) };
@@ -85,7 +91,7 @@ app.whenReady().then(async () => {
       const term = current.tabs.find(tab => tab.id === id);
       return term && { ws: current, term };
     };
-    const findGroupContainingTerm = (_, id) => ({ activeTermId: id });
+    const findGroupContainingTerm = (_, id) => ({ activeTermId: findTermById(id)?.term.el.style.display === 'none' ? current.activeTermId : id });
     ${focus}
     ${sync}
     ${view}
@@ -127,9 +133,26 @@ app.whenReady().then(async () => {
     press(second.el.querySelector('.thr-snapshot .thr-turn > summary span'));
     await winTick();
     check(thrPage.parentElement === second.el && thrPage.querySelector('.thr-turn').open, 'First click did not expand the history action');
+    let group = thrPage.querySelector('.thr-tools');
+    check(group.querySelector('template') && !group.querySelector('.thr-tool'), 'Collapsed group mounts all tool rows');
+    group.open = true;
+    group.dispatchEvent(new Event('toggle'));
+    let tool = group.querySelector('.thr-tool');
+    check(tool?.textContent.includes('List files'), 'Opening a group did not mount its tool rows');
+    tool.open = true;
+    tool.dispatchEvent(new Event('toggle'));
+    check(tool.textContent.includes('Tool output'), 'Opening a tool did not render its output');
+    group.open = false;
     replySuffix = ' updated';
     await refreshThreadFlow(second);
     check(thrPage.querySelector('.thr-turn').open && thrPage.textContent.includes('Reply for second updated'), 'A changed turn lost its expanded state');
+    group = thrPage.querySelector('.thr-tools');
+    tool = group.querySelector('.thr-tool');
+    check(!group.open && tool?.open && tool.textContent.includes('Tool output'), 'Refreshing a closed group lost its nested expansion');
+    const searchFixture = document.createElement('div');
+    searchFixture.innerHTML = '<details data-key="search-group"><template><div><details data-key="search-tool"></details></div></template></details>';
+    expandThreadDetails(searchFixture, () => true, new Map([['search-tool', toolDetailsHtml]]));
+    check(searchFixture.textContent.includes('Tool output') && !searchFixture.querySelector('[open]'), 'Search preparation must hydrate nested output without opening details');
     a.activeTermId = first.id; syncThreadPanel();
     thrInput.value = 'unfinished prompt'; _chatFiles = [{ name: 'screenshot.png' }]; renderChatFiles();
     const flow = thrPage.querySelector('.thr-flow'); flow.innerHTML = '<details data-key="turn" open><summary>Steps</summary>Saved chat</details>';
@@ -163,6 +186,7 @@ app.whenReady().then(async () => {
     first.chat = { title: 'First', segments: [{ harness: 'codex' }] };
     let revision = '', tailRevision = '';
     window.electronAPI.threadHistory = async meta => {
+      historyLoads.push(meta.id);
       await winTick();
       return [{ items: Array.from({ length: meta.id === 'first' ? 70 : 20 }, (_, i) => ({
         role: 'user', text: meta.id + ' message ' + i + revision + (i === 69 ? tailRevision : ''), ts: '2026-11-15T00:00:00Z'
@@ -176,15 +200,29 @@ app.whenReady().then(async () => {
     const flowMutations = new MutationObserver(() => {});
     flowMutations.observe(flow, { childList: true });
     flow.scrollTop = 370;
+    const transcriptSurface = flow.parentElement;
+    let historyClicks = 0;
+    onThreadPage('click', () => historyClicks++);
+    rememberThreadScroll(first);
+    first.el.style.display = 'none';
     a.activeTermId = second.id; syncThreadPanel();
-    check(first.el.querySelector('.thr-snapshot .thr-flow') === flow, 'Switching parked the rows individually instead of moving the transcript');
+    check(flow.parentElement === transcriptSurface && transcriptSurface.classList.contains('thr-snapshot'), 'Switching detached the transcript from its surface');
     check(flowMutations.takeRecords().length === 0, 'Switching changed the transcript children');
+    check(first.el.classList.contains('chat-keep-layout') && getComputedStyle(first.el).visibility === 'hidden', 'Warm chat must stay hidden');
     await winTick();
     check(first._scrollState.top === 370 && !first._scrollState.bottom, 'Switching failed to capture scroll before the scroll event');
+    second.el.style.display = 'none'; first.el.style.display = 'block';
+    const loadsBeforeSwitch = historyLoads.length;
     a.activeTermId = first.id; syncThreadPanel();
-    check(thrPage.querySelector('.thr-flow') === flow, 'Switching back did not restore the same transcript element');
+    check(historyLoads.length === loadsBeforeSwitch, 'Returning to cached history initiated an immediate reread');
+    second.el.style.display = 'block';
+    check(thrPage === transcriptSurface && flow.parentElement === transcriptSurface, 'Switching back moved the transcript');
+    flow.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    check(historyClicks === 1, 'The promoted transcript lost or duplicated its click handler');
     flowMutations.disconnect();
     check(Math.abs(flow.scrollTop - 370) < 2, 'Tab switch jumps before history loads');
+    await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
+    check(historyLoads.length === loadsBeforeSwitch, 'An idle transcript should use the normal poll after switching');
     await winTick();
     check(Math.abs(flow.scrollTop - 370) < 2, 'Async history redraw resets the scroll position');
     check(flow.querySelector('.thr-msg') === firstMessage, 'Switching rebuilt unchanged history nodes');
@@ -213,16 +251,24 @@ app.whenReady().then(async () => {
     const cold = makeChat(a, 'cold');
     cold.chat = { title: 'Cold chat', segments: [{ harness: 'codex' }] };
     const saved = { role: 'user', text: 'Recent saved message', ts: '2026-11-15T00:00:01Z' };
-    let resolveLive;
-    window.electronAPI.threadHistoryPreview = async meta => meta.id === cold.id ? [{ items: [saved] }] : null;
-    window.electronAPI.threadHistory = async meta => meta.id === cold.id ? new Promise(resolve => { resolveLive = resolve; }) : [];
+    let resolvePreview, resolveLive, liveReads = 0;
+    window.electronAPI.threadHistoryPreview = async meta => meta.id === cold.id ? new Promise(resolve => { resolvePreview = resolve; }) : null;
+    window.electronAPI.threadHistory = async meta => meta.id === cold.id ? new Promise(resolve => {
+      liveReads++;
+      resolveLive = resolve;
+    }) : [];
     a.activeTermId = cold.id; syncThreadPanel();
     check(thrPage.textContent.includes('Loading conversation'), 'Cold history has no loading state');
+    const repeatedLoad = refreshThreadFlow(cold);
+    check(liveReads === 0, 'An overlapping startup refresh bypassed the saved preview');
+    resolvePreview([{ items: [saved] }]);
     await winTick();
     check(thrPage.textContent.includes('Recent saved message'), 'Saved messages did not appear ahead of the live transcript');
     for (let i = 0; !resolveLive && i < 10; i++) await winTick();
     check(resolveLive, 'Live history did not load after the preview');
     resolveLive([{ items: [{ role: 'user', text: 'Older history', ts: '2026-11-15T00:00:00Z' }, saved] }]);
+    await repeatedLoad;
+    check(liveReads === 1, 'Startup requested the full transcript more than once');
     await winTick();
     check(thrPage.textContent.includes('Older history') && thrPage.textContent.includes('Recent saved message'), 'Full history did not replace the preview');
     const resumedAt = '2026-11-15T00:01:00Z', typedAt = '2026-11-15T00:02:00Z';

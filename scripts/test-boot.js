@@ -14,7 +14,7 @@ if (!process.versions.electron) {
   fs.rmSync(home, { recursive: true, force: true });
   process.exit(r.status ?? 1);
 }
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const errors = [];
 app.on('web-contents-created', (_e, wc) => {
   // Electron 35+ passes one event object; older versions (event, level, message).
@@ -25,7 +25,23 @@ app.on('web-contents-created', (_e, wc) => {
   wc.on('preload-error', (_e, file, err) => errors.push(`preload ${file}: ${err.message}`));
   wc.on('render-process-gone', (_e, d) => errors.push(`renderer gone: ${d.reason}`));
 });
+const optionalRequests = new Set(['usage:limits', 'chat-sdk:models', 'git:pull-requests']);
+const startupRequests = [];
+const handle = ipcMain.handle;
+ipcMain.handle = function (channel, listener) {
+  if (optionalRequests.has(channel)) {
+    return handle.call(this, channel, () => { startupRequests.push(channel); });
+  }
+  if (channel === 'threads:agents') {
+    return handle.call(this, channel, async (...args) => {
+      const result = await listener(...args);
+      return { ...result, found: { ...result.found, agy: '/fixture/agy' } };
+    });
+  }
+  return handle.call(this, channel, listener);
+};
 require('../electron/main.js');
+ipcMain.handle = handle;
 const finish = (ok, msg) => { console.log(`${ok ? 'PASS' : 'FAIL'}: ${msg}`); app.exit(ok ? 0 : 1); };
 setTimeout(async () => {
   // dist/index.html, or the dev server when one is running (main.js prefers it in development).
@@ -38,5 +54,6 @@ setTimeout(async () => {
   if (real.length) return finish(false, `renderer errors during boot:\n  ${real.join('\n  ')}`);
   if (!s.ran || !/hide|gone/.test(s.splash)) return finish(false, `splash still up (app.js ran: ${s.ran}, splash: "${s.splash}")`);
   if (!s.terminals) return finish(false, 'no workspace terminal was created');
+  if (startupRequests.length) return finish(false, `optional commands ran at startup (${startupRequests.join(', ')})`);
   finish(true, 'the app boots past its splash with no renderer errors');
 }, 12000);
