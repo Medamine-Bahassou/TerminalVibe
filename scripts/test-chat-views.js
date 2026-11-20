@@ -41,7 +41,8 @@ app.whenReady().then(async () => {
     const toolDetailsHtml = () => '<pre class="thr-tool-output">Tool output</pre>';
     const hydrateChatAttachmentSizes = () => {};
     const threadSegments = tab => tab.chat?.segments || [], threadMeta = tab => ({ id: tab.id });
-    const chatWorking = () => false, saveState = () => {}, setChatTabLabel = () => {};
+    let workingTab;
+    const chatWorking = tab => tab === workingTab, saveState = () => {}, setChatTabLabel = () => {};
     const _pendingMsgs = new Map(), _turns = new Map(), thrFind = { q: '' }, _thrImgSize = new Map(), _thrImgCache = new Map();
     const escHtml = s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     const mdLite = escHtml, userTextHtml = s => ({ html: escHtml(s), paths: [] });
@@ -213,6 +214,7 @@ app.whenReady().then(async () => {
     check(first._scrollState.top === 370 && !first._scrollState.bottom, 'Switching failed to capture scroll before the scroll event');
     second.el.style.display = 'none'; first.el.style.display = 'block';
     const loadsBeforeSwitch = historyLoads.length;
+    workingTab = first;
     a.activeTermId = first.id; syncThreadPanel();
     check(historyLoads.length === loadsBeforeSwitch, 'Returning to cached history initiated an immediate reread');
     second.el.style.display = 'block';
@@ -222,7 +224,8 @@ app.whenReady().then(async () => {
     flowMutations.disconnect();
     check(Math.abs(flow.scrollTop - 370) < 2, 'Tab switch jumps before history loads');
     await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
-    check(historyLoads.length === loadsBeforeSwitch, 'An idle transcript should use the normal poll after switching');
+    check(historyLoads.length === loadsBeforeSwitch, 'A working transcript should use the normal poll after switching');
+    workingTab = null;
     await winTick();
     check(Math.abs(flow.scrollTop - 370) < 2, 'Async history redraw resets the scroll position');
     check(flow.querySelector('.thr-msg') === firstMessage, 'Switching rebuilt unchanged history nodes');
@@ -234,6 +237,19 @@ app.whenReady().then(async () => {
     check(Math.abs(flow.scrollTop - 370) < 2, 'A tail update moved the reading position');
     revision = ' updated'; _flowSig = ''; await refreshThreadFlow(first);
     check(Math.abs(flow.scrollTop - 370) < 2, 'History refresh jumps to top while reading');
+    const readHistory = window.electronAPI.threadHistory;
+    let finishHiddenRead;
+    window.electronAPI.threadHistory = meta => meta.id === first.id ? new Promise(resolve => { finishHiddenRead = resolve; }) : readHistory(meta);
+    const hiddenRead = refreshThreadFlow(first);
+    first.el.style.display = 'none';
+    a.activeTermId = second.id; syncThreadPanel();
+    finishHiddenRead([{ items: [{ role: 'assistant', text: 'Do not render this while hidden', ts: '2026-11-15T00:00:00Z' }] }]);
+    await hiddenRead;
+    check(!flow.textContent.includes('Do not render this while hidden'), 'A late history response must not repaint an inactive tab');
+    window.electronAPI.threadHistory = readHistory;
+    first.el.style.display = 'block';
+    a.activeTermId = first.id; syncThreadPanel();
+
     rememberThreadScroll(first);
     first.el.style.display = 'none'; rememberThreadScroll(first);
     check(first._scrollState.top === 370, 'Hiding the tab overwrites the saved position with zero');

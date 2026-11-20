@@ -16,7 +16,8 @@ app.whenReady().then(async () => {
     document.body.innerHTML = '<div id="sbr-thread"><button class="thr-send"></button></div>';
     document.body.classList.add('ui-animations');
     const thrSend = document.querySelector('button'), thrInput = { value: 'hello' }, tab = { id: 'a' };
-    const curChat = () => tab, syncQueuedEditUI = () => {}, _chatFiles = [], _chatStarting = new Map(), queueIcon = '<svg></svg>';
+    let activeChat = tab;
+    const curChat = () => activeChat, syncQueuedEditUI = () => {}, _chatFiles = [], _chatStarting = new Map(), queueIcon = '<svg></svg>';
     const scheduleDialog = null, _chatAlt = false;
     let working = false, _chatCtrl = false, reduced = false;
     const chatWorking = () => working;
@@ -43,6 +44,11 @@ app.whenReady().then(async () => {
     checkCentered('.ph-stop');
     check(thrSend.querySelectorAll('.thr-send-icon').length === 1 && thrSend.querySelector('.ph-stop'), 'Outgoing icons must be removed after rapid switches');
     check(thrSend.getBoundingClientRect().width === rect.width && thrSend.getBoundingClientRect().height === rect.height, 'Transitions must not shift the button');
+    activeChat = { id: 'b' }; working = false; thrInput.value = 'hello'; syncSendBtn();
+    check(thrSend.getAttribute('aria-label') === 'Send' && !iconAnimations().length, 'Switching tabs must update the send mode without animating');
+    activeChat = tab; working = true; thrInput.value = ''; syncSendBtn();
+    check(thrSend.getAttribute('aria-label') === 'Stop' && !iconAnimations().length, 'Returning to a working tab must set Stop without animating');
+
     reduced = true; working = false; thrInput.value = 'hello'; syncSendBtn();
     check(thrSend.querySelectorAll('.thr-send-icon').length === 1 && !iconAnimations().length, 'Reduced motion must switch icons immediately');
     reduced = false; document.body.classList.remove('ui-animations'); working = true; syncSendBtn();

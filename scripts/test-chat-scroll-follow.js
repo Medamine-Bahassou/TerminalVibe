@@ -8,6 +8,7 @@ app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false }); await win.loadURL('about:blank');
   await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname, '..', 'workspace.css'), 'utf8'));
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const working = source.slice(source.indexOf('  function syncWorking('), source.indexOf('  const pendingMessages ='));
   const queue = source.slice(source.indexOf('  function renderChatQueue('), source.indexOf('  function updateChatQueue('));
   const start = source.indexOf('      if (curChat() === ws) {', source.indexOf('  async function deliverChatMessage('));
   const pending = source.slice(start, source.indexOf("      _flowSig = '';", start));
@@ -27,7 +28,22 @@ app.whenReady().then(async () => {
     flow.scrollTop = flow.scrollHeight;
     ws.chat.queuedMessages.push({ id: 'q2', typed: 'Second', files: [] }); renderChatQueue(ws);
     check(flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1, 'Queue updates must follow when already at the bottom');
-    const pendingHtml = () => '<div class="thr-pending" style="height:150px">New message</div>', syncWorking = () => {}, bindThreadImage = () => {};
+    const w = { label: 'Thinking', since: Date.now() };
+    const chatWorking = () => w, renderChatResume = () => {}, fmtSecs = String;
+    ${working}
+    syncWorking(ws);
+    const row = flow.querySelector('.thr-working');
+    const timer = row.querySelector('.thr-working-time');
+    let styleReads = 0;
+    const height = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight').get;
+    Object.defineProperty(flow, 'scrollHeight', { configurable: true, get() { styleReads++; return height.call(this); } });
+    w.since -= 3000;
+    syncWorking(ws);
+    check(row.querySelector('.thr-working-time') === timer && Number(timer.textContent) >= 3, 'Working timer must update without replacing its row');
+    check(styleReads === 0, 'An unchanged working row and queue must skip scroll layout reads');
+    delete flow.scrollHeight;
+
+    const pendingHtml = () => '<div class="thr-pending" style="height:150px">New message</div>', bindThreadImage = () => {};
     flow.scrollTop = flow.scrollHeight - flow.clientHeight - 10; before = flow.scrollTop;
     ${pending}
     check(flow.scrollTop === before, 'Sending while reading history must not jump to the end');
