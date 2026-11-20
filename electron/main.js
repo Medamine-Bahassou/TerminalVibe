@@ -1363,9 +1363,7 @@ async function githubRepo(cwd) {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 // gh needs a login even for public repos; GitHub's API doesn't (60 requests/hour per IP), so try it when gh can't.
-async function publicPullRequests(cwd) {
-  const repo = await githubRepo(cwd);
-  if (!repo) return null;
+async function publicPullRequests(repo) {
   try {
     // shortcut: first 100 open PRs only (no Link-header paging); page through if a public repo needs more.
     const res = await require('electron').net.fetch(`https://api.github.com/repos/${repo}/pulls?state=open&per_page=100`,
@@ -1376,11 +1374,13 @@ async function publicPullRequests(cwd) {
 }
 ipcMain.handle('git:pull-requests', async (_e, cwd) => {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { error: 'Select a project folder first.' };
-  const result = await runGitHub(cwd, ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url,draft}',
-    'repos/{owner}/{repo}/pulls?state=open&per_page=100']);
+  const repo = await githubRepo(cwd);
+  if (!repo) return { error: 'No github.com origin remote found for this project.' };
+  const result = await runGitHub(require('os').homedir(), ['api', '--hostname', 'github.com', '--paginate', '--jq',
+    '.[] | {number,title,url:.html_url,draft}', `repos/${repo}/pulls?state=open&per_page=100`]);
   let pulls;
   if (result.error) {
-    pulls = await publicPullRequests(cwd);
+    pulls = await publicPullRequests(repo);
     if (!pulls) return /gh auth login/.test(result.error) ? { error: 'Sign in to GitHub to see pull requests for this repo.', auth: true } : result;
   } else {
     try { pulls = result.out.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)); }
