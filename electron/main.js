@@ -1354,10 +1354,18 @@ function runGitHub(cwd, args) {
     child.stdin?.end();
   });
 }
+// "owner/repo" of a folder's github.com origin remote, or null.
+async function githubRepo(cwd) {
+  const r = await runGit(cwd, ['remote', 'get-url', 'origin']);
+  const m = r.ok && /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(r.out.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}
 ipcMain.handle('git:pull-requests', async (_e, cwd) => {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return { error: 'Select a project folder first.' };
-  const result = await runGitHub(cwd, ['api', '--paginate', '--jq', '.[] | {number,title,url:.html_url,draft}',
-    'repos/{owner}/{repo}/pulls?state=open&per_page=100']);
+  const repo = await githubRepo(cwd);
+  if (!repo) return { error: 'No github.com origin remote found for this project.' };
+  const result = await runGitHub(require('os').homedir(), ['api', '--hostname', 'github.com', '--paginate', '--jq',
+    '.[] | {number,title,url:.html_url,draft}', `repos/${repo}/pulls?state=open&per_page=100`]);
   if (result.error) return result;
   try {
     const pulls = result.out.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))

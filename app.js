@@ -8691,12 +8691,17 @@
       `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(path)}" alt="Pasted image"></div>`).join('')}</div>` : '';
   }
   const resumePrompt = 'continue from where you left';
+  const mergePrNumber = text => /^Please merge GitHub PR #(\d+) \(https:\/\/[^\s)]+\)\. If GitHub blocks the merge, tell me why\.(?: <terminalvibe_context [\s\S]*<\/terminalvibe_context>)?$/.exec(text)?.[1];
+  const mergeStatusHtml = (number, at, pending = false, stopped = false) =>
+    `<div class="thr-status-line thr-merge-status${pending ? ' thr-pending' : ''}" data-ts="${at}" role="status"><i class="ph ph-git-merge" aria-hidden="true"></i><span class="thr-status-title">${stopped ? 'Merge stopped for' : pending ? 'Requesting merge for' : 'Merge requested for'} PR #${number}</span></div>`;
   const resumeStatusHtml = (at, pending = false) =>
     '<div class="thr-status-line thr-resumed' + (pending ? ' thr-pending' : '') + '" data-ts="' + at + '" role="status">'
     + '<i class="ph ph-play" aria-hidden="true"></i><span class="thr-status-title">'
     + (pending ? 'Resuming thread…' : 'Thread resumed') + '</span></div>';
   const pendingMessageHtml = (p, stopped = false) => {
     if (p.resume) return resumeStatusHtml(p.at, !stopped);
+    const mergePr = mergePrNumber(p.text);
+    if (mergePr) return mergeStatusHtml(mergePr, p.at, !stopped, stopped);
     const user = userTextHtml(p.text);
     const images = threadImagesHtml([...(p.imagePaths || []), ...user.paths]);
     return `<div class="thr-msg user${stopped ? '' : ' thr-pending'}" data-ts="${p.at}">${stopped ? '<span class="thr-pending-kind">Stopped</span>' : p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}${images}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}</div>`;
@@ -12169,7 +12174,9 @@
     hydrateChatFiles(queue.flatMap(message => message.files || []), () => updateChatQueue(ws));
     const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
     const html = header + queue.map(m => {
-      const label = queuedMessageTextHtml(m);
+      const mergePr = mergePrNumber(m.text);
+      const label = mergePr ? `Merge queued for PR #${mergePr}` : queuedMessageTextHtml(m);
+
       const schedule = m.scheduleMode === 'countdown' && m.sendAt
         ? `<div class="thr-queued-schedule"><i class="ph ph-timer" aria-hidden="true"></i><span data-countdown-at="${m.sendAt}" role="timer" aria-label="Time remaining"></span></div>`
         : m.sendAt ? `<div class="thr-queued-schedule"><i class="ph ph-clock" aria-hidden="true"></i><span>Scheduled for ${escHtml(new Date(m.sendAt).toLocaleString())}</span></div>` : '';
@@ -13007,7 +13014,7 @@
     // Keep locally stopped turns even after the active Continue state is cleared.
     const interruptions = [...(tab.chat?.interruptions || [])];
     if (tab.chat?.interruptedAt && !interruptions.some(item => item.at === tab.chat.interruptedAt)) interruptions.push({ at: tab.chat.interruptedAt });
-    const prompts = interruptions.length ? [...flow.querySelectorAll(':is(.thr-msg.user, .thr-resumed)[data-ts]')] : [];
+    const prompts = interruptions.length ? [...flow.querySelectorAll(':is(.thr-msg.user, .thr-resumed, .thr-merge-status)[data-ts]')] : [];
     for (const { at, promptTs } of interruptions.sort((a, b) => a.at - b.at)) {
       const next = prompts.find(el => Number(el.dataset.ts) > Math.max(at, promptTs || 0));
       let anchor = next;
@@ -13017,7 +13024,7 @@
         if (row.matches('.thr-seg')) anchor = row;
       }
       const previous = anchor ? anchor.previousElementSibling : [...flow.children].filter(el => !el.matches('.thr-queue, .thr-working')).at(-1);
-      if (previous?.matches('.thr-status-line:not(.thr-resumed)')) continue;
+      if (previous?.matches('.thr-status-line:not(.thr-resumed, .thr-merge-status)')) continue;
       const status = document.createElement('div');
       status.className = 'thr-status-line thr-interruption-status';
       status.setAttribute('role', 'status');
@@ -13312,6 +13319,8 @@
       };
       const msgHtml = (m, key, showActions = true, extra = '') => {
         if (m.role === 'user' && (m.resume || resumed.has(m.ts))) return resumeStatusHtml(Date.parse(m.ts) || 0);
+        const mergePr = m.role === 'user' && mergePrNumber(m.text);
+        if (mergePr) return mergeStatusHtml(mergePr, Date.parse(m.ts) || 0, false, m.stopped);
         const cls = `thr-msg ${m.role}`;
         texts.set(key, m.text);
         // Copy + time under the message, shown on hover.
