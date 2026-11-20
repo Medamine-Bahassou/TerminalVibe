@@ -1283,9 +1283,9 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 #sbr-thread .thr-tools-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #sbr-thread .thr-tools-count { font-size:11px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
 #sbr-thread .thr-tools-time { font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
-#sbr-thread .thr-tools > summary > :is(.thr-tools-count, .thr-tools-time),
+#sbr-thread .thr-tools > summary > :is(.thr-tools-count, .thr-tools-time) { display:none; flex:none; white-space:nowrap; }
+#sbr-thread .thr-tools > summary:is(:hover, :focus-visible) > :is(.thr-tools-count, .thr-tools-time):not(:empty) { display:block; }
 #sbr-thread .thr-tool > summary > .thr-tools-time { flex:none; white-space:nowrap; opacity:0; transition:opacity 140ms ease; }
-#sbr-thread .thr-tools > summary:is(:hover, :focus-visible) > :is(.thr-tools-count, .thr-tools-time),
 #sbr-thread .thr-tool > summary:is(:hover, :focus-visible) > .thr-tools-time { opacity:1; }
 #sbr-thread .thr-tools-caret { color:var(--dim-text); transition:transform 140ms; }
 #sbr-thread .thr-tools[open] .thr-tools-caret { transform:rotate(90deg); }
