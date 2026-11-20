@@ -106,7 +106,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatTitle: (harness, text) => ipcRenderer.invoke('chat:title', harness, text),
   gitBranches: (cwd) => ipcRenderer.invoke('git:branches', cwd),
   gitPullRequests: (cwd) => ipcRenderer.invoke('git:pull-requests', cwd),
-  githubAllPullRequests: (cwds) => ipcRenderer.invoke('github:all-pull-requests', cwds),
+  githubAllPullRequests: (cwds, kind) => ipcRenderer.invoke('github:all-pull-requests', cwds, kind),
   githubLoginStart: () => ipcRenderer.invoke('github:login-start'),
   githubLoginWait: () => ipcRenderer.invoke('github:login-wait'),
   githubLoginCancel: () => ipcRenderer.invoke('github:login-cancel'),

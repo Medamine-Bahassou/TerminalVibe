@@ -66,6 +66,23 @@
         tip.replaceChildren(heading);
         for (const r of rows) {
           const row = document.createElement('div'); row.className = 'ws-process-tooltip-row';
+          // { bar: 0-100, text }: a meter with its caption. { label, text }: an aligned key/value row.
+          if (r.bar != null) {
+            row.className = 'ui-tip-meter';
+            const track = document.createElement('div'); track.className = 'ui-tip-track';
+            track.setAttribute('role', 'img'); track.setAttribute('aria-label', r.text || `${r.bar}%`);
+            const fill = document.createElement('div'); fill.className = 'ui-tip-fill'; fill.style.width = `${Math.max(0, Math.min(100, r.bar))}%`;
+            if (r.bar >= 90) fill.classList.add('high'); else if (r.bar >= 75) fill.classList.add('warn');
+            track.append(fill);
+            const caption = document.createElement('span'); caption.textContent = r.text || '';
+            row.append(track, caption); tip.append(row); continue;
+          }
+          if (r.label) {
+            row.className = 'ui-tip-kv';
+            const k = document.createElement('span'); k.textContent = r.label;
+            const v = document.createElement('span'); v.textContent = r.text;
+            row.append(k, v); tip.append(row); continue;
+          }
           row.innerHTML = r.proc ? procIconHtml(r.proc, 'ph-robot') : `<i class="ph ${/^ph-[\w-]+$/.test(r.icon || '') ? r.icon : 'ph-dot'}" aria-hidden="true"></i>`;
           const text = document.createElement('span'); text.textContent = r.text; row.append(text);
           tip.append(row);
@@ -133,6 +150,7 @@
         }
         else for (const node of record.addedNodes) normalize(node);
       }
+      if (pinned && !pinned.isConnected) pinned = null; // its trigger was re-rendered away
       if (target && !target.isConnected) release();
     }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'data-tip', 'data-tip-processes', 'data-tip-rows'] });
     const schedule = () => { clearTimeout(timer); timer = setTimeout(show, Date.now() < warmUntil ? SKIP_DELAY : DELAY); };
@@ -152,20 +170,37 @@
       }
       return el.closest?.('[data-tip]');
     };
-    document.addEventListener('mouseover', e => { if (take(closestTip(e.target))) schedule(); });
+    // data-tip-pin: a click keeps that tooltip open (live, as its rows update) until a click outside, a second click or Esc.
+    let pinned = null;
+    const unpin = () => { if (!pinned) return; pinned.removeAttribute('aria-expanded'); pinned = null; release(); };
+    document.addEventListener('click', e => {
+      const el = e.target.closest?.('[data-tip-pin][data-tip]');
+      if (!el) return;
+      if (pinned === el) { unpin(); return; }
+      unpin(); release();
+      target = pinned = el; el.setAttribute('aria-expanded', 'true'); show();
+    });
+    document.addEventListener('mouseover', e => { if (!pinned && take(closestTip(e.target))) schedule(); });
     document.addEventListener('mouseout', e => {
-      if (target && (!e.relatedTarget || !target.contains(e.relatedTarget))) release();
+      if (!pinned && target && (!e.relatedTarget || !target.contains(e.relatedTarget))) release();
     });
-    document.addEventListener('mousemove', () => { if (target && !dismissed && !tip.classList.contains('show')) schedule(); }, { passive: true });
-    document.addEventListener('mousedown', () => { if (target) { close(); dismissed = true; } }, true);
-    document.addEventListener('focusin', e => { if (e.target.matches?.(':focus-visible') && take(closestTip(e.target))) schedule(); });
+    document.addEventListener('mousemove', () => { if (!pinned && target && !dismissed && !tip.classList.contains('show')) schedule(); }, { passive: true });
+    document.addEventListener('mousedown', e => {
+      if (pinned) { if (!pinned.contains(e.target)) unpin(); return; } // a press on the pinned trigger is its toggle click
+      if (target?.matches('[data-tip-pin]') && target.contains(e.target)) return; // about to pin: don't dismiss
+      if (target) { close(); dismissed = true; }
+    }, true);
+    document.addEventListener('focusin', e => { if (!pinned && e.target.matches?.(':focus-visible') && take(closestTip(e.target))) schedule(); });
     document.addEventListener('focusout', e => {
-      if (target?.contains(e.target) && !target.contains(e.relatedTarget)) release();
+      if (!pinned && target?.contains(e.target) && !target.contains(e.relatedTarget)) release();
     });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && tip.classList.contains('show')) { close(); dismissed = true; } }, true);
-    document.addEventListener('wheel', () => { if (target) { close(); dismissed = true; } }, { capture: true, passive: true });
-    document.documentElement.addEventListener('mouseleave', release);
-    window.addEventListener('blur', release);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && pinned) { e.stopPropagation(); unpin(); return; }
+      if (e.key === 'Escape' && tip.classList.contains('show')) { close(); dismissed = true; }
+    }, true);
+    document.addEventListener('wheel', () => { if (!pinned && target) { close(); dismissed = true; } }, { capture: true, passive: true });
+    document.documentElement.addEventListener('mouseleave', () => { if (!pinned) release(); });
+    window.addEventListener('blur', () => { unpin(); release(); }); // a click in another window is a click outside
   }
 
   window.addEventListener('error', e => console.error('[UNCAUGHT]', e.error || e.message, e.filename, e.lineno));
@@ -4144,7 +4179,8 @@
   function setupTerminalTitles(entry) {
     for (const code of [0, 2]) entry.term.parser.registerOscHandler(code, title => {
       entry._atShellPrompt = false;
-      if (/claude/i.test(title)) entry._claudeRunning = true;
+      // Claude Code's own titles ("✳ topic", "◐ topic") rarely say "claude".
+      if (/claude/i.test(title) || /^[◐-◓✳]/.test(title)) entry._claudeRunning = true;
       // Claude Code titles: "◐◓◑◒ <topic>" while working, "✳ <topic>" when idle.
       if (/^[\u25D0-\u25D3]/.test(title)) { if (!entry._agentWorking) entry._workSince = Date.now(); entry._agentWorking = true; }
       else if (/^\u2733/.test(title)) entry._idleAt = Date.now();
@@ -4230,7 +4266,10 @@
       if (r?.data) return { src: `data:${r.mediaType};base64,${r.data}` };
     }
     // Not Claude (Codex, …): never fall back to Claude's transcripts, they'd show another session's content.
-    const other = entry._claudeRunning === false;
+    // The process watcher knows the tab's agent; the title/prompt guess only covers tabs it hasn't seen
+    // (a thread's Claude starts behind a shell prompt and may never title itself "claude").
+    const agent = _tabAgent.get(entry.id);
+    const other = agent ? agent !== 'claude' : entry._claudeRunning === false;
     if (other && ref.kind !== 'image') return null;
     // Cache hits only: a miss may be something the CLI hasn't written to disk yet.
     // `later` counts from the newest message, so it shifts when a new one is sent; the prompt's
@@ -4296,7 +4335,123 @@
     }
     place();
   }
-  async function openClaudeRefViewer(entry, ref, prompt, previewSrc) {
+  // Annotate an image that hasn't been sent yet: boxes, arrows and freehand marks, drawn at the image's own
+  // resolution, saved as a PNG. Returns { el, keys, undo } for the viewer; save(bytes, dataUrl) stores the result.
+  function startImageAnnotator(img, save, exit) {
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const wrap = document.createElement('div'); wrap.className = 'civ-edit';
+    const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H; canvas.className = 'civ-edit-canvas';
+    canvas.setAttribute('aria-label', 'Image being annotated');
+    const ctx = canvas.getContext('2d');
+    // Mark colours are part of the picture, not the UI: fixed, high-contrast on screenshots.
+    const COLORS = [['#ef4444', 'Red'], ['#f59e0b', 'Amber'], ['#22c55e', 'Green'], ['#3b82f6', 'Blue'], ['#ffffff', 'White'], ['#111111', 'Black']];
+    const st = { tool: 'rect', color: COLORS[0][0], shapes: [], cur: null };
+    const lw = Math.max(3, Math.round(Math.min(W, H) / 220)); // a stroke that reads at any image size
+    const fs = Math.max(16, Math.round(Math.min(W, H) / 26)); // text size, in image pixels
+    const font = `600 ${fs}px ${getComputedStyle(document.body).getPropertyValue('--ui-font').trim() || 'sans-serif'}`;
+    const drawShape = s => {
+      ctx.strokeStyle = ctx.fillStyle = s.color; ctx.lineWidth = lw; ctx.lineCap = ctx.lineJoin = 'round';
+      if (s.tool === 'text') { // a dark (or, for black text, light) outline keeps it readable on any background
+        ctx.font = font; ctx.textBaseline = 'top';
+        ctx.lineWidth = Math.max(2, fs / 7); ctx.strokeStyle = s.color === '#111111' ? '#ffffffcc' : '#000000aa';
+        s.text.split('\n').forEach((line, i) => { ctx.strokeText(line, s.x0, s.y0 + i * fs * 1.2); ctx.fillText(line, s.x0, s.y0 + i * fs * 1.2); });
+        return;
+      }
+      ctx.beginPath();
+      if (s.tool === 'rect') ctx.rect(Math.min(s.x0, s.x1), Math.min(s.y0, s.y1), Math.abs(s.x1 - s.x0), Math.abs(s.y1 - s.y0));
+      else if (s.tool === 'pen') s.pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+      else { // arrow: a line ending in a filled head
+        const a = Math.atan2(s.y1 - s.y0, s.x1 - s.x0), head = lw * 4.5;
+        ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x1 - Math.cos(a) * head * .8, s.y1 - Math.sin(a) * head * .8); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(s.x1, s.y1);
+        ctx.lineTo(s.x1 - head * Math.cos(a - .45), s.y1 - head * Math.sin(a - .45));
+        ctx.lineTo(s.x1 - head * Math.cos(a + .45), s.y1 - head * Math.sin(a + .45)); ctx.closePath(); ctx.fill();
+        return;
+      }
+      ctx.stroke();
+    };
+    const redraw = () => { ctx.clearRect(0, 0, W, H); ctx.drawImage(img, 0, 0, W, H); st.shapes.forEach(drawShape); if (st.cur) drawShape(st.cur); };
+    const at = e => { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; };
+    // Text: a box typed in place over the image; Enter (or clicking elsewhere) places it, Esc drops it.
+    let typing = null;
+    const commitText = (keep = true) => {
+      if (!typing) return;
+      const { input, x, y } = typing; typing = null;
+      const text = input.value.trim(); input.remove();
+      if (keep && text) st.shapes.push({ tool: 'text', color: st.color, x0: x, y0: y, text });
+      redraw(); sync();
+    };
+    const startText = e => {
+      const [x, y] = at(e), r = canvas.getBoundingClientRect(), scale = r.width / W;
+      const input = document.createElement('input');
+      input.type = 'text'; input.className = 'civ-text-input'; input.setAttribute('aria-label', 'Annotation text');
+      Object.assign(input.style, { left: `${e.clientX}px`, top: `${e.clientY}px`, color: st.color, font: font.replace(`${fs}px`, `${fs * scale}px`) });
+      input.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') { ev.preventDefault(); commitText(); }
+        else if (ev.key === 'Escape') { ev.preventDefault(); commitText(false); }
+        ev.stopPropagation();
+      });
+      input.addEventListener('blur', () => commitText());
+      wrap.appendChild(input); typing = { input, x, y };
+      requestAnimationFrame(() => input.focus());
+    };
+    canvas.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      if (typing) { commitText(); return; } // the first click away places the text
+      if (st.tool === 'text') { startText(e); return; }
+      canvas.setPointerCapture(e.pointerId);
+      const [x, y] = at(e); st.cur = { tool: st.tool, color: st.color, x0: x, y0: y, x1: x, y1: y, pts: [[x, y]] };
+    });
+    canvas.addEventListener('pointermove', e => {
+      if (!st.cur) return;
+      const [x, y] = at(e); Object.assign(st.cur, { x1: x, y1: y }); if (st.cur.tool === 'pen') st.cur.pts.push([x, y]);
+      redraw();
+    });
+    canvas.addEventListener('pointerup', () => {
+      const s = st.cur; st.cur = null;
+      if (s && Math.hypot(s.x1 - s.x0, s.y1 - s.y0) > lw * 2) st.shapes.push(s); // a click without a drag adds nothing
+      redraw(); sync();
+    });
+    wrap.addEventListener('click', e => e.stopPropagation());
+    const bar = document.createElement('div'); bar.className = 'civ-bar civ-edit-bar'; bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'Annotate');
+    const button = (html, title, fn, cls = '') => {
+      const b = document.createElement('button'); b.type = 'button'; b.title = title; b.setAttribute('aria-label', title);
+      b.className = cls; b.innerHTML = html; b.onclick = fn; bar.appendChild(b); return b;
+    };
+    const sep = () => bar.appendChild(Object.assign(document.createElement('span'), { className: 'civ-sep' }));
+    const tools = [['rect', 'square', 'Box (B)'], ['arrow', 'arrow-up-right', 'Arrow (A)'], ['pen', 'pencil-simple-line', 'Pen (P)'], ['text', 'text-t', 'Text (T)']]
+      .map(([id, icon, title]) => [id, button(`<i class="ph ph-${icon}"></i>`, title, () => { st.tool = id; sync(); })]);
+    sep();
+    const swatches = COLORS.map(([c, name]) => [c, button(`<span class="civ-swatch" style="--swatch:${c}"></span>`, name, () => { st.color = c; sync(); }, 'civ-color')]);
+    // Picking a colour mid-text keeps the caret in the text box (so the text takes the new colour when placed).
+    for (const [, b] of swatches) b.addEventListener('mousedown', e => e.preventDefault());
+    sep();
+    const undoBtn = button('<i class="ph ph-arrow-u-up-left"></i>', 'Undo (Ctrl+Z)', () => undo());
+    sep();
+    button('Cancel', 'Cancel (Esc)', () => exit(), 'civ-text');
+    const saveBtn = button('<i class="ph ph-check"></i>Save', 'Save the annotated image', async () => {
+      commitText(); // text still being typed is part of the save
+      saveBtn.disabled = true;
+      try {
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        await save(new Uint8Array(await blob.arrayBuffer()), canvas.toDataURL('image/png'));
+      } catch (err) { zoomBadge(err.message || 'Could not save the image'); saveBtn.disabled = false; }
+    }, 'civ-text civ-save');
+    bar.onclick = e => e.stopPropagation();
+    const undo = () => { st.shapes.pop(); redraw(); sync(); };
+    function sync() {
+      for (const [id, b] of tools) b.setAttribute('aria-pressed', String(st.tool === id));
+      for (const [c, b] of swatches) b.setAttribute('aria-pressed', String(st.color === c));
+      undoBtn.disabled = !st.shapes.length;
+      saveBtn.disabled = !st.shapes.length && !typing;
+      if (typing) typing.input.style.color = st.color; // a colour picked while typing applies to that text
+    }
+    wrap.append(canvas, bar);
+    redraw(); sync();
+    return { el: wrap, undo, keys: { b: () => { st.tool = 'rect'; sync(); }, a: () => { st.tool = 'arrow'; sync(); }, p: () => { st.tool = 'pen'; sync(); }, t: () => { st.tool = 'text'; sync(); } } };
+  }
+  async function openClaudeRefViewer(entry, ref, prompt, previewSrc, opts = {}) {
     hideClaudeRefPop();
     const found = previewSrc ? { src: previewSrc } : await loadClaudeRef(entry, ref, prompt).catch(() => null);
     if (!found?.src && found?.text == null) { zoomBadge(found?.error || 'Preview unavailable'); return; }
@@ -4304,6 +4459,7 @@
     const overlay = document.createElement('div'); overlay.className = 'claude-image-viewer';
     overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-label', ref.label); overlay.tabIndex = -1;
     let keys = null; // image viewer shortcuts
+    let editing = null; // the annotator, while open
     if (found.src) {
       const img = document.createElement('img'); img.src = found.src; img.alt = ref.label; img.draggable = false;
       // Wheel zooms at the cursor, drag pans, toolbar/keys rotate and flip.
@@ -4356,13 +4512,23 @@
       btn('arrow-clockwise', 'Rotate right (R)', () => rotate(90));
       btn('flip-horizontal', 'Flip (F)', flip);
       sep();
-      btn('x', 'Close (Esc)', () => close());
-      keys = { '+': () => zoomAt(v.s * 1.25), '=': () => zoomAt(v.s * 1.25), '-': () => zoomAt(v.s / 1.25), '0': fit,
+      // Only an image that hasn't been sent yet can be annotated (the caller passes onEdit for those).
+      const viewKeys = { '+': () => zoomAt(v.s * 1.25), '=': () => zoomAt(v.s * 1.25), '-': () => zoomAt(v.s / 1.25), '0': fit,
         r: () => rotate(90), R: () => rotate(-90), f: flip, F: flip };
+      const stage = document.createElement('div'); stage.className = 'civ-stage';
+      const startEdit = () => {
+        if (editing) return;
+        const stop = () => { editing?.el.remove(); editing = null; keys = viewKeys; stage.hidden = bar.hidden = false; overlay.focus(); };
+        editing = startImageAnnotator(img, async (bytes, dataUrl) => { await opts.onEdit(bytes, dataUrl); close(); }, stop);
+        keys = editing.keys; stage.hidden = bar.hidden = true;
+        overlay.append(editing.el);
+      };
+      if (opts.onEdit) { btn('pencil-simple', 'Annotate (E)', startEdit); viewKeys.e = startEdit; sep(); }
+      btn('x', 'Close (Esc)', () => close());
+      keys = viewKeys;
       apply();
       // The zoomed image stays inside a frame (at most 92vw x 84vh, centered like the overlay, so the
       // zoom math is unchanged); past it, the image is cropped and panned inside.
-      const stage = document.createElement('div'); stage.className = 'civ-stage';
       stage.appendChild(img);
       overlay.append(stage, bar);
     } else {
@@ -4372,11 +4538,15 @@
     }
     // Capture on document: xterm refocuses itself after the click, and a stray Esc would interrupt Claude.
     const onKey = e => {
-      const k = e.key === 'Escape' ? close : !e.ctrlKey && !e.metaKey && !e.altKey && keys?.[e.key];
+      if (e.target.closest?.('.civ-text-input')) return; // typing annotation text: its own keys (Enter, Esc) handle it
+      // While annotating, Esc leaves the annotator (not the viewer) and Ctrl/Cmd+Z undoes the last mark.
+      const undo = editing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && editing.undo;
+      const k = undo || (e.key === 'Escape' ? (editing ? () => editing.el.querySelector('.civ-text')?.click() : close)
+        : !e.ctrlKey && !e.metaKey && !e.altKey && keys?.[e.key]);
       if (k) { e.preventDefault(); e.stopPropagation(); k(); }
     };
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); if (entry?.term) entry.term.focus(); else previousFocus?.focus(); };
-    overlay.onclick = close;
+    overlay.onclick = () => { if (!editing) close(); }; // a stray click on the backdrop never throws away marks
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(overlay);
   }
@@ -4501,7 +4671,9 @@
     let text = '', pos = [];
     const glues = [];
     rows.forEach((row, i) => {
-      if (i && !row.wrapped) {
+      // A full-width row (Claude's highlighted prompt) makes the CLI's indented continuation look
+      // soft-wrapped; its indent must be dropped too, or the path gets "  " in the middle.
+      if (i && (!row.wrapped || /^\s/.test(row.text))) {
         const tail = /(\S+)\s*$/.exec(text)?.[1] || '';
         const lead = row.text.length - row.text.trimStart().length;
         const pathStart = /^['"(]?(?:~|[A-Za-z]:)?[\\/][^\s'"`()<>[\]{}|]*$/.test(tail) && !/\.(?:png|jpe?g|gif|webp|bmp)$/i.test(tail);
@@ -4512,7 +4684,7 @@
           text += row.text.slice(lead); pos.push(...row.pos.slice(lead));
           return;
         }
-        text += '\n'; pos.push(null);
+        if (!row.wrapped) { text += '\n'; pos.push(null); }
       }
       text += row.text; pos.push(...row.pos);
     });
@@ -8260,7 +8432,11 @@
   const PR_SORTS = { updated: ['ph-clock-counter-clockwise', 'Recently updated'], newest: ['ph-sort-descending', 'Newest'], oldest: ['ph-sort-ascending', 'Oldest'] };
   const PR_FILTERS = { all: ['ph-git-pull-request', 'All open'], mine: ['ph-user', 'Created by me'], review: ['ph-eye', 'Review requested'],
     ready: ['ph-check-circle', 'Ready for review'], drafts: ['ph-note-pencil', 'Drafts'] };
-  const _pulls = { el: null, data: null, loading: false, q: '', sort: 'updated', filter: 'all', repo: '', returnFocus: null };
+  // The same page lists issues when opened from the Issues button (kind 'issues').
+  const ISSUE_FILTERS = { all: ['ph-circle issue-icon', 'All open'], mine: ['ph-user', 'Created by me'], assigned: ['ph-user-circle', 'Assigned to me'] };
+  const pageFilters = () => _pulls.kind === 'issues' ? ISSUE_FILTERS : PR_FILTERS;
+  const pageNoun = () => _pulls.kind === 'issues' ? 'issues' : 'pull requests';
+  const _pulls = { el: null, data: null, loading: false, q: '', sort: 'updated', filter: 'all', repo: '', returnFocus: null, kind: 'pulls' };
   const pullsButton = document.getElementById('ts-pulls');
   // Search: free text over title, repo, #number, author and branch, plus label:, author:, repo: and is:draft tokens.
   function prMatches(pr, q) {
@@ -8270,7 +8446,7 @@
         : key === 'author' ? (pr.author?.login || '').toLowerCase().includes(value)
         : key === 'repo' ? pr.repo.toLowerCase().includes(value)
         : key === 'is' ? (value === 'draft' ? pr.isDraft : value === 'ready' ? !pr.isDraft : true)
-        : `${pr.title} ${pr.repo} #${pr.number} ${pr.author?.login || ''} ${pr.headRefName}`.toLowerCase().includes(word);
+        : `${pr.title} ${pr.repo} #${pr.number} ${pr.author?.login || ''} ${pr.headRefName || ''}`.toLowerCase().includes(word);
       if (!ok) return false;
     }
     return true;
@@ -8279,6 +8455,7 @@
     const { data, q, sort, filter, repo } = _pulls, me = data?.me;
     const keep = pr => (!repo || pr.repo === repo) && prMatches(pr, q)
       && (filter === 'mine' ? pr.author?.login === me : filter === 'review' ? pr.reviewRequests?.some(r => r.login === me)
+        : filter === 'assigned' ? pr.assignees?.some(a => a.login === me)
         : filter === 'ready' ? !pr.isDraft : filter === 'drafts' ? pr.isDraft : true);
     const time = pr => Date.parse(sort === 'updated' ? pr.updatedAt : pr.createdAt) || 0;
     return (data?.pulls || []).filter(keep).sort((a, b) => sort === 'oldest' ? time(a) - time(b) : time(b) - time(a));
@@ -8288,34 +8465,35 @@
     if (!el) return;
     const { data, loading, sort, filter, repo } = _pulls;
     el.querySelector('[data-act="sort"] span').textContent = PR_SORTS[sort][1];
-    el.querySelector('[data-act="filter"] span').textContent = PR_FILTERS[filter][1];
+    el.querySelector('[data-act="filter"] span').textContent = pageFilters()[filter][1];
     el.querySelector('[data-act="repo"] span').textContent = repo || 'All repos';
     el.querySelector('[data-act="refresh"]').classList.toggle('busy', loading);
     const list = visiblePulls();
     el.querySelector('.pr-count').textContent = data?.pulls ? String(list.length) : '';
     const empty = (icon, text) => `<div class="um-empty"><i class="ph ${icon}" aria-hidden="true"></i><span>${escHtml(text)}</span></div>`;
     const errors = data?.errors?.length ? `<div class="pr-errors"><i class="ph ph-warning-circle" aria-hidden="true"></i><span>${escHtml(data.errors.join(' · '))}</span></div>` : '';
-    el.querySelector('.um-body').innerHTML = loading && !data ? empty('ph-circle-notch um-spin', 'Loading pull requests…')
+    el.querySelector('.um-body').innerHTML = loading && !data ? empty('ph-circle-notch um-spin', `Loading ${pageNoun()}…`)
       : data?.error ? empty('ph-warning-circle', data.error)
       : !data?.repos?.length ? empty('ph-git-pull-request', 'None of your threads use a GitHub repo yet.')
       : errors + (list.length ? `<div class="pr-list" role="list">${list.map(pr => {
         const review = pr.reviewDecision === 'APPROVED' ? '<i class="ph ph-check-circle pr-approved" title="Approved" aria-label="Approved"></i>'
           : pr.reviewDecision === 'CHANGES_REQUESTED' ? '<i class="ph ph-warning-circle pr-changes" title="Changes requested" aria-label="Changes requested"></i>' : '';
         const labels = (pr.labels || []).slice(0, 3).map(l => `<span class="pr-label">${escHtml(l.name)}</span>`).join('');
+        const icon = _pulls.kind === 'issues' ? 'ph-circle issue-icon' : 'ph-git-pull-request';
         return `<a href="#" class="pr-row" role="listitem" data-url="${escHtml(pr.url)}" data-number="${pr.number}">`
-          + `<i class="ph ph-git-pull-request pr-state${pr.isDraft ? ' draft' : ''}" title="${pr.isDraft ? 'Draft' : 'Open'}" aria-label="${pr.isDraft ? 'Draft' : 'Open'}"></i>`
+          + `<i class="ph ${icon} pr-state${pr.isDraft ? ' draft' : ''}" title="${pr.isDraft ? 'Draft' : 'Open'}" aria-label="${pr.isDraft ? 'Draft' : 'Open'}"></i>`
           + `<span class="pr-main"><span class="pr-title">${escHtml(pr.title)}</span><span class="pr-meta"><span class="pr-repo">${escHtml(pr.repo)}#${pr.number}</span>`
           + `<span>${escHtml(pr.author?.login || '')}</span><span>updated ${escHtml(ago(Date.parse(pr.updatedAt)))}${ago(Date.parse(pr.updatedAt)) === 'now' ? '' : ' ago'}</span>`
-          + `<span class="pr-branch"><i class="ph ph-git-branch" aria-hidden="true"></i>${escHtml(pr.headRefName)}</span></span></span>`
+          + (pr.headRefName ? `<span class="pr-branch"><i class="ph ph-git-branch" aria-hidden="true"></i>${escHtml(pr.headRefName)}</span>` : '') + '</span></span>'
           + `<span class="pr-side">${labels}${review}</span></a>`;
-      }).join('')}</div>` : empty('ph-funnel-simple', 'No pull requests match.'));
+      }).join('')}</div>` : empty('ph-funnel-simple', `No ${pageNoun()} match.`));
   }
   async function loadPullsPage() {
     if (_pulls.loading) return;
     _pulls.loading = true; renderPullsPage();
     try {
-      const data = await window.electronAPI.githubAllPullRequests(allChatTabs().map(chatCwd)).catch(() => ({ error: 'Could not load pull requests.' }));
-      if (data.auth) { closePullsPage(); showGitHubLogin(openPullsPage); return; }
+      const data = await window.electronAPI.githubAllPullRequests(allChatTabs().map(chatCwd), _pulls.kind).catch(() => ({ error: `Could not load ${pageNoun()}.` }));
+      if (data.auth) { const kind = _pulls.kind; closePullsPage(); showGitHubLogin(() => openPullsPage(kind)); return; }
       _pulls.data = data;
       if (_pulls.repo && !data.repos?.includes(_pulls.repo)) _pulls.repo = '';
     } finally { _pulls.loading = false; renderPullsPage(); }
@@ -8334,17 +8512,19 @@
     showCtxMenu({ pageX: r.right, pageY: r.bottom + 6, alignRight: true }, 'choice', { options, current, pick: value => { pick(value); renderPullsPage(); } });
     ctxEl._owner = btn;
   }
-  function openPullsPage() {
-    if (_pulls.el) { _pulls.el.querySelector('.pr-search input').focus(); return; }
+  function openPullsPage(kind = 'pulls') {
+    if (_pulls.el && _pulls.kind === kind) { _pulls.el.querySelector('.pr-search input').focus(); return; }
+    if (_pulls.el) { _pulls.el.remove(); _pulls.el = null; }
+    if (_pulls.kind !== kind) Object.assign(_pulls, { kind, data: null, q: '', filter: 'all', repo: '' });
     if (!window.electronAPI?.githubAllPullRequests) { zoomBadge('Pull requests need the desktop app'); return; }
     _pulls.returnFocus = document.activeElement;
     const el = document.createElement('div');
     el.id = 'pulls-overlay';
     el.innerHTML = `<div id="pulls-modal" role="dialog" aria-modal="true" aria-labelledby="pulls-title">
-      <div class="um-head"><span class="um-crumb current" id="pulls-title">Pull requests</span><span class="pr-count"></span>
+      <div class="um-head"><span class="um-crumb current" id="pulls-title">${kind === 'issues' ? 'Issues' : 'Pull requests'}</span><span class="pr-count"></span>
         <button type="button" class="um-icon pr-close" data-act="close" title="Close (Esc)" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></div>
       <div class="pr-toolbar">
-        <label class="pr-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search pull requests, or label:bug" aria-label="Search pull requests" spellcheck="false" autocomplete="off"></label>
+        <label class="pr-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search ${pageNoun()}, or label:bug" aria-label="Search ${pageNoun()}" spellcheck="false" autocomplete="off"></label>
         <button type="button" class="pr-tool" data-act="sort" aria-haspopup="menu"><i class="ph ph-arrows-down-up" aria-hidden="true"></i><span></span></button>
         <button type="button" class="pr-tool" data-act="filter" aria-haspopup="menu"><i class="ph ph-funnel-simple" aria-hidden="true"></i><span></span></button>
         <button type="button" class="pr-tool" data-act="repo" aria-haspopup="menu"><i class="ph ph-git-fork" aria-hidden="true"></i><span></span><i class="ph ph-caret-down" aria-hidden="true"></i></button>
@@ -8358,12 +8538,12 @@
     el.addEventListener('keydown', e => { if (e.key === 'Escape' && !ctxEl.classList.contains('open')) { e.preventDefault(); e.stopPropagation(); closePullsPage(); } });
     el.addEventListener('click', e => {
       const row = e.target.closest('.pr-row');
-      if (row) { e.preventDefault(); closePullsPage(); addBrowserTab(activeWsId, null, row.dataset.url, `PR #${row.dataset.number}`); return; }
+      if (row) { e.preventDefault(); closePullsPage(); addBrowserTab(activeWsId, null, row.dataset.url, `${_pulls.kind === 'issues' ? 'Issue' : 'PR'} #${row.dataset.number}`); return; }
       const btn = e.target.closest('[data-act]'), act = btn?.dataset.act;
       if (act === 'close') closePullsPage();
       else if (act === 'refresh') void loadPullsPage();
       else if (act === 'sort') pullsMenu(btn, Object.entries(PR_SORTS), _pulls.sort, v => { _pulls.sort = v; });
-      else if (act === 'filter') pullsMenu(btn, Object.entries(PR_FILTERS), _pulls.filter, v => { _pulls.filter = v; });
+      else if (act === 'filter') pullsMenu(btn, Object.entries(pageFilters()), _pulls.filter, v => { _pulls.filter = v; });
       else if (act === 'repo') pullsMenu(btn, [['', ['ph-stack', 'All repos']], ...(_pulls.data?.repos || []).map(r => [r, ['ph-git-fork', r]])], _pulls.repo, v => { _pulls.repo = v; });
     });
     document.body.appendChild(el);
@@ -8372,7 +8552,8 @@
     input.focus();
     void loadPullsPage(); // opening the page always checks GitHub again
   }
-  pullsButton?.addEventListener('click', openPullsPage);
+  pullsButton?.addEventListener('click', () => openPullsPage());
+  document.getElementById('ts-issues')?.addEventListener('click', () => openPullsPage('issues'));
   if (!SETTINGS_ONLY && window.electronAPI?.usageLimits) {
     _usageLimits = readUsageCache();
     if (usageButton) usageButton.parentElement.hidden = false;
@@ -9781,7 +9962,8 @@
     const pr = thrChip('pr');
     const prs = _chatPullRequests.get(cwd), pulls = prs?.pulls || [];
     if (b && window.electronAPI?.gitPullRequests) void loadChatPullRequests(cwd);
-    pr.hidden = !b || !window.electronAPI?.gitPullRequests;
+    // Only when there's something to show: open PRs, or a sign-in needed to see them.
+    pr.hidden = !b || !window.electronAPI?.gitPullRequests || !(pulls.length || prs?.auth);
     if (!pr.hidden) {
       pr.querySelector('span').textContent = pulls.length === 1 ? `PR #${pulls[0].number}` : pulls.length > 1 ? `${pulls.length} PRs` : 'Pull requests';
       pr.title = prs?.auth ? 'Sign in to GitHub to see pull requests' : 'Show open pull requests';
@@ -10465,7 +10647,7 @@
         }
         const segs = threadSegments(tab);
         let latest = [...segs].reverse().find(s => s.used || s.sessionId || s === tab._chatSeg) || segs[segs.length - 1];
-        const process = await checkTerminalRunning(tab.id);
+        const process = await shellSettled(tab.id);
         const running = THREAD_HARNESSES.find(h => h.bin === String(process || '').toLowerCase().replace(/\.exe$/, ''));
         if (running && (!latest || (running.id === latest.harness && (tab._chatSeg === latest || tab._chatSeg?.sessionId === latest.sessionId && latest.sessionId)))) {
           _tabAgent.set(tab.id, running.id);
@@ -10489,10 +10671,31 @@
           access: current.harness === latest.harness ? current.access : 'default' } : current;
         if (!harnessOf(options.harness) || !CHAT_AGENTS[options.harness]) throw Error('This chat’s agent harness is unavailable.');
         if (latest?.sessionId && !['claude', 'codex', 'antigravity'].includes(options.harness)) throw Error(`Session resume is not supported for ${harnessOf(options.harness).name} yet.`);
-        return await startChatAgent(tab, tab, null, null, { terminalOnly: true, resumeSegment: latest?.sessionId ? latest : null, options });
-      } catch (err) { zoomBadge(err.message || 'Could not resume this chat session'); return false; }
+        const started = await startChatAgent(tab, tab, null, null, { terminalOnly: true, resumeSegment: latest?.sessionId ? latest : null, options });
+        if (!started) noteInTerminal(tab, `Could not start ${harnessOf(options.harness)?.name || 'the agent'} here. Check Settings › Providers, then switch views to try again.`);
+        return started;
+      } catch (err) {
+        zoomBadge(err.message || 'Could not resume this chat session');
+        noteInTerminal(tab, err.message || 'Could not resume this chat session');
+        return false;
+      }
     })().finally(() => { delete tab._terminalSessionOpening; });
     return tab._terminalSessionOpening;
+  }
+  // The terminal view hides the chat (and its error line): say why the agent didn't start where the user is looking.
+  function noteInTerminal(tab, message) {
+    if (!tab._cliView || findTermById(tab.id)?.term !== tab) return;
+    tab.term.write(`\r\n\x1b[33m[TerminalVibe] ${String(message).replace(/[\x00-\x1f]/g, ' ')}\x1b[0m\r\n`);
+  }
+  // A fresh shell runs short-lived prompt helpers (git, oh-my-posh…) that look like a busy terminal for a moment:
+  // read it fresh a few times before calling it busy. Returns the running process name, or null when idle.
+  async function shellSettled(id) {
+    let name = await checkTerminalRunning(id, true);
+    for (let i = 0; i < 6 && name !== null && !THREAD_HARNESSES.some(h => h.bin === String(name).toLowerCase().replace(/\.exe$/, '')); i++) {
+      await sleep(250);
+      name = await checkTerminalRunning(id, true);
+    }
+    return name;
   }
   async function startChatAgent(ws, chatTab, text, replace, launch = {}) {
     const o = launch.options || chatOpts(ws), h = harnessOf(o.harness);
@@ -10534,7 +10737,7 @@
       const entry = chatTab;
       if (launch.terminalOnly) {
         if (findTermById(entry.id)?.term !== entry) return false;
-        if (await checkTerminalRunning(entry.id) !== null) throw Error('The terminal became busy before the session could resume.');
+        if (await shellSettled(entry.id) !== null) throw Error('The terminal became busy before the session could resume.');
         if (findTermById(entry.id)?.term !== entry) return false;
       }
       const stopped = await stopTabAgent(entry);
@@ -10786,10 +10989,20 @@
     const icon = image ? 'ph-image' : linkFileIcon(path);
     return `<a href="#" class="thr-image-ref thr-img-link" tabindex="${tabIndex}" data-path="${escHtml(path)}" title="${escHtml(path)}"><span class="thr-inline-image-icon">${image && preview ? `<img src="${escHtml(preview)}" alt="">` : `<i class="ph ${icon}" aria-hidden="true"></i>`}</span><span class="thr-img-link-name">${escHtml(name)}</span><small class="thr-img-size" data-size-path="${escHtml(path)}">${size ? escHtml(fmtBytes(size).replace(' ', '')) : ''}</small></a>`;
   }
-  function openChatAttachment(file) {
+  // draftTab: the chat whose composer holds this not-yet-sent file; only then can an image be annotated.
+  function openChatAttachment(file, draftTab = null) {
     if (!file?.path) return;
     const image = file.image ?? /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.path);
-    if (image) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name || file.path.split(/[\\/]/).pop() }, '', file.preview);
+    // The annotated copy is a new file in the thread's attachments; the draft then sends it instead.
+    const onEdit = draftTab && window.electronAPI?.saveThreadAttachment ? async (bytes, dataUrl) => {
+      const path = await window.electronAPI.saveThreadAttachment(threadKey(draftTab), `${(file.name || 'image').replace(/\.[^.]+$/, '')}-annotated.png`, bytes);
+      if (!path) throw Error('Could not save the annotated image');
+      Object.assign(file, { path, preview: dataUrl, size: bytes.length, image: true });
+      cacheThreadImage(path, dataUrl);
+      if (curChat() === draftTab) renderChatFiles();
+      saveState();
+    } : null;
+    if (image) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name || file.path.split(/[\\/]/).pop() }, '', file.preview, { onEdit });
     else openClaudeRefViewer(null, { kind: 'text-file', path: file.path, label: file.name || file.path }, '');
   }
   function hydrateChatAttachmentSizes(surface) {
@@ -11020,7 +11233,7 @@
     const cite = e.target.closest('.thr-cite-link'), citation = cite && _chatFiles[+cite.dataset.i];
     if (citation?.cite) { jumpToCitation(citation); return; }
     const open = e.target.closest('.thr-file-open'), file = open && _chatFiles[+open.dataset.i];
-    if (file) openChatAttachment(file);
+    if (file) openChatAttachment(file, curChat()); // a composer chip: not sent yet, so it can be annotated
   });
   const thrFileInput = thrPage.querySelector('#sbr-thread-file');
   thrPage.querySelector('#sbr-thread-attach')?.addEventListener('click', () => thrFileInput.click());
@@ -11036,7 +11249,7 @@
     const file = _chatFiles.find(f => f.mention === reference.dataset.mention);
     if (file?.cite) jumpToCitation(file);
     else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
-    else if (file && !file.at) openChatAttachment(file);
+    else if (file && !file.at) openChatAttachment(file, curChat());
   });
   {
     const editor = threadPart(thrPage, 'input-links');
@@ -13200,7 +13413,17 @@
     if (el.hidden) return;
     const p = Math.min(100, Math.round(ctx.used / ctx.max * 100));
     el.style.setProperty('--p', p);
-    el.setAttribute('aria-label', `Context: ${p}% used`);
+    const n = v => v >= 1e6 ? `${+(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${+(v / 1e3).toFixed(1)}k` : String(v);
+    el.setAttribute('aria-label', `Context: ${n(ctx.used)} of ${n(ctx.max)} tokens (${p}%)`);
+    el.dataset.tip = 'Context window';
+    el.dataset.tipPin = '1'; // click to keep the details open
+    const rows = [{ bar: p, text: `${p}% · ${n(ctx.used)} of ${n(ctx.max)} · ${n(Math.max(0, ctx.max - ctx.used))} left` }];
+    const l = ctx.last, s = ctx.session, io = u => `${n(u.input + u.cacheWrite)} new · ${n(u.cacheRead)} cached · ${n(u.output)} out`;
+    if (l) rows.push({ label: 'Last reply', text: io(l) });
+    if (s) rows.push({ label: 'Session', text: io(s) });
+    if (s?.cost != null) rows.push({ label: 'Cost', text: `$${s.cost.toFixed(2)} at API rates` });
+    if (ctx.model) rows.push({ label: 'Model', text: ctx.model });
+    el.dataset.tipRows = JSON.stringify(rows);
   }
   // Right-click the composer (outside the text) to pick which controls it shows.
   document.addEventListener('contextmenu', e => {
@@ -14761,10 +14984,17 @@
     }
     if (!notifyOnCommandFinish) return;
     if (notificationSound) playNotifySound();
-    const agent = /^claude/i.test(name || '') ? 'Claude Code' : /^codex/i.test(name || '') ? 'Codex' : null;
-    const title = kind === 'agent' ? `${agent || name} finished responding` : (name ? `${name} finished` : 'Command finished');
-    try {
-      const n = new Notification(title, { body: `${found.term.label} · ${found.ws.label}`, silent: true, icon: 'logo.png' });
+    const t = found.term, agent = kind === 'agent' ? (harnessOf(name)?.name || (/^claude/i.test(name || '') ? 'Claude Code' : /^codex/i.test(name || '') ? 'Codex' : name || 'The agent')) : null;
+    // How long the turn took: a thread's sent message, else the terminal agent's first "working" title.
+    const since = _turns.get(id)?.since || (kind === 'agent' ? t._workSince : null);
+    const secs = since ? Math.round((Date.now() - since) / 1000) : 0;
+    const took = secs < 1 ? '' : ` in ${secs < 60 ? `${secs}s` : secs < 3600 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${Math.floor(secs / 3600)}h ${Math.floor(secs % 3600 / 60)}m`}`;
+    const what = kind === 'agent' ? (completed ? `${agent} finished${took}` : `${agent} stopped${took}`) : `${name || 'Command'} finished${took}`;
+    // The thread's name leads (it says which work is done); the agent, the time and the reply's opening follow.
+    const title = t.chat?.title || t.label;
+    const meta = `${what} · ${found.ws.label}`;
+    const show = preview => { try {
+      const n = new Notification(title, { body: preview ? `${meta}\n${preview}` : meta, silent: true, icon: 'logo.png' });
       n.onclick = () => {
         window.electronAPI?.focusWindow?.();
         const now = findTermById(id);
@@ -14772,7 +15002,14 @@
         if (now.ws.id !== activeWsId) activateWorkspace(now.ws.id);
         activateTerminal(now.ws.id, id);
       };
-    } catch { }
+    } catch { } };
+    if (!(completed && t.threadHistory && t.chat && window.electronAPI?.threadHistory)) { show(''); return; }
+    // The reply's opening line, as plain text (no markdown marks, code blocks or links).
+    window.electronAPI.threadHistory(threadMeta(t)).then(hist => {
+      const reply = hist.flatMap(h => h.items).findLast(m => m.role === 'assistant' && m.text)?.text || '';
+      const plain = reply.replace(/```[\s\S]*?```/g, ' ').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*_#>|]+/g, '').replace(/\s+/g, ' ').trim();
+      show(plain.length > 140 ? plain.slice(0, 139).trimEnd() + '…' : plain);
+    }, () => show(''));
   }
 
   // Count live terminals with a running process (excluding idle shells)
@@ -16269,7 +16506,17 @@
       + row('Status', `<i class="ph ${st.icon} prov-${st.tone}" aria-hidden="true"></i>${st.text}`)
       + row('Path', a.path ? `<code>${escHtml(a.path)}</code>` : '')
       + row('Version', a.version ? `<code>${escHtml(a.version)}</code>` : '')
-      + row('Account', email ? `<button type="button" class="prov-email" data-act="email" data-id="${h.id}" aria-pressed="${shown}" title="Click to ${shown ? 'hide' : 'reveal'} email">${escHtml(email)}</button>` : '');
+      + row('Account', email ? `<button type="button" class="prov-email" data-act="email" data-id="${h.id}" aria-pressed="${shown}" title="Click to ${shown ? 'hide' : 'reveal'} email">${escHtml(email)}</button>`
+        : a.path && provOn(h) && PROV_LOGIN[h.id] ? `<button type="button" class="prov-add" data-act="login" title="Opens the CLI's own sign-in in a new terminal tab"><i class="ph ph-sign-in" aria-hidden="true"></i>Sign in</button>` : '');
+  }
+  // Each CLI's own sign-in, run in a terminal tab (they're interactive: a browser link, a pasted code).
+  const PROV_LOGIN = { claude: ['/login'], codex: ['login'], antigravity: [], opencode: ['auth', 'login'], 'cursor-agent': ['login'] };
+  function startProviderLogin(h) {
+    const bin = _prov.agents[h.bin]?.path || h.bin;
+    // shortcut: typed into the default shell; `& "…"` is PowerShell's call syntax (the Windows default shell).
+    const exe = /\s/.test(bin) ? (window.electronAPI?.platform === 'win32' ? `& "${bin}"` : `"${bin}"`) : bin;
+    closeSettings();
+    addTerminal(activeWsId, null, { label: `${h.name} sign-in`, cmd: [exe, ...PROV_LOGIN[h.id]].join(' ') });
   }
   const PROV_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
   // One launch argument: an input and its remove button.
@@ -16370,7 +16617,8 @@
         const shown = !_provEmailShown.delete(btn.dataset.id);
         if (shown) _provEmailShown.add(btn.dataset.id);
         btn.setAttribute('aria-pressed', shown); btn.title = `Click to ${shown ? 'hide' : 'reveal'} email`;
-      } else if (act === 'arg-add') { readProviderForm(); c.args.push(''); drawProviderForm('arg-' + (c.args.length - 1)); }
+      } else if (act === 'login') startProviderLogin(harnessOf(_provSelected));
+      else if (act === 'arg-add') { readProviderForm(); c.args.push(''); drawProviderForm('arg-' + (c.args.length - 1)); }
       else if (act === 'env-add') {
         // A new variable has no name yet, so it lives only in the form until one is typed.
         readProviderForm();

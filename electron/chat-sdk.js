@@ -26,8 +26,10 @@ function expandSlashSkill(text, references, skills) {
 function resolveLaunch(bin, args, platform = process.platform, readFile = f => fs.readFileSync(f, 'utf8')) {
   if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { file: bin, args };
   try {
-    const m = /"%dp0%\\([^"]+\.(?:js|cjs|mjs))"/i.exec(readFile(bin));
-    if (m) return { file: 'node', args: [path.win32.join(path.win32.dirname(bin), m[1]), ...args] };
+    const m = /"%dp0%\\([^"]+\.(js|cjs|mjs|exe))"/i.exec(readFile(bin));
+    const target = m && path.win32.join(path.win32.dirname(bin), m[1]);
+    // Newer packages (opencode-ai) ship a native binary behind the shim: run it directly.
+    if (m) return m[2].toLowerCase() === 'exe' ? { file: target, args } : { file: 'node', args: [target, ...args] };
   } catch {}
   return null;
 }
@@ -735,6 +737,8 @@ if (require.main === module) {
     { file: 'node', args: ['C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js', 'app-server'] });
   assert.deepStrictEqual(resolveLaunch('C:\\bin\\claude.exe', ['-p'], 'win32'), { file: 'C:\\bin\\claude.exe', args: ['-p'] });
   assert.deepStrictEqual(resolveLaunch('/usr/bin/codex', ['app-server'], 'linux'), { file: '/usr/bin/codex', args: ['app-server'] });
+  assert.deepStrictEqual(resolveLaunch('C:\\npm\\opencode.cmd', ['serve'], 'win32', () => '"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe"   %*'),
+    { file: 'C:\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe', args: ['serve'] });
   assert.strictEqual(resolveLaunch('C:\\npm\\odd.cmd', [], 'win32', () => 'no script here'), null);
   // Claude permission asks: a suggestion adds "don't ask again"; a plan approval has its own question.
   const w = claudePermissionAsk({ tool_name: 'Write', display_name: 'Write', input: { file_path: 'a.txt' }, permission_suggestions: [{}], decision_reason: 'why' });

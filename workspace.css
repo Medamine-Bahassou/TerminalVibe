@@ -1571,7 +1571,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-change > summary:hover { background:var(--ui-hover); }
 #sbr-thread .thr-change > summary > i { font-size:14px; color:var(--muted-text); flex-shrink:0; }
 #sbr-thread .thr-change-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono-font); font-size:12px; }
-#sbr-thread .thr-diff { margin:2px 4px 6px; max-height:420px; overflow:auto; padding:6px 0; background:var(--bg); border:1px solid var(--ui-line); border-radius:6px !important; font:400 12px/1.55 var(--mono-font); white-space:pre; }
+#sbr-thread .thr-diff { margin:2px 4px 6px; max-height:240px; overflow:auto; padding:6px 0; background:var(--bg); border:1px solid var(--ui-line); border-radius:6px !important; font:400 12px/1.55 var(--mono-font); white-space:pre; }
 #sbr-thread .thr-diff-lines { display:block; width:max-content; min-width:100%; }
 #sbr-thread .thr-diff .dl { display:block; padding:0 10px; color:var(--muted-text); }
 #sbr-thread .thr-diff .dl.add { color:var(--fg); background:color-mix(in srgb,var(--ui-success) 14%,transparent); }
@@ -2870,3 +2870,40 @@ body #pulls-modal .pr-label { padding:1px 6px; background:var(--ui-hover); borde
    shown once in place of the separate .thr-chat-error row. */
 #sbr-thread .thr-msg.assistant.thr-msg-error > .thr-msg-text { position:relative; padding-left:22px; color:var(--ui-error); }
 #sbr-thread .thr-msg.assistant.thr-msg-error > .thr-msg-text::before { content:"\e4e2"; position:absolute; left:0; top:0; font-family:"Phosphor"; font-size:14px; line-height:20.8px; }
+
+/* ── Issue icon: Phosphor ships no circle-dot, so draw the dot inside ph-circle ── */
+.ph.issue-icon { position:relative; }
+.ph.issue-icon::after { content:''; position:absolute; left:50%; top:50%; width:.22em; height:.22em; transform:translate(-50%,-50%); background:currentColor; border-radius:50% !important; }
+
+/* ── Tooltip meter + key/value rows (data-tip-rows { bar } / { label }): the composer's context ring ── */
+.ui-tooltip .ui-tip-meter { display:flex; flex-direction:column; gap:6px; margin:2px 0 8px; padding-bottom:8px; border-bottom:1px solid var(--ui-line); }
+.ui-tooltip .ui-tip-track { height:6px; background:var(--ui-hover); border-radius:9999px !important; overflow:hidden; }
+.ui-tooltip .ui-tip-fill { height:100%; background:var(--accent); border-radius:9999px !important; }
+.ui-tooltip .ui-tip-fill.warn { background:color-mix(in srgb,var(--ui-error) 50%,var(--accent)); }
+.ui-tooltip .ui-tip-fill.high { background:var(--ui-error); }
+.ui-tooltip .ui-tip-meter > span { color:var(--muted-text); font-variant-numeric:tabular-nums; }
+.ui-tooltip .ui-tip-kv { display:grid; grid-template-columns:72px minmax(0,1fr); gap:8px; min-height:20px; align-items:baseline; }
+.ui-tooltip .ui-tip-kv > span:first-child { color:var(--dim-text); }
+.ui-tooltip .ui-tip-kv > span:last-child { color:var(--fg); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+
+/* ── Settings › Providers: no visible "Providers" heading (the breadcrumb already says it). The label stays
+   in the page, visually hidden, so settings search still finds and scrolls to this section. ── */
+#settings-modal .prov-head { justify-content:flex-end; }
+#settings-modal .prov-head .settings-section-label { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
+
+/* ── Image viewer › Annotate (unsent composer images): canvas + tool bar (box, arrow, pen, colours, undo, cancel/save) ── */
+body .claude-image-viewer [hidden] { display:none !important; }
+body .claude-image-viewer .civ-edit { display:flex; align-items:center; justify-content:center; width:92vw; height:84vh; cursor:default; }
+body .claude-image-viewer .civ-edit-canvas { max-width:92vw; max-height:78vh; border-radius:10px !important; box-shadow:0 8px 24px #0008; cursor:crosshair; touch-action:none; }
+body .claude-image-viewer .civ-bar button[aria-pressed="true"] { background:var(--ui-active); color:var(--fg); }
+body .claude-image-viewer .civ-bar button:disabled { opacity:.4; cursor:default; background:transparent; }
+body .claude-image-viewer .civ-swatch { width:14px; height:14px; border-radius:50% !important; background:var(--swatch); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--fg) 25%,transparent); }
+body .claude-image-viewer .civ-bar button.civ-color[aria-pressed="true"] .civ-swatch { box-shadow:0 0 0 2px var(--bg), 0 0 0 3px var(--fg); }
+body .claude-image-viewer .civ-bar button.civ-text { width:auto; gap:6px; padding:0 10px; font:500 13px var(--ui-font); color:var(--fg); border:1px solid var(--border); margin-left:4px; }
+body .claude-image-viewer .civ-bar button.civ-text i { font-size:14px; }
+body .claude-image-viewer .civ-bar button.civ-save { background:var(--accent); border-color:var(--accent); color:#0d1017; }
+body .claude-image-viewer .civ-bar button.civ-save:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 85%,#fff); color:#0d1017; }
+body .claude-image-viewer .civ-bar button.civ-save:disabled { background:transparent; border-color:var(--border); color:var(--muted-text); }
+/* Annotate › text: typed in place (fixed at the click point, scaled like the image), then drawn into it */
+body .claude-image-viewer .civ-text-input { position:fixed; z-index:1; min-width:140px; padding:0 2px; margin:0; background:color-mix(in srgb,#000 35%,transparent);
+  border:1px solid var(--accent); border-radius:4px !important; outline:none; line-height:1.2; caret-color:currentColor; }

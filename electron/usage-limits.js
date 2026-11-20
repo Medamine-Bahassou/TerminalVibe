@@ -125,7 +125,17 @@ async function agyUsage(bin, env) {
   });
   let res;
   try { res = JSON.parse(out); } catch { res = out.split('\n').map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
-  return parseAgyUsage(res);
+  const usage = parseAgyUsage(res), email = agyEmail();
+  // No quotas but signed in: still report the account (the Usage modal skips entries without windows).
+  return usage || email ? { ...(usage || { plan: null, windows: [] }), email } : null;
+}
+// The signed-in account, from agy's own login file (read locally; the tokens in it are never used).
+function agyEmail() {
+  try {
+    const file = require('path').join(require('os').homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+    const email = JSON.parse(require('fs').readFileSync(file, 'utf8')).id_token_email;
+    return typeof email === 'string' && email.includes('@') ? email : null;
+  } catch { return null; }
 }
 
 // { claude?: {plan, windows}, codex?: … } for the installed agents that report limits.

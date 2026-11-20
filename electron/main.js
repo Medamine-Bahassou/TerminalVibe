@@ -431,6 +431,8 @@ function createWindow() {
     mainWindow = null;
     allowWindowClose = false;
     ipcMain.emit('terminal:kill-all');
+    // The main window is the app: a leftover browser-tab popup window must not keep it running in the background.
+    if (process.platform !== 'darwin') app.quit();
   });
 
   // Intercept the OS "X" close button so the renderer's quit-confirmation
@@ -1411,7 +1413,9 @@ ipcMain.handle('github:login-start', () => new Promise(resolve => {
 }));
 // The Pull requests page: every open PR of the GitHub repos behind the given project folders (the threads' projects).
 const PR_FIELDS = 'number,title,url,author,isDraft,createdAt,updatedAt,headRefName,labels,reviewDecision,reviewRequests';
-ipcMain.handle('github:all-pull-requests', async (_e, cwds) => {
+const ISSUE_FIELDS = 'number,title,url,author,createdAt,updatedAt,labels,assignees';
+ipcMain.handle('github:all-pull-requests', async (_e, cwds, kind) => {
+  const issues = kind === 'issues';
   if (!Array.isArray(cwds)) return { error: 'No projects.' };
   const dirs = [...new Set(cwds.filter(d => typeof d === 'string' && path.isAbsolute(d)))];
   const discovered = new Set();
@@ -1425,7 +1429,7 @@ ipcMain.handle('github:all-pull-requests', async (_e, cwds) => {
   const home = require('os').homedir();
   const me = await runGitHub(home, ['api', 'user', '--jq', '.login']);
   if (me.error) return /gh auth login/.test(me.error) ? { auth: true, error: 'Sign in to GitHub to see pull requests.' } : { error: me.error };
-  const results = await Promise.all(repos.map(repo => runGitHub(home, ['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS])));
+  const results = await Promise.all(repos.map(repo => runGitHub(home, [issues ? 'issue' : 'pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', issues ? ISSUE_FIELDS : PR_FIELDS])));
   const pulls = [], errors = [];
   results.forEach((r, i) => {
     try { if (r.error) throw Error(r.error); for (const pr of JSON.parse(r.out)) if (/^https:\/\//i.test(pr.url)) pulls.push({ ...pr, repo: repos[i] }); }
@@ -1648,7 +1652,8 @@ ipcMain.handle('providers:save', (_e, config) => providers.save(config));
 ipcMain.on('terminal:kill-all', () => {
   require('./chat-sdk').stopAll();
   notifyBusy.clear(); ptyIO.clear();
-  for (const t of ptys.values()) { try { t.kill(); } catch {} }
+  // A flow-paused PTY stops draining ConPTY output, and closing a pseudo-console whose output isn't drained can block.
+  for (const t of ptys.values()) { try { t.resume(); } catch {} try { t.kill(); } catch {} }
   ptys.clear();
 });
 
