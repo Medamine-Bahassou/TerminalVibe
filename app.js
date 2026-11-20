@@ -13030,20 +13030,24 @@
 
   function renderChatErrors(tab, flow) {
     flow.querySelectorAll('.thr-chat-error').forEach(el => el.remove());
+    const boundaries = [...flow.querySelectorAll(':is(.thr-msg.user, .thr-resumed)[data-ts], .thr-interruption-status')];
     for (const error of tab.chat?.errors || []) {
       flow.querySelector('.thr-empty')?.remove();
+      let next = boundaries.find(el => el.dataset.interruptedAt
+        ? Number(el.dataset.interruptedAt) >= error.at
+        : Number(el.dataset.ts) > error.at);
+      while (next?.previousElementSibling?.matches('.thr-seg, .thr-note')) next = next.previousElementSibling;
       const row = document.createElement('div'); row.className = 'thr-chat-error'; row.setAttribute('role', 'alert');
       row.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i><span></span>';
       row.querySelector('span').textContent = error.message;
-      const next = [...flow.querySelectorAll('.thr-msg.user[data-ts]')].find(el => Number(el.dataset.ts) > error.at);
-      if (next) next.before(row); else flow.insertBefore(row, flow.querySelector('.thr-queue'));
+      flow.insertBefore(row, next || flow.querySelector('.thr-working, .thr-queue'));
     }
   }
   function noteChatError(tab, message) {
     if (!tab) return;
     tab.chat ||= { createdAt: Date.now() };
-    tab.chat.interruptedAt = Date.now();
     const errors = tab.chat.errors ||= [], last = errors.at(-1), at = Date.now();
+    tab.chat.interruptedAt = at;
     if (!last || last.message !== message || at - last.at > 2000) errors.push({ at, message: String(message) });
     _flowSig = '';
     const surface = curChat() === tab ? thrPage : tab.el?.querySelector('.thr-snapshot');

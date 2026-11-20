@@ -20,6 +20,7 @@ app.whenReady().then(async () => {
   const view = source.slice(source.indexOf('  function setChatView(tab, cli)'), source.indexOf('  // An agent finished its turn:', source.indexOf('  function setChatView(tab, cli)')));
   const refresh = source.slice(source.indexOf('  async function refreshThreadFlow('), source.indexOf('  // ── Find in the thread history:', source.indexOf('  async function refreshThreadFlow(')));
   const pending = source.slice(source.indexOf('  const pendingMessages ='), source.indexOf('  const _thrImgCache ='));
+  const chatErrors = source.slice(source.indexOf('  function renderChatErrors('), source.indexOf('  function noteChatError('));
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     document.body.innerHTML = '<div id="sbr-thread" style="display:none"><div class="thr-flow" id="sbr-thread-flow"></div><textarea id="sbr-thread-input"></textarea><div class="attachments" id="sbr-thread-attachments"></div><button id="sbr-thread-model"><span>Model</span></button></div>';
@@ -35,7 +36,8 @@ app.whenReady().then(async () => {
     const ensureChatTerminalSession = async () => true;
     const clearCitationFlash = () => {};
     const decorateWorkUsernames = () => {}; // Privacy rendering is covered by test-work-usernames.
-    const renderChatErrors = () => {}, renderChatResume = () => {}, syncChatInterruption = () => {}, syncScrollEnd = () => {}, syncContextRing = () => {};
+    ${chatErrors}
+    const renderChatResume = () => {}, syncChatInterruption = () => {}, syncScrollEnd = () => {}, syncContextRing = () => {};
     const turnGitFiles = () => [];
     const toolIcon = () => '', toolTimestampHtml = () => '';
     const toolDetailsHtml = () => '<pre class="thr-tool-output">Tool output</pre>';
@@ -300,6 +302,17 @@ app.whenReady().then(async () => {
     const resumed = thrPage.querySelector('.thr-resumed');
     check(resumed?.textContent === 'Thread resumed' && Number(resumed.dataset.ts) === Date.parse(resumedAt), 'Restored resume prompt shows its status');
     check(thrPage.querySelectorAll('.thr-resumed').length === 1 && thrPage.querySelectorAll('.thr-msg.user')[1].textContent.includes(resumePrompt), 'An identical manually typed prompt remains visible');
+    const errorFlow = document.createElement('div');
+    errorFlow.innerHTML = '<div class="thr-msg assistant"><div class="thr-msg-text">Previous reply</div></div><div class="thr-seg">Codex</div><div class="thr-note">Started with full history</div>';
+    errorFlow.append(resumed.cloneNode(true));
+    errorFlow.insertAdjacentHTML('beforeend', '<div class="thr-msg assistant"><div class="thr-msg-text">Continued reply</div></div><div class="thr-working">Thinking</div>');
+    renderChatErrors({ chat: { errors: [
+      { at: Date.parse(resumedAt) - 1000, message: 'Claude Code: usage limit reached' },
+      { at: Date.parse(resumedAt) + 1000, message: 'Codex: connection lost' },
+    ] } }, errorFlow);
+    const errors = errorFlow.querySelectorAll('.thr-chat-error');
+    check(errors[0]?.nextElementSibling?.matches('.thr-seg'), 'Previous agent error belongs above the resumed session header');
+    check(errors[1]?.nextElementSibling?.matches('.thr-working'), 'Current error belongs above the working indicator');
     const stoppedAt = Date.parse(typedAt) + 1000, nextAt = stoppedAt + 2000;
     cold.chat.stopped = [{ text: 'same message', at: stoppedAt, submitted: false, nextAt }];
     window.electronAPI.threadHistory = async () => [{ items: [
