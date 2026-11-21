@@ -73,7 +73,11 @@ async function agentProcesses(paneId, roots = [], listeners = []) {
   // OpenCode's harness server (chat-sdk.js launches exactly this) and its helpers are the agent, not something it
   // left running, even orphaned by an app instance that was killed before it could stop it.
   roots = [...roots, ...[...all.values()].filter(isHarnessServer).map(p => p.pid)];
-  const kept = [...all.values()].filter(p => p.match && !self.has(p.pid) && !DAEMONS.test(p.comm) && !roots.some(r => r && under(p.pid, r)));
+  // Another TerminalVibe (a packaged build next to this dev app) shares ~/.terminalvibe, so its chats carry the same
+  // pane ids and its agents match here. Anything running under a different app instance is that instance's, not ours.
+  const APP = /^(electron|terminalvibe)$/i;
+  const foreign = pid => { let other = false; for (let p = all.get(pid)?.ppid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) { if (p === process.pid) return false; if (APP.test(all.get(p)?.comm || '')) other = true; } return other; };
+  const kept = [...all.values()].filter(p => p.match && !self.has(p.pid) && !DAEMONS.test(p.comm) && !foreign(p.pid) && !roots.some(r => r && under(p.pid, r)));
   const keptIds = new Set(kept.map(p => p.pid));
   // One row per tree: a process whose parent is also listed belongs to that row (npm -> node -> esbuild).
   const top = pid => { let t = pid; for (let p = all.get(pid)?.ppid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) if (keptIds.has(p)) t = p; return t; };
