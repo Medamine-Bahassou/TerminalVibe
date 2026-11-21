@@ -892,6 +892,7 @@
   let settingsWindowOpen = false; // separate Electron settings window is up
   let _wsDomCache = {};      // wsId -> DOM element wrapping that workspace's layout
   let focusedSlotId = null;  // DOM id of focused .term-slot
+  let focusedGroupDomId = null; // DOM id of the element carrying .focused-group
   let _multiSelected = new Set(); // terminal IDs selected via Ctrl+Alt+RightClick
   // Tab double-click detection state. Declared here (IIFE scope) because the
   let _lastTabClickTime = 0;
@@ -913,10 +914,15 @@
     }
   }
   function updateFocusedGroup() {
-    document.querySelectorAll('.term-group.focused-group').forEach(g => g.classList.remove('focused-group'));
+    if (focusedGroupDomId) document.getElementById(focusedGroupDomId)?.classList.remove('focused-group');
+    focusedGroupDomId = null;
     if (!focusedSlotId) return;
     const slot = document.getElementById(focusedSlotId);
-    if (slot) { const g = slot.closest('.term-group'); if (g) g.classList.add('focused-group'); }
+    const g = slot?.closest('.term-group');
+    if (g) {
+      g.classList.add('focused-group');
+      focusedGroupDomId = g.id;
+    }
   }
 
   /* Browser tabs render in an absolutely-positioned .browser-slot overlay that
@@ -924,7 +930,12 @@
      a .term-slot.focused::after border is hidden underneath it. These helpers
      keep the focus state of both elements in sync everywhere. */
   function clearSlotFocus() {
-    document.querySelectorAll('.term-slot.focused').forEach(s => s.classList.remove('focused'));
+    // The focused terminal slot is already tracked; two document-wide queries per tab switch
+    // forced a full style recalc just to clear one class.
+    if (focusedSlotId) {
+      document.getElementById(focusedSlotId)?.classList.remove('focused');
+      focusedSlotId = null;
+    }
     document.querySelectorAll('.browser-slot.focused').forEach(s => s.classList.remove('focused'));
   }
 
@@ -942,7 +953,9 @@
       found.ws.activeTermId = entry.id;
       const group = findGroupContainingTerm(found.ws.layout, entry.id);
       if (group) group.activeTermId = entry.id;
-      syncThreadSelection();
+      // Chat activation already updates the sidebar selection in syncThreadPanel; other tabs can
+      // wait for the frame that paints this switch rather than querying the document right here.
+      requestAnimationFrame(() => { if (focusedSlotId === entry.el.id) syncThreadSelection(); });
     }
   }
 
@@ -4479,6 +4492,7 @@
     if (!wsp) return;
     const target = getWorkspaceTerminals(wsp).find(t => t.id === termId);
     if (target?._closePending) return;
+    const hasBrowserOverlay = getWorkspaceTerminals(wsp).some(x => x.type === 'browser' && x.browserContainer);
     wsp.activeTermId = termId;
     const group = findGroupContainingTerm(wsp.layout, termId);
     if (group) {
@@ -4517,7 +4531,10 @@
             if (!slot) return;
             const isActive = t.id === termId;
             const showAs = t.type === 'browser' ? 'flex' : 'block';
-            slot.style.display = isActive ? showAs : 'none';
+            const display = isActive ? showAs : 'none';
+            // Rewriting an identical display invalidates style for the slot (and its overlay),
+            // so only touch the slots whose visibility actually changed.
+            if (slot.style.display !== display) slot.style.display = display;
             if (t.type !== 'browser') _syncWebgl(t, isActive);
             if (t.type === 'browser') {
               if (isActive) resumeBrowserTab(t);
@@ -4537,13 +4554,30 @@
       const t = target;
       if (activeGroupEl) syncGroupChatButton(activeGroupEl, t);
       if (nativePtyReady) restorePendingTerminal(t);
-      syncChatPanels(wsp); // a thread's side chat panel shows (or goes) with this selection
-      if (t?.threadHistory && t.el && (curChat() !== t || thrPage.parentElement !== t.el)) {
+      // syncThreadPanel repositions chat surfaces (and pairs side panels) itself; doing it here
+      // as well walked every group twice on each tab click.
+      const chatNeedsSync = t?.threadHistory && t.el && (curChat() !== t || thrPage.parentElement !== t.el);
+      if (!chatNeedsSync) syncChatPanels(wsp); // a thread's side chat panel shows (or goes) with this selection
+      if (chatNeedsSync) {
         _preferChat = t;
         syncThreadPanel();
       }
-      // Read overlay geometry only after the incoming chat surface is attached.
-      if (activeGroupEl) syncBrowserSlots();
+      // The tab bar's geometry is independent of the slot display toggles above, so reveal the
+      // active tab now instead of two frames later. 'instant' avoids a queued smooth scroll when
+      // switching rapidly, which left the bar mid-animation and looked glitchy.
+      if (activeGroupEl) {
+        // Both helpers read tab-bar geometry. Batch them into the frame that paints this
+        // switch instead of forcing layout in the middle of the shortcut handler.
+        const barGroup = activeGroupEl;
+        requestAnimationFrame(() => {
+          if (activeWsId !== wsId || wsp.activeTermId !== termId || !barGroup.isConnected) return;
+          updateTabBarOverflow(barGroup);
+          scrollTabIntoView(barGroup, termId, 'instant');
+        });
+      }
+      // Browser overlays are the only consumer of the geometry sync. Chat/terminal tabs skip the
+      // immediate sync plus the two deferred resyncs, which forced layout on every switch.
+      if (hasBrowserOverlay) syncBrowserSlots();
       if (t && t.el) {
         focusSlot(t);
         if (t.type === 'browser') {
@@ -4563,34 +4597,22 @@
         }
       }
     }
-    // Double-RAF + trailing resync — same fix as switchWorkspacePane, single RAF
-    // can still read a pre-settle size on a busy frame right after display toggle.
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (activeWsId !== wsId || wsp.activeTermId !== termId) return;
-      if (activeGroupEl?.isConnected) {
-        updateTabBarOverflow(activeGroupEl);
-        scrollTabIntoView(activeGroupEl, termId);
-      }
-      const terms = getWorkspaceTerminals(wsp);
-      syncBrowserSlots();
-      const t = terms.find(x => x.id === termId);
-      if (t && t.type === 'browser' && t._focusUrlOnActivate) {
-        t._focusUrlOnActivate = false;
-        const urlInput = t.browserContainer?.querySelector('.browser-url');
-        if (urlInput) { urlInput.focus(); urlInput.select(); }
-      }
-    }));
-    setTimeout(() => {
-      if (activeWsId !== wsId || wsp.activeTermId !== termId) return;
-      syncBrowserSlots();
-      const terms = getWorkspaceTerminals(wsp);
-      const t = terms.find(x => x.id === termId);
-      if (t && t.type === 'browser' && t._focusUrlOnActivate) {
-        t._focusUrlOnActivate = false;
-        const urlInput = t.browserContainer?.querySelector('.browser-url');
-        if (urlInput) { urlInput.focus(); urlInput.select(); }
-      }
-    }, 100);
+    if (hasBrowserOverlay) {
+      // Native browser views need the settled slot geometry; a single frame can still be stale.
+      // Chat and terminal tabs have no overlay to position, so they skip both deferred passes.
+      const syncOverlay = () => {
+        if (activeWsId !== wsId || wsp.activeTermId !== termId) return;
+        syncBrowserSlots();
+        const t = getWorkspaceTerminals(wsp).find(x => x.id === termId);
+        if (t && t.type === 'browser' && t._focusUrlOnActivate) {
+          t._focusUrlOnActivate = false;
+          const urlInput = t.browserContainer?.querySelector('.browser-url');
+          if (urlInput) { urlInput.focus(); urlInput.select(); }
+        }
+      };
+      requestAnimationFrame(() => requestAnimationFrame(syncOverlay));
+      setTimeout(syncOverlay, 100);
+    }
     scheduleNavigationSave();
   }
 
@@ -8600,10 +8622,13 @@
   let observeThreadPage = () => {};
   let _curChat = null, _preferChat = null, _warmChatSlot = null;
   // Safety net (startup restores and starts tabs in an order that can miss the move): a Chat tab in view
-  // that doesn't hold the page gets it.
+  // that doesn't hold the page gets it. The common, consistent case is checked with cheap state only;
+  // reading offsetParent on every chat twice a second forced a layout between switches and caused jank.
   setInterval(() => {
     const ws = activeWs();
-    if (!ws?.layout || SETTINGS_ONLY) return;
+    if (!ws?.layout || SETTINGS_ONLY || document.hidden) return;
+    if (_curChat && thrPage.parentElement === _curChat.el && _curChat.el.style.display !== 'none' &&
+        findGroupContainingTerm(ws.layout, _curChat.id)?.activeTermId === _curChat.id) return;
     const shown = getWorkspaceTerminals(ws).find(t => t.threadHistory && t.el?.offsetParent && findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id);
     if (shown && thrPage.parentElement !== shown.el && !(_curChat && thrPage.parentElement === _curChat.el && _curChat.el.style.display !== 'none' && _curChat.el.offsetParent)) { _preferChat = shown; syncThreadPanel(); }
   }, 500);
@@ -8639,14 +8664,10 @@
     }
     const snapshot = tab && prev !== tab ? tab.el.querySelector(':scope > .thr-snapshot') : null;
     if (prev !== tab && (prev || snapshot)) {
-      // Keep one inactive transcript laid out for quick back-and-forth switches.
-      const warmSlot = prev?.el?.style.display === 'none' && !prev._cliView && !prev._closePending
+      // Hidden chat slots keep their layout in CSS (content-visibility), so back-and-forth
+      // switches relayout nothing. Remember the slot only so closing it can clear the reference.
+      _warmChatSlot = prev?.el?.style.display === 'none' && !prev._cliView && !prev._closePending
         && ws && getWorkspaceTerminals(ws).includes(prev) ? prev.el : null;
-      if (_warmChatSlot !== warmSlot) {
-        _warmChatSlot?.classList.remove('chat-keep-layout');
-        warmSlot?.classList.add('chat-keep-layout');
-        _warmChatSlot = warmSlot;
-      }
       const next = snapshot || createThreadSurface();
       if (tab && !snapshot) tab.el.append(next);
       switchThreadSurface(page, next, prev?.el && !prev._closePending ? prev : null, !shown.includes(prev));
@@ -8749,9 +8770,16 @@
 
   function rememberThreadScroll(tab, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow');
-    // Hiding or detaching a tab can report zero geometry; keep its last visible position.
-    if (!tab || tab.el?.style.display === 'none' || !flow.dataset.seen || !flow.clientHeight || !flow.getClientRects().length) return;
-    tab._scrollState = { top: flow.scrollTop, bottom: flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1 };
+    // Saving scrollTop is a free read; computing bottom needs clientHeight/scrollHeight layout
+    // reads of the whole transcript, so keep the switch's critical path layout-free and defer it.
+    if (!tab || tab.el?.style.display === 'none' || !flow.dataset.seen) return;
+    tab._scrollState = { top: flow.scrollTop };
+    requestAnimationFrame(() => {
+      if (tab._scrollState && tab._scrollState.top === flow.scrollTop &&
+          tab.el?.style.display !== 'none' && flow.dataset.seen) {
+        tab._scrollState.bottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
+      }
+    });
   }
   function restoreThreadScroll(tab, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow'), state = tab._scrollState;
@@ -8812,6 +8840,7 @@
         if (tabindex === null) el.removeAttribute('tabindex'); else el.setAttribute('tabindex', tabindex);
       }
       flow._snapshotTabIndexes = undefined;
+      flow._snapshotFocusDisabled = false;
     }
     flow.inert = false;
     _flowSig = flow.dataset.signature || '';
@@ -8825,28 +8854,37 @@
     queueMicrotask(() => { if (thrPage === to) observeThreadPage(); });
   }
   function disableSnapshotHistoryFocus(flow) {
+    if (flow._snapshotFocusDisabled) return; // already a disabled snapshot: skip re-walking heavy transcripts
     const previous = flow._snapshotTabIndexes;
     const indices = flow._snapshotTabIndexes = new Map();
     for (const el of flow.querySelectorAll('button, a[href], input, textarea, summary, [tabindex]')) {
       indices.set(el, previous?.has(el) ? previous.get(el) : el.getAttribute('tabindex'));
       el.tabIndex = -1;
     }
+    flow._snapshotFocusDisabled = true;
   }
   // Pads a surface's history by its composer's height (the composer floats over the bottom of the history), for the
   // live surface and every snapshot. A hidden composer (height 0) keeps the last value. Lazily built: snapshots can
   // be cloned before the live composer's observer line runs.
   function observeComposerPad(wrap) {
     observeComposerPad.ro ||= new ResizeObserver(entries => {
-      for (const { target } of entries) {
+      for (const entry of entries) {
+        const target = entry.target;
         const surface = target.parentElement, flow = surface && threadPart(surface, 'flow');
-        if (!target.offsetHeight || !flow) continue;
+        // borderBoxSize is delivered by the observer: reading offsetHeight here forced a full
+        // document layout inside the frame that paints a tab switch.
+        const height = entry.borderBoxSize?.[0]?.blockSize ?? target.offsetHeight;
+        if (!height || !flow) continue;
         const live = surface === thrPage;
+        surface.style.setProperty('--thr-composer-pad', height + 12 + 'px');
+        // Hidden snapshots are inert; measuring their transcript's scrollHeight only forces the
+        // whole history to lay out. Their scroll position is restored when they become the live flow.
+        if (!live) continue;
         // Also trust the last scroll event: content can grow in the same frame as the composer (a reply
         // streaming in, the side-chat bubble appearing), so the live check alone misses "was at the bottom".
-        const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 2 || (live && !!_curChat?._scrollState?.bottom);
-        surface.style.setProperty('--thr-composer-pad', target.offsetHeight + 12 + 'px');
+        const atBottom = !!_curChat?._scrollState?.bottom || flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 2;
         if (atBottom) flow.scrollTop = flow.scrollHeight;
-        if (live) syncScrollEnd();
+        syncScrollEnd();
       }
     });
     if (wrap) observeComposerPad.ro.observe(wrap);
@@ -9480,7 +9518,7 @@
       // A thread's side chats: a header (label + caret) over one row per chat; collapsed, the whole tray
       // goes and a bubble on the composer's edge brings it back (opening it is remembered). A side chat or
       // subagent has no tray here: the bar at the top names its thread, links to it and holds "Use as context".
-      if (sidesEl._owner !== ws) { if (sidesEl._owner) sidesEl._owner._procsOpen = false; sidesEl._owner = ws; void refreshAgentProcCards(); }
+      if (sidesEl._owner !== ws) { if (sidesEl._owner) sidesEl._owner._procsOpen = false; sidesEl._owner = ws; }
       const store = 'tv-side-chats-expanded';
       let collapsed = true;
       try { collapsed = !localStorage.getItem(store); } catch {}
@@ -10528,7 +10566,7 @@
     };
     const range = document.createRange();
     range.setStart(...point(input.selectionStart)); range.setEnd(...point(input.selectionEnd));
-    const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    window.getSelection().setBaseAndExtent(range.startContainer, range.startOffset, range.endContainer, range.endOffset); // one step: removeAllRanges forced a layout each call
   }
   // Live markdown in the composer: styles the text but keeps every character (markers dimmed),
   // so the draft, caret offsets and what is sent stay exactly as typed.
@@ -10664,9 +10702,11 @@
       return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}">${link}</span>`;
     }).join('');
     // Keep native spellcheck ranges when typing leaves the rendered markup unchanged.
-    if (editor.innerHTML !== markup) editor.innerHTML = markup;
+    const rewrote = editor.innerHTML !== markup;
+    if (rewrote) editor.innerHTML = markup;
     editor._draftValue = input.value; editor._draftReferences = signature; editor._draftMd = md;
-    if (surface === thrPage && document.activeElement === editor) restoreChatEditorSelection(editor, input);
+    // An untouched editor keeps its selection; resetting it forces a layout of the whole page.
+    if (rewrote && surface === thrPage && document.activeElement === editor) restoreChatEditorSelection(editor, input);
     openMdTokens(editor); // now, not on the async selectionchange: no frame with the caret's markers hidden
   }
   function insertChatMention(file, input = thrInput, files = _chatFiles) {
@@ -12616,6 +12656,7 @@
   // Fenced code in chat: highlight.js (vendored) by the fence's language tag; untagged fences are auto-detected
   // and only colored when the guess is confident, so plain output stays plain.
   const _hlFenceCache = new Map();
+  const HL_AUTO = ['javascript', 'typescript', 'json', 'bash', 'python', 'css', 'xml', 'diff', 'yaml', 'sql']; // auto-detect over all ~190 languages cost 300ms+ at startup
   function hlFence(code, tag) {
     const key = tag + '\u0000' + code;
     if (_hlFenceCache.has(key)) return _hlFenceCache.get(key);
@@ -12623,7 +12664,7 @@
     const lang = tag.toLowerCase().split(/[\s{]/)[0];
     try {
       if (window.hljs && lang && hljs.getLanguage(lang)) html = hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
-      else if (window.hljs && !lang && code.length < 20000) { const r = hljs.highlightAuto(code); if (r.relevance >= 3) html = r.value; }
+      else if (window.hljs && !lang && code.length < 20000) { const r = hljs.highlightAuto(code, HL_AUTO); if (r.relevance >= 3) html = r.value; }
     } catch {}
     if (_hlFenceCache.size > 300) _hlFenceCache.clear(); // ponytail: wholesale clear, LRU if long chats thrash it
     _hlFenceCache.set(key, html);
@@ -12727,7 +12768,7 @@
     const img = new Image();
     img.onload = () => {
       const c = document.createElement('canvas'); c.width = c.height = 32;
-      const g = c.getContext('2d'); g.drawImage(img, 0, 0, 32, 32);
+      const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, 32, 32);
       const d = g.getImageData(0, 0, 32, 32).data;
       let clear = 0;
       for (let i = 0; i < d.length; i += 4) {

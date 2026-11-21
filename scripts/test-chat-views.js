@@ -211,7 +211,7 @@ app.whenReady().then(async () => {
     a.activeTermId = second.id; syncThreadPanel();
     check(flow.parentElement === transcriptSurface && transcriptSurface.classList.contains('thr-snapshot'), 'Switching detached the transcript from its surface');
     check(flowMutations.takeRecords().length === 0, 'Switching changed the transcript children');
-    check(first.el.classList.contains('chat-keep-layout') && getComputedStyle(first.el).visibility === 'hidden', 'Warm chat must stay hidden');
+    check(getComputedStyle(first.el).visibility === 'hidden' && getComputedStyle(first.el).contentVisibility === 'hidden', 'Warm chat must stay hidden');
     await winTick();
     check(first._scrollState.top === 370 && !first._scrollState.bottom, 'Switching failed to capture scroll before the scroll event');
     second.el.style.display = 'none'; first.el.style.display = 'block';
