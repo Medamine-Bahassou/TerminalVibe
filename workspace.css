@@ -3174,3 +3174,10 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 #sbr-thread .thr-code .hljs-comment { color:var(--dim-text); font-style:italic; }
 #sbr-thread .thr-code .hljs-emphasis { font-style:italic; }
 #sbr-thread .thr-code .hljs-strong { font-weight:600; }
+
+/* Markdown images and rendered SVG blocks in chat. They have no file path, so they skip the .thr-img pipeline. */
+#sbr-thread .thr-rimg-wrap { display:inline-block; max-width:100%; vertical-align:top; }
+#sbr-thread .thr-rimg { display:block; max-width:100%; max-height:320px; object-fit:contain; border:1px solid var(--ui-line); border-radius:8px !important; background:var(--ui-surface); }
+#sbr-thread .thr-svg-preview { margin:8px 0; }
+#sbr-thread .thr-rimg-alt, #sbr-thread .thr-rimg.failed { display:none; }
+#sbr-thread .thr-rimg.failed + .thr-rimg-alt { display:inline; color:var(--muted-text); font-size:12px; }

@@ -12853,6 +12853,14 @@
     }
     return mdFromDom(fragment).trim();
   }
+  // A complete ```svg block (or an <svg> in an xml/html/untagged fence) also renders as an image. An <img> never runs the
+  // SVG's scripts or loads its external resources, so the markup is safe to show.
+  function svgPreviewHtml(lang, code) {
+    if (!/^(svg|xml|html|)$/i.test(lang) || code.length > 200000) return '';
+    const svg = code.trim();
+    if (!/^(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(svg) || !/<\/svg>\s*$/i.test(svg)) return '';
+    return `<div class="thr-svg-preview"><img class="thr-rimg" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}" alt="SVG preview"></div>`;
+  }
   // Escape first, then the markdown agents use: fences (highlighted by their language tag), `code`, **bold**,
   // *italic*, ~~strike~~, links, headings, lists, > quotes, tables and --- rules.
   function mdLite(text) {
@@ -12877,6 +12885,9 @@
           if (bare) { href = label = bare; }
           const link = label ? `<button type="button" class="thr-link" data-href="${href}" title="${href}">${linkIconHtml(href)}${label}</button>` : '';
           const raw = href.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+          // ![alt](https://…) and ![alt](data:image/…) are shown inline, never fetched until the markdown says so; a failed load falls back to the alt text.
+          if (bang && !bare && (/^https?:\/\//i.test(raw) || /^data:image\/(png|jpe?g|gif|webp);base64,/i.test(raw)))
+            return `<span class="thr-rimg-wrap"><img class="thr-rimg" src="${href}" alt="${label}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.classList.add('failed')"><span class="thr-rimg-alt">${label || 'image'}</span></span>`;
           if (bare || /^[a-z]+:/i.test(raw) || !/\.(png|jpe?g|gif|webp|bmp)$/i.test(raw.replace(/[?#].*$/, ''))) return link || href;
           const img = `<span class="thr-img-wrap thr-md-img"><img class="thr-img" data-path="${escHtml(chatLinkPath(raw).path)}" alt="${label}"></span>`;
           return (bang ? '' : link) + img;
@@ -12945,7 +12956,7 @@
     };
     let out = '', last = 0;
     for (const m of text.matchAll(/```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g)) {
-      out += inline(text.slice(last, m.index)) + `<div class="thr-code-wrap"><pre class="thr-code" data-lang="${escHtml(m[1].trim())}"><code class="hljs">${hlFence(m[2].replace(/\n$/, ''), m[1].trim())}</code></pre>`
+      out += inline(text.slice(last, m.index)) + svgPreviewHtml(m[1].trim(), m[2]) + `<div class="thr-code-wrap"><pre class="thr-code" data-lang="${escHtml(m[1].trim())}"><code class="hljs">${hlFence(m[2].replace(/\n$/, ''), m[1].trim())}</code></pre>`
         + '<button type="button" class="thr-code-copy" title="Copy code" aria-label="Copy code"><i class="ph ph-copy" aria-hidden="true"></i></button></div>';
       last = m.index + m[0].length;
     }
