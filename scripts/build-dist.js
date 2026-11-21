@@ -36,6 +36,7 @@ for (const addon of ['fit', 'web-links', 'search', 'unicode11', 'webgl', 'canvas
 ensureVendorFile('split.min.js', path.join('node_modules', 'split.js', 'dist', 'split.min.js'));
 ensureVendorFile('coloris.min.js', path.join('node_modules', '@melloware', 'coloris', 'dist', 'umd', 'coloris.min.js'));
 ensureVendorFile('coloris.min.css', path.join('node_modules', '@melloware', 'coloris', 'dist', 'coloris.min.css'));
+ensureVendorFile('highlight.min.js', path.join('node_modules', '@highlightjs', 'cdn-assets', 'highlight.min.js'));
 // Always regenerated: the icon alias map lives in scripts/build-icons.js.
 require('./build-icons.js');
 // Always regenerated: the class list changes with every frontend edit.

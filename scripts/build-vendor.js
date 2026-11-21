@@ -34,6 +34,9 @@ cp(path.join(root, 'node_modules/split.js/dist/split.min.js'), path.join(vendor,
 cp(path.join(root, 'node_modules/@melloware/coloris/dist/umd/coloris.min.js'), path.join(vendor, 'coloris.min.js'));
 cp(path.join(root, 'node_modules/@melloware/coloris/dist/coloris.min.css'), path.join(vendor, 'coloris.min.css'));
 
+// highlight.js (common languages) for chat code blocks
+cp(path.join(root, 'node_modules/@highlightjs/cdn-assets/highlight.min.js'), path.join(vendor, 'highlight.min.js'));
+
 // Lucide icon font + ph-* aliases
 require('./build-icons.js');
 

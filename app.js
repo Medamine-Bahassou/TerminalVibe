@@ -12613,7 +12613,22 @@
 
   // ── Syntax highlighting (shell, JSON) for tool calls and code blocks: escaped spans, colors from the terminal theme ──
   const tk = (cls, t) => `<span class="tk-${cls}">${escHtml(t)}</span>`;
-  const codeLang = tag => /^(sh|bash|zsh|shell|console|shellscript)$/i.test(tag) ? 'sh' : /^(json|jsonc|json5)$/i.test(tag) ? 'json' : '';
+  // Fenced code in chat: highlight.js (vendored) by the fence's language tag; untagged fences are auto-detected
+  // and only colored when the guess is confident, so plain output stays plain.
+  const _hlFenceCache = new Map();
+  function hlFence(code, tag) {
+    const key = tag + '\u0000' + code;
+    if (_hlFenceCache.has(key)) return _hlFenceCache.get(key);
+    let html = escHtml(code);
+    const lang = tag.toLowerCase().split(/[\s{]/)[0];
+    try {
+      if (window.hljs && lang && hljs.getLanguage(lang)) html = hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+      else if (window.hljs && !lang && code.length < 20000) { const r = hljs.highlightAuto(code); if (r.relevance >= 3) html = r.value; }
+    } catch {}
+    if (_hlFenceCache.size > 300) _hlFenceCache.clear(); // ponytail: wholesale clear, LRU if long chats thrash it
+    _hlFenceCache.set(key, html);
+    return html;
+  }
   function hlJson(text) {
     const re = /("(?:\\.|[^"\\\n])*")(\s*:)?|\b(true|false|null)\b|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g;
     let out = '', last = 0;
@@ -12751,7 +12766,7 @@
     if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) return kids(node);
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const el = node, tag = el.nodeName;
-    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-pending-kind, .thr-seg, .thr-worked, .thr-tools > summary, .thr-tool > summary, .thr-turn > summary, button[data-act]')) return ''; // icons, chrome
+    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-code-copy, .thr-pending-kind, .thr-seg, .thr-worked, .thr-tools > summary, .thr-tool > summary, .thr-turn > summary, button[data-act]')) return ''; // icons, chrome
     if (el.matches('.thr-msg-text, .thr-queued-text') || tag === 'P') return block(kids(el).trim());
     if (tag === 'BR') return '\n';
     if (tag === 'PRE') return block('```' + (el.matches('.thr-tool-detail') ? 'sh' : el.dataset.lang || '') + '\n' + el.textContent.replace(/\n$/, '') + '\n```');
@@ -12889,7 +12904,8 @@
     };
     let out = '', last = 0;
     for (const m of text.matchAll(/```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g)) {
-      out += inline(text.slice(last, m.index)) + `<pre class="thr-code" data-lang="${escHtml(m[1].trim())}"><code>${hlCode(m[2].replace(/\n$/, ''), codeLang(m[1].trim()))}</code></pre>`;
+      out += inline(text.slice(last, m.index)) + `<div class="thr-code-wrap"><pre class="thr-code" data-lang="${escHtml(m[1].trim())}"><code class="hljs">${hlFence(m[2].replace(/\n$/, ''), m[1].trim())}</code></pre>`
+        + '<button type="button" class="thr-code-copy" title="Copy code" aria-label="Copy code"><i class="ph ph-copy" aria-hidden="true"></i></button></div>';
       last = m.index + m[0].length;
     }
     return out + inline(text.slice(last));
@@ -13592,6 +13608,11 @@
     });
     content.querySelectorAll('.thr-table-copy').forEach(b => b.addEventListener('click', () => {
       void copyPrivateText(b.dataset.md).catch(() => {});
+      b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+      setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
+    }));
+    content.querySelectorAll('.thr-code-copy').forEach(b => b.addEventListener('click', () => {
+      void copyPrivateText(b.previousElementSibling.textContent).catch(() => {});
       b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
     }));

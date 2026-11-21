@@ -3149,3 +3149,28 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn):hover { background:var(--ui-hover
 body #sidebar :is(.ws-add, .ws-folder-add-btn):focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 @media (prefers-reduced-motion: reduce) { body #sidebar :is(.ws-add, .ws-folder-add-btn) { transition:none; } }
+
+/* ── Chat code blocks: container with a copy button top-right (shown on hover, like .thr-table-copy);
+   highlight.js token classes mapped to the terminal theme's palette, same as the .tk-* tokens ── */
+#sbr-thread .thr-code-wrap { position:relative; white-space:normal; }
+#sbr-thread .thr-msg-text .thr-code-wrap { margin:8px 0; }
+#sbr-thread .thr-code-wrap > .thr-code { margin:0; padding-right:40px; white-space:pre; }
+#sbr-thread .thr-code-copy { position:absolute; top:6px; right:6px; display:grid; place-items:center; width:24px; height:24px; padding:0;
+  background:color-mix(in srgb,var(--fg) 5%,var(--bg)); border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer;
+  user-select:none; -webkit-user-select:none; opacity:0; transition:opacity 140ms, background-color 140ms, color 140ms; }
+#sbr-thread .thr-code-copy:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-code-wrap:hover .thr-code-copy, #sbr-thread .thr-code-copy:focus-visible { opacity:1; }
+#sbr-thread .thr-code-copy:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-code-copy i { font-size:13px; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-code-copy { transition:none; } }
+#sbr-thread .thr-code :is(.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-meta .hljs-keyword) { color:var(--ansi-cyan, #7dcfff); }
+#sbr-thread .thr-code :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_, .hljs-template-tag) { color:var(--ansi-green, #9ece6a); }
+#sbr-thread .thr-code :is(.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-attr, .hljs-attribute) { color:var(--ansi-yellow, #e0af68); }
+#sbr-thread .thr-code :is(.hljs-literal, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-subst, .hljs-selector-attr, .hljs-selector-pseudo) { color:var(--ansi-magenta, #bb9af7); }
+#sbr-thread .thr-code :is(.hljs-title, .hljs-name, .hljs-section, .hljs-selector-id, .hljs-selector-class, .hljs-link) { color:var(--ansi-blue, #7aa2f7); }
+#sbr-thread .thr-code :is(.hljs-built_in, .hljs-type, .hljs-title.class_, .hljs-tag) { color:var(--ansi-yellow, #e0af68); }
+#sbr-thread .thr-code :is(.hljs-deletion, .hljs-operator) { color:var(--ansi-red, #f7768e); }
+#sbr-thread .thr-code :is(.hljs-meta, .hljs-params, .hljs-punctuation) { color:var(--muted-text); }
+#sbr-thread .thr-code .hljs-comment { color:var(--dim-text); font-style:italic; }
+#sbr-thread .thr-code .hljs-emphasis { font-style:italic; }
+#sbr-thread .thr-code .hljs-strong { font-weight:600; }
