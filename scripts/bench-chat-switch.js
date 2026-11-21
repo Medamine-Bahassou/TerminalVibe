@@ -200,6 +200,11 @@ app.whenReady().then(() => setTimeout(async () => {
   await cdp.sendCommand('Profiler.enable');
   await cdp.sendCommand('Profiler.setSamplingInterval', { interval: 200 });
   await cdp.sendCommand('Profiler.start');
+  const traced = [];
+  if (process.env.TV_BENCH_TRACE) {
+    cdp.on('message', (_e, m, p) => { if (m === 'Tracing.dataCollected') traced.push(...p.value); });
+    await cdp.sendCommand('Tracing.start', { traceConfig: { includedCategories: ['devtools.timeline', 'devtools.timeline.stack', 'disabled-by-default-devtools.timeline.invalidationTracking'] } });
+  }
   const timing = await win.webContents.executeJavaScript(`(async () => {
     const wait = ms => new Promise(r => setTimeout(r, ms));
     const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -225,6 +230,24 @@ app.whenReady().then(() => setTimeout(async () => {
     return { samples, first: activeId() };
   })()`).catch(e => ({ error: e.message }));
   const profile = await cdp.sendCommand('Profiler.stop').catch(() => null);
+  let traceOut = '';
+  if (process.env.TV_BENCH_TRACE) {
+    const done = new Promise(r => cdp.once('message', function f(_e, m) { if (m === 'Tracing.tracingComplete') r(); else cdp.once('message', f); }));
+    await cdp.sendCommand('Tracing.end'); await done;
+    const sum = {};
+    for (const e of traced) if (e.ph === 'X' && e.dur && /^(Layout|UpdateLayoutTree|Paint|PrePaint|Layerize|Commit|UpdateLayer|FunctionCall|EvaluateScript|HitTest|RunTask|IntersectionObserverController::computeIntersections|ResizeObserver::deliverObservations|RecalculateStyles)$/.test(e.name)) sum[e.name] = (sum[e.name] || 0) + e.dur / 1000;
+    const inv = {};
+    for (const e of traced) if (/InvalidationTracking/.test(e.name)) { const a = e.args?.data || {}; if (/details-content|thr-prompt-tick|#text/.test(a.nodeName||'')) continue; const k = e.name.replace('InvalidationTracking', '') + ' ' + (a.reason || a.invalidationSet || '') + ' <' + (a.nodeName || '').slice(0, 60) + '>'; inv[k] = (inv[k] || 0) + 1; }
+    const stk = {};
+    for (const e of traced) if (/InvalidationTracking/.test(e.name) && /details-content/.test(e.args?.data?.nodeName || '')) {
+      const st = (e.args.data.stackTrace || []).slice(0, 4).map(f => (f.functionName || 'anon') + ':' + f.lineNumber).join(' < ') || '(none)';
+      stk[st] = (stk[st] || 0) + 1; }
+    const stkOut = Object.entries(stk).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => v + '  ' + k).join('\n');
+    const invOut = Object.entries(inv).sort((a, b) => b[1] - a[1]).slice(0, 22).map(([k, v]) => v + '  ' + k).join('\n');
+    const lay = traced.filter(e => e.name === 'Layout' && e.ph === 'X' && e.dur > 3000).slice(0, 14)
+      .map(e => `${(e.dur / 1000).toFixed(0)}ms dirty=${e.args?.beginData?.dirtyObjects}/${e.args?.beginData?.totalObjects} root=${e.args?.endData?.root || ''}`).join('\n');
+    traceOut = 'STK\n' + stkOut + '\nINV\n' + invOut + '\n' + lay + '\n--- trace (ms, all renderer threads) ---\n' + Object.entries(sum).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v.toFixed(0).padStart(7)}  ${k}`).join('\n');
+  }
   if (timing?.error) return finish(1, 'timing: ' + JSON.stringify(timing));
 
   // 5. Aggregate V8 self time across the switches.
@@ -249,5 +272,6 @@ app.whenReady().then(() => setTimeout(async () => {
     '  samples: ' + JSON.stringify(timing.samples),
     '--- V8 self time during the switch run (ms) ---',
     top.join('\n'),
+    traceOut,
   ].join('\n'));
 }, 2000));
