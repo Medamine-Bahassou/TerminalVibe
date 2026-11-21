@@ -3181,3 +3181,19 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 #sbr-thread .thr-svg-preview { margin:8px 0; }
 #sbr-thread .thr-rimg-alt, #sbr-thread .thr-rimg.failed { display:none; }
 #sbr-thread .thr-rimg.failed + .thr-rimg-alt { display:inline; color:var(--muted-text); font-size:12px; }
+
+/* SVG block: the container shows the picture first; the toggle swaps it with the code (copy always copies the code). */
+#sbr-thread .thr-svg-wrap > .thr-svg-preview { margin:0; padding:12px; display:grid; place-items:center; background:var(--ui-surface); border:1px solid var(--ui-line); border-radius:var(--ui-radius) !important; }
+#sbr-thread .thr-svg-wrap > .thr-svg-preview .thr-rimg { border:0; background:transparent; max-height:360px; }
+#sbr-thread .thr-svg-wrap[data-view="preview"] > .thr-code { display:none; }
+#sbr-thread .thr-svg-wrap[data-view="code"] > .thr-svg-preview { display:none; }
+#sbr-thread .thr-svg-wrap > .thr-code-copy { right:36px; }
+#sbr-thread .thr-svg-toggle { position:absolute; top:6px; right:6px; display:grid; place-items:center; width:24px; height:24px; padding:0;
+  background:color-mix(in srgb,var(--fg) 5%,var(--bg)); border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer;
+  user-select:none; -webkit-user-select:none; opacity:0; transition:opacity 140ms, background-color 140ms, color 140ms; }
+#sbr-thread .thr-svg-toggle:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-code-wrap:hover .thr-svg-toggle, #sbr-thread .thr-svg-toggle:focus-visible { opacity:1; }
+#sbr-thread .thr-svg-toggle:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-svg-toggle i { font-size:13px; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-svg-toggle { transition:none; } }
+#sbr-thread .thr-svg-wrap > .thr-code { padding-right:72px; }

@@ -12807,7 +12807,7 @@
     if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) return kids(node);
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const el = node, tag = el.nodeName;
-    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-code-copy, .thr-pending-kind, .thr-seg, .thr-worked, .thr-tools > summary, .thr-tool > summary, .thr-turn > summary, button[data-act]')) return ''; // icons, chrome
+    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-code-copy, .thr-svg-toggle, .thr-svg-preview, .thr-pending-kind, .thr-seg, .thr-worked, .thr-tools > summary, .thr-tool > summary, .thr-turn > summary, button[data-act]')) return ''; // icons, chrome
     if (el.matches('.thr-msg-text, .thr-queued-text') || tag === 'P') return block(kids(el).trim());
     if (tag === 'BR') return '\n';
     if (tag === 'PRE') return block('```' + (el.matches('.thr-tool-detail') ? 'sh' : el.dataset.lang || '') + '\n' + el.textContent.replace(/\n$/, '') + '\n```');
@@ -12956,8 +12956,10 @@
     };
     let out = '', last = 0;
     for (const m of text.matchAll(/```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g)) {
-      out += inline(text.slice(last, m.index)) + svgPreviewHtml(m[1].trim(), m[2]) + `<div class="thr-code-wrap"><pre class="thr-code" data-lang="${escHtml(m[1].trim())}"><code class="hljs">${hlFence(m[2].replace(/\n$/, ''), m[1].trim())}</code></pre>`
-        + '<button type="button" class="thr-code-copy" title="Copy code" aria-label="Copy code"><i class="ph ph-copy" aria-hidden="true"></i></button></div>';
+      const svg = svgPreviewHtml(m[1].trim(), m[2]);
+      out += inline(text.slice(last, m.index)) + `<div class="thr-code-wrap${svg ? ' thr-svg-wrap' : ''}"${svg ? ' data-view="preview"' : ''}>${svg}<pre class="thr-code" data-lang="${escHtml(m[1].trim())}"><code class="hljs">${hlFence(m[2].replace(/\n$/, ''), m[1].trim())}</code></pre>`
+        + '<button type="button" class="thr-code-copy" title="Copy code" aria-label="Copy code"><i class="ph ph-copy" aria-hidden="true"></i></button>'
+        + (svg ? '<button type="button" class="thr-svg-toggle" title="Show code" aria-label="Show code"><i class="ph ph-code" aria-hidden="true"></i></button>' : '') + '</div>';
       last = m.index + m[0].length;
     }
     return out + inline(text.slice(last));
@@ -13662,6 +13664,14 @@
       void copyPrivateText(b.dataset.md).catch(() => {});
       b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
+    }));
+    // An SVG block shows its picture first; the toggle flips the container between the picture and its code.
+    content.querySelectorAll('.thr-svg-toggle').forEach(b => b.addEventListener('click', () => {
+      const wrap = b.closest('.thr-svg-wrap'), code = wrap.dataset.view !== 'code';
+      wrap.dataset.view = code ? 'code' : 'preview';
+      const label = code ? 'Preview' : 'Show code';
+      b.title = label; b.setAttribute('aria-label', label);
+      b.innerHTML = `<i class="ph ${code ? 'ph-play' : 'ph-code'}" aria-hidden="true"></i>`;
     }));
     content.querySelectorAll('.thr-code-copy').forEach(b => b.addEventListener('click', () => {
       void copyPrivateText(b.previousElementSibling.textContent).catch(() => {});
