@@ -1481,12 +1481,19 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 .tv-model-picker .mp-access .mp-caret { margin-left:auto; font-size:10px; color:var(--dim-text); }
 
 /* ── Chat tab showing its agent's terminal: the tab bar's chat button brings the chat back ── */
+/* The active slot's state is mirrored on the group by syncGroupChatButton(). A :has() here forced a
+   style recalculation of the entire group (every transcript summary) on each slot display toggle. */
 .term-group .tg-chat-back { display:none; }
-.term-group:has(> .term-group-body > .term-slot.chat-tab[style*="display: block"]) .tg-chat-back { display:flex; }
+.term-group.tg-chat-view .tg-chat-back,
+.term-group.tg-cli-view .tg-chat-back,
+.term-group.tg-agent-tab .tg-chat-back { display:flex; }
+.term-group.tg-cli-no-agent .tg-chat-back { display:none; }
 .term-group .tg-chat-back .tg-cli-to-chat { display:none; }
-.term-group:has(> .term-group-body > .term-slot.chat-cli[style*="display: block"]) .tg-chat-back { color:var(--fg); }
-.term-group:has(> .term-group-body > .term-slot.chat-cli[style*="display: block"]) .tg-chat-back .tg-cli-to-chat { display:inline; }
-.term-group:has(> .term-group-body > .term-slot.chat-cli[style*="display: block"]) .tg-chat-back .tg-chat-to-cli { display:none; }
+.term-group.tg-cli-view .tg-chat-back { color:var(--fg); }
+.term-group.tg-cli-view .tg-chat-back .tg-cli-to-chat,
+.term-group.tg-agent-tab .tg-chat-back .tg-cli-to-chat { display:inline; }
+.term-group.tg-cli-view .tg-chat-back .tg-chat-to-cli,
+.term-group.tg-agent-tab .tg-chat-back .tg-chat-to-cli { display:none; }
 
 /* ── Chat composer: attachments (paperclip at left of the bar, chips above the text) ── */
 #sbr-thread .thr-attach { display:grid; place-items:center; width:28px; height:28px; margin-left:-6px; margin-right:auto; padding:0; background:transparent; border:0; border-radius:8px !important; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
@@ -1528,8 +1535,10 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-changes { position:relative; margin:4px 0 6px; padding:4px; background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--ui-line); border-radius:10px !important; }
 #sbr-thread .thr-changes-head { display:flex; align-items:center; flex-wrap:wrap; gap:2px 8px; min-height:32px; padding:4px 104px 4px 8px; list-style:none; border-radius:6px !important; font-size:12.5px; cursor:pointer; }
 #sbr-thread .thr-changes-head::-webkit-details-marker { display:none; }
+/* Hover/focus of the diff button used to be detected with :has(), which re-ran on every pointer move and
+   invalidated .thr-flow (and the whole transcript) along with it. :is() keeps the invalidation local. */
 #sbr-thread .thr-changes-head:hover,
-#sbr-thread .thr-changes:has(.thr-diff-btn:is(:hover,:focus-visible)) .thr-changes-head { background:var(--ui-hover); }
+#sbr-thread .thr-changes:is(:hover,:focus-within) .thr-changes-head { background:var(--ui-hover); }
 #sbr-thread .thr-changes-caret { font-size:11px; color:var(--dim-text); }
 #sbr-thread .thr-changes-list[open] > summary .thr-changes-caret { transform:rotate(90deg); }
 #sbr-thread .thr-changes-count { font-weight:500; color:var(--fg); }
@@ -1737,13 +1746,16 @@ body.ui-animations.resizing #threads-sidebar { transition:none; }
 .term-slot.chat-tab:not(.chat-cli) > .term-wrap { visibility:hidden; pointer-events:none; }
 .term-slot.chat-tab > #sbr-thread { position:absolute; inset:0; z-index:2; }
 .term-slot.chat-cli > .thr-snapshot { display:none !important; }
-/* Keep only the last inactive chat's layout. Its absolute slot takes no pane space. */
-.term-slot.chat-keep-layout:not(.chat-cli)[style*="display: none"] {
+/* Hidden chat tabs keep their layout, so switching back re-lays out nothing: display:none would throw the
+   transcript's layout away (100–300ms per switch). content-visibility skips their rendering while hidden.
+   The live page stays shown too: it only becomes a snapshot mid-switch. Their absolute slot takes no pane space. */
+.term-slot.chat-tab:not(.chat-cli)[style*="display: none"] {
   display:block !important;
   visibility:hidden;
   pointer-events:none;
+  content-visibility:hidden;
 }
-.term-slot.chat-keep-layout[style*="display: none"] > :not(.thr-snapshot) {
+.term-slot.chat-tab[style*="display: none"] > :not(.sbr-page) {
   display:none !important;
 }
 
@@ -1774,7 +1786,7 @@ body.ui-animations.resizing #threads-sidebar { transition:none; }
 #sbr-thread .thr-image-ref { color:var(--accent); text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent); text-underline-offset:3px; pointer-events:auto; cursor:pointer; }
 #sbr-thread .thr-image-ref:hover { text-decoration-color:var(--accent); }
 #sbr-thread .thr-image-ref:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-#sbr-thread .thr-input-wrap:has(textarea:disabled) .thr-input-links { opacity:.6; }
+#sbr-thread .thr-input-wrap textarea:disabled ~ .thr-input-links { opacity:.6; }
 
 /* Model picker fades in and out without moving the controls. */
 @keyframes tv-model-picker-in { from { opacity:0; } to { opacity:1; } }
@@ -1861,13 +1873,9 @@ body .term-group .tg-tab.unsent:hover { background:color-mix(in srgb,var(--ui-wa
 .tg-tab .tg-tab-agent { position:relative; display:inline-grid; place-items:center; flex-shrink:0; width:18px; height:18px; margin-right:4px; color:var(--muted-text); }
 .tg-tab .tg-tab-agent .ws-proc-icon { width:13px; height:13px; font-size:13px; fill:currentColor; }
 
-/* A plain terminal running an agent: the chat button (chat icon) opens it as a Chat tab. */
-.term-group:has(> .term-group-body > .term-slot.agent-tab[style*="display: block"]) .tg-chat-back { display:flex; }
-.term-group:has(> .term-group-body > .term-slot.agent-tab[style*="display: block"]) .tg-chat-back .tg-cli-to-chat { display:inline; }
-.term-group:has(> .term-group-body > .term-slot.agent-tab[style*="display: block"]) .tg-chat-back .tg-chat-to-cli { display:none; }
-
-/* A Chat tab showing its terminal after the agent quit: hide the chat button (reopen it from the threads list). */
-.term-group:has(> .term-group-body > .term-slot.chat-cli.no-agent[style*="display: block"]) .tg-chat-back { display:none; }
+/* A plain terminal running an agent: the chat button (chat icon) opens it as a Chat tab.
+   A Chat tab showing its terminal after the agent quit hides the button (reopen from the threads list).
+   Both states are mirrored on the group by syncGroupChatButton(); see the rules near line 1483. */
 
 /* Threads sidebar: every agent a thread used, side by side. */
 #threads-sidebar .ts-agents { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; }
@@ -2663,7 +2671,8 @@ body.thr-hide-ctx .thr-composer .thr-ctx-ring { display:none !important; }
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-prompts { transition:none; } }
 
 /* ── Checkpoint rail: when shown, narrow chats keep a clear gutter between its ticks and the content. */
-#sbr-thread:has(.thr-prompts:not([hidden])) .thr-flow { padding-left:max(32px, calc((100% - 788px) / 2)); }
+/* thr-has-prompts is kept in sync by renderPromptNav(); a :has() here invalidated the whole flow. */
+#sbr-thread.thr-has-prompts .thr-flow { padding-left:max(32px, calc((100% - 788px) / 2)); }
 
 /* ── Usage modal: account email beside the plan, blurred until clicked. */
 #usage-modal .um-email, #providers-panel .prov-email { margin-left:4px; padding:1px 6px; border:0; border-radius:4px !important; background:transparent; color:var(--muted-text); font:400 12px var(--mono-font); cursor:pointer; filter:blur(4px); user-select:none; transition:background-color 150ms, color 150ms; }
@@ -3034,7 +3043,7 @@ img.ws-proc-icon { object-fit:contain; }
 .term-slot.chat-panel-guest { left:calc(100% - var(--chat-panel-width, 40%)); border-left:1px solid var(--ui-line); }
 .tg-tab.tg-in-panel { display:none !important; }
 /* The thread half stays visible while you type in the side chat (it's then the hidden "warm" slot of the rule above). */
-.term-slot.chat-panel-on.chat-keep-layout:not(.chat-cli)[style*="display: none"] { visibility:visible; pointer-events:auto; }
+.term-slot.chat-panel-on.chat-tab:not(.chat-cli)[style*="display: none"] { visibility:visible; pointer-events:auto; content-visibility:visible; }
 /* Its left edge resizes it (a 6px grab area over the hairline; the hairline turns accent while dragged or focused). */
 .term-slot > .chat-panel-sash { display:none; }
 .term-slot.chat-panel-guest > .chat-panel-sash { display:block; position:absolute; top:0; bottom:0; left:0; width:6px; z-index:20; cursor:col-resize; touch-action:none; outline:none; }
@@ -3044,7 +3053,7 @@ body.chat-panel-resizing { cursor:col-resize; user-select:none; }
 body.chat-panel-resizing webview, body.chat-panel-resizing iframe { pointer-events:none; }
 @media (prefers-reduced-motion: reduce) { .term-slot.chat-panel-guest > .chat-panel-sash::after { transition:none; } }
 /* …and the side chat half keeps its resize sash when it's that warm slot (the rule above hides all but the snapshot). */
-.term-slot.chat-panel-guest.chat-keep-layout[style*="display: none"] > .chat-panel-sash { display:block !important; }
+.term-slot.chat-panel-guest.chat-tab[style*="display: none"] > .chat-panel-sash { display:block !important; }
 
 /* ── Chat at narrow widths (a side chat panel, a thin split) ── */
 /* The top bar: "Side chat of" and the "Use as context" label give way to their icons (tooltips keep the words),

@@ -4461,6 +4461,19 @@
     return { cols: 80, rows: 24 };
   }
 
+  // The tab bar's chat button used to rely on :has() rules that re-styled the whole group (and every
+  // transcript summary) whenever a slot's display changed. Mirror the active slot's state on the group
+  // instead, so the style invalidation stays limited to the button.
+  function syncGroupChatButton(groupEl, activeTerm) {
+    if (!groupEl) return;
+    const h = activeTerm && harnessOf(_tabAgent.get(activeTerm.id));
+    const cli = !!(activeTerm?.threadHistory && activeTerm._cliView);
+    groupEl.classList.toggle('tg-chat-view', !!(activeTerm?.threadHistory && !cli));
+    groupEl.classList.toggle('tg-cli-view', cli);
+    groupEl.classList.toggle('tg-cli-no-agent', cli && !h);
+    groupEl.classList.toggle('tg-agent-tab', !!activeTerm && !activeTerm.threadHistory && !!h);
+  }
+
   function activateTerminal(wsId, termId) {
     const wsp = findWs(wsId);
     if (!wsp) return;
@@ -4522,6 +4535,7 @@
         }
       }
       const t = target;
+      if (activeGroupEl) syncGroupChatButton(activeGroupEl, t);
       if (nativePtyReady) restorePendingTerminal(t);
       syncChatPanels(wsp); // a thread's side chat panel shows (or goes) with this selection
       if (t?.threadHistory && t.el && (curChat() !== t || thrPage.parentElement !== t.el)) {
@@ -4827,6 +4841,7 @@
                 if (t.type === 'browser' && t.browserContainer) t.browserContainer.classList.add('focused');
               }
             });
+            syncGroupChatButton(groupEl, group.terminals.find(t => t.id === group.activeTermId));
           }
         }
         syncBrowserSlots();
@@ -5797,6 +5812,7 @@
         else slot.classList.remove('focused');
         body.appendChild(slot);
       });
+      syncGroupChatButton(groupEl, node.terminals.find(t => t.id === node.activeTermId));
 
       setupGroupDragAndDrop(body, node, wsp, overlay);
 
@@ -7906,6 +7922,8 @@
     if (cli && curChat() === tab) rememberThreadScroll(tab);
     tab._cliView = !!cli;
     tab.el?.classList.toggle('chat-cli', !!cli);
+    const activeId = typeof findWs === 'function' ? findWs(activeWsId)?.activeTermId : tab.id;
+    if (typeof syncGroupChatButton === 'function' && tab.id === activeId) syncGroupChatButton(tab.el?.closest('.term-group'), tab);
     if (thrPage.parentElement === tab.el) thrPage.style.display = cli ? 'none' : 'flex';
     if (cli) {
       requestAnimationFrame(() => {
@@ -8530,6 +8548,7 @@
     t.el?.classList.toggle('agent-tab', !t.threadHistory && !!harnessOf(_tabAgent.get(t.id)));
     // A Chat tab whose agent quit while its terminal shows: no chat button there (it's a plain shell now).
     t.el?.classList.toggle('no-agent', !!t.threadHistory && !harnessOf(_tabAgent.get(t.id)));
+    if (el.classList.contains('active') && typeof syncGroupChatButton === 'function') syncGroupChatButton(t.el?.closest('.term-group'), t);
     // The agent running there; a Chat tab with none running yet (e.g. right after startup, before it
     // resumes) shows its thread's latest agent, as the threads sidebar does.
     const h = (isLiveTerminal(t) ? harnessOf(_tabAgent.get(t.id)) : null)
@@ -8753,8 +8772,12 @@
       move.call(to, control, index < before ? flow : null);
     }
     // The composer arrived at its height: the observer only fires on a change, so pad this surface now.
+    // A cloned surface already inherits the live pad, so avoid reading offsetHeight (which forces a full
+    // document layout mid-switch) unless there is no value yet.
     const liveWrap = to.querySelector(':scope > .thr-composer-wrap');
-    if (liveWrap?.offsetHeight) to.style.setProperty('--thr-composer-pad', liveWrap.offsetHeight + 12 + 'px');
+    if (!to.style.getPropertyValue('--thr-composer-pad') && liveWrap?.offsetHeight) {
+      to.style.setProperty('--thr-composer-pad', liveWrap.offsetHeight + 12 + 'px');
+    }
     if (owner) {
       from.style.display = 'flex';
       from.classList.add('thr-snapshot');
@@ -8770,9 +8793,9 @@
       previousQueue.dataset.thrId = 'sbr-thread-queue';
     }
     if (owner) {
-      // A warm slot is already hidden by CSS. Changing inert also invalidates
-      // style for every descendant when coming back to it.
-      previous.inert = !!hidden && owner.el !== _warmChatSlot;
+      // A hidden chat tab is already hidden by CSS (not focusable or clickable). Changing
+      // inert invalidates style for every descendant, on hiding and again on coming back.
+      previous.inert = false;
       if (!hidden) disableSnapshotHistoryFocus(previous);
     }
     to.classList.remove('thr-snapshot');
@@ -8798,6 +8821,7 @@
       to.addEventListener(...args);
     }
     thrPage = to;
+    to.classList.toggle('thr-has-prompts', !threadPart(to, 'prompts')?.hidden);
     queueMicrotask(() => { if (thrPage === to) observeThreadPage(); });
   }
   function disableSnapshotHistoryFocus(flow) {
@@ -9441,7 +9465,9 @@
     const folderName = chatFolderName(cwd);
     cwdEl.dataset.projectCwd = folderName === 'No project' ? '' : cwd;
     const icon = projectIconHtml(cwd, 'ph-selection');
-    cwdEl.innerHTML = `${folderName === 'No project' || icon.startsWith('<img') ? icon : chatFolderIcon(cwd)}<span>${escHtml(folderName)}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
+    // Runs every poll tick: rewriting unchanged markup re-lays out the whole transcript.
+    const cwdHtml = `${folderName === 'No project' || icon.startsWith('<img') ? icon : chatFolderIcon(cwd)}<span>${escHtml(folderName)}</span>${fresh ? '<i class="ph ph-caret-down thr-caret" aria-hidden="true"></i>' : ''}`;
+    if (cwdEl._html !== cwdHtml) { cwdEl._html = cwdHtml; cwdEl.innerHTML = cwdHtml; }
     cwdEl.title = fresh ? `Working folder: ${cwd || 'a new scratch folder'}` : cwd;
     // Above the composer: a thread's side chats, or (in a side chat) the thread it belongs to.
     const sidesEl = thrChip('sides');
@@ -9510,7 +9536,8 @@
       pr.title = prs?.auth ? 'Sign in to GitHub to see pull requests' : 'Show open pull requests';
       pr.setAttribute('aria-label', pr.title);
     }
-    if (shownBranch) branch.innerHTML = `<i class="ph ${branchMismatch ? 'ph-warning' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
+    const branchHtml = `<i class="ph ${branchMismatch ? 'ph-warning' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
+    if (shownBranch && branch._html !== branchHtml) { branch._html = branchHtml; branch.innerHTML = branchHtml; }
     thrInput.placeholder = h && h.id === o.harness ? `Message ${h.name}` : 'Ask anything';
     const editor = threadPart(surface, 'input-links');
     if (editor) editor.dataset.placeholder = thrInput.placeholder;
@@ -11427,6 +11454,7 @@
     const activePrompt = checkpointPrompts[activeCheckpoint];
     checkpointPrompts = prompts;
     promptNav.hidden = prompts.length < 2;
+    thrPage?.classList.toggle('thr-has-prompts', !promptNav.hidden);
     promptNav.style.setProperty('--prompt-rail-height', (prompts.length - 1) * 8 + 'px');
     promptTicks.replaceChildren(...prompts.map((_, index) => {
       const tick = document.createElement('span');
@@ -12989,11 +13017,12 @@
     const flow = surface.querySelector('.thr-flow');
     if (!flow) return;
     flow.querySelector('.thr-continue')?.remove();
-    flow.querySelectorAll('.thr-interruption-status').forEach(el => el.remove());
     // Keep locally stopped turns even after the active Continue state is cleared.
     const interruptions = [...(tab.chat?.interruptions || [])];
     if (tab.chat?.interruptedAt && !interruptions.some(item => item.at === tab.chat.interruptedAt)) interruptions.push({ at: tab.chat.interruptedAt });
     const prompts = interruptions.length ? [...flow.querySelectorAll(':is(.thr-msg.user, .thr-resumed, .thr-merge-status)[data-ts]')] : [];
+    // Where each interruption row belongs, ignoring the rows already shown (placed by an earlier call).
+    const want = [];
     for (const { at, promptTs } of interruptions.sort((a, b) => a.at - b.at)) {
       const next = prompts.find(el => Number(el.dataset.ts) > Math.max(at, promptTs || 0));
       let anchor = next;
@@ -13002,14 +13031,29 @@
       for (let row = next?.previousElementSibling; row?.matches('.thr-seg, .thr-note'); row = row.previousElementSibling) {
         if (row.matches('.thr-seg')) anchor = row;
       }
-      const previous = anchor ? anchor.previousElementSibling : [...flow.children].filter(el => !el.matches('.thr-queue, .thr-working')).at(-1);
+      // One row per gap: a second interruption before the same prompt adds nothing.
+      if (want.some(w => w.anchor === anchor)) continue;
+      let previous = anchor ? anchor.previousElementSibling : [...flow.children].filter(el => !el.matches('.thr-queue, .thr-working, .thr-interruption-status')).at(-1);
+      while (previous?.matches('.thr-interruption-status')) previous = previous.previousElementSibling;
       if (previous?.matches('.thr-status-line:not(.thr-resumed, .thr-merge-status)')) continue;
+      want.push({ at, anchor });
+    }
+    // Runs every poll tick: leave the rows alone when they are already in place, since
+    // removing and re-adding them re-lays out the whole transcript.
+    const shown = [...flow.querySelectorAll('.thr-interruption-status')];
+    if (shown.length === want.length && shown.every((el, i) => el.dataset.interruptedAt === String(want[i].at)
+      && (want[i].anchor ? el.nextElementSibling === want[i].anchor : !el.nextElementSibling?.matches(':not(.thr-working, .thr-queue)')))) {
+      if (surface === thrPage && curChat() === tab) syncSendBtn();
+      return;
+    }
+    shown.forEach(el => el.remove());
+    for (const { at, anchor } of want) {
       const status = document.createElement('div');
       status.className = 'thr-status-line thr-interruption-status';
       status.setAttribute('role', 'status');
       status.dataset.interruptedAt = at;
       status.innerHTML = '<i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span><span class="thr-status-detail">· Generation stopped</span>';
-      if (anchor) anchor.before(status); else flow.insertBefore(status, flow.querySelector('.thr-queue'));
+      if (anchor) anchor.before(status); else flow.insertBefore(status, flow.querySelector(':scope > :is(.thr-working, .thr-queue)'));
     }
     if (surface === thrPage && curChat() === tab) syncSendBtn();
   }
