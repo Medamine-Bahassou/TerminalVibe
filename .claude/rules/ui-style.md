@@ -4,7 +4,6 @@ paths:
   - "style.css"
   - "index.html"
   - "app.js"
-  - "examples/**"
 ---
 
 # TerminalVibe UI style rule
@@ -28,7 +27,7 @@ This rule applies to any change that adds or alters something the user sees. The
 3. **Type**: UI 13px/400, labels 500, headings 600. Secondary 12px, metadata 11–11.5px. No uppercase + letter-spacing labels. Paths, keys, ports and code use `--mono-font`. Never style `.xterm`.
 4. **Sizes**: values sit on the 4px grid. Controls are 28–36px tall, menu rows 32px, sidebar rows ≥ 40px.
 5. **Corners**: rounding is opt-in with `!important` (`body.roundless` resets everything to 0). Use the documented radii only. The collapsed sidebar stays square.
-6. **State**: use a Phosphor icon (`ph-check-circle`, `ph-warning-circle`, spinning `ph-circle-notch`) tinted with a status token. Never use colored dots, glow rings or labelled pills.
+6. **State**: use an icon (`ph-check-circle`, `ph-warning-circle`, spinning `ph-circle-notch`) tinted with a status token. Never use colored dots, glow rings or labelled pills.
 7. **Interaction**: hover = `--ui-hover` background. Focus = the documented ring (inputs: accent border + 3px soft ring; buttons: 2px gap + 4px accent ring). Never stack an outline on a border.
 8. **Motion**: transitions only on `background-color, color, border-color, box-shadow`, 120–180ms, with a `prefers-reduced-motion: reduce` override next to them.
 9. **Placement**: styles go in a commented, component-scoped block at the end of `workspace.css`. JS-built markup uses semantic class names, not Tailwind strings. Don't refactor `style.css`.
@@ -47,3 +46,32 @@ This rule applies to any change that adds or alters something the user sees. The
 - A modal, toast or banner where an inline hint, tooltip or existing panel would do.
 
 When a design need isn't covered here or in `CLAUDE.md`, pick the quietest option that still communicates, match the nearest existing component, and say in the reply which precedent you followed.
+
+## Lessons from corrections
+
+Mistakes the user has corrected. Read these before a UI change, and add a line here whenever a new correction comes in.
+
+- **Keep an audit trail in the history.** The user wants a record of what happened, not only the current state. When something starts or stops, gets shared or stopped (a server, a process, a merge, a side chat), add a `.thr-status-line` at that point in the history and save it in the chat state so it survives restarts. Put events that happen after the last prompt into `contextLines`. Live controls can sit elsewhere (a composer bubble), but the events still go in the history.
+- **Order is everything in the history.** An event goes after the response of the turn it happened in, never above the prompt that caused it. Interleave by time with everything, including pending (not yet transcribed) messages (`pendingHtml(ws, '', ctx)`). Pin an event that happens during a turn after that turn's prompt timestamp. Before finishing, walk through the sequence send → event → reply and check where each line lands.
+- **User preference: events wait for the end of the response.** While the agent is still answering, don't show an event line (server started, process stopped, …) at all, not even at the bottom between live steps and "Thinking". Hold it until the response ends, then show it directly below the response. Only live controls (the composer bubble) update immediately. Implemented in `refreshThreadFlow`: `working ? '' : ctx.before(Infinity)`.
+- **No repeated chrome in the history.** The agent header (harness · model · time) shows only when the agent or model changes. That includes a just-sent message that the transcript doesn't have yet. Pass the render's `lastHead` into `pendingHtml`, never `''`.
+- **Both sides of a cross-thread action show it.** When an action links two threads (a side chat shared as context), each thread's history shows its own status line: the side chat says "Shared as context with X · goes with its next message", and the parent says "Side chat Y goes with your next message · Discard", then "Included side chat Y". Building the HTML isn't enough; check that it's actually appended (`ctx.waiting` was built but never rendered).
+- **Undone pending actions vanish; they don't leave a trail.** The audit is for things that happened. A discarded "Use as context" removes its status line instead of showing "discarded". (A real stop, like a server stopped, is still logged.)
+- **Destructive actions turn red on hover.** Small inline ones (Discard, Delete, Stop) rest gray (`--muted-text`, `--border`) and only turn `--ui-error` on hover (text, border and a light red tint). Don't leave them red at rest, and don't keep them neutral on hover.
+- **Audit lines are grouped, short and neutral.** Several events of one kind that happen together make one line ("Stopped 127.0.0.1:4096, python server.py by user"), never a stack of near-identical lines. Show short names (host:port, binary + script) with the full text in a tooltip, not long paths. Say "user", not "you".
+- **Chat: live status that isn't part of the conversation stays out of the history.** Still-running processes were first a bordered card in the message flow, then plain text there. Both were rejected. Such status goes on the composer's top edge as a bubble next to the side-chats bubble (`.thr-sides-bubble`).
+- **Chat: anything that expands from the composer's edge opens as the side-chats tray** (`.thr-sides:not(.collapsed)`: header label + caret, full-width `.thr-side-row`s, the row action where `.thr-side-del` sits). Don't use a floating popover there, even though it's the standard menu recipe.
+- **"Like X" means X's exact placement.** "Like the Ctrl+J terminal" meant inside the same tab, sharing its tab bar, not a new split pane with its own header. When a request names a precedent, copy where it lives and how it attaches (`toggleChatBottomTerminal`), not just its general idea, and ask if the placement is unclear.
+- **Tooltips are short.** A few words that name the action. Don't repeat what's already visible next to the control (like the thread's name in the same bar), and don't add user-provided text (titles, prompts) to an action's tooltip.
+- **Tooltips are never truncated.** A tooltip exists to show the full text that's cut off elsewhere. `.ui-tooltip` wraps (max 360px); don't give tooltips `nowrap` or an ellipsis.
+- **Every bar must hold up at panel width (~250px).** Chats now live in narrow side panels. A bar with a label + name + actions needs a narrow layout (a container query: labels collapse to icons with tooltips, and names keep the room). Check that nothing overlaps or shows through (no transparent strips under the composer).
+- **Several chats can be on screen at once** (a thread plus its side chat panel, or splits). Per-chat layout values (like `--thr-composer-pad`) belong on each chat surface, never on `:root`, or one chat's composer sets another's spacing.
+- **Check new controls against Settings' generic styles.** `#settings-modal input[type="text"]` (and similar) outranks a plain component class, so a search field with an icon inset lost its left padding and the text ran under the icon. Inside Settings, check the computed padding and size of any new input, and give the component's padding enough weight to win.
+- **Hover zones are exactly where the thing is.** A hover-to-reveal control answers only over its own spot, not a full-width row and not another control (the composer's input). Set `pointer-events:none` on wide containers and give only the control (or its reveal area) `pointer-events:auto`.
+- **Header icon buttons all hover the same way.** Muted icon, then a `--ui-hover` tile with `--fg` on hover (the threads sidebar's `.ts-icon-btn`), never an accent-colored icon. When an older control in `style.css` still uses an accent hover, override it in `workspace.css`.
+- **One control per job.** Don't show two elements that do the same thing (e.g. the top "Side chat of …" bar and a composer bubble that links to the same thread). Keep the clearer one, and move any action that only the other one had into it ("Use as context" now sits in the top bar).
+- **A tray folds once its job is done.** Picking a side chat from the side-chats tray opens it and collapses the tray back to its bubble. Don't leave the list open over the history.
+- **Composer-edge trays start collapsed** (bubble only). Opening one is the user's choice and isn't forced open by default.
+- **A copy of a component needs all of its classes' styles.** When reusing a look (e.g. `.thr-sides-bubble`), check which base class supplies the rest (`.thr-sides-toggle` gives centering and 13px icons). If you can't use that class, copy its rules, then compare the copy with the original side by side.
+- **Row actions positioned over a row need reserved space.** An absolutely placed action (`.thr-side-del`, Stop) must not cover the row's content. Check that the padding that reserves its space really applies, since a more specific rule may override it. Test with the longest content (a URL on the right edge), not just a short title.
+- **Fix layout bugs inside the existing mechanism.** When asked to fix a glitch (e.g. history text under the composer), keep the current approach (`--thr-composer-pad`) and fix its edge case. Don't redesign it.

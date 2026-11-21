@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listSkills: () => ipcRenderer.invoke('skills:list'),
   setSkillEnabled: (id, enabled) => ipcRenderer.invoke('skills:set-enabled', id, enabled),
   listRunningServers: () => ipcRenderer.invoke('servers:list'),
+  chatBgProcs: (id) => ipcRenderer.invoke('chat:bg-procs', id),
+  chatBgStop: (id, pid) => ipcRenderer.invoke('chat:bg-stop', id, pid),
   killRunningServer: (pid, port) => ipcRenderer.invoke('servers:kill', { pid, port }),
   onAgentRequest: (cb) => {
     const listener = async (_event, request) => {
@@ -103,7 +105,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitBranch: (cwd) => ipcRenderer.invoke('git:branch', cwd),
   faviconGet: (origin) => ipcRenderer.invoke('favicon:get', origin),
   projectIcon: (cwd) => ipcRenderer.invoke('project:icon', cwd),
-  chatTitle: (harness, text) => ipcRenderer.invoke('chat:title', harness, text),
+  chatTitle: (harness, text, model) => ipcRenderer.invoke('chat:title', harness, text, model),
   gitBranches: (cwd) => ipcRenderer.invoke('git:branches', cwd),
   gitPullRequests: (cwd) => ipcRenderer.invoke('git:pull-requests', cwd),
   githubAllPullRequests: (cwds, kind) => ipcRenderer.invoke('github:all-pull-requests', cwds, kind),
@@ -148,6 +150,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('terminal:exit', l);
     return () => ipcRenderer.removeListener('terminal:exit', l);
   },
+  // An agent CLI exited and its PTY was replaced by a shell under the same id.
+  onTerminalAgentExit: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('terminal:agent-exit', l);
+    return () => ipcRenderer.removeListener('terminal:agent-exit', l);
+  },
 
   // Native WebContentsView browser tabs (owned in the main process)
   browserCreate: (id, url) => ipcRenderer.send('browser:create', id, url),
@@ -173,6 +181,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const l = (_e, d) => cb(d);
     ipcRenderer.on('browser:key', l);
     return () => ipcRenderer.removeListener('browser:key', l);
+  },
+  // A browser tab's page asked for its find bar (Ctrl+F or the right-click menu): the page's webContents id.
+  onBrowserFind: (cb) => {
+    const l = (_e, id) => cb(id);
+    ipcRenderer.on('browser:find', l);
+    return () => ipcRenderer.removeListener('browser:find', l);
+  },
+  // "Open link/image in new tab" from a page's right-click menu: { id (the page's webContents id), url }.
+  onBrowserOpenTab: (cb) => {
+    const l = (_e, d) => cb(d);
+    ipcRenderer.on('browser:open-tab', l);
+    return () => ipcRenderer.removeListener('browser:open-tab', l);
   },
   onBrowserEvent: (cb) => {
     const l = (_e, d) => cb(d);
@@ -222,15 +242,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   configWriteThemeFile: (name, theme) => ipcRenderer.invoke('config:writeThemeFile', name, theme),
   configDeleteThemeFile: (name) => ipcRenderer.invoke('config:deleteThemeFile', name),
   configListThemeFiles: () => ipcRenderer.invoke('config:listThemeFiles'),
-
-  // Plugins (~/.terminalvibe/plugins/<id>/)
-  configListPlugins: () => ipcRenderer.invoke('config:listPlugins'),
-  configReadPluginFile: (id, relPath) => ipcRenderer.invoke('config:readPluginFile', id, relPath),
-  configOpenPluginFolder: (id) => ipcRenderer.invoke('config:openPluginFolder', id),
-  configOpenPluginsDir: () => ipcRenderer.invoke('config:openPluginsDir'),
-  // Read-only file access for plugins (api.fs)
-  pluginFsList: (dir) => ipcRenderer.invoke('plugin-fs:list', dir),
-  pluginFsRead: (file, opts) => ipcRenderer.invoke('plugin-fs:read', file, opts),
 
   // Images stored as files in ~/.terminalvibe/images/ (backgrounds, icons)
   configWriteImages: (images) => ipcRenderer.invoke('config:writeImages', images),

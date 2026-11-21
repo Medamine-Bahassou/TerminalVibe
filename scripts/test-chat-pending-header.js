@@ -9,7 +9,7 @@ const context = vm.createContext({
   _pendingMsgs: pending, chatOpts: () => options,
   harnessOf: id => ({ name: id === 'codex' ? 'Codex' : 'Claude', bin: id }),
   escHtml: String, procIconHtml: () => '', clockTime: () => '09:35',
-  userTextHtml: text => ({ html: text }),
+  userTextHtml: text => ({ html: text, paths: [] }), threadImagesHtml: () => '', mergePrNumber: () => null,
 });
 vm.runInContext(source.slice(source.indexOf('  const pendingMessages ='), source.indexOf('  const _thrImgCache =')) + '\nthis.renderPending = pendingHtml;', context);
 const tab = { id: 'chat' };

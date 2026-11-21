@@ -36,9 +36,8 @@ for (const addon of ['fit', 'web-links', 'search', 'unicode11', 'webgl', 'canvas
 ensureVendorFile('split.min.js', path.join('node_modules', 'split.js', 'dist', 'split.min.js'));
 ensureVendorFile('coloris.min.js', path.join('node_modules', '@melloware', 'coloris', 'dist', 'umd', 'coloris.min.js'));
 ensureVendorFile('coloris.min.css', path.join('node_modules', '@melloware', 'coloris', 'dist', 'coloris.min.css'));
-for (const f of ['style.css', 'Phosphor.woff2']) {
-  ensureVendorFile(path.join('phosphor', f), path.join('node_modules', '@phosphor-icons', 'web', 'src', 'regular', f));
-}
+// Always regenerated: the icon alias map lives in scripts/build-icons.js.
+require('./build-icons.js');
 // Always regenerated: the class list changes with every frontend edit.
 require('./build-tailwind.js');
 
@@ -53,6 +52,7 @@ for (const a of assets) {
 
 fs.cpSync(path.join(root, 'fonts'), path.join(dist, 'fonts'), { recursive: true });
 fs.cpSync(path.join(root, 'sounds'), path.join(dist, 'sounds'), { recursive: true });
+fs.cpSync(path.join(root, 'icons'), path.join(dist, 'icons'), { recursive: true });
 
 // index.html references everything in vendor/ with the vendor/ prefix
 fs.cpSync(vendorDir, path.join(dist, 'vendor'), { recursive: true });

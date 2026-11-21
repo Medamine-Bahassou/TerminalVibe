@@ -37,7 +37,7 @@ app.whenReady().then(async () => {
     const countGroups = () => 1, removeEmptyGroups = layout => layout;
     const clearSlotFocus = () => {}, updateTabBarOverflow = () => {}, scrollTabIntoView = () => {}, syncBrowserSlots = () => {};
     const focusSlot = () => {}, fitTerm = () => {}, renderSidebar = () => {}, saveState = () => {};
-    const pluginEmit = () => {}, syncThreadPanel = () => {}, renderThreadsSidebar = () => {};
+    const syncThreadPanel = () => {}, renderThreadsSidebar = () => {};
     ${slice('  function beginTabClose(', '  // Close several tabs')}
     ${slice('  async function runningTabProcess(', '  async function closeTabs(')}
     ${slice('  function removeTerminal(', '  function applyTabColor(')}

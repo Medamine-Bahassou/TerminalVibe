@@ -14,7 +14,7 @@
     "dev": "node electron/dev-server.js & node server.js & wait",
     "electron": "electron .",
     "electron:dev": "node electron/dev-server.js & DEV_PID=$!; trap \"kill $DEV_PID 2>/dev/null\" EXIT INT TERM; electron .; kill $DEV_PID 2>/dev/null",
-    "test": "node scripts/test-cli.js && node scripts/test-pulls-page.js && node electron/agent-settings.js && node electron/chat-sdk.js && node electron/chat-complete.js && node electron/usage-limits.js && node electron/providers.js && node scripts/test-skills.js && node scripts/test-settings-sync.js && node scripts/test-process-startup.js && node scripts/test-agent-control.js && node scripts/test-servers.js && node scripts/test-finish-notify.js && node scripts/test-pty-flow.js && node scripts/test-shell-startup.js && node scripts/test-history-terminal.js && node scripts/test-claude-sessions.js && node scripts/test-threads.js",
+    "test": "node scripts/test-cli.js && node scripts/test-pulls-page.js && node electron/agent-settings.js && node electron/chat-sdk.js && node electron/chat-complete.js && node electron/usage-limits.js && node electron/providers.js && node scripts/test-skills.js && node scripts/test-settings-sync.js && node scripts/test-process-startup.js && node scripts/test-agent-control.js && node scripts/test-servers.js && node scripts/test-finish-notify.js && node scripts/test-pty-flow.js && node scripts/test-shell-startup.js && node scripts/test-history-terminal.js && node scripts/test-claude-sessions.js && node scripts/test-threads.js && node scripts/test-opencode-models-cache.js",
     "test:sessions": "node scripts/test-history-terminal.js && node scripts/test-claude-sessions.js && node scripts/test-session-context.js && node scripts/test-file-drop.js && node scripts/test-workspace-context.js",
     "test:boot": "node scripts/build-dist.js && node scripts/test-boot.js",
     "test:browser": "node scripts/test-browser-resizing.js && node scripts/test-browser-snapshot.js",
@@ -42,6 +42,7 @@
     "@melloware/coloris": "^0.25.0",
     "@opencode-ai/sdk": "1.19.6",
     "js-yaml": "^5.3.0",
+    "lucide-static": "^1.77.0",
     "node-pty": "^1.0.0",
     "simple-icons": "^16.28.0",
     "split.js": "^1.6.5",
@@ -56,7 +57,6 @@
     "xterm-addon-webgl": "^0.16.0"
   },
   "devDependencies": {
-    "@phosphor-icons/web": "2.1.1",
     "electron": "^43.5.0",
     "electron-builder": "^26.15.3",
     "tailwindcss": "3.4.17"
@@ -69,6 +69,7 @@
     "asar": true,
     "npmRebuild": true,
     "asarUnpack": [
+      "electron/delegate-mcp.js",
       "node_modules/node-pty/**"
     ],
     "files": [

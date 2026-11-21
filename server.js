@@ -245,6 +245,7 @@ class PTYSession {
       // History replaces the shell with Claude. Once Claude exits, keep the
       // same pane alive with a shell; explicit close/replacement must stay closed.
       if (wasRunning && this.executable && this.returnToShell) {
+        this._send(JSON.stringify({ type: "agent-exit", id: this.id, name: this.executable }));
         this.executable = null;
         this.argv = null;
         this.returnToShell = false;

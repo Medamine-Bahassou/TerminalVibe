@@ -107,4 +107,4 @@ async function killServer(pid, port, self = process.pid) {
   process.kill(pid, 'SIGTERM');
 }
 
-module.exports = { listRunningServers, killServer, parseSs, parseLsof, normalize };
+module.exports = { listRunningServers, killServer, allServers, parseSs, parseLsof, normalize };

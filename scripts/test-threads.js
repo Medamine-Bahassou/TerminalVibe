@@ -182,6 +182,67 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
     { role: 'interrupt', reason: 'crash', text: 'crashed (SIGSEGV)', ts: 't3' }]);
   assert.deepStrictEqual(crashed.map(i => [i.role, i.interrupted || null]), [['user', null], ['tool', 'crash']]);
 
+  // delegate_task subagents: the same prompt delegated three times keeps three runs. A finished call finds its run by
+  // the session in its result; a running one takes the next unclaimed run; a run whose process died shows stopped.
+  {
+    const { delegateKey } = require('../electron/delegate-mcp');
+    const prompt = 'say hi', key = delegateKey('opencode', prompt), runs = path.join(home, '.terminalvibe', 'subagents');
+    fs.mkdirSync(runs, { recursive: true });
+    const t0 = Date.parse('2026-05-01T10:00:00Z');
+    const run = (n, sessionId, status, pid) => fs.writeFileSync(path.join(runs, `${key}.${t0 + n * 1000}.1.${n}.json`),
+      JSON.stringify({ harness: 'opencode', sessionId, status, pid, model: null, startedAt: t0 + n * 1000, endedAt: status === 'running' ? null : t0 + n * 1000 + 500 }));
+    run(1, 'ses_first00001', 'completed', 1);
+    run(2, 'ses_second0001', 'running', process.pid);
+    run(3, 'ses_third00001', 'running', 999999999);
+    const call = (n, output) => ({ role: 'tool', name: 'terminalvibe_delegate_task', summary: 'Hi', detail: '{}', input: { harness: 'opencode', description: 'Hi', prompt },
+      callId: 'c' + n, ts: new Date(t0 + n * 1000 - 200).toISOString(), ...(output ? { output } : {}) });
+    const sid = 'ses_delegparent1';
+    fs.mkdirSync(path.join(home, '.terminalvibe', 'acp'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.terminalvibe', 'acp', sid + '.jsonl'), jsonl([{ role: 'user', text: 'three subagents', ts: new Date(t0).toISOString() },
+      call(1, '[OpenCode session ses_first00001]\nhi one'), call(2), call(3)]));
+    const [seg] = await threadHistory({ id: 'deleg', segments: [{ harness: 'opencode', sessionId: sid, since: 0 }] }, home);
+    const agents = seg.items.filter(x => x.agent).map(x => [x.agent.sessionId, x.agent.status, x.output ?? null]);
+    assert.deepStrictEqual(agents, [['ses_first00001', 'completed', 'hi one'], ['ses_second0001', 'running', null], ['ses_third00001', 'stopped', null]]);
+    assert.strictEqual(new Set(seg.items.filter(x => x.agent).map(x => x.agent.toolUseId)).size, 3, 'one id per call');
+  }
+
+  // Background commands (Claude Code's Bash with run_in_background): a running one has its latest output read live,
+  // a finished one its status, and its end is an "event" (once, though Claude logs it as queued and as a turn).
+  // A background subagent's row is finished by the same notification.
+  {
+    const bgSid = 'bbbbbbbb-1111-2222-3333-444444444444', tasks = path.join(home, 'bgtasks', 'tasks');
+    fs.mkdirSync(tasks, { recursive: true });
+    fs.writeFileSync(path.join(tasks, 'run1.output'), 'line 1\n\x1b[32mline 2\x1b[0m\n');
+    const note = (id, tool, status) => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>${tool}</tool-use-id>\n<status>${status}</status>\n<summary>Background command "Build" ${status} (exit code 2)</summary>\n</task-notification>`;
+    const use = (id, name, input, t) => ({ type: 'assistant', timestamp: t, message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id, name, input }] } });
+    const result = (id, text, tur, t) => ({ type: 'user', timestamp: t, toolUseResult: tur, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] } });
+    const dir = path.join(home, '.claude', 'projects', 'bg');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, bgSid + '.jsonl'), jsonl([
+      { type: 'user', timestamp: '2026-05-02T10:00:00Z', message: { role: 'user', content: 'start two jobs' } },
+      use('tu1', 'Bash', { command: 'npm run watch', description: 'Watch', run_in_background: true }, '2026-05-02T10:00:01Z'),
+      result('tu1', `Command running in background with ID: run1. Output is being written to: ${path.join(tasks, 'run1.output')}`, { backgroundTaskId: 'run1' }, '2026-05-02T10:00:02Z'),
+      use('tu2', 'Bash', { command: 'make', description: 'Build', run_in_background: true }, '2026-05-02T10:00:03Z'),
+      result('tu2', 'Command running in background with ID: run2. Output is being written to: /x/tasks/run2.output', { backgroundTaskId: 'run2' }, '2026-05-02T10:00:04Z'),
+      use('tu3', 'Agent', { description: 'Research', prompt: 'look', subagent_type: 'general-purpose', run_in_background: true }, '2026-05-02T10:00:05Z'),
+      result('tu3', 'Async agent launched', { status: 'async_launched', agentId: 'a1' }, '2026-05-02T10:00:06Z'),
+      { type: 'assistant', timestamp: '2026-05-02T10:00:07Z', message: { role: 'assistant', model: 'm', content: [{ type: 'text', text: 'started' }] } },
+      { type: 'attachment', timestamp: '2026-05-02T10:00:20Z', attachment: { type: 'queued_command', prompt: note('run2', 'tu2', 'failed'), timestamp: '2026-05-02T10:00:20Z' } },
+      { type: 'user', timestamp: '2026-05-02T10:00:21Z', message: { role: 'user', content: note('run2', 'tu2', 'failed') } },
+      { type: 'user', timestamp: '2026-05-02T10:00:30Z', message: { role: 'user', content: note('a1', 'tu3', 'completed') } },
+    ]));
+    const [seg] = await threadHistory({ id: 'bg', segments: [{ harness: 'claude', sessionId: bgSid, since: 0 }] }, home);
+    const byId = n => seg.items.find(x => x.role === 'tool' && x.summary === n || x.input?.description === n);
+    const watch = seg.items.find(x => x.bg?.command === 'npm run watch'), build = seg.items.find(x => x.bg?.command === 'make');
+    assert.deepStrictEqual([watch.bg.status, watch.bg.taskId, watch.bg.tail], ['running', 'run1', 'line 1\nline 2\n'], 'running: live output, colors stripped');
+    assert.deepStrictEqual([build.bg.status, build.bg.summary.includes('exit code 2')], ['failed', true]);
+    const events = seg.items.filter(x => x.role === 'event');
+    assert.deepStrictEqual(events.map(e => [e.kind, e.status, e.title]), [['bg', 'failed', 'Build'], ['agent', 'completed', 'Research']], 'one event per task, where it ended');
+    assert.strictEqual(seg.items.find(x => x.agent)?.agent.status, 'completed', 'the background subagent is finished by its notification');
+    assert(!seg.items.some(x => x.role === 'user' && /task-notification/.test(x.text || '')), 'notifications are not shown as prompts');
+    void byId;
+  }
+
   fs.rmSync(home, { recursive: true, force: true });
   console.log('PASS: thread folders keep every agent session, survive deleted transcripts, hand off and delete');
 })().catch(err => { console.error(err); fs.rmSync(home, { recursive: true, force: true }); process.exit(1); });

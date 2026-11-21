@@ -49,21 +49,13 @@
       tip.classList.toggle('ws-process-tooltip', !!(processes || rows));
       tip.classList.toggle('ui-tooltip-wrap', target.hasAttribute('data-tip-wrap'));
       tip.textContent = target.dataset.tip;
-      if (processes) {
+      // Heading, then the rows, then the running processes (a workspace has both: its tabs and what runs in them).
+      if (processes || rows) {
         const heading = document.createElement('div');
         heading.className = 'ws-process-tooltip-heading'; heading.textContent = target.dataset.tip;
         tip.replaceChildren(heading);
-        for (const process of processes) {
-          const row = document.createElement('div'); row.className = 'ws-process-tooltip-row';
-          row.innerHTML = procIconHtml(process.name);
-          const name = document.createElement('span'); name.textContent = process.name; row.append(name);
-          tip.append(row);
-        }
       }
       if (rows) {
-        const heading = document.createElement('div');
-        heading.className = 'ws-process-tooltip-heading'; heading.textContent = target.dataset.tip;
-        tip.replaceChildren(heading);
         for (const r of rows) {
           const row = document.createElement('div'); row.className = 'ws-process-tooltip-row';
           // { bar: 0-100, text }: a meter with its caption. { label, text }: an aligned key/value row.
@@ -85,6 +77,15 @@
           }
           row.innerHTML = r.proc ? procIconHtml(r.proc, 'ph-robot') : `<i class="ph ${/^ph-[\w-]+$/.test(r.icon || '') ? r.icon : 'ph-dot'}" aria-hidden="true"></i>`;
           const text = document.createElement('span'); text.textContent = r.text; row.append(text);
+          tip.append(row);
+        }
+      }
+      if (processes) {
+        if (rows?.length) { const sep = document.createElement('div'); sep.className = 'ui-tip-sep'; tip.append(sep); }
+        for (const process of processes) {
+          const row = document.createElement('div'); row.className = 'ws-process-tooltip-row';
+          row.innerHTML = procIconHtml(process.name);
+          const name = document.createElement('span'); name.textContent = process.name; row.append(name);
           tip.append(row);
         }
       }
@@ -261,8 +262,10 @@
     focusDown: { alt: true, key: 'j', label: 'Alt+J' },
     focusUp: { alt: true, key: 'k', label: 'Alt+K' },
     focusRight: { alt: true, key: 'l', label: 'Alt+L' },
-    nextWorkspace: { ctrl: true, shift: true, key: 'PageDown', label: 'Ctrl+Shift+PageDown' },
-    prevWorkspace: { ctrl: true, shift: true, key: 'PageUp', label: 'Ctrl+Shift+PageUp' },
+    moveTabRight: { ctrl: true, shift: true, key: 'PageDown', label: 'Ctrl+Shift+PageDown' },
+    moveTabLeft: { ctrl: true, shift: true, key: 'PageUp', label: 'Ctrl+Shift+PageUp' },
+    nextWorkspace: { ctrl: true, alt: true, key: 'PageDown', label: 'Ctrl+Alt+PageDown' },
+    prevWorkspace: { ctrl: true, alt: true, key: 'PageUp', label: 'Ctrl+Alt+PageUp' },
     multiSelect: { ctrl: true, alt: true, key: 'Click', label: 'Ctrl+Alt+Click' },
     maximizeTab: { ctrl: true, shift: true, key: 'M', label: 'Ctrl+Shift+M' },
     profiles: { ctrl: true, shift: true, key: 'P', label: 'Ctrl+Shift+P' },
@@ -275,7 +278,7 @@
     splitH: 'Split horizontal', splitV: 'Split vertical',
     search: 'Search', tabSearch: 'Search tabs', commandPalette: 'Command palette', snippets: 'Snippets', browserTab: 'New browser tab',
     copy: 'Copy selection', paste: 'Paste',
-    nextTab: 'Next tab', prevTab: 'Previous tab',
+    nextTab: 'Next tab', prevTab: 'Previous tab', moveTabRight: 'Move tab right', moveTabLeft: 'Move tab left',
     focusLeft: 'Focus left pane', focusDown: 'Focus down pane',
     focusUp: 'Focus up pane', focusRight: 'Focus right pane',
     nextWorkspace: 'Next workspace', prevWorkspace: 'Previous workspace',
@@ -291,6 +294,18 @@
   }
 
   let customShortcuts = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS));
+  // Defaults that changed: a saved binding still on the old default moves to the new one; a user's own choice stays.
+  const SHORTCUT_MIGRATIONS = {
+    nextWorkspace: { ctrl: true, shift: true, key: 'PageDown' }, // was Ctrl+Shift+PageDown
+    prevWorkspace: { ctrl: true, shift: true, key: 'PageUp' },   // was Ctrl+Shift+PageUp
+  };
+  function migrateShortcuts() {
+    for (const [k, old] of Object.entries(SHORTCUT_MIGRATIONS)) {
+      const s = customShortcuts[k];
+      if (s && s.key === old.key && !!s.ctrl === !!old.ctrl && !!s.shift === !!old.shift && !!s.alt === !!old.alt && !!s.meta === !!old.meta)
+        customShortcuts[k] = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS[k]));
+    }
+  }
 
   function matchShortcut(e, action) {
     const s = customShortcuts[action];
@@ -758,932 +773,6 @@
   }, true);
 
   /* ═══════════════════════════════════════════════════════════════
-   P L U G I N   S Y S T E M  (Obsidian-style: JS + CSS, TS via build)
-   ─────────────────────────────────────────────────────────────
-   Plugins live in ~/.terminalvibe/plugins/<id>/ with a manifest
-   (`manifest.json`, Obsidian-style, or legacy `plugin.json`) + a JS entry
-   + an optional stylesheet. The Electron main process reads manifests and
-   files over IPC; entries are evaluated in this renderer against a small
-   `TerminalVibe` namespace and activated with an `api` object (commands,
-   events, menus, themes, terminal I/O, settings, UI widgets).
-   Layout (Obsidian parity):
-     <id>/manifest.json  (or plugin.json) — name/version/description/...
-     <id>/main.js        (or "main" field, or legacy plugin.js; TS source
-                          in src/main.ts compiles to main.js via esbuild)
-     <id>/styles.css     (auto-injected; legacy style.css also picked up)
-   Supported entry shapes:
-     1. TerminalVibe.register({ id, activate(api), deactivate() })
-     2. module.exports = class extends TerminalVibe.Plugin { onload/onunload }
-     3. module.exports = { activate, deactivate } (or onload/onunload)
-   Enable/disable state persists in state.json (pluginStates).
-   ═══════════════════════════════════════════════════════════════ */
-  const _pluginRegistry = new Map();   // id -> { activate, deactivate }
-  const _pluginStates = new Map();     // id -> true/false (from state.json)
-  const _pluginManifests = new Map();  // id -> manifest (for config resolution)
-  const _pluginConfigs = new Map();    // id -> { key: value } persisted config
-  const _pluginConfigCbs = new Map();  // id -> Set<cb> config onChange handlers
-  const _pluginConfigLast = new Map(); // id -> JSON snapshot of last delivered config
-  const _pluginCommands = new Map();   // id -> { pluginId, label, combo, handler }
-  const _pluginMenuItems = { terminal: [], workspace: [], folder: [] };
-  const _pluginThemes = new Map();     // themeName -> { pluginId, theme }
-  const _pluginWidgets = [];           // { pluginId, id, position, el }
-  const _pluginBus = new Map();        // event -> Set<{ pluginId, cb }>
-  const _pluginErrors = new Map();     // id -> error message (failed evaluate/activate)
-  let _pluginsView = { mode: 'list' }; // { mode: 'list' } | { mode: 'detail', id }
-
-  function pluginEmit(event, data) {
-    const set = _pluginBus.get(event);
-    if (!set) return;
-    for (const h of [...set]) { try { h.cb(data); } catch (e) { console.error('[plugin] handler for', event, 'failed:', e); } }
-  }
-
-  function _pluginComboMatches(combo, e) {
-    if (!combo || !combo.key) return false;
-    const keyMatch = combo.key.length === 1
-      ? e.key.toLowerCase() === combo.key.toLowerCase()
-      : (e.key === combo.key || e.code === combo.key);
-    return keyMatch
-      && !!e.ctrlKey === !!combo.ctrl
-      && !!e.shiftKey === !!combo.shift
-      && !!e.altKey === !!combo.alt
-      && !!e.metaKey === !!combo.meta;
-  }
-
-  // Obsidian-style hotkey ({ modifiers: ['Ctrl','Shift'], key: 'H' }) → ours.
-  function _obsidianHotkeysToCombo(hk) {
-    if (!hk) return null;
-    if (typeof hk === 'string') return { key: hk };
-    const mods = new Set((hk.modifiers || []).map(m => String(m).toLowerCase()));
-    const key = hk.key;
-    if (!key) return null;
-    return {
-      ctrl: mods.has('ctrl') || mods.has('control'),
-      shift: mods.has('shift'),
-      alt: mods.has('alt'),
-      meta: mods.has('meta') || mods.has('cmd') || mods.has('command') || mods.has('mod'),
-      key: String(key),
-    };
-  }
-
-  // Obsidian-style base class: `module.exports = class extends
-  // TerminalVibe.Plugin { onload() {...} onunload() {...} }`.
-  // Thin sugar over the same per-plugin `api` object the legacy
-  // TerminalVibe.register({ activate }) style receives.
-  class TerminalVibePlugin {
-    constructor(api) {
-      this.api = api || null;
-      this.app = this.api;
-      this.manifest = api ? { id: api.id, name: api.name, version: api.version } : {};
-      this.pluginId = api ? api.id : '';
-    }
-    get name() { return this.api ? this.api.name : ''; }
-    log(...args) { if (this.api) this.api.log(...args); else console.log('[plugin]', ...args); }
-    async onload() { }
-    onunload() { }
-    // { id, name, callback } (+ optional combo: ours, or hotkeys: Obsidian's)
-    addCommand(def) {
-      if (!this.api || !def) return null;
-      const base = def.id || def.name || 'cmd';
-      const id = (base.includes(':') || (this.pluginId && base.startsWith(this.pluginId)))
-        ? base : (this.pluginId ? this.pluginId + ':' + base : base);
-      let combo = def.combo || null;
-      if (!combo && def.hotkeys) {
-        const first = Array.isArray(def.hotkeys) ? def.hotkeys[0] : def.hotkeys;
-        combo = _obsidianHotkeysToCombo(first);
-      }
-      const label = def.name || def.label || id;
-      const handler = typeof def.callback === 'function' ? def.callback
-        : (typeof def.checkCallback === 'function' ? () => def.checkCallback(false)
-        : (typeof def.handler === 'function' ? def.handler : null));
-      if (!handler) return null;
-      this.api.commands.register({ id, label, combo, handler });
-      return id;
-    }
-    // Obsidian returns an element the plugin fills; we mount it in the
-    // status bar strip (visible once a plugin adds the first widget).
-    addStatusBarItem() {
-      const el = document.createElement('span');
-      el.className = 'tv-plugin-statusbar-item';
-      if (this.api) this.api.ui.addWidget({ id: 'statusbar-' + Math.random().toString(36).slice(2), position: 'statusbar', el });
-      return el;
-    }
-    // Obsidian's left ribbon → our sidebar (appended at the bottom).
-    addRibbonIcon(icon, title, cb) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'tv-plugin-ribbon-icon';
-      btn.title = title || '';
-      if (icon) btn.innerHTML = icon;
-      if (typeof cb === 'function') btn.addEventListener('click', cb);
-      if (this.api) this.api.ui.addWidget({ id: 'ribbon-' + Math.random().toString(36).slice(2), position: 'sidebar', el: btn });
-      return btn;
-    }
-    // Auto-cleaned on unload (deactivatePlugin drops the whole bus by id).
-    registerEvent(ev, cb) {
-      if (this.api && typeof cb === 'function') this.api.events.on(ev, cb);
-      return { ev, cb };
-    }
-    off(ev, cb) { if (this.api) this.api.events.off(ev, cb); }
-    // Obsidian's data.json blob ↔ our per-key persisted config.
-    async loadData() { return this.api ? this.api.config.all() : {}; }
-    async saveData(obj) {
-      if (!this.api || !obj || typeof obj !== 'object') return;
-      for (const [k, v] of Object.entries(obj)) this.api.config.set(k, v);
-    }
-  }
-
-  // The global plugin entries evaluate against. Exposes both the legacy
-  // register() and the Obsidian-style Plugin base class.
-  function ensureTerminalVibeGlobal() {
-    if (!window.TerminalVibe || typeof window.TerminalVibe.register !== 'function') {
-      window.TerminalVibe = { register: registerPlugin, Plugin: TerminalVibePlugin };
-    } else if (!window.TerminalVibe.Plugin) {
-      window.TerminalVibe.Plugin = TerminalVibePlugin;
-    }
-    return window.TerminalVibe;
-  }
-
-  // Evaluate an entry with a CommonJS shim so esbuild/tsc-bundled output
-  // (module.exports = ...) works alongside legacy TerminalVibe.register
-  // entries. Returns module.exports (or null when the entry used register).
-  function _evaluatePluginEntry(code, ns) {
-    const module = { exports: {} };
-    const exports = module.exports;
-    (new Function('TerminalVibe', 'module', 'exports', code))(ns, module, exports);
-    return module.exports;
-  }
-
-  function _unwrapDefault(exp) {
-    return (exp && exp.__esModule && exp.default !== undefined) ? exp.default : exp;
-  }
-
-  // Normalize module.exports → { activate, deactivate }.
-  // Handles: Plugin subclass, { onload, onunload }, { activate, deactivate }.
-  function _normalizePluginExport(exp, manifest) {
-    const unwrapped = _unwrapDefault(exp);
-    if (!unwrapped) return null;
-    if (typeof unwrapped === 'function'
-      && unwrapped.prototype
-      && (typeof unwrapped.prototype.onload === 'function' || typeof unwrapped.prototype.onunload === 'function')) {
-      return { _PluginClass: unwrapped };
-    }
-    if ((typeof unwrapped === 'object' || typeof unwrapped === 'function')) {
-      if (typeof unwrapped.onload === 'function' || typeof unwrapped.onunload === 'function') {
-        const inst = unwrapped;
-        return {
-          id: manifest.id,
-          activate: (api) => inst.onload ? inst.onload.call(inst, api) : undefined,
-          deactivate: () => { if (typeof inst.onunload === 'function') inst.onunload.call(inst); },
-          _instance: inst,
-        };
-      }
-      if (typeof unwrapped.activate === 'function') return unwrapped;
-    }
-    return null;
-  }
-
-  // Read the first readable file from a candidate list (entry / styles).
-  async function _readFirstPluginFile(cfgApi, id, candidates) {
-    for (const rel of candidates) {
-      try {
-        const content = await cfgApi.configReadPluginFile(id, rel);
-        if (typeof content === 'string' && content.length) return { rel, content };
-      } catch { }
-    }
-    return null;
-  }
-
-  function _pluginEntryCandidates(manifest) {
-    if (typeof manifest.main === 'string' && manifest.main) return [manifest.main];
-    return ['main.js', 'plugin.js']; // Obsidian default, then legacy
-  }
-
-  function _pluginStyleCandidates(manifest) {
-    if (typeof manifest.styles === 'string' && manifest.styles) return [manifest.styles];
-    if (typeof manifest.css === 'string' && manifest.css) return [manifest.css]; // legacy reserved field
-    return ['styles.css', 'style.css']; // Obsidian default, then legacy
-  }
-
-  // Obsidian parity: stylesheets are auto-injected and namespaced per plugin
-  // so deactivate can remove exactly what the plugin added.
-  function _injectPluginStyles(id, css) {
-    try {
-      document.querySelectorAll('style[data-plugin-styles="' + CSS.escape(id) + '"]').forEach(el => el.remove());
-      const el = document.createElement('style');
-      el.dataset.pluginStyles = id;
-      el.textContent = css;
-      document.head.appendChild(el);
-    } catch (e) { console.error('[plugin] style inject failed for', id, ':', e); }
-  }
-
-  function _removePluginStyles(id) {
-    try {
-      document.querySelectorAll('style[data-plugin-styles="' + CSS.escape(id) + '"]').forEach(el => el.remove());
-    } catch { }
-  }
-
-  function _makePluginApi(manifest) {
-    const api = {
-      id: manifest.id,
-      name: manifest.name,
-      version: manifest.version,
-      log: (...args) => console.log(`[plugin:${manifest.id}]`, ...args),
-      events: {
-        on: (ev, cb) => {
-          if (typeof cb !== 'function') return;
-          if (!_pluginBus.has(ev)) _pluginBus.set(ev, new Set());
-          _pluginBus.get(ev).add({ pluginId: manifest.id, cb });
-        },
-        off: (ev, cb) => {
-          const set = _pluginBus.get(ev);
-          if (!set) return;
-          for (const h of [...set]) { if (h.cb === cb) set.delete(h); }
-        },
-      },
-      commands: {
-        register: (def) => {
-          if (!def || typeof def.id !== 'string' || typeof def.handler !== 'function') return;
-          _pluginCommands.set(def.id, { pluginId: manifest.id, id: def.id, label: def.label || def.id, combo: def.combo || null, handler: def.handler });
-        },
-        unregister: (id) => { _pluginCommands.delete(id); },
-        run: (id) => {
-          const c = _pluginCommands.get(id);
-          if (c) { try { c.handler(); } catch (e) { console.error('[plugin] command', id, 'failed:', e); } }
-        },
-      },
-      menus: {
-        add: (type, item) => {
-          if (!['terminal', 'workspace', 'folder'].includes(type)) return;
-          if (!item || typeof item.handler !== 'function') return;
-          _pluginMenuItems[type].push({ pluginId: manifest.id, label: item.label, icon: item.icon || '', handler: item.handler, when: item.when || null });
-        },
-        remove: (type, label) => {
-          const arr = _pluginMenuItems[type];
-          if (!arr) return;
-          const i = arr.findIndex(x => x.pluginId === manifest.id && x.label === label);
-          if (i !== -1) arr.splice(i, 1);
-        },
-      },
-      themes: {
-        register: (name, theme) => {
-          if (!name || !theme || BUILTIN_THEME_KEYS.has(name)) return;
-          THEMES[name] = theme;
-          _pluginThemes.set(name, { pluginId: manifest.id, theme });
-        },
-        unregister: (name) => {
-          const rec = _pluginThemes.get(name);
-          if (rec && rec.pluginId === manifest.id) { delete THEMES[name]; _pluginThemes.delete(name); }
-        },
-      },
-      terminal: {
-        // Write directly to a terminal's screen buffer (xterm display).
-        // Display-only: never fed to the shell, so special characters can't
-        // trigger glob errors or command execution. For real input/keystrokes
-        // use window.electronAPI.terminalWrite({ id, data }) instead.
-        write: (id, data) => {
-          try {
-            const result = findTermById(id);
-            if (!result || !result.term || result.term.type === 'browser' || !result.term.term) return false;
-            result.term.term.write(data);
-            return true;
-          } catch (e) {
-            console.error('[plugin] terminal.write failed for', id, ':', e);
-            return false;
-          }
-        },
-        // Open a new terminal tab in the active pane: { cwd, cmd, label }.
-        // `cmd` is typed into the fresh shell. Returns the new terminal id.
-        open: (opts = {}) => {
-          const entry = addTerminal(null, null, {
-            cwd: typeof opts.cwd === 'string' ? opts.cwd : null,
-            cmd: typeof opts.cmd === 'string' ? opts.cmd : null,
-            label: typeof opts.label === 'string' ? opts.label : null,
-          });
-          return entry ? entry.id : null;
-        },
-      },
-      // Read-only file access (Electron only; resolves null elsewhere or on error).
-      fs: {
-        list: (dir) => window.electronAPI?.pluginFsList ? window.electronAPI.pluginFsList(dir) : Promise.resolve(null),
-        read: (file, opts) => window.electronAPI?.pluginFsRead ? window.electronAPI.pluginFsRead(file, opts || {}) : Promise.resolve(null),
-      },
-      ui: {
-        addWidget: (w) => {
-          if (!w || !w.el) return;
-          _pluginWidgets.push({ pluginId: manifest.id, id: w.id || ('w' + Math.random().toString(36).slice(2)), position: w.position || 'statusbar', el: w.el });
-          renderPluginWidgets();
-        },
-        removeWidget: (id) => {
-          const i = _pluginWidgets.findIndex(x => x.pluginId === manifest.id && x.id === id);
-          if (i !== -1) { const [w] = _pluginWidgets.splice(i, 1); _removeWidgetDom(w); renderPluginWidgets(); }
-        },
-        // The right panel was removed: plugins that still call this keep working, without a page.
-        addPanel: () => console.warn(`[plugin] ${manifest.id}: ui.addPanel is no longer supported (the right panel was removed)`),
-      },
-
-      // Plugin-declared settings (manifest.settings). Values are persisted in
-      // state.json (pluginConfigs) and edited from Settings → Plugins.
-      config: {
-        get: (key, fallback) => {
-          const stored = (_pluginConfigs.get(manifest.id) || {})[key];
-          if (stored !== undefined) return stored;
-          const schema = (manifest.settings || []).find(s => s.key === key);
-          if (schema && schema.default !== undefined) return schema.default;
-          return fallback;
-        },
-        set: (key, value) => {
-          const cfg = Object.assign({}, _pluginConfigs.get(manifest.id) || {});
-          cfg[key] = value;
-          _pluginConfigs.set(manifest.id, cfg);
-          _pluginConfigLast.delete(manifest.id); // force re-delivery
-          saveState();
-          deliverPluginConfig(manifest.id, [key]);
-        },
-        all: () => {
-          const out = {};
-          for (const s of (manifest.settings || [])) out[s.key] = api.config.get(s.key, s.default);
-          return out;
-        },
-        onChange: (cb) => {
-          if (typeof cb !== 'function') return;
-          if (!_pluginConfigCbs.has(manifest.id)) _pluginConfigCbs.set(manifest.id, new Set());
-          _pluginConfigCbs.get(manifest.id).add(cb);
-          deliverPluginConfig(manifest.id, null);
-        },
-      },
-      state: {
-        getActiveTerminal: () => {
-          const t = activeTerminal();
-          if (!t) return null;
-          return { id: t.id, label: t.label, type: t.type, url: t.url || null, wsId: activeWsId };
-        },
-        getActiveWorkspace: () => {
-          const w = activeWs();
-          return w ? { id: w.id, label: w.label } : null;
-        },
-        getWorkspaces: () => workspaces.map(w => ({ id: w.id, label: w.label })),
-      },
-    };
-    return api;
-  }
-
-  // Deliver the plugin's persisted config to its onChange handlers (deduped
-  // by snapshot, so a delivery only fires when values actually changed).
-  function deliverPluginConfig(id, changedKeys) {
-    const manifest = _pluginManifests.get(id);
-    const cbs = _pluginConfigCbs.get(id);
-    if (!manifest || !cbs || !cbs.size) return;
-    const snapshot = JSON.stringify(_pluginConfigs.get(id) || {});
-    if (snapshot === _pluginConfigLast.get(id) && changedKeys === null) return;
-    _pluginConfigLast.set(id, snapshot);
-    for (const cb of [...cbs]) {
-      try { cb({ id, config: Object.assign({}, _pluginConfigs.get(id) || {}), changed: changedKeys }); }
-      catch (e) { console.error('[plugin] config onChange failed for', id, ':', e); }
-    }
-  }
-
-  // Persist a plugin config value (used by the Settings → Plugins page).
-  function setPluginConfigValue(id, key, value) {
-    const cfg = Object.assign({}, _pluginConfigs.get(id) || {});
-    cfg[key] = value;
-    _pluginConfigs.set(id, cfg);
-    _pluginConfigLast.delete(id);
-    saveState();
-    deliverPluginConfig(id, [key]);
-  }
-
-  function _removeWidgetDom(w) {
-    w.el.remove();
-  }
-
-  function renderPluginWidgets() {
-    const dock = document.getElementById('statusbar');
-    if (!dock) return;
-    dock.querySelectorAll('[data-plugin-widget]').forEach(el => el.remove());
-    const sbWidgets = _pluginWidgets.filter(w => w.position === 'statusbar');
-    dock.classList.toggle('active', sbWidgets.length > 0);
-    const sbRight = dock.querySelector('#statusbar-right') || dock;
-    for (const w of sbWidgets) { w.el.dataset.pluginWidget = '1'; sbRight.appendChild(w.el); }
-    const sidebarInner = document.getElementById('sidebar-inner');
-    if (sidebarInner) {
-      sidebarInner.querySelectorAll('[data-plugin-widget]').forEach(el => el.remove());
-      // Banner widgets live above the WORKSPACES header (prepended in order).
-      const tops = _pluginWidgets.filter(x => x.position === 'sidebar-top');
-      for (let i = tops.length - 1; i >= 0; i--) {
-        const w = tops[i];
-        w.el.dataset.pluginWidget = '1';
-        w.el.dataset.widgetPosition = 'sidebar-top';
-        sidebarInner.insertBefore(w.el, sidebarInner.firstChild);
-      }
-      for (const w of _pluginWidgets.filter(x => x.position === 'sidebar')) {
-        w.el.dataset.pluginWidget = '1';
-        w.el.dataset.widgetPosition = 'sidebar';
-        sidebarInner.appendChild(w.el);
-      }
-    }
-  }
-
-  // Render the Settings → Plugins page: one row per installed plugin with a
-  // status, an activate/deactivate toggle, and an "open folder" access button.
-  // Newly added folders are activated here, so imports apply without restart.
-  async function renderPluginsSettings() {
-    const list = document.getElementById('plugins-list');
-    if (!list) return;
-    const api = configApi();
-    let manifests = [];
-    if (api && api.configListPlugins) {
-      try { manifests = await api.configListPlugins(); } catch { manifests = []; }
-    }
-    try { await autoSyncPlugins(manifests); } catch { }
-    list.innerHTML = '';
-    updatePluginsSectionTitle(manifests);
-    if (!Array.isArray(manifests) || !manifests.length) {
-      const empty = document.createElement('div');
-      empty.className = 'plugin-empty';
-      empty.textContent = 'No plugins installed. Drop a folder into ~/.terminalvibe/plugins/, then reopen this page.';
-      list.appendChild(empty);
-      return;
-    }
-    // Detail view: options for a single plugin, with a back button at top.
-    if (_pluginsView.mode === 'detail') {
-      const manifest = manifests.find(m => m.id === _pluginsView.id);
-      if (manifest) { renderPluginDetailPage(list, manifest); return; }
-      _pluginsView = { mode: 'list' };
-      updatePluginsSectionTitle(manifests);
-    }
-    for (const manifest of manifests) {
-      const enabled = _pluginStates.get(manifest.id) !== false;
-      const row = document.createElement('div');
-      row.className = 'plugin-row';
-      const meta = document.createElement('div');
-      meta.className = 'plugin-info';
-      const nameEl = document.createElement('div');
-      nameEl.className = 'plugin-name';
-      nameEl.textContent = manifest.name || manifest.id;
-      const pluginErr = _pluginErrors.get(manifest.id);
-      // Quiet text state, like Skills; only a real failure gets an icon + color.
-      const status = document.createElement('span');
-      status.className = 'plugin-state' + (enabled && pluginErr ? ' error' : '');
-      if (enabled && pluginErr) status.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i>';
-      status.append(!enabled ? 'Inactive' : pluginErr ? 'Error' : 'Active');
-      nameEl.append(' ', status);
-      meta.appendChild(nameEl);
-      if (manifest.description) {
-        const desc = document.createElement('div');
-        desc.className = 'plugin-desc';
-        desc.textContent = manifest.description;
-        desc.title = manifest.description;
-        meta.appendChild(desc);
-      }
-      const idEl = document.createElement('div');
-      idEl.className = 'plugin-meta';
-      idEl.textContent = [manifest.id, manifest.version && 'v' + manifest.version, manifest.author].filter(Boolean).join(' · ');
-      meta.appendChild(idEl);
-      if (pluginErr) {
-        const errEl = document.createElement('div');
-        errEl.className = 'plugin-error';
-        errEl.textContent = pluginErr;
-        meta.appendChild(errEl);
-      }
-      row.appendChild(meta);
-
-      const controls = document.createElement('div');
-      controls.className = 'plugin-controls';
-      const schema = Array.isArray(manifest.settings) ? manifest.settings : [];
-      if (schema.length) {
-        const cfgBtn = document.createElement('button');
-        cfgBtn.type = 'button';
-        cfgBtn.className = 'plugin-icon-btn';
-        cfgBtn.title = 'Configure ' + (manifest.name || manifest.id);
-        cfgBtn.innerHTML = '<i class="ph ph-sliders-horizontal"></i>';
-        cfgBtn.addEventListener('click', () => {
-          _pluginsView = { mode: 'detail', id: manifest.id };
-          renderPluginsSettings();
-        });
-        controls.appendChild(cfgBtn);
-      }
-      const folderBtn = document.createElement('button');
-      folderBtn.type = 'button';
-      folderBtn.className = 'plugin-icon-btn';
-      folderBtn.title = 'Open plugin folder';
-      folderBtn.innerHTML = '<i class="ph ph-folder-open"></i>';
-      folderBtn.addEventListener('click', () => {
-        if (api && api.configOpenPluginFolder) api.configOpenPluginFolder(manifest.id);
-      });
-      controls.appendChild(folderBtn);
-
-      const label = document.createElement('label');
-      label.className = 'inline-flex items-center cursor-pointer';
-      label.title = enabled ? 'Deactivate plugin' : 'Activate plugin';
-      const input = document.createElement('input');
-      input.type = 'checkbox';
-      input.className = 'sr-only peer plugin-toggle';
-      input.dataset.id = manifest.id;
-      input.checked = enabled;
-      const knob = document.createElement('div');
-      knob.className = 'relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[\'\'] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]';
-      label.appendChild(input);
-      label.appendChild(knob);
-      input.addEventListener('change', () => {
-        togglePlugin(manifest.id, input.checked);
-      });
-      controls.appendChild(label);
-      row.appendChild(controls);
-      list.appendChild(row);
-    }
-  }
-
-  // Swap the section title: detail view shows "‹ plugin name" (transparent back
-  // button + name); list view restores the plain "Plugins" heading.
-  function updatePluginsSectionTitle(manifests) {
-    const titleEl = document.getElementById('plugins-title');
-    const openDirRow = document.getElementById('plugins-open-dir-row');
-    if (!titleEl) return;
-    if (_pluginsView.mode === 'detail') {
-      const manifest = (manifests || []).find(m => m.id === _pluginsView.id);
-      if (openDirRow) openDirRow.style.display = 'none';
-      titleEl.className = 'flex items-center gap-1.5 min-w-0 mt-0 mb-1.5 ml-1';
-      titleEl.textContent = '';
-      const back = document.createElement('button');
-      back.type = 'button';
-      back.className = 'plugin-back-btn';
-      back.title = 'Back to all plugins';
-      back.innerHTML = '<i class="ph ph-arrow-left"></i>';
-      back.addEventListener('click', () => {
-        _pluginsView = { mode: 'list' };
-        renderPluginsSettings();
-      });
-      titleEl.appendChild(back);
-      const name = document.createElement('span');
-      name.className = 'text-[12.5px] font-medium text-[var(--fg)] truncate';
-      name.textContent = manifest ? (manifest.name || manifest.id) : 'Plugins';
-      titleEl.appendChild(name);
-    } else {
-      if (openDirRow) openDirRow.style.display = '';
-      titleEl.className = 'settings-section-label mt-0 mb-1.5 ml-1';
-      titleEl.textContent = 'Plugins';
-    }
-  }
-
-  // Detail page for one plugin's declared settings (manifest.settings).
-  function renderPluginDetailPage(list, manifest) {
-    const schema = Array.isArray(manifest.settings) ? manifest.settings : [];
-
-    if (!schema.length) {
-      const none = document.createElement('div');
-      none.className = 'plugin-empty';
-      none.textContent = 'This plugin has no configurable options.';
-      list.appendChild(none);
-      return;
-    }
-
-    for (const s of schema) {
-      const field = renderPluginConfigField(manifest, s);
-      list.appendChild(field);
-      field.querySelectorAll('.custom-dropdown').forEach(dd => {
-        if (typeof initCustomDropdown === 'function') initCustomDropdown(dd);
-      });
-    }
-  }
-
-  // Build one option row for a manifest.settings entry, matching the standard
-  // settings-row pattern: label/description on the left, control on the right.
-  function renderPluginConfigField(manifest, s) {
-    const wrap = document.createElement('div');
-    wrap.className = 'plugin-row';
-    const labelEl = document.createElement('div');
-    labelEl.className = 'flex flex-col gap-1';
-    const lab = document.createElement('div');
-    lab.className = 'text-[12.5px] font-medium text-[var(--fg)]';
-    lab.textContent = s.label || s.key;
-    labelEl.appendChild(lab);
-    if (s.description) {
-      const d = document.createElement('div');
-      d.className = 'text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]';
-      d.textContent = s.description;
-      labelEl.appendChild(d);
-    }
-    wrap.appendChild(labelEl);
-
-    const current = (_pluginConfigs.get(manifest.id) || {})[s.key];
-    const value = current !== undefined ? current : s.default;
-
-    const commit = (v) => { setPluginConfigValue(manifest.id, s.key, v); };
-
-    const controlWrap = document.createElement('div');
-    controlWrap.className = 'flex-1 flex items-center justify-end gap-3';
-
-    const inputCls = 'bg-black/20 border border-[var(--border)] rounded text-[var(--fg)] px-2.5 py-1.5 text-[12px] w-[200px] text-left transition-all duration-200 font-inherit placeholder:text-[var(--dim-text)] focus:border-[var(--accent)] focus:bg-black/30 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_20%,transparent)] focus:outline-none';
-
-    let control;
-    if (s.type === 'boolean') {
-      const lbl = document.createElement('label');
-      lbl.className = 'inline-flex items-center cursor-pointer shrink-0';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.className = 'sr-only peer';
-      cb.checked = !!value;
-      const knob = document.createElement('div');
-      knob.className = 'relative w-9 h-5 bg-white/10 rounded-full peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[color-mix(in_srgb,var(--accent)_40%,transparent)] peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full after:content-[\'\'] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[var(--accent)]';
-      cb.addEventListener('change', () => commit(cb.checked));
-      lbl.appendChild(cb);
-      lbl.appendChild(knob);
-      control = lbl;
-    } else if (s.type === 'select') {
-      // Use the app's custom dropdown component (hidden native select +
-      // .custom-dropdown) so it matches every other settings dropdown.
-      const selId = 'plugin-cfg-' + String(manifest.id).replace(/[^a-zA-Z0-9_-]/g, '') + '-' + String(s.key).replace(/[^a-zA-Z0-9_-]/g, '');
-      const sel = document.createElement('select');
-      sel.id = selId;
-      sel.className = 'native-select-hidden';
-      for (const opt of (s.options || [])) {
-        const o = document.createElement('option');
-        o.value = opt;
-        o.textContent = opt;
-        if (opt === value) o.selected = true;
-        sel.appendChild(o);
-      }
-      sel.addEventListener('change', () => commit(sel.value));
-      const dd = document.createElement('div');
-      dd.className = 'custom-dropdown';
-      dd.dataset.for = selId;
-      const box = document.createElement('div');
-      box.className = 'flex items-center gap-3';
-      box.appendChild(sel);
-      box.appendChild(dd);
-      control = box;
-    } else if (s.type === 'number') {
-      const inp = document.createElement('input');
-      inp.type = 'number';
-      inp.value = value !== undefined ? value : '';
-      inp.className = inputCls.replace('w-[200px]', 'w-[90px]');
-      inp.addEventListener('change', () => {
-        const n = parseFloat(inp.value);
-        commit(Number.isFinite(n) ? n : s.default);
-      });
-      control = inp;
-    } else {
-      const inp = document.createElement('input');
-      inp.type = 'text';
-      inp.value = value !== undefined ? value : '';
-      inp.className = inputCls;
-      inp.addEventListener('change', () => commit(inp.value));
-      control = inp;
-    }
-    controlWrap.appendChild(control);
-    wrap.appendChild(controlWrap);
-    return wrap;
-  }
-
-  // Live activate/deactivate a plugin (no restart) and persist to state.json.
-  async function togglePlugin(id, enabled) {
-    _pluginStates.set(id, !!enabled);
-    saveState();
-    if (enabled) {
-      const api = configApi();
-      if (!api || !api.configListPlugins || !api.configReadPluginFile) return;
-      const manifests = await api.configListPlugins();
-      const manifest = (manifests || []).find(m => m.id === id);
-      if (!manifest) return;
-      try {
-        await activatePlugin(manifest);
-      } catch (e) {
-        console.error('[plugin] activate failed for', id, ':', e);
-      }
-    } else {
-      try { deactivatePlugin(id); } catch (e) { console.error('[plugin] deactivate failed for', id, ':', e); }
-    }
-    renderPluginsSettings();
-  }
-
-  // Evaluate + activate one plugin manifest. Supports the legacy
-  // TerminalVibe.register style and Obsidian-style module.exports
-  // (Plugin subclass or { onload/onunload }). Idempotent: re-activating
-  // first unloads the previous instance so toggles never double-register.
-  async function activatePlugin(manifest) {
-    const cfgApi = configApi();
-    if (!cfgApi || !cfgApi.configReadPluginFile) return;
-    const ns = ensureTerminalVibeGlobal();
-    if (_pluginRegistry.has(manifest.id)) {
-      try { deactivatePlugin(manifest.id); } catch { }
-    }
-    _pluginErrors.delete(manifest.id);
-    _pluginManifests.set(manifest.id, manifest);
-
-    // Styles first — independent of JS, like Obsidian (styles.css).
-    const styleHit = await _readFirstPluginFile(cfgApi, manifest.id, _pluginStyleCandidates(manifest));
-    if (styleHit) _injectPluginStyles(manifest.id, styleHit.content);
-
-    const entryHit = await _readFirstPluginFile(cfgApi, manifest.id, _pluginEntryCandidates(manifest));
-    if (!entryHit) {
-      const msg = 'missing entry (looked for ' + _pluginEntryCandidates(manifest).join(', ') + ')';
-      console.warn('[plugin]', manifest.id, msg);
-      _pluginErrors.set(manifest.id, msg);
-      return;
-    }
-
-    let exported = null;
-    const before = new Set(_pluginRegistry.keys());
-    try {
-      exported = _evaluatePluginEntry(entryHit.content, ns);
-    } catch (e) {
-      console.error('[plugin] failed to evaluate', manifest.id, ':', e);
-      _pluginErrors.set(manifest.id, String((e && e.message) || e));
-      return;
-    }
-
-    // Legacy register() wins when the entry used it; otherwise fall back to
-    // whatever the entry assigned to module.exports.
-    let def = _pluginRegistry.get(manifest.id);
-    if (!def) {
-      for (const k of _pluginRegistry.keys()) {
-        if (!before.has(k)) {
-          const aliasKey = k;
-          def = _pluginRegistry.get(aliasKey);
-          // Folder name is the canonical id (as in Obsidian): re-key so
-          // unload/cleanup by folder works even when register() used another.
-          if (aliasKey !== manifest.id) {
-            console.warn('[plugin] id mismatch: folder "' + manifest.id + '" registered as "' + aliasKey + '" — using folder id');
-            _pluginRegistry.delete(aliasKey);
-            _pluginRegistry.set(manifest.id, def);
-          }
-          break;
-        }
-      }
-    }
-    if (!def) {
-      def = _normalizePluginExport(exported, manifest);
-      if (def) _pluginRegistry.set(manifest.id, def);
-    }
-    // Obsidian-style Plugin subclass → instantiate with the plugin api.
-    if (def && def._PluginClass) {
-      const PluginClass = def._PluginClass;
-      let instance = null;
-      try {
-        instance = new PluginClass(_makePluginApi(manifest));
-      } catch (e) {
-        console.error('[plugin] failed to construct', manifest.id, ':', e);
-        _pluginErrors.set(manifest.id, String((e && e.message) || e));
-        _pluginRegistry.delete(manifest.id);
-        return;
-      }
-      def = {
-        id: manifest.id,
-        activate: (api) => { instance.api = api; instance.app = api; return instance.onload ? instance.onload() : undefined; },
-        deactivate: () => { if (instance && typeof instance.onunload === 'function') instance.onunload(); },
-        _instance: instance,
-      };
-      _pluginRegistry.set(manifest.id, def);
-    }
-    if (!def || typeof def.activate !== 'function') {
-      const msg = 'entry registered nothing (need TerminalVibe.register or module.exports)';
-      console.warn('[plugin]', manifest.id, msg);
-      _pluginErrors.set(manifest.id, msg);
-      _pluginRegistry.delete(manifest.id);
-      return;
-    }
-    if (def.id && def.id !== manifest.id) {
-      console.warn('[plugin] id mismatch: folder "' + manifest.id + '" registered as "' + def.id + '" — using folder id');
-    }
-    try {
-      await def.activate(_makePluginApi(manifest));
-    } catch (e) {
-      console.error('[plugin] activate failed for', manifest.id, ':', e);
-      try { deactivatePlugin(manifest.id); } catch { }
-      _pluginErrors.set(manifest.id, String((e && e.message) || e));
-      return;
-    }
-    // Deliver persisted config to the freshly-activated plugin
-    _pluginConfigLast.delete(manifest.id);
-    deliverPluginConfig(manifest.id, null);
-  }
-
-  // Unload a plugin: run its deactivate, then drop everything it registered.
-  function deactivatePlugin(id) {
-    const def = _pluginRegistry.get(id);
-    if (def && typeof def.deactivate === 'function') {
-      try {
-        const r = def.deactivate();
-        if (r && typeof r.catch === 'function') r.catch(e => console.error('[plugin] deactivate hook failed for', id, ':', e));
-      } catch (e) { console.error('[plugin] deactivate hook failed for', id, ':', e); }
-    }
-    for (const [cid, cmd] of [..._pluginCommands]) {
-      if (cmd.pluginId === id) _pluginCommands.delete(cid);
-    }
-    for (const type of ['terminal', 'workspace', 'folder']) {
-      _pluginMenuItems[type] = _pluginMenuItems[type].filter(x => x.pluginId !== id);
-    }
-    for (const [name, rec] of [..._pluginThemes]) {
-      if (rec.pluginId === id) {
-        delete THEMES[name];
-        _pluginThemes.delete(name);
-        if (currentThemeName === name) {
-          currentThemeName = 'catppuccin-mocha';
-          currentTheme = resolveAppearanceTheme(THEMES[currentThemeName], resolvedDarkScheme());
-          applyTheme(currentThemeName);
-        }
-      }
-    }
-    const removedWidgets = _pluginWidgets.filter(w => w.pluginId === id);
-    for (const w of removedWidgets) { try { _removeWidgetDom(w); } catch { } }
-    _pluginWidgets.splice(0, _pluginWidgets.length, ..._pluginWidgets.filter(w => w.pluginId !== id));
-    renderPluginWidgets();
-    for (const [ev, set] of _pluginBus) {
-      for (const h of [...set]) { if (h.pluginId === id) set.delete(h); }
-    }
-    _removePluginStyles(id);
-    _pluginErrors.delete(id);
-    _pluginConfigCbs.delete(id);
-    _pluginConfigLast.delete(id);
-    _pluginManifests.delete(id);
-    // Drop the registry entry plus any alias keys pointing at the same def
-    // (left over from folder/register id mismatches).
-    for (const k of [..._pluginRegistry.keys()]) {
-      if (k === id || _pluginRegistry.get(k) === def) _pluginRegistry.delete(k);
-    }
-  }
-
-  function dispatchPluginKeydown(e) {
-    for (const cmd of _pluginCommands.values()) {
-      if (!cmd.combo) continue;
-      if (_pluginComboMatches(cmd.combo, e)) {
-        e.preventDefault();
-        try { cmd.handler(); } catch (err) { console.error('[plugin] command failed:', cmd.id, err); }
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Plugin entry JS calls TerminalVibe.register({ id, activate, deactivate }).
-  function registerPlugin(def) {
-    if (!def || typeof def.id !== 'string') return;
-    _pluginRegistry.set(def.id, def);
-  }
-
-  async function loadPlugins() {
-    try {
-      const api = configApi();
-      if (!api || !api.configListPlugins) return; // browser dev mode: no plugin host
-      const manifests = await api.configListPlugins();
-      if (!Array.isArray(manifests) || !manifests.length) return;
-
-      ensureTerminalVibeGlobal();
-
-      for (const manifest of manifests) {
-        if (_pluginStates.get(manifest.id) === false) continue;
-        try { await activatePlugin(manifest); } catch (e) { console.error('[plugin] activate failed for', manifest.id, ':', e); }
-      }
-    } catch (e) {
-      console.error('[plugin] loadPlugins failed:', e);
-    }
-  }
-
-  // Reconcile active plugins with persisted state (used after a settings change
-  // pushes new pluginStates to the main window).
-  async function syncPlugins() {
-    const api = configApi();
-    if (!api || !api.configListPlugins) return;
-    const manifests = await api.configListPlugins();
-    if (!Array.isArray(manifests)) return;
-    const ids = new Set(manifests.map(m => m.id));
-    for (const [id, def] of [..._pluginRegistry]) {
-      if (!ids.has(id) || _pluginStates.get(id) === false) deactivatePlugin(id);
-    }
-    for (const manifest of manifests) {
-      if (_pluginStates.get(manifest.id) === false) continue;
-      if (_pluginRegistry.has(manifest.id)) {
-        // Config may have been updated by the settings window — re-deliver.
-        _pluginConfigLast.delete(manifest.id);
-        deliverPluginConfig(manifest.id, null);
-        continue;
-      }
-      try { await activatePlugin(manifest); } catch (e) { console.error('[plugin] activate failed for', manifest.id, ':', e); }
-    }
-  }
-
-  // Auto-apply on Plugins-page open: activate anything enabled-but-not-loaded
-  // (e.g. a folder the user just copied into ~/.terminalvibe/plugins/) and
-  // unload anything whose folder disappeared — no restart required.
-  let _pluginsAutoSyncing = null;
-  async function autoSyncPlugins(manifests) {
-    if (_pluginsAutoSyncing) { try { await _pluginsAutoSyncing; } catch { } return; }
-    const run = (async () => {
-      const live = new Set((manifests || []).map(m => m.id));
-      for (const [id] of [..._pluginRegistry]) {
-        if (!live.has(id)) { try { deactivatePlugin(id); } catch (e) { console.error('[plugin] deactivate failed for', id, ':', e); } }
-      }
-      for (const m of (manifests || [])) {
-        if (_pluginStates.get(m.id) === false) continue;
-        if (_pluginRegistry.has(m.id)) continue;
-        try { await activatePlugin(m); } catch (e) { console.error('[plugin] activate failed for', m.id, ':', e); }
-      }
-    })();
-    _pluginsAutoSyncing = run;
-    try { await run; } finally { if (_pluginsAutoSyncing === run) _pluginsAutoSyncing = null; }
-  }
-
-  /* ═══════════════════════════════════════════════════════════════
    S T*ATE
    ═══════════════════════════════════════════════════════════════ */
   let currentColorScheme = 'dark'; // Preserve the appearance of existing installations.
@@ -1781,7 +870,11 @@
   let notificationSound = true;     // play the chime for finish notifications and agent questions
   let terminalLinkTarget = 'tab';     // 'tab' (browser tab beside the terminal) | 'external'
   // New threads: harness ('' = last used), folder ('scratch' = No project | 'workspace'), titles ('agent' | 'claude' | 'codex' | 'off').
-  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed', markdown: 'on', usernames: 'show' };
+  // The threads sidebar's shelves (status arrangement), in order; threadSettings.shelvesHidden lists the ones turned off.
+  const THREAD_SHELVES = [['drafts', 'Drafts', 'ph-note-pencil'], ['pinned', 'Pinned', 'ph-push-pin'], ['working', 'Working', 'ph-circle-notch'],
+    ['active', 'Threads', 'ph-chats-circle'], ['sides', 'Side chats', 'ph-chat-circle-dots'], ['settled', 'Settled', 'ph-check-circle']];
+  // sideModel ("harness|model") and sideEffort: a new side chat's picks; '' = the same as its thread.
+  let threadSettings = { harness: '', folder: 'scratch', titles: 'agent', usageDisplay: 'consumed', markdown: 'on', usernames: 'show', sideModel: '', sideEffort: '' };
   const _workUsernameRecords = new Map(), _workUsernameMarkup = new WeakMap();
   const loadThreadSettings = s => {
     if (s && typeof s === 'object') threadSettings = { ...threadSettings, ...s };
@@ -1866,15 +959,88 @@
   let workspaceContextReady = false;
 
   const browserEventHooks = new Map(); // browser tab id -> handler(listener payload)
+  // The browser tab showing a page (its <webview>'s webContents id, as main reports it).
+  function browserTabOfPage(id) {
+    const ownsGuest = view => { try { return view.getWebContentsId() === id; } catch { return false; } };
+    return workspaces.flatMap(getWorkspaceTerminals).find(t => t.type === 'browser' &&
+      [...(t.browserContainer?.querySelectorAll('webview.browser-surface') || [])].some(ownsGuest)) || null;
+  }
+  // Find in page (Ctrl+F in a browser tab): a bar at the content's top right, as the chat's find bar. Enter / Shift+Enter
+  // step through matches, Escape closes it. findInPage can take focus into the page; the input gets it back.
+  function openBrowserFind(entry) {
+    const wrap = entry.browserContainer?.querySelector('.browser-content');
+    const view = wrap?.querySelector('webview.browser-surface');
+    if (!view?._guestReady) return;
+    let bar = wrap.querySelector(':scope > .browser-find');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'browser-find'; bar.setAttribute('role', 'search');
+      bar.innerHTML = '<i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Find in page" aria-label="Find in page" spellcheck="false" autocomplete="off">'
+        + '<span class="browser-find-count" aria-live="polite"></span>'
+        + '<button type="button" class="sbr-btn" data-find="prev" aria-label="Previous match" data-tip="Previous (Shift+Enter)"><i class="ph ph-caret-up"></i></button>'
+        + '<button type="button" class="sbr-btn" data-find="next" aria-label="Next match" data-tip="Next (Enter)"><i class="ph ph-caret-down"></i></button>'
+        + '<button type="button" class="sbr-btn" data-find="close" aria-label="Close find" data-tip="Close (Esc)"><i class="ph ph-x"></i></button>';
+      wrap.append(bar);
+      const input = bar.querySelector('input'), count = bar.querySelector('.browser-find-count');
+      const surface = () => wrap.querySelector('webview.browser-surface');
+      // findNext: true starts a new search (new text), false steps to the next/previous match.
+      const run = (forward = true, fresh = true) => {
+        const v = surface();
+        if (!v?._guestReady) return;
+        if (!input.value) { try { v.stopFindInPage('clearSelection'); } catch {} count.textContent = ''; return; }
+        try { v.findInPage(input.value, { forward, findNext: fresh }); } catch {}
+      };
+      const close = () => {
+        bar.hidden = true;
+        try { surface()?.stopFindInPage('clearSelection'); } catch {}
+        surface()?.focus();
+      };
+      bar._close = close;
+      input.addEventListener('input', () => run(true, true));
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); run(!e.shiftKey, false); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+      });
+      bar.addEventListener('click', e => {
+        const act = e.target.closest('[data-find]')?.dataset.find;
+        if (act === 'close') close(); else if (act) { run(act === 'next', false); input.focus(); }
+      });
+      bar._input = input; bar._count = count;
+    }
+    if (!view._findWired) {
+      view._findWired = true;
+      view.addEventListener('found-in-page', e => {
+        const b = wrap.querySelector(':scope > .browser-find');
+        if (!b || b.hidden) return;
+        const { activeMatchOrdinal: at = 0, matches = 0 } = e.result || {};
+        b._count.textContent = b._input.value ? (matches ? `${at}/${matches}` : 'No results') : '';
+        if (document.activeElement !== b._input) b._input.focus({ preventScroll: true });
+      });
+      view.addEventListener('did-navigate', () => wrap.querySelector(':scope > .browser-find')?._close?.()); // a new page: start over
+    }
+    bar.hidden = false;
+    bar._input.focus(); bar._input.select();
+    if (bar._input.value) bar._input.dispatchEvent(new Event('input'));
+  }
+  // Ctrl+F while a browser tab's own chrome (address bar, toolbar) has focus: the same find bar.
+  document.addEventListener('keydown', e => {
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'f') return;
+    const t = activeTerminal();
+    if (t?.type !== 'browser' || !t.browserContainer?.contains(document.activeElement)) return;
+    e.preventDefault(); e.stopPropagation();
+    openBrowserFind(t);
+  }, true);
   let browserDevToolsHeight = 0; // Last dragged DevTools drawer height, shared by tabs; 0 = 40% of the tab
   if (isDesktop() && window.electronAPI) {
     window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
     window.electronAPI.onBrowserKey?.(d => document.dispatchEvent(new KeyboardEvent('keydown', { ...d, bubbles: true, cancelable: true })));
     // The key came from a tab's page, or from its DevTools (main sends the page's id for both).
-    window.electronAPI.onBrowserDevToolsToggle?.(id => {
-      const ownsGuest = view => { try { return view.getWebContentsId() === id; } catch { return false; } };
-      workspaces.flatMap(getWorkspaceTerminals).find(t => t.type === 'browser' &&
-        [...(t.browserContainer?.querySelectorAll('webview.browser-surface') || [])].some(ownsGuest))?._toggleDevTools?.();
+    window.electronAPI.onBrowserDevToolsToggle?.(id => browserTabOfPage(id)?._toggleDevTools?.());
+    window.electronAPI.onBrowserFind?.(id => { const t = browserTabOfPage(id); if (t) openBrowserFind(t); });
+    // "Open link/image in new tab" (the page's right-click menu): a browser tab next to it, in the same pane.
+    window.electronAPI.onBrowserOpenTab?.(({ id, url } = {}) => {
+      const t = browserTabOfPage(id), ws = t && findTermById(t.id)?.ws;
+      if (ws && /^https?:\/\//i.test(url || '')) addBrowserTab(ws.id, findGroupContainingTerm(ws.layout, t.id)?.id, url);
     });
     syncBrowserShortcuts();
   }
@@ -2119,6 +1285,7 @@
             fileDropReady = msg.fileDrop === true;
             terminalBackendPlatform = msg.platform || null;
           } else if (msg.type === 'exit') handleExit(msg.id, msg.code);
+          else if (msg.type === 'agent-exit') handleAgentExit(msg);
           else if (msg.type === 'error') handleError(msg.id, msg.msg);
           else if (msg.type === 'pong') { }
         } catch { }
@@ -2301,6 +1468,7 @@
         writePtyData(result, id, data);
       });
       api.onTerminalExit(({ id, code }) => handleExit(id, code));
+      if (api.onTerminalAgentExit) api.onTerminalAgentExit(handleAgentExit);
       if (api.onTerminalFinished) api.onTerminalFinished(onTerminalFinished);
       restoreOrCreateInitial();
       return;
@@ -2565,7 +1733,6 @@
     renderSidebar();
     renderPaneArea();
     applyBackground();
-    pluginEmit('theme:changed', { name });
   }
 
   /* transparentBg: when a background image is active behind the panel, xterm
@@ -3059,8 +2226,6 @@
         customSearchUrl,
         defaultTerminalPath,
         defaultShell,
-        pluginStates: Object.fromEntries(_pluginStates),
-        pluginConfigs: Object.fromEntries(_pluginConfigs),
       };
       // Disk state is what restoreState prefers — write it even when the
       // localStorage copy overflows the quota.
@@ -3107,8 +2272,6 @@
       sidebarExpanded: document.getElementById('sidebar').classList.contains('expanded'),
       sidebarWidth: document.getElementById('sidebar').offsetWidth || null,
       shortcuts: customShortcuts,
-      pluginStates: Object.fromEntries(_pluginStates),
-      pluginConfigs: Object.fromEntries(_pluginConfigs),
       activeWsId,
       closedThreads: closedThreads.map(({ _files, _flowHtml, _open, ...saved }) => ({ ...saved, chat: serializeChat(saved.chat) })),
       folders: folders.map(f => {
@@ -3192,19 +2355,12 @@
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
         }
+        migrateShortcuts();
         // Seed any new defaults not in saved state (e.g. tabSearch added later)
         for (const k of Object.keys(DEFAULT_SHORTCUTS)) {
           if (!(k in customShortcuts)) customShortcuts[k] = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS[k]));
         }
         syncBrowserShortcuts();
-      }
-      if (state.pluginStates) {
-        for (const [k, v] of Object.entries(state.pluginStates)) _pluginStates.set(k, !!v);
-      }
-      if (state.pluginConfigs) {
-        for (const [k, v] of Object.entries(state.pluginConfigs)) {
-          if (v && typeof v === 'object') _pluginConfigs.set(k, Object.assign({}, v));
-        }
       }
 
       closedThreads = Array.isArray(state.closedThreads) ? state.closedThreads.filter(t => t && typeof t.id === 'string' && t.chat && typeof t.chat === 'object').map(t => ({ ...t, _closed: true, threadHistory: true })) : [];
@@ -3521,7 +2677,6 @@
     const ids = workspaces.map(w => w.id);
     for (const id of ids) { try { _removeWorkspace(id); } catch (e) { console.error('teardown ws', id, e); } }
     workspaces = []; closedThreads = []; folders = []; sideOrder = []; activeWsId = null; _wsDomCache = {};
-    _pluginStates.clear(); _pluginConfigs.clear(); // restoreState only adds keys; drop stale ones
   }
 
   function apiProfilesSwitch(p) {
@@ -3534,15 +2689,13 @@
     return profilesApi().profilesSwitchInPlace(p.id).then(async ok => {
       try {
         if (ok) {
-          // Custom themes + plugins are global (already loaded at boot) — do NOT
+          // Custom themes are global (already loaded at boot) — do NOT
           // re-fetch them here; that async IPC round-trip was the switch bottleneck.
           await restoreState();          // per-profile state (settings + workspaces)
           applyTheme(currentThemeName);  // builds the pane DOM (renderPaneArea) + sidebar
           applySidebarMode();
           applyWsProcsSetting();
           restoreOrCreateInitial();      // spawn PTYs into the now-existing DOM
-          // Plugin enabled-state is per-profile; non-blocking, after the splash.
-          syncPlugins();
         }
       } finally {
         // Always release the transition lock + hide the splash, even if the
@@ -3836,6 +2989,9 @@
     const revision = ++workspacePaneRevision;
     const area = document.getElementById('pane-area');
     const wsp = activeWs();
+    // The sidebars follow the pane in view: collapsed while it's maximized, back once it isn't (restored, closed,
+    // or another workspace shown).
+    collapseSidebarsForMaximize(!!wsp?._maximizedGroupId);
 
     // Hide all cached workspace containers
     Object.values(_wsDomCache).forEach(el => { el.style.display = 'none'; });
@@ -3944,7 +3100,7 @@
 
   // Workspace ids in the sidebar's visual order: pinned items first (in their
   // sideOrder sequence), then the rest, with each folder expanded into its
-  // children where it sits. Used by Ctrl+Shift+PageUp/PageDown so the cycle
+  // children where it sits. Used by Ctrl+Alt+PageUp/PageDown so the cycle
   // follows the layout even when workspaces live inside folders.
   function getOrderedWorkspaceIds() {
     const ids = [];
@@ -4048,7 +3204,7 @@
     const ws = findWs(id);
     if (!ws) return;
 
-    showPrompt('Edit workspace', ws.label, { color: ws.color || '', icon: ws.icon || '' }, (value, color, icon) => {
+    showPrompt('Edit workspace', ws.label, { color: ws.color || '', icon: ws.icon || '', iconPicker: true }, (value, color, icon) => {
       ws.label = value.trim() || ws.label;
       ws.color = color || undefined;
       if (icon) ws.icon = icon; else delete ws.icon;
@@ -4977,7 +4133,7 @@
     term.buffer.onBufferChange(() => { clear(); soon(); }); // markers belong to one buffer
   }
 
-  // opts (plugins: api.terminal.open): { cwd, cmd, label } — start directory,
+  // opts: { cwd, cmd, label } — start directory,
   // a command typed into the fresh shell, and a pinned tab label.
   function addTerminal(wsId, targetGroupId, opts = {}) {
     const wsp = findWs(wsId || activeWsId);
@@ -5127,7 +4283,6 @@
     requestAnimationFrame(() => fitTerm(entry));
 
     saveState();
-    pluginEmit('terminal:add', { wsId: wsp.id, termId: id, type: 'terminal', label: entry.label });
     return entry;
   }
 
@@ -5287,7 +4442,6 @@
 
     renderSidebar();
     saveState();
-    pluginEmit('terminal:add', { wsId: wsp.id, termId: id, type: 'browser', url: entry.url });
     return entry;
   }
 
@@ -5313,7 +4467,6 @@
     const target = getWorkspaceTerminals(wsp).find(t => t.id === termId);
     if (target?._closePending) return;
     wsp.activeTermId = termId;
-    pluginEmit('terminal:activate', { wsId, termId });
     const group = findGroupContainingTerm(wsp.layout, termId);
     if (group) {
       // Track activation history (stack) for LIFO tab switching
@@ -5370,6 +4523,7 @@
       }
       const t = target;
       if (nativePtyReady) restorePendingTerminal(t);
+      syncChatPanels(wsp); // a thread's side chat panel shows (or goes) with this selection
       if (t?.threadHistory && t.el && (curChat() !== t || thrPage.parentElement !== t.el)) {
         _preferChat = t;
         syncThreadPanel();
@@ -5698,7 +4852,6 @@
     if (skipPtyClose && getWorkspaceTerminals(wsp).length === 0 && workspaces.length > 1) {
       _removeWorkspace(wsId);
     }
-    pluginEmit('terminal:remove', { wsId, termId, type: entry?.type });
     if (!skipRender) {
       syncThreadPanel();
       afterTabClosePaint(() => { renderSidebar(); renderThreadsSidebar(); saveState(); });
@@ -5800,7 +4953,6 @@
     const { ws, term: t } = result;
     t.dead = true;
     if (t._chatOwner) { disposeChatBottomTerminal(t._chatOwner); return; }
-    pluginEmit('terminal:exit', { termId: id, code });
     // Other agent panes returned to a shell when the agent ended, so this exit is the user's: close like any tab.
     if (t.agentManaged && t.keepOnExit) {
       t.term.write(`\r\n[Agent process exited: ${code}]\r\n`);
@@ -6004,9 +5156,28 @@
   /* ═══════════════════════════════════════════════════════════════
    M A*XIMIZE / RESTORE TAB
    ═══════════════════════════════════════════════════════════════ */
+  // Maximizing makes room: the workspace and threads sidebars collapse; restoring brings back the ones that were open.
+  let _sidebarsBeforeMax = null;
+  function collapseSidebarsForMaximize(maximizing) {
+    const sb = document.getElementById('sidebar');
+    const sbOpen = () => !!sb?.classList.contains('expanded') && !sb.classList.contains('hover-expanded');
+    if (maximizing) {
+      if (_sidebarsBeforeMax) return; // already collapsed for a maximized pane
+      _sidebarsBeforeMax = { sidebar: sidebarMode !== 'hidden' && sbOpen(), threads: tsOpen };
+      if (_sidebarsBeforeMax.sidebar) toggleSidebar();
+      if (_sidebarsBeforeMax.threads) setThreadsSidebar(false);
+    } else if (_sidebarsBeforeMax) {
+      const was = _sidebarsBeforeMax;
+      _sidebarsBeforeMax = null;
+      if (was.sidebar && !sbOpen()) toggleSidebar();
+      if (was.threads && !tsOpen) setThreadsSidebar(true);
+    }
+  }
   function toggleMaximizeTerminal(wsId, termId) {
     const wsp = findWs(wsId);
     if (!wsp) return;
+    // Only when it really toggles: a pane that can't be found changes nothing.
+    if (wsp._maximizedGroupId || findGroupContainingTerm(wsp.layout, termId)) collapseSidebarsForMaximize(!wsp._maximizedGroupId);
 
     const container = _wsDomCache[wsp.id];
     if (!container) {
@@ -6023,11 +5194,9 @@
     }
 
     if (wsp._maximizedGroupId) {
-      // Unmaximize: remove cached DOM and rebuild full layout
+      // Unmaximize: rebuild the full layout (renderPaneArea keeps chat scroll positions)
       wsp._maximizedGroupId = null;
-      const oldContainer = _wsDomCache[wsp.id];
-      if (oldContainer) { oldContainer.remove(); delete _wsDomCache[wsp.id]; }
-      switchWorkspacePane();
+      renderPaneArea();
     } else {
       const group = findGroupContainingTerm(wsp.layout, termId);
       if (!group) return;
@@ -6164,6 +5333,7 @@
       delete _wsDomCache[wsp.id];
     }
     switchWorkspacePane();
+    syncChatPanels(wsp);
     for (const t of chats) {
       const surface = t === _curChat ? thrPage : t.el?.querySelector(':scope > .thr-snapshot');
       if (surface?.isConnected && surface.querySelector('.thr-flow')?.clientHeight) restoreThreadScroll(t, surface);
@@ -7152,6 +6322,7 @@
           if (loading && !entry._suspended) return;
           loadUrl(entry.url);
         });
+        btnHistory.dataset.historyToggle = ''; // the drawer's outside-click close leaves its own toggle alone
         btnHistory.addEventListener('click', () => toggleBrowserHistoryDrawer(entry, contentWrap));
         btnOpenExt.addEventListener('click', () => { if (entry.url && entry.url !== 'about:blank') openExternalUrl(entry.url); });
 
@@ -7539,8 +6710,10 @@
     if (srcGroup.id === targetGroupId && zone === 'center') return;
 
     srcGroup.terminals.splice(termIdx, 1);
+    if (srcGroup._history) srcGroup._history = srcGroup._history.filter(id => id !== draggedId);
     if (srcGroup.activeTermId === draggedId) {
-      srcGroup.activeTermId = srcGroup.terminals.length ? srcGroup.terminals[0].id : null;
+      // The tab beside it (the one before; the next when it was first), never a jump to the first tab in the row.
+      srcGroup.activeTermId = srcGroup.terminals.length ? srcGroup.terminals[Math.max(0, termIdx - 1)].id : null;
     }
 
     const targetGroup = findGroupById(wsp.layout, targetGroupId);
@@ -7827,7 +7000,7 @@
     addBtn.title = 'New workspace';
     addBtn.innerHTML = '<i class="ph ph-plus"></i>';
     addBtn.addEventListener('click', () => {
-      showPrompt('New workspace', nextWorkspaceName(), { color: '', icon: '' }, (value, color, icon) => {
+      showPrompt('New workspace', nextWorkspaceName(), { color: '', icon: '', iconPicker: true }, (value, color, icon) => {
         createWorkspace(value.trim() || undefined, undefined, { color, icon });
         renderSidebar();
         saveState();
@@ -7863,12 +7036,6 @@
 
     header.appendChild(headerActions);
     sb.insertBefore(header, sb.firstChild);
-    // Plugin banner widgets ("sidebar-top", e.g. an image above the
-    // workspaces) must stay above the header: renderSidebar rebuilds the
-    // header on every render, so re-assert their position here.
-    const _topWidgets = [...sb.querySelectorAll('[data-plugin-widget]')]
-      .filter(el => el.dataset.widgetPosition === 'sidebar-top');
-    for (let i = _topWidgets.length - 1; i >= 0; i--) sb.insertBefore(_topWidgets[i], sb.firstChild);
 
     // ── Workspace button builder (shared by root list and folders) ──
     // slot is the sideOrder index for top-level buttons (undefined for folder children)
@@ -7895,6 +7062,7 @@
         if (typeof icon === 'string' && icon) {
           return `<img class="ws-icon" src="${escHtml(icon)}" alt="" draggable="false">`;
         }
+        if (isLucideIcon(icon)) return `<i class="ws-icon ws-icon-ph ph" aria-hidden="true">${String.fromCodePoint(icon.cp)}</i>`;
         if (icon && typeof icon === 'object' && typeof icon.phosphor === 'string' && icon.phosphor) {
           return `<i class="ws-icon ws-icon-ph ph ph-${escHtml(icon.phosphor)}" aria-hidden="true"></i>`;
         }
@@ -7903,7 +7071,20 @@
       const labelHtml = wsIconHtml();
       btn.innerHTML = `<span class="ws-strip"></span>${labelHtml}<div class="ws-info"><span class="ws-name">${escHtml(wsp.label)}</span><div class="ws-procs"></div></div><span class="ws-meta">${wsp.pinned && !isInFolder ? '<span class="ws-pin-icon"><i class="ph ph-push-pin-simple"></i></span>' : ''}<span class="ws-count">${tabCount}</span></span>`;
       if (wsp.pinned) btn.classList.add('pinned');
-      btn.title = wsp.label;
+      // Tooltip: the name, then what's open in it (terminals, chats, browser tabs); running processes follow (renderWsProcs).
+      btn.dataset.tip = wsp.label;
+      {
+        const tabs = getWorkspaceTerminals(wsp);
+        const chats = tabs.filter(t => t.threadHistory).length, pages = tabs.filter(t => t.type === 'browser').length;
+        const terms = tabs.length - chats - pages;
+        const n = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+        btn.dataset.tipRows = JSON.stringify([
+          ...(terms ? [{ icon: 'ph-terminal-window', text: n(terms, 'terminal tab', 'terminal tabs') }] : []),
+          ...(chats ? [{ icon: 'ph-chats-circle', text: n(chats, 'chat tab', 'chat tabs') }] : []),
+          ...(pages ? [{ icon: 'ph-globe-hemisphere-west', text: n(pages, 'browser tab', 'browser tabs') }] : []),
+          ...(!tabs.length ? [{ icon: 'ph-dot', text: 'No tabs' }] : []),
+        ]);
+      }
       makeKeyboardButton(btn, wsp.label);
       btn.setAttribute('aria-current', isActive ? 'true' : 'false');
       if (wsp.color) {
@@ -8296,6 +7477,7 @@
         _tabAgent.set(t.id, h?.id || null);
         trackTerminalQuestion(t, h ? agentQuestion(t) : null);
         t._agentExited = !h && (!!before || !!t._agentExited); // an agent quit here: its logo goes too
+        if (before && !h) renderThreadsSidebar(); // the thread's card must drop its agent/selection state now
         syncTabAgentIcon(t); // also catches agents the chat started itself
         if (h && before !== h.id && t.threadHistory) await adoptThreadAgent(t, h, ws); // typed into the Chat tab's own terminal
         // The permission mode can change inside Claude Code (Shift+Tab, leaving plan mode): the picker follows it.
@@ -8420,7 +7602,6 @@
       } else if (act === 'close') closeUsageModal();
       else if (act === 'refresh' && !_usageLoading) void loadUsageModal(true);
     });
-    overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeUsageModal(); } });
     document.body.appendChild(overlay);
     _usageModal = overlay;
     overlay.querySelector('[data-act="close"]').focus();
@@ -8433,7 +7614,7 @@
   const PR_FILTERS = { all: ['ph-git-pull-request', 'All open'], mine: ['ph-user', 'Created by me'], review: ['ph-eye', 'Review requested'],
     ready: ['ph-check-circle', 'Ready for review'], drafts: ['ph-note-pencil', 'Drafts'] };
   // The same page lists issues when opened from the Issues button (kind 'issues').
-  const ISSUE_FILTERS = { all: ['ph-circle issue-icon', 'All open'], mine: ['ph-user', 'Created by me'], assigned: ['ph-user-circle', 'Assigned to me'] };
+  const ISSUE_FILTERS = { all: ['ph-circle-dot', 'All open'], mine: ['ph-user', 'Created by me'], assigned: ['ph-user-circle', 'Assigned to me'] };
   const pageFilters = () => _pulls.kind === 'issues' ? ISSUE_FILTERS : PR_FILTERS;
   const pageNoun = () => _pulls.kind === 'issues' ? 'issues' : 'pull requests';
   const _pulls = { el: null, data: null, loading: false, q: '', sort: 'updated', filter: 'all', repo: '', returnFocus: null, kind: 'pulls' };
@@ -8479,7 +7660,7 @@
         const review = pr.reviewDecision === 'APPROVED' ? '<i class="ph ph-check-circle pr-approved" title="Approved" aria-label="Approved"></i>'
           : pr.reviewDecision === 'CHANGES_REQUESTED' ? '<i class="ph ph-warning-circle pr-changes" title="Changes requested" aria-label="Changes requested"></i>' : '';
         const labels = (pr.labels || []).slice(0, 3).map(l => `<span class="pr-label">${escHtml(l.name)}</span>`).join('');
-        const icon = _pulls.kind === 'issues' ? 'ph-circle issue-icon' : 'ph-git-pull-request';
+        const icon = _pulls.kind === 'issues' ? 'ph-circle-dot' : 'ph-git-pull-request';
         return `<a href="#" class="pr-row" role="listitem" data-url="${escHtml(pr.url)}" data-number="${pr.number}">`
           + `<i class="ph ${icon} pr-state${pr.isDraft ? ' draft' : ''}" title="${pr.isDraft ? 'Draft' : 'Open'}" aria-label="${pr.isDraft ? 'Draft' : 'Open'}"></i>`
           + `<span class="pr-main"><span class="pr-title">${escHtml(pr.title)}</span><span class="pr-meta"><span class="pr-repo">${escHtml(pr.repo)}#${pr.number}</span>`
@@ -8535,7 +7716,6 @@
     input.value = _pulls.q;
     input.addEventListener('input', () => { _pulls.q = input.value; renderPullsPage(); });
     el.addEventListener('mousedown', e => { if (e.target === el) closePullsPage(); });
-    el.addEventListener('keydown', e => { if (e.key === 'Escape' && !ctxEl.classList.contains('open')) { e.preventDefault(); e.stopPropagation(); closePullsPage(); } });
     el.addEventListener('click', e => {
       const row = e.target.closest('.pr-row');
       if (row) { e.preventDefault(); closePullsPage(); addBrowserTab(activeWsId, null, row.dataset.url, `${_pulls.kind === 'issues' ? 'Issue' : 'PR'} #${row.dataset.number}`); return; }
@@ -8554,6 +7734,16 @@
   }
   pullsButton?.addEventListener('click', () => openPullsPage());
   document.getElementById('ts-issues')?.addEventListener('click', () => openPullsPage('issues'));
+  // Escape closes the Pull requests / Issues page or the Usage modal wherever focus is (a click on a non-focusable
+  // spot, or a terminal taking focus back, left it outside them). Capture: before a terminal or the chat sees it.
+  // An open menu (sort/filter/repo) closes first.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || e.defaultPrevented || ctxEl.classList.contains('open')) return;
+    if (_pulls.el) closePullsPage();
+    else if (_usageModal) closeUsageModal();
+    else return;
+    e.preventDefault(); e.stopPropagation();
+  }, true);
   if (!SETTINGS_ONLY && window.electronAPI?.usageLimits) {
     _usageLimits = readUsageCache();
     if (usageButton) usageButton.parentElement.hidden = false;
@@ -8606,7 +7796,7 @@
 
   const threadMeta = ws => ({ id: ws.chat?.storeId || ws.id, title: ws.chat?.title || ws.label, projectId: null, cwd: ws.cwd, createdAt: ws.chat?.createdAt,
     segments: threadSegments(ws).map(x => ({ harness: x.harness, sessionId: x.sessionId, cwd: x.cwd || ws.cwd, since: x.since, model: x.model, effort: x.effort, handoff: x.handoff,
-      ...(x.frozen ? { frozen: true } : {}), ...(x.unsupported ? { unsupported: true } : {}) })) });
+      ...(x.frozen ? { frozen: true } : {}), ...(x.unsupported ? { unsupported: true } : {}), ...(x.subagent ? { subagent: x.subagent } : {}) })) });
 
   // ── Right panel: thread flow ──
   let _threadPoll = null, _flowSig = '';
@@ -8955,7 +8145,28 @@
     const images = threadImagesHtml([...(p.imagePaths || []), ...user.paths]);
     return `<div class="thr-msg user${stopped ? '' : ' thr-pending'}" data-ts="${p.at}">${stopped ? '<span class="thr-pending-kind">Stopped</span>' : p.steer ? '<span class="thr-pending-kind">Steered</span>' : ''}${images}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}</div>`;
   };
-  const pendingHtml = ws => pendingMessages(ws).map(p => pendingMessageHtml(p)).join('');
+  // A turn's agent header: harness, model, effort. usedModel stands in for "default" (the model the
+  // transcript says it ran on), so a header reads the same whether it came from the picks or the transcript.
+  const agentHead = (opts, fallbackHarness, time, usedModel) => {
+    if ((!opts.model || opts.model === 'default') && usedModel) opts = { ...opts, model: usedModel };
+    const id = opts.harness || fallbackHarness;
+    const agent = harnessOf(id), name = agent?.name || id;
+    const meta = [opts.model, opts.effort].filter(value => value && value !== 'default').join(' · ');
+    const head = name + '|' + meta;
+    return { head, html: (cls = '') => `<div class="thr-seg${cls}" data-head="${escHtml(head)}"${agent?.color ? ` style="--agent-color:${agent.color}"` : ''}>${procIconHtml(agent?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(time)}</span></div>` };
+  };
+  // Sent messages not in the transcript yet, each with its agent header when that differs from the last one shown
+  // (lastHead), so the header is there at once instead of when the transcript catches up.
+  // ctx (contextLines): its lines from before each pending message go ahead of it, in time order.
+  const pendingHtml = (ws, lastHead = '', ctx = null) => pendingMessages(ws).map(p => {
+    let head = ctx ? ctx.before(p.at) : '';
+    if (p.options && !p.steer && !p.resume) {
+      const harness = p.options.harness || ws._usedModel?.harness;
+      const h = agentHead(p.options, harness, new Date(p.at).toISOString(), harness === ws._usedModel?.harness ? ws._usedModel.model : null);
+      if (h.head !== lastHead) { lastHead = h.head; head = h.html(' thr-pending'); }
+    }
+    return head + pendingMessageHtml(p);
+  }).join('');
   const _thrImgCache = new Map(); // saved image path -> data URL, so a re-render doesn't re-read files
   // A chat is a tab (its history + a message box); a workspace can hold any number of them.
   // ponytail: it is a terminal tab whose shell sits under the page until the chat starts its agent
@@ -9039,21 +8250,146 @@
   // Side chat (T3 Code's /side, /btw): a question about a thread without adding to it. It opens as a
   // chat tab next to the thread, forks the thread's agent session and starts with its picks; the
   // thread keeps working meanwhile. "Bring back" hands its history to the thread's next message.
-  // ponytail: a tab in the same pane, not a side panel; split it off by dragging if wanted.
+  // It shows inside the thread's tab, as a panel on the right (like the Ctrl+J terminal): its own tab is hidden
+  // (chatPanelHost / syncChatPanels). "Open in tab" (its top bar) makes it an ordinary tab.
   async function openSideChat(parent, question, files = []) {
     const ws = wsOf(parent) || findWs(parent.workspaceId) || activeWs();
     if (!ws) return;
     const seg = threadSegments(parent).findLast(x => x.used && x.sessionId);
-    const opts = chatOpts(parent);
+    const opts = { ...chatOpts(parent) };
+    // Settings > Threads: a side chat model and effort (else the thread's). setChatOpts clamps an effort the model lacks.
+    const [sideHarness, sideModel] = (threadSettings.sideModel || '').split('|');
+    if (sideHarness && CHAT_AGENTS[sideHarness] && !harnessOf(sideHarness)?.retired) Object.assign(opts, { harness: sideHarness, model: sideModel || 'default' });
+    if (threadSettings.sideEffort) opts.effort = threadSettings.sideEffort;
     const tab = newChatTab(ws, findGroupContainingTerm(ws.layout, parent.id)?.id, opts.harness);
     if (!tab) return;
     const cwd = seg?.cwd || chatCwd(parent); // Claude keeps sessions per folder: fork in the thread's
     if (cwd) { tab.chat.cwd = cwd; delete tab.chat.scratch; } // shares the thread's folder, never owns it
     tab.chat.side = { parentId: threadKey(parent), harness: seg?.harness || null, sessionId: seg?.sessionId || null };
+    parent._panelGuest = tab.id; // shown in the thread's tab, on the right
+    syncChatPanels(ws);
+    syncThreadPanel();
     setChatOpts(tab, opts);
     setChatTabLabel(tab);
     const text = chatMessageText(question, files);
     if (text) await deliverChatMessage(tab, { id: uuid(), text, typed: question, files, after: Date.now() });
+  }
+  // The thread whose tab shows this side chat as its right panel: the thread is open in the same pane and the side
+  // chat wasn't moved out with "Open in tab" (chat.side.panel === false).
+  function chatPanelHost(t, group) {
+    if (!t?.chat?.side || t.chat.side.panel === false || !group) return null;
+    const key = t.chat.side.parentId;
+    return group.terminals.find(x => x !== t && x.threadHistory && threadKey(x) === key) || null;
+  }
+  // While a thread or its shown side chat (host._panelGuest, the last one opened) is its pane's selected tab, both
+  // slots stay visible side by side (.chat-panel-on beats the inline display:none) and the thread's tab stands for
+  // both: the side chats' own tabs are hidden. Returns the chats shown that way (syncThreadPanel keeps them live).
+  // Its width (% of the pane) is one remembered value for every panel, dragged on the sash at its left edge.
+  const CHAT_PANEL_MIN = 20, CHAT_PANEL_MAX = 75;
+  const setChatPanelWidth = pct => {
+    const w = Math.max(CHAT_PANEL_MIN, Math.min(CHAT_PANEL_MAX, Math.round(pct * 10) / 10));
+    document.documentElement.style.setProperty('--chat-panel-width', w + '%');
+    return w;
+  };
+  let _chatPanelWidth = 40;
+  try { _chatPanelWidth = setChatPanelWidth(Number(localStorage.getItem('tv-chat-panel-width')) || 40); } catch {} // else the CSS default (40%)
+  function chatPanelSash() {
+    const sash = document.createElement('div');
+    sash.className = 'chat-panel-sash';
+    sash.setAttribute('role', 'separator'); sash.tabIndex = 0;
+    sash.setAttribute('aria-label', 'Resize side chat'); sash.setAttribute('aria-orientation', 'vertical');
+    const save = () => { try { localStorage.setItem('tv-chat-panel-width', String(_chatPanelWidth)); } catch {} };
+    let drag = null, frame = 0;
+    sash.addEventListener('mousedown', e => e.stopPropagation()); // not a click into the side chat
+    sash.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      const body = sash.parentElement?.parentElement; // the pane's body, which both slots fill
+      if (!body) return;
+      e.preventDefault(); e.stopPropagation();
+      sash.setPointerCapture(e.pointerId);
+      drag = { id: e.pointerId, rect: body.getBoundingClientRect() };
+      sash.classList.add('dragging'); document.body.classList.add('chat-panel-resizing');
+    });
+    sash.addEventListener('pointermove', e => {
+      if (drag?.id !== e.pointerId) return;
+      const x = e.clientX;
+      if (!frame) frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (drag) _chatPanelWidth = setChatPanelWidth((drag.rect.right - x) * 100 / drag.rect.width);
+      });
+    });
+    const end = e => {
+      if (drag?.id !== e.pointerId) return;
+      drag = null;
+      sash.classList.remove('dragging'); document.body.classList.remove('chat-panel-resizing');
+      save();
+    };
+    for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) sash.addEventListener(ev, end);
+    sash.addEventListener('keydown', e => {
+      const next = { ArrowLeft: _chatPanelWidth + 5, ArrowRight: _chatPanelWidth - 5, Home: CHAT_PANEL_MAX, End: CHAT_PANEL_MIN }[e.key];
+      if (next === undefined) return;
+      e.preventDefault(); e.stopPropagation();
+      _chatPanelWidth = setChatPanelWidth(next); save();
+    });
+    return sash;
+  }
+  function syncChatPanels(ws) {
+    const on = new Set();
+    const syncGroup = group => {
+      const groupEl = document.getElementById('group-' + group.id);
+      const tabEl = t => groupEl?.querySelector(`.tg-tab[data-termid="${CSS.escape(t.id)}"]`);
+      const active = group.terminals.find(t => t.id === group.activeTermId);
+      const activeHost = chatPanelHost(active, group);
+      if (activeHost) activeHost._panelGuest = active.id;
+      const host = activeHost || active;
+      const guest = host?.threadHistory && group.terminals.find(g => g.id === host._panelGuest && chatPanelHost(g, group) === host);
+      for (const t of group.terminals) {
+        const pair = !!guest && (t === host || t === guest);
+        t.el?.classList.toggle('chat-panel-on', pair);
+        t.el?.classList.toggle('chat-panel-host', pair && t === host);
+        t.el?.classList.toggle('chat-panel-guest', pair && t === guest);
+        tabEl(t)?.classList.toggle('tg-in-panel', !!chatPanelHost(t, group));
+        if (pair) on.add(t);
+      }
+      if (guest) {
+        tabEl(host)?.classList.add('active');
+        if (guest.el && !guest.el.querySelector(':scope > .chat-panel-sash')) guest.el.append(chatPanelSash());
+      }
+    };
+    (function walk(n) { if (n?.type === 'group') syncGroup(n); else n?.children?.forEach(walk); })(ws?.layout);
+    return on;
+  }
+  // The panel's top-bar buttons: hide it (the thread alone again), or make the side chat an ordinary tab.
+  function closeChatPanel(t) {
+    const ws = wsOf(t), host = ws && chatPanelHost(t, findGroupContainingTerm(ws.layout, t.id));
+    if (!host) return;
+    host._panelGuest = null;
+    activateTerminal(ws.id, host.id);
+  }
+  function chatPanelToTab(t) {
+    const ws = wsOf(t), host = ws && chatPanelHost(t, findGroupContainingTerm(ws.layout, t.id));
+    if (!host) return;
+    t.chat.side.panel = false;
+    host._panelGuest = null;
+    saveState();
+    renderPaneArea();
+    activateTerminal(ws.id, t.id);
+  }
+  // Back into the panel: the side chat joins its thread's pane (wherever its tab went), its tab hidden again.
+  function chatPanelHostIn(t, ws) {
+    const key = t.chat?.side?.parentId;
+    return key ? getWorkspaceTerminals(ws).find(x => x !== t && x.threadHistory && threadKey(x) === key) || null : null;
+  }
+  function chatTabToPanel(t) {
+    const ws = wsOf(t), host = ws && chatPanelHostIn(t, ws);
+    if (!host) { zoomBadge('Open its thread first'); return; }
+    delete t.chat.side.panel;
+    host._panelGuest = t.id;
+    const hostGroup = findGroupContainingTerm(ws.layout, host.id);
+    if (hostGroup && findGroupContainingTerm(ws.layout, t.id) !== hostGroup) handleTerminalDrop(t.id, hostGroup.id, 'center', ws);
+    saveState();
+    renderPaneArea();
+    activateTerminal(ws.id, t.id);
   }
   // Fork a thread from a reply: a new Chat tab beside it holding the history up to that reply. TerminalVibe owns the
   // copy (frozen sessions in the fork's own thread folder, so deleting the parent never breaks it); the fork's first
@@ -9078,6 +8414,95 @@
     syncThreadPanel(true);
     renderThreadsSidebar();
   }
+  // A subagent's own thread: a read-only Chat tab showing its transcript (every step it took). One per subagent.
+  // Claude Code: the parent session plus the call (its subagents/ transcript); OpenCode: the subagent's own session;
+  // delegated (delegate_task, another harness): that harness's own session, an ordinary one it can resume.
+  function openSubagentThread(parent, { subCall: call, subHarness: harness = 'claude', subSession: sessionId, subTitle: title, subModel: model, subDelegated: delegated, subSince: since }) {
+    if (!call || !sessionId) return;
+    const open = allChatTabs().find(t => t.chat?.subagent?.call === call);
+    if (open) { openChatTab(open); return; }
+    const ws = wsOf(parent) || activeWs();
+    const tab = ws && newChatTab(ws, findGroupContainingTerm(ws.layout, parent.id)?.id, harness, chatCwd(parent) || undefined);
+    if (!tab) return;
+    Object.assign(tab.chat, { title: title || 'Subagent', subagent: { parentId: threadKey(parent), call },
+      // since: when it started (Codex looks its session up by date)
+      segments: [{ harness, sessionId, ...(delegated ? {} : { subagent: call }), since: Number(since) || Date.now(), model: model || undefined }] });
+    setChatTabLabel(tab);
+    saveState();
+    _flowSig = '';
+    syncThreadPanel(true);
+  }
+  // "Use as context": the main thread gets the side chat with its next message. Both chats show it where it happened:
+  // the side chat a line at the point it was shared (pending, sent or discarded), the main thread a line with
+  // Discard while it waits, then a line before the message that carried it (chat.contextNotes).
+  // parent.chat.bringBack: { file, sideId, title, at } (a bare file path in older state).
+  const bringBackOf = ws => { const b = ws?.chat?.bringBack; return !b ? null : typeof b === 'string' ? { file: b } : b; };
+  function settleBringBack(parent, state, at = Date.now()) {
+    const b = bringBackOf(parent);
+    if (!b) return;
+    const side = b.sideId && findThreadByKey(b.sideId);
+    const share = side?.chat?.shares?.findLast(s => s.parentId === threadKey(parent) && s.state === 'pending');
+    if (share) Object.assign(share, { state, settledAt: Date.now() });
+    if (state === 'sent') (parent.chat.contextNotes ||= []).push({ at, sideId: b.sideId || null, title: b.title || 'Side chat' });
+    delete parent.chat.bringBack;
+    saveState();
+    for (const t of [parent, side]) if (t && curChat() === t) { _flowSig = ''; refreshThreadFlow(t); }
+  }
+  // A chat's context lines, each placed before the first prompt after it (before(t) hands out those up to t):
+  // in the main thread, "Included side chat X" before the message that carried it; in a side chat, "Shared as
+  // context with Y" where it was shared, with its outcome. waiting: the main thread's line while it waits, with Discard.
+  // Runs of process events of one kind, each within 10s of the run's first (a stop also takes down its children).
+  function procEventGroups(events) {
+    const groups = [];
+    // The OpenCode harness's own server (chat-sdk.js launches exactly this) was logged before sessionPid skipped it.
+    const harnessServer = ev => /\bopencode(\.exe)?\s+serve\s+--hostname=127\.0\.0\.1\s+--port=0$/.test(ev.command || '');
+    for (const ev of [...events].filter(ev => !harnessServer(ev)).sort((a, b) => a.at - b.at)) {
+      const g = groups.at(-1);
+      if (g && g[0].kind === ev.kind && ev.at - g[0].at <= 10000) g.push(ev); else groups.push([ev]);
+    }
+    return groups;
+  }
+  // "./venv/bin/python server.py --port 1" → "python server.py"; "/…/node_modules/.bin/vite" → "vite".
+  const procShortName = cmd => {
+    const [bin = 'process', arg] = String(cmd || '').trim().split(/\s+/);
+    const base = s => s.split('/').pop();
+    return arg && !arg.startsWith('-') && /[./]/.test(arg) ? `${base(bin)} ${base(arg)}` : base(bin);
+  };
+  function contextLines(ws) {
+    const link = (key, title) => `<button type="button" class="thr-context-link" data-thread-key="${escHtml(key || '')}"${key ? '' : ' disabled'} title="${escHtml(title)}">${escHtml(title)}</button>`;
+    const line = (at, cls, icon, text, rest = '') => ({ at, html: `<div class="thr-status-line thr-context-line ${cls}" data-ts="${at}" role="status"><i class="ph ${icon}" aria-hidden="true"></i><span class="thr-status-title">${text}</span>${rest}</div>` });
+    const lines = [
+      ...(ws.chat?.contextNotes || []).map(n => line(n.at, 'sent', 'ph-arrow-bend-down-right', 'Included side chat', link(n.sideId, n.title))),
+      // A discarded share just disappears (the user prefers no "discarded" trail for it).
+      ...(ws.chat?.shares || []).filter(s => s.state !== 'discarded').map(s => {
+        const p = findThreadByKey(s.parentId), title = p?.chat?.title || p?.label || 'a deleted thread';
+        return line(s.at, s.state, s.state === 'discarded' ? 'ph-x-circle' : s.state === 'sent' ? 'ph-check-circle' : 'ph-arrow-bend-up-left', 'Shared as context with',
+          link(p && s.parentId, title) + `<span class="thr-context-state">${s.state === 'pending' ? 'goes with its next message' : s.state === 'sent' ? 'sent' : 'discarded'}</span>`);
+      }),
+      // Processes the agent left running: when they started and stopped (recorded by refreshAgentProcCards).
+      // Events of one kind within a few seconds of each other are one line: "Started  http://…:8000, node".
+      ...procEventGroups(ws.chat?.procEvents || []).map(g => {
+        const start = g[0].kind === 'start', servers = g.filter(ev => ev.urls?.length), others = g.filter(ev => !ev.urls?.length);
+        const noun = !others.length ? (servers.length > 1 ? 'Servers' : 'Server') : !servers.length ? (others.length > 1 ? 'Processes' : 'Process') : '';
+        const items = [
+          ...servers.map(ev => `<button type="button" class="thr-link" data-href="${escHtml(ev.urls[0])}" title="${escHtml(ev.command || ev.urls[0])}">${escHtml(ev.urls[0].replace(/^https?:\/\//, ''))}</button>`),
+          ...others.map(ev => `<span class="thr-proc-cmd" title="${escHtml(ev.command || '')}">${escHtml(procShortName(ev.command))}</span>`),
+        ].join('<span class="thr-proc-sep">,</span>');
+        return line(g[0].at, `thr-proc-line ${g[0].kind}`, start ? 'ph-play' : 'ph-stop-circle', noun ? `${noun} ${start ? 'started' : 'stopped'}` : start ? 'Started' : 'Stopped',
+          `<span class="thr-proc-items">${items}</span>` + (g.some(ev => ev.by === 'you') ? '<span class="thr-context-state">by user</span>' : ''));
+      }),
+    ].sort((a, b) => a.at - b.at);
+    const b = bringBackOf(ws);
+    const waiting = b ? `<div class="thr-status-line thr-context-line waiting" role="status"><i class="ph ph-arrow-bend-down-right" aria-hidden="true"></i><span class="thr-status-title">Side chat</span>`
+      + `${link(b.sideId, b.title || 'Side chat')}<span class="thr-context-state">goes with your next message</span>`
+      + `<button type="button" class="thr-context-discard" title="Don't include this side chat">Discard</button></div>` : '';
+    let next = 0;
+    return {
+      key: lines.map(l => l.html.length + ':' + l.at).join(',') + (b ? '|w' + b.at : '') + JSON.stringify((ws.chat?.shares || []).map(s => s.state)),
+      before: t => { let out = ''; while (next < lines.length && lines[next].at <= t) out += lines[next++].html; return out; },
+      waiting,
+    };
+  }
   async function bringBackSideChat(tab) {
     const parent = findThreadByKey(tab.chat?.side?.parentId);
     if (!parent) { zoomBadge('The main thread was deleted'); return; }
@@ -9085,10 +8510,14 @@
     try { file = await window.electronAPI?.threadHandoff?.({ ...threadMeta(tab), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); } catch {}
     if (!file) { zoomBadge('Could not write the side chat for the main thread'); return; }
     parent.chat ||= { createdAt: Date.now() };
-    parent.chat.bringBack = file;
+    settleBringBack(parent, 'discarded'); // one side chat at a time: a newer one replaces a waiting one
+    const at = Date.now();
+    parent.chat.bringBack = { file, sideId: threadKey(tab), title: tab.chat?.title || tab.label || 'Side chat', at };
+    (tab.chat.shares ||= []).push({ at, parentId: threadKey(parent), state: 'pending' });
     saveState();
+    _flowSig = '';
+    if (curChat() === tab) refreshThreadFlow(tab);
     openChatTab(parent);
-    zoomBadge('The main thread gets this side chat with your next message there');
   }
   function findChatThread(id) {
     return findTermById(id)?.term || closedThreads.find(t => t.id === id);
@@ -9143,6 +8572,12 @@
     threadPageListeners.push(args);
     thrPage.addEventListener(...args);
   }
+  // Side chat context lines (contextLines): open the other thread, or drop the side chat waiting for the next message.
+  onThreadPage('click', e => {
+    const open = e.target.closest('.thr-context-link');
+    if (open) { const t = findThreadByKey(open.dataset.threadKey); if (t) openChatTab(t); else zoomBadge('That thread was deleted'); return; }
+    if (e.target.closest('.thr-context-discard')) { const c = curChat(); if (c) settleBringBack(c, 'discarded'); }
+  });
   let observeThreadPage = () => {};
   let _curChat = null, _preferChat = null, _warmChatSlot = null;
   // Safety net (startup restores and starts tabs in an order that can miss the move): a Chat tab in view
@@ -9173,7 +8608,8 @@
         if (!thrPage.contains(document.activeElement)) thrInput.focus({ preventScroll: true });
       };
     }
-    const shown = chats.filter(t => !t._closePending && findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id);
+    const paired = syncChatPanels(ws); // a thread and its side chat panel are both shown
+    const shown = chats.filter(t => !t._closePending && (paired.has(t) || findGroupContainingTerm(ws.layout, t.id)?.activeTermId === t.id));
     const tab = shown.find(t => t === _preferChat) || shown.find(t => t.id === ws.activeTermId) || shown.find(t => t === _curChat) || shown[0];
     _preferChat = null;
     const prev = _curChat;
@@ -9272,8 +8708,12 @@
       if (changed) { saveState(); renderThreadsSidebar(); }
     }
     const activeId = ws?.activeTermId;
+    // A Chat tab left showing a plain shell after its agent quit is no longer an active thread:
+    // don't leave its card selected just because the tab still has focus.
+    const activeTab = tabs.find(t => t.id === activeId);
+    const liveChat = activeTab?.threadHistory && (!activeTab._cliView || !!activeTab._sdk?.alive || !!_tabAgent.get(activeTab.id));
     document.querySelectorAll('#ts-list .ts-card').forEach(button => {
-      const selected = button.dataset.tab === activeId;
+      const selected = button.dataset.tab === activeId && liveChat;
       button.classList.toggle('active', selected);
       if (button.getAttribute('aria-current') !== String(selected)) button.setAttribute('aria-current', String(selected));
     });
@@ -9312,6 +8752,9 @@
     for (const [index, control] of controls.entries()) {
       move.call(to, control, index < before ? flow : null);
     }
+    // The composer arrived at its height: the observer only fires on a change, so pad this surface now.
+    const liveWrap = to.querySelector(':scope > .thr-composer-wrap');
+    if (liveWrap?.offsetHeight) to.style.setProperty('--thr-composer-pad', liveWrap.offsetHeight + 12 + 'px');
     if (owner) {
       from.style.display = 'flex';
       from.classList.add('thr-snapshot');
@@ -9365,6 +8808,25 @@
       el.tabIndex = -1;
     }
   }
+  // Pads a surface's history by its composer's height (the composer floats over the bottom of the history), for the
+  // live surface and every snapshot. A hidden composer (height 0) keeps the last value. Lazily built: snapshots can
+  // be cloned before the live composer's observer line runs.
+  function observeComposerPad(wrap) {
+    observeComposerPad.ro ||= new ResizeObserver(entries => {
+      for (const { target } of entries) {
+        const surface = target.parentElement, flow = surface && threadPart(surface, 'flow');
+        if (!target.offsetHeight || !flow) continue;
+        const live = surface === thrPage;
+        // Also trust the last scroll event: content can grow in the same frame as the composer (a reply
+        // streaming in, the side-chat bubble appearing), so the live check alone misses "was at the bottom".
+        const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 2 || (live && !!_curChat?._scrollState?.bottom);
+        surface.style.setProperty('--thr-composer-pad', target.offsetHeight + 12 + 'px');
+        if (atBottom) flow.scrollTop = flow.scrollHeight;
+        if (live) syncScrollEnd();
+      }
+    });
+    if (wrap) observeComposerPad.ro.observe(wrap);
+  }
   function cloneThreadControls(source, target) {
     const flow = threadPart(target, 'flow');
     let beforeFlow = true;
@@ -9380,6 +8842,7 @@
         if (el.hasAttribute('contenteditable')) el.contentEditable = 'false';
       }
       target.insertBefore(clone, beforeFlow ? flow : null);
+      if (clone.classList.contains('thr-composer-wrap')) observeComposerPad(clone);
     }
   }
   function createThreadSurface() {
@@ -9556,8 +9019,12 @@
     },
     opencode: {
       models: [],
-      access: [['default', 'OpenCode settings', 'ph-shield']],
-      argv: o => o.model !== 'default' ? ['--model', o.model] : [],
+      access: [['default', 'Ask first', 'ph-shield'], ['auto', 'Auto', 'ph-magic-wand'], ['accept-edits', 'Accept edits', 'ph-pencil-simple'], ['plan', 'Plan only', 'ph-list-checks'], ['full', 'Full access', 'ph-shield-slash']],
+      // `-s` is the session to continue; `--fork` continues it in a new one (the terminal view of the chat).
+      // The CLI approves permissions with --auto and switches to its read-only plan agent with --agent.
+      argv: (o, sid, resume, fork) => [...(o.model !== 'default' ? ['--model', o.model] : []),
+        ...(o.access === 'auto' || o.access === 'full' ? ['--auto'] : o.access === 'plan' ? ['--agent', 'plan'] : []),
+        ...(fork ? ['--session', fork, '--fork'] : resume && sid ? ['--session', sid] : [])],
     },
   };
   const setAgyModels = models => {
@@ -9569,7 +9036,31 @@
   // their transcripts aren't read yet, so their chats show the messages sent, not a history.
   for (const h of THREAD_HARNESSES) CHAT_AGENTS[h.id] ||= { models: [], efforts: ['default'], access: [['default', 'Default', 'ph-shield']], argv: () => [] };
   // An agent with no known models still gets one row: its own default.
-  const openCodeCatalogs = new Map();
+  // OpenCode's catalog comes from a local server + provider probe: keep it like Codex's and Antigravity's,
+  // so opening the picker doesn't launch a server every time. One map per project folder, persisted across restarts.
+  const OPENCODE_MODELS_KEY = 'tv-opencode-models';
+  let openCodeCatalogs;
+  try { openCodeCatalogs = new Map(Object.entries(JSON.parse(localStorage.getItem(OPENCODE_MODELS_KEY)) || {})); }
+  catch { openCodeCatalogs = new Map(); }
+  const saveOpenCodeCatalogs = () => { try { localStorage.setItem(OPENCODE_MODELS_KEY, JSON.stringify(Object.fromEntries(openCodeCatalogs))); } catch {} };
+  const openCodeModelRequests = new Map(); // cwd -> one in-flight probe, shared by the picker and the background load
+  function loadOpenCodeModels(bin, cwd) {
+    if (!bin || !cwd) return Promise.resolve(null);
+    const cached = openCodeCatalogs.get(cwd);
+    if (cached) return Promise.resolve(cached);
+    if (!openCodeModelRequests.has(cwd)) openCodeModelRequests.set(cwd,
+      window.electronAPI.chatSdkModels('opencode', bin, cwd).catch(() => null).then(models => {
+        openCodeModelRequests.delete(cwd);
+        if (Array.isArray(models) && models.length) {
+          openCodeCatalogs.set(cwd, models);
+          saveOpenCodeCatalogs();
+          const chat = curChat();
+          if (chat && chatCwd(chat) === cwd) syncThreadComposer(chat);
+        }
+        return openCodeCatalogs.get(cwd) || null;
+      }));
+    return openCodeModelRequests.get(cwd);
+  }
   const chatModels = (harness, ws) => harness === 'opencode'
     ? [{ id: 'default', name: 'OpenCode default', efforts: ['default'], defaultEffort: 'default' },
       ...(openCodeCatalogs.get(chatCwd(ws)) || [])]
@@ -9591,9 +9082,23 @@
     _chatAgents.then(r => { _chatAgentsFound = r?.found || {}; });
     return _chatAgents;
   }
-  if (!SETTINGS_ONLY) loadChatAgents();
+  if (!SETTINGS_ONLY) loadChatAgents().then(({ found }) => {
+    // Soft background prime: no picker interaction and no loading state, just a warm cache for when it's opened.
+    setTimeout(() => {
+      if (!found?.opencode || !window.electronAPI?.chatSdkModels) return;
+      const ws = activeWs(), tabs = getWorkspaceTerminals(ws || {});
+      const cwds = [...new Set(tabs.filter(t => t.threadHistory).map(chatCwd).filter(Boolean))];
+      const fallback = ws?.cwd || tabs.find(t => t.cwd)?.cwd;
+      if (fallback) cwds.push(fallback);
+      for (const cwd of cwds) loadOpenCodeModels(found.opencode, cwd);
+    }, 0);
+  });
   // Settings > Providers changed (enabled, binary path): look the agents up again.
-  function reloadChatAgents() { _chatAgents = null; if (!SETTINGS_ONLY) loadChatAgents().then(() => syncThreadComposer(curChat())); }
+  function reloadChatAgents() {
+    _chatAgents = null;
+    openCodeCatalogs.clear(); saveOpenCodeCatalogs(); openCodeModelRequests.clear();
+    if (!SETTINGS_ONLY) loadChatAgents().then(() => syncThreadComposer(curChat()));
+  }
   let agyModelsRequest;
   function loadAgyModels(bin) {
     agyModelsRequest ||= window.electronAPI.chatSdkModels('antigravity', bin).then(setAgyModels).catch(() => {
@@ -9649,10 +9154,10 @@
   // headless stream-json mode, Codex through `codex app-server`. Messages, permission prompts, questions, stop and
   // permission changes go through them; the history is still read from their transcripts. Other agents (and
   // browser mode) still run in the tab's terminal, and the terminal view resumes the same session in the real CLI.
-  const sdkHarness = h => (h === 'claude' || h === 'codex' || h === 'antigravity') && !!window.electronAPI?.chatSdkStart;
-  // Agents that take model, effort and permissions on every turn (no restart): Codex, and Antigravity except
-  // for Full access, which is a start flag.
-  const sdkPerTurn = (h, from, to) => h === 'codex' || (h === 'antigravity' && (from === 'full') === (to === 'full'));
+  const sdkHarness = h => ['claude', 'codex', 'antigravity', 'opencode'].includes(h) && !!window.electronAPI?.chatSdkStart;
+  // Agents that take model, effort and permissions on every turn (no restart): Codex and OpenCode, and
+  // Antigravity except for Full access, which is a start flag.
+  const sdkPerTurn = (h, from, to) => h === 'codex' || h === 'opencode' || (h === 'antigravity' && (from === 'full') === (to === 'full'));
   // What a turn needs to know (Codex takes these on every turn; Claude Code takes the permission mode live).
   const sdkTurnOptions = o => ({ model: o.model, effort: o.effort, access: o.access,
     ...(o.harness === 'codex' && o.fast ? { serviceTier: CHAT_AGENTS.codex.models.find(m => m.id === o.model)?.fastTier } : {}) });
@@ -9704,16 +9209,27 @@
   };
   // The floating composer covers the bottom of the history: pad the history by its height so
   // the last message can always scroll clear of it (it grows with the text and attachments).
-  {
-    const wrap = thrPage.querySelector('.thr-composer-wrap');
-    new ResizeObserver(() => {
-      const flow = threadPart(thrPage, 'flow');
-      const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
-      flow.style.paddingBottom = wrap.offsetHeight + 12 + 'px';
-      if (atBottom) flow.scrollTop = flow.scrollHeight;
-      syncScrollEnd();
-    }).observe(wrap);
-  }
+  // Each chat surface has its own value (--thr-composer-pad on the surface, workspace.css): a thread and its side
+  // chat panel are shown together with composers of different heights. See observeComposerPad.
+  observeComposerPad(thrPage.querySelector('.thr-composer-wrap'));
+  // The bar at the top of a side chat or subagent thread: go to the thread it belongs to.
+  thrPage.querySelector('#sbr-thread-parent').addEventListener('click', e => {
+    const back = e.target.closest('.thr-bring-back'), chat = curChat();
+    const act = e.target.closest('.thr-parent-icon')?.dataset.act;
+    if (chat && act === 'to-tab') { chatPanelToTab(chat); return; }
+    if (chat && act === 'to-panel') { chatTabToPanel(chat); return; }
+    if (chat && act === 'close-panel') { closeChatPanel(chat); return; }
+    if (back) {
+      // One at a time, guarded on the chat, not by disabling the button: bringBackSideChat switches to the thread,
+      // and the side chat's snapshot (cloned at that moment) would keep a disabled button that ignores clicks.
+      if (!chat || chat._bringingBack) return;
+      chat._bringingBack = true;
+      void bringBackSideChat(chat).finally(() => { chat._bringingBack = false; });
+      return;
+    }
+    const t = findChatThread(e.target.closest('.thr-parent-link')?.dataset.side);
+    if (t) openChatTab(t); else if (e.target.closest('.thr-parent-link')) zoomBadge('That thread was deleted');
+  });
   thrPage.querySelector('#sbr-thread-ask').addEventListener('click', e => {
     const headBtn = e.target.closest('.thr-ask-head');
     if (headBtn) { const folded = e.currentTarget.classList.toggle('folded'); headBtn.setAttribute('aria-expanded', String(!folded)); return; }
@@ -9857,11 +9373,13 @@
   const chatFolderName = cwd => !cwd || isScratchDir(cwd) ? 'No project' : cwd.split(/[\\/]/).filter(Boolean).pop() || cwd;
   async function ensureThreadBranch(tab, cwd = chatCwd(tab)) {
     if (!cwd || !window.electronAPI?.gitBranch) return;
-    if (_chatBranchSwitches.has(cwd)) throw Error('Wait for the project branch switch to finish.');
+    // A blocked send, not a transcript event: callers show `toast` errors as a toast.
+    const block = message => Object.assign(Error(message), { toast: true });
+    if (_chatBranchSwitches.has(cwd)) throw block('Wait for the project branch switch to finish.');
     const current = await window.electronAPI.gitBranch(cwd);
     const saved = tab.chat?.branch;
     if (saved && saved !== current) {
-      throw Error(`This thread uses ${saved}. ${current ? `The project is on ${current}.` : 'The current branch could not be read.'} Switch to ${saved} before continuing.`);
+      throw block(`This thread uses ${saved}. ${current ? `The project is on ${current}.` : 'The current branch could not be read.'} Switch to ${saved} before continuing.`);
     }
     if (current && !saved) {
       tab.chat ||= { createdAt: Date.now() };
@@ -9931,25 +9449,48 @@
       const chip = (x, icon, i = 0) => `<button type="button" class="thr-side-chip" style="--i:${i}" data-side="${escHtml(x.id)}" title="${escHtml(x.chat?.title || x.label)}">`
         + `<i class="ph ${icon}" aria-hidden="true"></i><span>${escHtml(x.chat?.title || x.label || 'Side chat')}</span>`
         + `${chatWorking(x) ? '<i class="ph ph-circle-notch thr-side-spin" aria-hidden="true"></i>' : ''}</button>`;
-      const parent = findThreadByKey(ws.chat?.side?.parentId), sides = ws.chat?.side ? [] : sideChatsOf(ws);
+      const sub = !!ws.chat?.subagent; // a subagent's thread links back to its thread, as a side chat does
+      const parent = findThreadByKey(ws.chat?.side?.parentId || ws.chat?.subagent?.parentId), sides = ws.chat?.side || sub ? [] : sideChatsOf(ws);
       // A thread's side chats: a header (label + caret) over one row per chat; collapsed, the whole tray
-      // goes and a bubble on the composer's edge brings it back. A side chat's thread: always shown.
-      let collapsed = !parent; // collapsed by default; opening it is remembered
-      if (!parent) try { collapsed = !localStorage.getItem('tv-side-chats-expanded'); } catch {}
+      // goes and a bubble on the composer's edge brings it back (opening it is remembered). A side chat or
+      // subagent has no tray here: the bar at the top names its thread, links to it and holds "Use as context".
+      if (sidesEl._owner !== ws) { if (sidesEl._owner) sidesEl._owner._procsOpen = false; sidesEl._owner = ws; void refreshAgentProcCards(); }
+      const store = 'tv-side-chats-expanded';
+      let collapsed = true;
+      try { collapsed = !localStorage.getItem(store); } catch {}
       const what = `${sides.length} side chat${sides.length > 1 ? 's' : ''}`;
-      const useAsContext = parent && threadSegments(ws).some(x => x.used)
-        ? `<button type="button" class="thr-side-chip thr-bring-back" title="Include this side chat with your next message in ${escHtml(parent.chat?.title || parent.label)}"><i class="ph ph-arrow-bend-up-left" aria-hidden="true"></i><span>Use as context</span></button>`
+      const useAsContext = parent && !sub && threadSegments(ws).some(x => x.used)
+        ? `<button type="button" class="thr-parent-action thr-bring-back" aria-label="Use as context" data-tip="Use as context"><i class="ph ph-arrow-bend-up-left" aria-hidden="true"></i><span>Use as context</span></button>`
         : '';
-      const html = parent ? `<span class="thr-sides-label">Side chat of</span>${useAsContext}${chip(parent, 'ph-chats-circle')}`
-        : !sides.length ? ''
-        : collapsed ? `<button type="button" class="thr-sides-toggle thr-sides-bubble" aria-expanded="false" aria-label="Show ${what}" data-tip="Side chats">`
-          + `<i class="ph ph-chat-circle-dots" aria-hidden="true"></i><span class="thr-sides-count">${sides.length}</span><i class="ph ph-caret-up" aria-hidden="true"></i></button>`
-        : `<span class="thr-sides-label">Side chats</span>${sides.map((x, i) => `<div class="thr-side-row" style="--i:${i}">${chip(x, 'ph-chat-circle-dots', i)}`
+      const bubble = (icon, count) => `<button type="button" class="thr-sides-toggle thr-sides-bubble" data-store="${store}" aria-expanded="false" aria-label="Show ${what}" data-tip="Side chats">`
+        + `<i class="ph ${icon}" aria-hidden="true"></i>${count ? `<span class="thr-sides-count">${count}</span>` : ''}<i class="ph ph-caret-up" aria-hidden="true"></i></button>`;
+      const hide = `<button type="button" class="thr-sides-toggle" data-store="${store}" aria-expanded="true" aria-label="Hide ${what}"><i class="ph ph-caret-down" aria-hidden="true"></i></button>`;
+      // Processes the agent left running: a bubble beside the collapsed side-chats bubble (hidden while the tray is open).
+      const { bubble: procs, tray: procsTray } = procsHtml(ws);
+      if (procsTray) collapsed = false;
+      const html = procsTray || (parent || !sides.length ? procs
+        : collapsed ? procs + bubble('ph-chat-circle-dots', sides.length)
+        : `<span class="thr-sides-label thr-sides-label-icon"><i class="ph ph-chats-circle" aria-hidden="true"></i>Side chats</span>${sides.map((x, i) => `<div class="thr-side-row" style="--i:${i}">${chip(x, 'ph-chat-circle-dots', i)}`
           + `<button type="button" class="thr-side-del" data-del-side="${escHtml(x.id)}" aria-label="Delete side chat “${escHtml(x.chat?.title || x.label || 'Side chat')}”" data-tip="Delete side chat"><i class="ph ph-trash" aria-hidden="true"></i></button></div>`).join('')}`
-          + `<button type="button" class="thr-sides-toggle" aria-expanded="true" aria-label="Hide ${what}"><i class="ph ph-caret-down" aria-hidden="true"></i></button>`;
+          + hide);
       sidesEl.hidden = !html;
-      sidesEl.classList.toggle('collapsed', collapsed);
-      if (sidesEl._html !== html) { sidesEl._html = html; sidesEl.innerHTML = html; }
+      sidesEl.classList.toggle('collapsed', !procsTray && (collapsed || !sides.length));
+      if (sidesEl._html !== html) { sidesEl._html = html; sidesEl.innerHTML = html; armSidesTuck(sidesEl); } // new content shows in full first
+      // At the top: whose side chat (or subagent) this is, its name truncated, a click away.
+      const parentEl = thrChip('parent');
+      if (parentEl) {
+        const name = parent ? parent.chat?.title || parent.label || 'Thread' : '';
+        const wsp = wsOf(ws), inSidePanel = !!(wsp && chatPanelHost(ws, findGroupContainingTerm(wsp.layout, ws.id)));
+        const asTab = !!(wsp && ws.chat?.side?.panel === false && chatPanelHostIn(ws, wsp)); // moved out: can go back
+        const top = parent ? `<button type="button" class="thr-parent-link" data-side="${escHtml(parent.id)}" title="Go to ${escHtml(name)}">`
+          + `<i class="ph ${sub ? 'ph-robot' : 'ph-chat-circle-dots'}" aria-hidden="true"></i><span class="thr-parent-kind">${sub ? 'Subagent of' : 'Side chat of'}</span>`
+          + `<span class="thr-parent-name">${escHtml(name)}</span><i class="ph ph-arrow-up-right thr-parent-go" aria-hidden="true"></i></button>${useAsContext}`
+          + (inSidePanel ? `<button type="button" class="thr-parent-icon" data-act="to-tab" aria-label="Open in tab" data-tip="Open in tab"><i class="ph ph-arrow-square-out" aria-hidden="true"></i></button>`
+            + `<button type="button" class="thr-parent-icon" data-act="close-panel" aria-label="Hide side chat" data-tip="Hide"><i class="ph ph-x" aria-hidden="true"></i></button>`
+          : asTab ? `<button type="button" class="thr-parent-icon" data-act="to-panel" aria-label="Show beside the thread" data-tip="Show beside the thread"><i class="ph ph-arrow-square-in" aria-hidden="true"></i></button>` : '') : '';
+        parentEl.hidden = !top;
+        if (parentEl._html !== top) { parentEl._html = top; parentEl.innerHTML = top; }
+      }
     }
     const branch = thrChip('branch');
     void refreshChatGitBranch(cwd);
@@ -9977,23 +9518,53 @@
     if (surface === thrPage) syncSendBtn();
   }
 
+  // The bubbles on the composer's edge (side chats, running processes) tuck behind it after 10s without a hover, a
+  // 7px edge left showing; hovering just above the composer brings them back up (workspace.css .thr-sides.tucked).
+  function armSidesTuck(el) {
+    el.classList.remove('tucked');
+    clearTimeout(el._tuckTimer);
+    el._tuckTimer = setTimeout(() => { if (!el.matches(':hover, :focus-within')) el.classList.add('tucked'); }, 10000);
+  }
+  {
+    const el = thrChip('sides');
+    el?.addEventListener('mouseenter', () => { clearTimeout(el._tuckTimer); el.classList.remove('tucked'); });
+    el?.addEventListener('mouseleave', () => armSidesTuck(el));
+    el?.addEventListener('focusin', () => { clearTimeout(el._tuckTimer); el.classList.remove('tucked'); });
+  }
   thrChip('sides')?.addEventListener('click', e => {
-    const back = e.target.closest('.thr-bring-back');
-    if (back) {
-      const chat = curChat();
-      if (!chat) return;
-      back.disabled = true;
-      void bringBackSideChat(chat).finally(() => { back.disabled = false; });
+    const chat = curChat();
+    // Running processes: the bubble, the tray's caret or its header toggles the tray (not remembered).
+    if (chat && (e.target.closest('.thr-procs-bubble') || (chat._procsOpen && e.target.closest('.thr-sides-label')))) {
+      const el = e.currentTarget;
+      chat._procsOpen = !chat._procsOpen;
+      el.classList.remove('anim');
+      syncThreadComposer(chat);
+      void el.offsetWidth; // restart the entry animation, as the side-chats tray does
+      el.classList.add('anim');
+      clearTimeout(el._animEnd); el._animEnd = setTimeout(() => el.classList.remove('anim'), 500);
+      return;
+    }
+    const stop = e.target.closest('.thr-procs-stop');
+    if (chat && stop) {
+      stop.disabled = true;
+      _stoppedByYou.add(Number(stop.dataset.pid)); // the history's "stopped" line says "by you"
+      window.electronAPI?.chatBgStop?.(chat.id, Number(stop.dataset.pid)).catch(() => {}).finally(() => refreshAgentProcCards());
+      return;
+    }
+    if (e.target.closest('.thr-proc-chip')) {
+      const href = e.target.closest('button.thr-link')?.dataset.href;
+      if (href && /^https?:/i.test(href)) openChatWebLink(href, e.shiftKey);
       return;
     }
     // The caret, or anywhere on the open tray's "Side chats" header row.
     if (e.target.closest('.thr-sides-toggle, .thr-sides:not(.collapsed):has(> .thr-sides-toggle) > .thr-sides-label')) {
       const el = e.currentTarget;
       if (el.classList.contains('leaving')) return;
+      const key = el.querySelector('.thr-sides-toggle')?.dataset.store || 'tv-side-chats-expanded';
       let done = false;
       const flip = () => {
         if (done) return; done = true;
-        try { localStorage.getItem('tv-side-chats-expanded') ? localStorage.removeItem('tv-side-chats-expanded') : localStorage.setItem('tv-side-chats-expanded', '1'); } catch {}
+        try { localStorage.getItem(key) ? localStorage.removeItem(key) : localStorage.setItem(key, '1'); } catch {}
         el.classList.remove('leaving', 'anim');
         syncThreadComposer(curChat());
         void el.offsetWidth; // restart the entry animation
@@ -10008,7 +9579,12 @@
     }
     const del = e.target.closest('.thr-side-del');
     if (del) { const t = findChatThread(del.dataset.delSide); if (t) confirmDeleteThread(t, undefined, 'side chat'); return; }
-    const t = findChatThread(e.target.closest('.thr-side-chip')?.dataset.side); if (t) openChatTab(t);
+    const t = findChatThread(e.target.closest('.thr-side-chip')?.dataset.side);
+    if (!t) return;
+    // Opening one folds the tray first (the thread half keeps just the bubble; its snapshot is taken from this state).
+    try { localStorage.removeItem('tv-side-chats-expanded'); } catch {}
+    if (chat) syncThreadComposer(chat);
+    openChatTab(t);
   });
   // Mode chip: the permission modes menu (same as in the model picker); a change applies live where the agent allows it.
   thrChip('mode')?.addEventListener('click', e => {
@@ -10042,7 +9618,7 @@
     const api = window.electronAPI;
     const d = _ghLoginDialog ||= document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'gh-login' }));
     d.setAttribute('aria-labelledby', 'gh-login-title');
-    d.innerHTML = `<div class="gh-login-icon"><i class="ph ph-github-logo" aria-hidden="true"></i></div>
+    d.innerHTML = `<div class="gh-login-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${window.PROC_ICON_PATHS?.github || ""}"/></svg></div>
       <h2 id="gh-login-title">Sign in to GitHub</h2>
       <p class="gh-login-text">Pull requests need a GitHub sign-in. Copy the code, then paste it on GitHub.</p>
       <div class="gh-login-code"><code>····-····</code><button type="button" class="gh-login-copy" aria-label="Copy code" disabled><i class="ph ph-copy" aria-hidden="true"></i></button></div>
@@ -10226,13 +9802,10 @@
       if (openCodeRequested || !found?.opencode || !window.electronAPI?.chatSdkModels) return;
       openCodeRequested = true;
       openCodeLoading = !openCodeCatalogs.has(openCodeCwd);
-      window.electronAPI.chatSdkModels('opencode', found.opencode, openCodeCwd).catch(() => null).then(models => {
+      loadOpenCodeModels(found.opencode, openCodeCwd).then(models => {
         openCodeLoading = false;
-        if (Array.isArray(models)) {
-          openCodeCatalogs.set(openCodeCwd, models);
-          openCodeStatus = models.length ? '' : 'No models from connected OpenCode providers';
-          if (curChat() === ws) syncThreadComposer(ws);
-        } else openCodeStatus = 'Could not load OpenCode models';
+        if (Array.isArray(models)) openCodeStatus = models.length ? '' : 'No models from connected OpenCode providers';
+        else openCodeStatus = 'Could not load OpenCode models';
         if (_modelPicker === pop) render();
       });
     }
@@ -10367,8 +9940,8 @@
       const o = chatOpts(t);
       window.electronAPI.chatSdkSetAccess(t.id, o.access);
       if (t._chatCfg) t._chatCfg.access = o.access;
-      // Codex and Antigravity take model and effort per turn: the session (and its history label) follows the picks.
-      if (['codex', 'antigravity'].includes(_tabAgent.get(t.id))) {
+      // Codex, OpenCode and Antigravity take model and effort per turn: the session (and its history label) follows the picks.
+      if (['codex', 'opencode', 'antigravity'].includes(_tabAgent.get(t.id))) {
         if (t._chatCfg) Object.assign(t._chatCfg, { model: o.model, effort: o.effort, fast: o.fast });
         if (t._chatSeg) Object.assign(t._chatSeg, { model: o.model, effort: o.effort });
       }
@@ -10377,7 +9950,7 @@
         let attachments = [];
         if (t._sdk.harness === 'codex') {
           attachments = images.map(file => file.path);
-        } else if (t._sdk.harness === 'claude') {
+        } else if (t._sdk.harness === 'claude' || t._sdk.harness === 'opencode') {
           for (const file of images) {
             const image = await window.electronAPI.readImageFile(file.path);
             if (!image?.data) throw Error('Could not attach image ' + file.name);
@@ -10664,13 +10237,13 @@
           latest = [...segs].reverse().find(s => s.used || s.sessionId) || latest;
         }
         if (!findTermById(tab.id)) return false;
-        if (latest?.frozen) throw Error('Send a message in this fork first to create its own agent session.');
+        if (unresumable(latest)) throw Error(latest.frozen ? 'Send a message in this fork first to create its own agent session.' : 'Send a message to continue this subagent in its own session.');
         if (latest?.used && !latest.sessionId) throw Error('The saved session could not be found. Send a message in chat to continue with its saved history.');
         const current = chatOpts(tab);
         const options = latest ? { harness: latest.harness, model: latest.model || 'default', effort: latest.effort || 'default',
           access: current.harness === latest.harness ? current.access : 'default' } : current;
         if (!harnessOf(options.harness) || !CHAT_AGENTS[options.harness]) throw Error('This chat’s agent harness is unavailable.');
-        if (latest?.sessionId && !['claude', 'codex', 'antigravity'].includes(options.harness)) throw Error(`Session resume is not supported for ${harnessOf(options.harness).name} yet.`);
+        if (latest?.sessionId && !['claude', 'codex', 'antigravity', 'opencode'].includes(options.harness)) throw Error(`Session resume is not supported for ${harnessOf(options.harness).name} yet.`);
         const started = await startChatAgent(tab, tab, null, null, { terminalOnly: true, resumeSegment: latest?.sessionId ? latest : null, options });
         if (!started) noteInTerminal(tab, `Could not start ${harnessOf(options.harness)?.name || 'the agent'} here. Check Settings › Providers, then switch views to try again.`);
         return started;
@@ -10697,6 +10270,9 @@
     }
     return name;
   }
+  // Sessions a new agent can't resume, so it starts its own with their history handed over: a fork's copied
+  // sessions, and a Claude Code subagent (its segment names the parent's session; an OpenCode subagent is its own).
+  const unresumable = s => !!s && (s.frozen || (s.subagent && s.harness === 'claude'));
   async function startChatAgent(ws, chatTab, text, replace, launch = {}) {
     const o = launch.options || chatOpts(ws), h = harnessOf(o.harness);
     const cancelled = () => launch.pending?.cancelled;
@@ -10707,7 +10283,7 @@
     const oldSeg = replace?._chatSeg;
     const lastUsed = [...segs].reverse().find(x => x.used);
     const resumeSeg = launch.resumeSegment || (replace ? ((replace._chatSent || oldSeg?.used) ? oldSeg : null)
-      : lastUsed?.harness === o.harness && !lastUsed.frozen ? lastUsed : null);
+      : lastUsed?.harness === o.harness && !unresumable(lastUsed) ? lastUsed : null);
     const resumeSid = resumeSeg?.sessionId || null;
     const sid = resumeSid || (o.harness === 'claude' ? uuid() : null);
     // A side chat's first session forks the main thread's: it starts with what the thread knows.
@@ -10718,6 +10294,13 @@
     if (!resumeSid && lastUsed && window.electronAPI?.threadHandoff) {
       try { handoff = await window.electronAPI.threadHandoff({ ...threadMeta(ws), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); }
       catch { zoomBadge('Could not write the history for the new agent'); }
+    }
+    // A side chat on another agent than its thread's (Settings > Threads) can't fork the session: it gets the
+    // thread's history as a handoff instead, so it still knows what the thread is about.
+    const sideParent = firstSide && !forkSid && side.sessionId ? findThreadByKey(side.parentId) : null;
+    if (!handoff && sideParent && window.electronAPI?.threadHandoff) {
+      try { handoff = await window.electronAPI.threadHandoff({ ...threadMeta(sideParent), names: Object.fromEntries(THREAD_HARNESSES.map(x => [x.id, x.name])) }); }
+      catch { zoomBadge("Could not write the thread's history for the side chat"); }
     }
     // Any other tab still running the session being resumed goes too: one process per session.
     const holders = resumeSeg ? getWorkspaceTerminals(wsOf(ws) || {}).filter(x => x !== replace && x._chatSeg === resumeSeg) : [];
@@ -12359,9 +11942,11 @@
   function autoTitleChat(ws, text, force) {
     const first = ws.chat.title, pick = threadSettings.titles;
     if (pick === 'off' && !force) return Promise.resolve(false); // Regenerate title still works
-    const harness = ['claude', 'codex'].includes(pick) ? pick : chatOpts(ws).harness;
+    // "harness|model" (Settings > Threads > Title generator), "claude"/"codex" (that agent's small model), or the thread's agent.
+    const [pickHarness, model] = (pick || '').split('|');
+    const harness = ['claude', 'codex'].includes(pickHarness) ? pickHarness : chatOpts(ws).harness;
     ws._titling = true; renderThreadsSidebar(); // its card's title shimmers meanwhile
-    return (window.electronAPI?.chatTitle?.(harness, text) || Promise.resolve(null)).then(t => {
+    return (window.electronAPI?.chatTitle?.(harness, text, model || undefined) || Promise.resolve(null)).then(t => {
       if (!t || (!force && ws.chat?.title !== first)) return false;
       ws.chat.title = t; setChatTabLabel(ws); saveState();
       return true;
@@ -12435,7 +12020,7 @@
       if (ws._terminalSessionOpening) await ws._terminalSessionOpening;
       if (findTermById(ws.id)?.term !== ws) return false;
       try { await ensureThreadBranch(ws, liveThreadAgent(ws)?.cwd || chatCwd(ws)); }
-      catch (err) { noteChatError(ws, err.message || 'Could not check the thread branch'); return false; }
+      catch (err) { (err.toast ? zoomBadge : m => noteChatError(ws, m))(err.message || 'Could not check the thread branch'); return false; }
       if (!ws.chat.title && typed) { ws.chat.title = typed.split('\n')[0].slice(0, 80); setChatTabLabel(ws); autoTitleChat(ws, typed); }
       ws.chat.updatedAt = Date.now();
       const flow = thrPage.querySelector('#sbr-thread-flow');
@@ -12456,7 +12041,7 @@
         const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
         flow.querySelector('.thr-empty')?.remove();
         flow.querySelectorAll('.thr-pending').forEach(el => el.remove());
-        flow.insertAdjacentHTML('beforeend', pendingHtml(ws));
+        flow.insertAdjacentHTML('beforeend', pendingHtml(ws, [...flow.querySelectorAll(':scope > .thr-seg')].at(-1)?.dataset.head || ''));
         flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
         if (atBottom) flow.scrollTop = flow.scrollHeight;
         syncWorking(ws);
@@ -12477,11 +12062,11 @@
           || (picksSame && ((sdk && o.harness !== 'antigravity') || cfg.access === o.access)))));
       if (same && agentLocked(t) && !await waitUnlocked(t)) throw Error('The conversation is still open in another app');
       if (pending.cancelled) return false;
-      const back = ws.chat.bringBack && !/^\s*\//.test(text) ? _bringBackNote(ws.chat.bringBack) : '';
+      const back = bringBackOf(ws) && !/^\s*\//.test(text) ? _bringBackNote(bringBackOf(ws).file) : '';
       if (same) { if (!await sendToAgent(t, text + back, steer, message.files, pending)) throw Error('The agent closed before the message was sent'); }
       else if (!await startChatAgent(ws, ws, text + back, cfg && cfg.harness === o.harness ? t : null, { files: message.files, pending })) throw Object.assign(Error('Could not start the agent'), { shown: true });
       if (pending.cancelled) return false;
-      if (back) { delete ws.chat.bringBack; saveState(); }
+      if (back) settleBringBack(ws, 'sent', pending.at); // the line goes before this message
       if (ws.chat.interruptedAt && !(ws.chat.interruptions || []).some(item => item.at === ws.chat.interruptedAt)) (ws.chat.interruptions ||= []).push({ at: ws.chat.interruptedAt });
       if (pending.resume) (ws.chat.resumes ||= []).push({ at: pending.at, afterTs: pending.afterTs, ts: pending.resumeTs });
       delete ws.chat.interruptedAt; ws.chat.lastContinueAt = Date.now(); saveState();
@@ -12494,7 +12079,8 @@
       if (!steer) _turns.delete(ws.id);
       _flowSig = '';
       if (curChat() === ws) refreshThreadFlow(ws);
-      if (!err.shown && !pending?.cancelled) noteChatError(ws, err.message || 'Could not send message');
+      if (err.toast) zoomBadge(err.message);
+      else if (!err.shown && !pending?.cancelled) noteChatError(ws, err.message || 'Could not send message');
       return false;
     } finally { _chatSending.delete(ws.id); }
   }
@@ -12512,6 +12098,7 @@
     }
     hydrateChatFiles(queue.flatMap(message => message.files || []), () => updateChatQueue(ws));
     const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
+    const reorder = queue.length > 1; // two or more still waiting: drag one to change the order
     const html = header + queue.map(m => {
       const mergePr = mergePrNumber(m.text);
       const label = mergePr ? `Merge queued for PR #${mergePr}` : queuedMessageTextHtml(m);
@@ -12519,7 +12106,7 @@
         ? `<div class="thr-queued-schedule"><i class="ph ph-timer" aria-hidden="true"></i><span data-countdown-at="${m.sendAt}" role="timer" aria-label="Time remaining"></span></div>`
         : m.sendAt ? `<div class="thr-queued-schedule"><i class="ph ph-clock" aria-hidden="true"></i><span>Scheduled for ${escHtml(new Date(m.sendAt).toLocaleString())}</span></div>` : '';
       const previews = (m.files || []).map((file, i) => !file.image ? '' : `<button type="button" class="thr-queued-preview" data-queue-act="preview" data-file-i="${i}" aria-label="Preview ${escHtml(file.name)}">${file.preview ? `<img src="${escHtml(file.preview)}" alt="${escHtml(file.name)}">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</button>`).join('');
-      return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"><div class="thr-queued-bubble">${schedule}${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${label}</div></div>`
+      return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"${reorder ? ' draggable="true" aria-roledescription="draggable message"' : ''}><div class="thr-queued-bubble">${schedule}${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${label}</div></div>`
         + '<div class="thr-queued-actions"><button type="button" data-queue-act="send" aria-label="Send queued message now"><i class="ph ph-arrow-up" aria-hidden="true"></i><span>Send now</span></button><button type="button" data-queue-act="edit" aria-label="Edit queued message"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button><button type="button" data-queue-act="remove" aria-label="Remove queued message"><i class="ph ph-x" aria-hidden="true"></i></button></div></div>';
     }).join('');
     const moved = box.parentElement !== flow || box !== flow.lastElementChild;
@@ -12555,6 +12142,51 @@
       updateChatQueue(ws); saveState();
     } finally { _queueDraining.delete(ws.id); }
   }
+  // Reorder the queue by dragging a message above or below another (a line marks where it lands). Only its own drag
+  // type, never text/plain: the pane would paste that into a terminal. Not while a queued message is being sent.
+  const QUEUE_DRAG = 'application/x-terminalvibe-queue';
+  let _queueDrag = null; // { ws, id }
+  const clearQueueDrop = () => thrPage.querySelectorAll('.thr-queued-message:is(.drop-before, .drop-after)').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+  onThreadPage('dragstart', e => {
+    const row = e.target.closest?.('.thr-queued-message[draggable="true"]'), ws = curChat();
+    if (!row || !ws?.chat || !thrPage.contains(row)) return;
+    if (_queueDraining.has(ws.id) || _chatSending.has(ws.id)) { e.preventDefault(); return; }
+    _queueDrag = { ws, id: row.dataset.queueId };
+    e.dataTransfer.setData(QUEUE_DRAG, row.dataset.queueId);
+    e.dataTransfer.effectAllowed = 'move';
+    row.classList.add('dragging');
+  });
+  onThreadPage('dragover', e => {
+    if (!_queueDrag) return;
+    e.preventDefault();
+    const row = e.target.closest?.('.thr-queued-message');
+    e.dataTransfer.dropEffect = row ? 'move' : 'none';
+    clearQueueDrop();
+    if (!row || row.dataset.queueId === _queueDrag.id) return;
+    const r = row.getBoundingClientRect();
+    row.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+  });
+  onThreadPage('drop', e => {
+    if (!_queueDrag) return;
+    e.preventDefault(); e.stopPropagation();
+    const row = e.target.closest?.('.thr-queued-message'), { ws, id } = _queueDrag;
+    const before = !!row?.classList.contains('drop-before');
+    clearQueueDrop();
+    if (!row || row.dataset.queueId === id || ws !== curChat()) return;
+    const list = ws.chat.queuedMessages || [], moving = list.find(m => m.id === id);
+    const rest = list.filter(m => m !== moving);
+    let at = rest.findIndex(m => m.id === row.dataset.queueId);
+    if (!moving || at < 0) return;
+    rest.splice(before ? at : at + 1, 0, moving);
+    ws.chat.queuedMessages = rest;
+    saveState();
+    updateChatQueue(ws);
+  });
+  onThreadPage('dragend', () => {
+    thrPage.querySelector('.thr-queued-message.dragging')?.classList.remove('dragging');
+    clearQueueDrop();
+    _queueDrag = null;
+  });
   onThreadPage('click', e => {
     if (!e.target.closest('#sbr-thread-flow')) return;
     const button = e.target.closest('[data-queue-act]'), ws = curChat();
@@ -12701,7 +12333,7 @@
   function threadDraft(t) { return threadHasMessages(t) ? '' : (t.chat?.draft || '').trim(); }
   const allChatTabs = () => [...workspaces.flatMap(ws => getWorkspaceTerminals(ws).filter(t => t.threadHistory && t.chat)), ...closedThreads];
   // Side chats live inside their thread (its chat lists them), never as threads of their own.
-  const chatThreads = () => allChatTabs().filter(t => !t.chat?.side)
+  const chatThreads = () => allChatTabs().filter(t => !t.chat?.side && !t.chat?.subagent)
     .filter(t => threadHasMessages(t) || threadDraft(t));
   // A thread's id that survives closing and reopening its tab.
   const threadKey = t => t.chat?.storeId || t.id;
@@ -12728,10 +12360,12 @@
   function renderThreadsSidebar() {
     if (!tsOpen) return;
     const q = tsSearch.value.trim().toLowerCase();
-    const all = chatThreads().map(threadInfo)
-      .filter(x => !q || `${x.title} ${x.folder} ${x.branch} ${x.openIn?.label || ''}`.toLowerCase().includes(q))
-      .filter(x => tsProject == null || tsProjectKey(x) === tsProject)
-      .sort((a, b) => b.updated - a.updated);
+    const matches = x => (!q || `${x.title} ${x.folder} ${x.branch} ${x.openIn?.label || ''}`.toLowerCase().includes(q))
+      && (tsProject == null || tsProjectKey(x) === tsProject);
+    const all = chatThreads().map(threadInfo).filter(matches).sort((a, b) => b.updated - a.updated);
+    // Side chats get a shelf of their own in the status arrangement only (by project, they stay inside their thread).
+    const sideChats = tsLayout.value === 'project' ? []
+      : allChatTabs().filter(t => t.chat?.side && threadHasMessages(t)).map(threadInfo).filter(matches).sort((a, b) => b.updated - a.updated);
     // T3 Code's sidebar logic: one-line rows ([agent] title [pin] · time, the time giving way to a Settle /
     // Un-settle action on hover); shelves Pinned · Working · the active list · Settled (10, then 25 more per click).
     // Settling is the user's "done": new activity after it brings the thread back to the active list.
@@ -12740,12 +12374,13 @@
     const row = (x, shelf) => {
       const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No project' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
         ...(x.branch ? [{ icon: 'ph-git-branch', text: x.branch }] : []), ...x.models.map(m => ({ proc: m.h.bin, text: m.text })),
-        ...(x.w.chat.forkOf ? [{ icon: 'ph-git-fork', text: `Forked from ${findThreadByKey(x.w.chat.forkOf)?.chat?.title || 'a deleted thread'}` }] : [])];
+        ...(x.w.chat.forkOf ? [{ icon: 'ph-git-fork', text: `Forked from ${findThreadByKey(x.w.chat.forkOf)?.chat?.title || 'a deleted thread'}` }] : []),
+        ...(x.w.chat.side ? [{ icon: 'ph-chats-circle', text: `Side chat of ${findThreadByKey(x.w.chat.side.parentId)?.chat?.title || 'a deleted thread'}` }] : [])];
       const parent = x.w.chat.forkOf && findThreadByKey(x.w.chat.forkOf);
       const forkBtn = parent ? `<button type="button" class="ts-pin ts-fork" data-act="parent" aria-label="Open parent thread" data-tip="Open parent: ${escHtml(parent.chat?.title || parent.label || 'thread')}"><i class="ph ph-git-fork" aria-hidden="true"></i></button>` : '';
       const end = x.work ? (x.work.wait ? 'Waiting' : fmtSecs(Math.max(0, Math.round((Date.now() - x.work.since) / 1000)))) : ago(x.updated);
       clocks.set(x.w.id, { time: ago(x.updated), status: x.work ? (x.work.wait ? end : `Working ${end}`) : '' });
-      const action = shelf === 'project' || x.draft || x.work ? ''
+      const action = shelf === 'project' || shelf === 'sides' || x.draft || x.work ? ''
         : shelf === 'settled' ? '<button type="button" class="ts-act" data-act="unsettle" aria-label="Un-settle thread"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><span class="ts-act-label">Un-settle</span></button>'
         : '<button type="button" class="ts-act" data-act="settle" aria-label="Settle thread"><i class="ph ph-check" aria-hidden="true"></i><span class="ts-act-label">Settle</span></button>';
       const pin = x.w.chat.pinned ? '<button type="button" class="ts-pin" data-act="unpin" aria-label="Unpin thread" data-tip="Unpin thread"><i class="ph ph-push-pin" aria-hidden="true"></i></button>' : '';
@@ -12785,7 +12420,9 @@
         + `<div class="ts-cards">${collapsed ? '' : body()}</div></div>`;
     };
     const shelves = list => {
+      const hiddenShelves = new Set(threadSettings.shelvesHidden || []); // right-click the list to choose
       const shelf = (kind, label, items) => {
+        if (hiddenShelves.has(kind)) return '';
         const folded = kind === 'settled';
         const limit = folded ? tsSettledShown.get(kind) ?? 10 : items.length;
         return section(kind, `<span>${label}</span>`, items.length, () => items.slice(0, limit).map(x => row(x, kind)).join('')
@@ -12796,6 +12433,7 @@
         + shelf('pinned', 'Pinned', list.filter(x => !x.draft && x.w.chat.pinned))
         + shelf('working', 'Working', rest.filter(x => x.work))
         + shelf('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
+        + shelf('sides', 'Side chats', sideChats)
         + shelf('settled', 'Settled', rest.filter(settled).sort((a, b) => b.w.chat.settledAt - a.w.chat.settledAt));
     };
     const byProject = () => {
@@ -12814,8 +12452,9 @@
         return section(id, label, list.length, () => list.map(x => row(x, 'project')).join(''));
       }).join('');
     };
-    const html = all.length
-      ? (tsLayout.value === 'project' ? byProject() : shelves(all))
+    const html = all.length || sideChats.length
+      ? (tsLayout.value === 'project' ? byProject() : shelves(all)
+        || '<div class="ts-empty">All sections are hidden. Right-click here to choose which ones show.</div>')
       : `<div class="ts-empty">${q ? 'No threads match' : tsProject != null ? `No threads in ${escHtml(tsProject === '' ? 'No project' : chatFolderName(tsProject))}` : 'No threads yet. Open a Chat tab in a workspace and send a message.'}</div>`;
     if (tsList.querySelector('.ts-rename')) return; // an inline rename is open: don't rebuild under it
     if (tsList._html !== html) { tsList._html = html; tsList.innerHTML = html; } // rebuild only on change (keeps hover and focus)
@@ -12887,9 +12526,11 @@
   });
   tsList.addEventListener('contextmenu', e => {
     const c = e.target.closest('.ts-card');
-    if (!c) return;
+    if (c) { e.preventDefault(); showCtxMenu(e, 'chat-thread', c.dataset.tab); return; }
+    // Anywhere else in the list (status arrangement): choose which shelves show.
+    if (tsLayout.value === 'project') return;
     e.preventDefault();
-    showCtxMenu(e, 'chat-thread', c.dataset.tab);
+    showCtxMenu(e, 'thread-shelves');
   });
   tsSearch.addEventListener('input', renderThreadsSidebar);
   tsLayout.addEventListener('change', () => {
@@ -13559,7 +13200,8 @@
     }).join(',')
       // Tool outputs grow while they stream: their count and total size catch that without
       // stringifying every output on each refresh (that made switching to long chats lag).
-      + '|' + hist.map(h => { let n = 0, len = 0; for (const m of h.items) if (m.role === 'tool') { n++; len += typeof m.output === 'string' ? m.output.length : (m.output ? JSON.stringify(m.output).length : 0); } return n + ':' + len; }).join(',');
+      + '|' + hist.map(h => { let n = 0, len = 0, subs = ''; for (const m of h.items) if (m.role === 'tool') { n++; len += typeof m.output === 'string' ? m.output.length : (m.output ? JSON.stringify(m.output).length : 0); if (m.agent) subs += m.agent.status[0] + (m.agent.last?.steps || 0); if (m.bg) subs += 'b' + m.bg.status[0] + (m.bg.size || 0); } return n + ':' + len + subs; }).join(',')
+      + (liveThreadAgent(ws) ? '|alive' : '');
     // The sent message shows until the transcript has it (or 60s pass).
     const pending = pendingMessages(ws);
     const resumed = new Set();
@@ -13592,19 +13234,21 @@
     ws._lastUserTs = Math.max(ws._lastUserTs || 0, ...hist.flatMap(h => h.items).filter(m => m.role === 'user').map(m => Date.parse(m.ts) || 0));
     const working = !!chatWorking(ws);
     const awaitingTurnPrompt = !!_turns.get(ws.id)?.awaitingPrompt || remaining.some(p => !p.steer);
-    const sigP = sig + '|r' + [...resumed].join(',') + '|p' + remaining.length + (working ? '|w' : '') + (awaitingTurnPrompt ? '|awaiting-prompt' : '');
+    const ctx = contextLines(ws);
+    const sigP = sig + '|r' + [...resumed].join(',') + '|p' + remaining.length + (working ? '|w' : '') + (awaitingTurnPrompt ? '|awaiting-prompt' : '') + '|c' + ctx.key;
     if (sigP === (surface === thrPage ? _flowSig : flow.dataset.signature)) return;
     if (surface === thrPage) _flowSig = sigP; else flow.dataset.signature = sigP;
     const atBottom = flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     const scrollTop = flow.scrollTop;
     const distanceFromBottom = replacingPreview ? flow.scrollHeight - flow.clientHeight - scrollTop : 0;
+    ws._usedModel = { harness: segs.at(-1)?.harness, model: hist[segs.length - 1]?.usedModel || null }; // for pendingHtml's headers
     const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
     const mountedTools = new Set(Array.from(flow.querySelectorAll('.thr-tools:has(> .thr-tool-list)'), el => el.dataset.key));
     const outputScroll = new Map([...flow.querySelectorAll('details[open] > .thr-tool-output')].map(el => [el.parentElement.dataset.key, { top: el.scrollTop, left: el.scrollLeft }]));
     if (!segs.length || note) {
       flow._historyChunks = undefined;
       flow._imageObserver?.disconnect();
-      flow.innerHTML = (t?.stopped || []).map(p => pendingMessageHtml(p, true)).join('') + pendingHtml(ws) || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
+      flow.innerHTML = (t?.stopped || []).map(p => pendingMessageHtml(p, true)).join('') + pendingHtml(ws, '') || `<div class="thr-empty"><i class="ph ph-chats-circle" aria-hidden="true"></i><div class="thr-empty-title">${note ? escHtml(note) : 'No messages yet'}</div>${note ? '' : '<div>Pick an agent below and send a message to start one, or run an agent CLI in a terminal tab of this workspace.</div>'}</div>`;
       flow.querySelectorAll('img.thr-img').forEach(bindThreadImage);
       renderChatErrors(ws, flow);
       syncWorking(ws, surface);
@@ -13614,7 +13258,7 @@
     if (!segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
       flow._historyChunks = undefined;
       flow._imageObserver?.disconnect();
-      flow.innerHTML = (t?.stopped || []).map(p => pendingMessageHtml(p, true)).join('') + pendingHtml(ws) || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
+      flow.innerHTML = (t?.stopped || []).map(p => pendingMessageHtml(p, true)).join('') + pendingHtml(ws, '') || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
       flow.querySelectorAll('img.thr-img').forEach(bindThreadImage);
       renderChatErrors(ws, flow);
       syncWorking(ws, surface);
@@ -13636,14 +13280,43 @@
     const lazy = new Map(); // data-key -> body of a collapsed tool call or diff, built when it opens
     const lazyBody = (key, html) => { lazy.set(key, html); return ''; };
     let lastHead = '';
-    const addAgentHeader = (opts, fallbackHarness, time) => {
-      const id = opts.harness || fallbackHarness;
-      const agent = harnessOf(id), name = agent?.name || id;
-      const meta = [opts.model, opts.effort].filter(value => value && value !== 'default').join(' · ');
-      const head = name + '|' + meta;
-      if (head === lastHead) return;
-      lastHead = head;
-      html += `<div class="thr-seg" data-head="${escHtml(head)}"${agent?.color ? ` style="--agent-color:${agent.color}"` : ''}>${procIconHtml(agent?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(time)}</span></div>`;
+    // Every header resolves "default" to the transcript's model the same way, so one model never shows as two
+    // alternating headers.
+    const addAgentHeader = (opts, fallbackHarness, time, usedModel) => {
+      const h = agentHead(opts, fallbackHarness, time, usedModel);
+      if (h.head === lastHead) return;
+      lastHead = h.head;
+      html += h.html();
+    };
+    // Background commands (Claude Code's Bash with run_in_background). They end with the agent's session: one still
+    // "running" in a transcript whose agent is gone was stopped with it.
+    const agentAlive = !!liveThreadAgent(ws);
+    const bgState = bg => bg.status === 'running' ? (agentAlive ? 'running' : 'stopped') : bg.status;
+    const BG_ICON = { running: 'ph-circle-notch thr-sub-spin', completed: 'ph-check-circle', failed: 'ph-warning-circle', stopped: 'ph-stop-circle' };
+    const BG_WORD = { running: 'Running in the background', completed: 'Finished in the background', failed: 'Failed in the background', stopped: 'Stopped' };
+    const bgIconHtml = bg => { const s = bgState(bg); return `<i class="ph ${BG_ICON[s]} thr-bg-state ${s}" data-tip="${BG_WORD[s]}" aria-label="${BG_WORD[s]}"></i>`; };
+    // The line where one ended (its own turn: the agent's reply to it follows).
+    const bgEventHtml = m => {
+      const what = m.kind === 'agent' ? 'Background subagent' : 'Background command', code = /exit code (-?\d+)/.exec(m.text || '')?.[1];
+      const detail = [m.title || m.command, code != null && code !== '0' ? `exit code ${code}` : ''].filter(Boolean).join(' · ');
+      return `<div class="thr-status-line thr-bg-line ${m.status}" data-ts="${Date.parse(m.ts) || 0}" role="status"><i class="ph ${BG_ICON[m.status] || BG_ICON.completed}" aria-hidden="true"></i>`
+        + `<span class="thr-status-title">${what} ${m.status === 'completed' ? 'finished' : m.status === 'failed' ? 'failed' : 'stopped'}</span>`
+        + (detail ? `<span class="thr-status-detail" title="${escHtml(m.command || detail)}">· ${escHtml(detail)}</span>` : '') + '</div>';
+    };
+    // At the end of the chat while any run: what, for how long, and (opened) each one's command and latest output.
+    const bgNowHtml = () => {
+      const running = hist.flatMap(h => h.items).filter(m => m.bg && bgState(m.bg) === 'running');
+      if (!running.length) return '';
+      const one = running.length === 1 ? running[0].bg : null;
+      const since = Math.min(...running.map(m => Date.parse(m.bg.startedAt || m.ts) || Date.now()));
+      return `<details class="thr-bg-now" data-key="bg-now"><summary><i class="ph ${BG_ICON.running} thr-bg-icon" aria-hidden="true"></i>`
+        + `<span class="thr-bg-title">Running in the background</span>`
+        + `<span class="thr-bg-what">${one ? `<code>${escHtml(one.description || one.command)}</code>` : `${running.length} commands`}</span>`
+        + `<span class="thr-bg-time">${fmtSecs(Math.max(0, Math.round((Date.now() - since) / 1000)))}</span><i class="ph ph-caret-right thr-bg-caret" aria-hidden="true"></i></summary>`
+        + `<div class="thr-bg-list">${running.map(({ bg }) => `<div class="thr-bg-task">${bg.description ? `<div class="thr-bg-desc">${escHtml(bg.description)}</div>` : ''}`
+          + `<pre class="thr-bg-cmd">${escHtml(bg.command)}</pre>`
+          + (bg.tail?.trim() ? `<pre class="thr-tool-output thr-bg-out" tabindex="0" role="region" aria-label="Latest output">${escHtml(bg.tail.trimEnd())}</pre>` : '<div class="thr-bg-empty">No output yet</div>')
+          + '</div>').join('')}</div></details>`;
     };
     segs.forEach((seg, i) => {
       if (forkNote && !seg.frozen) { html += forkNote; forkNote = ''; lastHead = ''; }
@@ -13651,7 +13324,9 @@
       if (!res.items.length && !res.unsupported) return; // a session with nothing said shows nothing
       const first = res.items[0];
       const firstOptions = first?.role === 'user' && ws.chat?.turnOptions?.[first.ts];
-      addAgentHeader(firstOptions || seg, seg.harness, firstOptions ? first.ts : seg.since);
+      // No model picked (a subagent, the agent's default): the one its transcript says it ran on.
+      const used = (o = {}) => (o.harness || seg.harness) === seg.harness ? res.usedModel : null;
+      addAgentHeader(firstOptions || seg, seg.harness, firstOptions ? first.ts : seg.since, used(firstOptions || seg));
       if (seg.handoff) html += `<div class="thr-note"><i class="ph ph-arrows-left-right" aria-hidden="true"></i>Started with the full history of the ${i} earlier session${i > 1 ? 's' : ''}</div>`;
       if (res.trimmed) html += `<div class="thr-note">${res.trimmed} earlier items not shown</div>`;
       if (res.unsupported) html += `<div class="thr-note">${escHtml(name)} keeps no history TerminalVibe can read yet.</div>`;
@@ -13671,11 +13346,12 @@
           + `<span class="thr-tools-text">${title}</span>${!completed && tools.length > 1 ? `<span class="thr-tools-count">+${tools.length - 1}</span>` : ''}`
           + `${completed ? '' : `<span class="thr-tools-time">${clockTime(last.ts)}</span>`}<i class="ph ph-caret-right thr-tools-caret" aria-hidden="true"></i></summary><template><div class="thr-tool-list">`
           // Each call expands to its command, arguments, or recorded file changes.
-          + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${toolTimestampHtml(x.ts)}${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
+          + tools.map((x, n) => `<details class="thr-tool" data-key="${key}:${n}"><summary><i class="ph ${toolIcon(x.name)}" aria-hidden="true"></i><span class="thr-tool-name">${escHtml(x.name)}</span><span class="thr-tool-sum">${escHtml(x.summary)}</span>${toolTimestampHtml(x.ts)}${x.bg ? bgIconHtml(x.bg) : ''}${x.error ? '<i class="ph ph-warning-circle thr-tool-err" aria-label="Failed"></i>' : ''}<i class="ph ph-caret-right thr-tool-caret" aria-hidden="true"></i></summary>`
             + lazyBody(`${key}:${n}`, () => toolDetailsHtml(x)) + '</details>').join('')
           + '</div></template></details>';
       };
       const msgHtml = (m, key, showActions = true, extra = '') => {
+        if (m.role === 'event') return bgEventHtml(m);
         if (m.role === 'user' && (m.resume || resumed.has(m.ts))) return resumeStatusHtml(Date.parse(m.ts) || 0);
         const mergePr = m.role === 'user' && mergePrNumber(m.text);
         if (mergePr) return mergeStatusHtml(mergePr, Date.parse(m.ts) || 0, false, m.stopped);
@@ -13705,26 +13381,64 @@
         + `<i class="ph ph-caret-down thr-qa-caret" aria-hidden="true"></i></summary>`
         + (x.answer != null ? `<div class="thr-qa-a"><i class="ph ph-arrow-bend-down-right" aria-hidden="true"></i><span>${escHtml(x.answer)}</span></div>`
           : '<div class="thr-qa-a none">Not answered</div>') + '</details>').join('');
-      // A turn's steps in order: thoughts, interim replies, runs of tool calls.
-      const stepsHtml = (list, base, completed = false, changedFiles) => {
-        let out = '', run = [];
-        const totalTools = list.filter(({ m }) => m.role === 'tool' && !m.qa).length;
+      // A subagent (Claude's Agent tool): its status icon, task and one line of progress or report; opens to its
+      // prompt and its own steps. A subagent still "running" in a finished turn was stopped with it.
+      const subState = (a, done) => a.status === 'running' ? (done ? 'stopped' : 'running') : a.status === 'completed' ? 'done' : a.status === 'stopped' ? 'stopped' : 'failed';
+      const SUB_ICON = { running: 'ph-circle-notch thr-sub-spin', done: 'ph-check-circle', failed: 'ph-warning-circle', stopped: 'ph-stop-circle' };
+      const oneLine = s => String(s || '').replace(/[`*_#>]/g, '').replace(/\s+/g, ' ').trim();
+      // The harness logo with the subagent's status icon at its bottom-right.
+      // (a delegated subagent runs on its own harness: its logo)
+      const subAvatar = (state, label, harness) => `<span class="thr-sub-avatar ${state}">${procIconHtml((harnessOf(harness) || h)?.bin || '', 'ph-robot')}`
+        + `<i class="ph ${SUB_ICON[state]} thr-sub-badge" aria-label="${label}"></i></span>`;
+      const subHtml = (m, key, done) => {
+        const a = m.agent, state = subState(a, done), last = a.last;
+        const detail = state === 'running' ? (last?.role === 'tool' ? `${last.name} ${last.summary}` : last?.role === 'thinking' ? 'Thinking' : oneLine(last?.text) || 'Starting')
+          : state === 'stopped' ? 'Stopped' : oneLine(m.output) || oneLine(last?.role === 'assistant' ? last.text : '') || (state === 'failed' ? 'Failed' : 'Done');
+        // Opens the subagent's own thread (openSubagentThread), with every step it took. A delegated subagent that
+        // never started a session (not installed, failed at launch) has no thread to open.
+        const session = a.sessionId || (a.harness ? '' : res.sessionId || '');
+        return `<button type="button" class="thr-sub ${state}" data-key="${key}" data-sub-call="${escHtml(a.toolUseId)}" data-sub-harness="${escHtml(a.harness || seg.harness)}"${a.harness ? ' data-sub-delegated="1"' : ''} data-sub-session="${escHtml(session)}"`
+          + `${a.since ? ` data-sub-since="${a.since}"` : ''} data-sub-title="${escHtml(a.description || 'Subagent')}" data-sub-model="${escHtml(a.model || '')}"`
+          + (session ? ` title="Open ${escHtml([a.type, a.model].filter(Boolean).join(' · ') || 'subagent')} thread">` : ` disabled title="${state === 'running' ? 'Starting' : 'This subagent has no session to open'}">`)
+          + subAvatar(state, state === 'done' ? 'Finished' : state[0].toUpperCase() + state.slice(1), a.harness)
+          + `<span class="thr-sub-main"><span class="thr-sub-title">${escHtml(a.description || 'Subagent')}</span>`
+          + `<span class="thr-sub-detail">${state === 'running' ? `<span class="thr-shimmer">${escHtml(detail)}</span>` : escHtml(detail)}</span></span>`
+          + `${a.ms ? `<span class="thr-sub-time">${fmtSecs(Math.round(a.ms / 1000))}</span>` : ''}<i class="ph ph-caret-right thr-sub-caret" aria-hidden="true"></i></button>`;
+      };
+      // Subagents started together: one "3 subagents" row with a status count, opening to each one.
+      const subsHtml = (subs, done) => {
+        if (subs.length === 1) return subHtml(subs[0].m, subs[0].key, done);
+        const counts = {};
+        for (const { m } of subs) { const s = subState(m.agent, done); counts[s] = (counts[s] || 0) + 1; }
+        const label = { running: 'working', done: 'done', failed: 'failed', stopped: 'stopped' };
+        const status = Object.keys(label).filter(s => counts[s]).map(s => `${counts[s]} ${label[s]}`).join(' · ');
+        return `<details class="thr-subs" data-key="${subs[0].key}:group"><summary>${subAvatar(counts.running ? 'running' : counts.failed ? 'failed' : counts.stopped ? 'stopped' : 'done', status)}`
+          + `<span class="thr-sub-main"><span class="thr-sub-title">${counts.running ? 'Running' : 'Ran'} ${subs.length} subagents</span><span class="thr-sub-detail">${status}</span></span>`
+          + `<i class="ph ph-caret-right thr-sub-caret" aria-hidden="true"></i></summary><div class="thr-subs-list">${subs.map(({ m, key }) => subHtml(m, key, done)).join('')}</div></details>`;
+      };
+      // A turn's steps in order: thoughts, interim replies, runs of tool calls, subagents.
+      const stepsHtml = (list, base, completed = false, changedFiles, pre = i + ':') => {
+        let out = '', run = [], subs = [];
+        const totalTools = list.filter(({ m }) => m.role === 'tool' && !m.qa && !m.agent).length;
         // A run the agent has moved on from is done (summarized) even mid-turn; only the trailing run stays live.
         const flush = (done = true) => {
           // A single run can use the whole turn's diff, including files changed by shell commands.
           if (run.length) out += toolsHtml(run.map(x => x.m), base + ':tools:' + run[0].j, done,
             run.length === totalTools ? changedFiles : undefined);
           run = [];
+          if (subs.length) out += subsHtml(subs, completed);
+          subs = [];
         };
         for (const { m, j } of list) {
           // The agent's question and your answer (a question still open shows in the answer tray instead).
           if (m.role === 'tool' && m.qa) {
-            if (m.qa.some(x => x.answer != null) || m.error) { flush(); out += qaHtml(m, i + ':' + j); }
+            if (m.qa.some(x => x.answer != null) || m.error) { flush(); out += qaHtml(m, pre + j); }
             continue;
           }
-          if (m.role === 'tool') { run.push({ m, j }); continue; }
+          if (m.role === 'tool' && m.agent) { if (run.length) flush(); subs.push({ m, key: pre + j + ':sub' }); continue; }
+          if (m.role === 'tool') { if (subs.length) flush(); run.push({ m, j }); continue; }
           flush();
-          out += m.role === 'thinking' ? thoughtHtml(m, i + ':' + j) : msgHtml(m, i + ':' + j, false);
+          out += m.role === 'thinking' ? thoughtHtml(m, pre + j) : msgHtml(m, pre + j, false);
         }
         flush(completed);
         return out;
@@ -13753,16 +13467,18 @@
       // T3-style turns: the prompt; for a finished turn a collapsible "Worked for 16s" holding its
       // steps, then the final reply and the files it changed. The turn in progress shows its steps live.
       const list = res.items.map((m, j) => ({ m, j: j + (res.previewOffset || 0) }));
-      const firstPrompt = list.findIndex(x => x.m.role === 'user');
+      // A background task ending (role "event") starts a turn of its own, like a prompt: the agent's reply to it follows.
+      const firstPrompt = list.findIndex(x => x.m.role === 'user' || x.m.role === 'event');
       if (firstPrompt !== 0) html += stepsHtml(firstPrompt < 0 ? list : list.slice(0, firstPrompt), i + ':pre', !working || i < segs.length - 1 || firstPrompt > 0); // a resumed session's start
       finishChunk();
       for (let u = firstPrompt; u >= 0 && u < list.length;) {
         let e = u + 1;
-        while (e < list.length && list[e].m.role !== 'user') e++;
+        while (e < list.length && list[e].m.role !== 'user' && list[e].m.role !== 'event') e++;
         const prompt = list[u], rest = list.slice(u + 1, e);
         const live = working && !awaitingTurnPrompt && i === segs.length - 1 && e === list.length;
         const options = ws.chat?.turnOptions?.[prompt.m.ts];
-        if (options) addAgentHeader(options, seg.harness, prompt.m.ts);
+        html += ctx.before(Date.parse(prompt.m.ts) || 0); // side chat context shared before this prompt
+        if (options) addAgentHeader(options, seg.harness, prompt.m.ts, used(options));
         html += msgHtml(prompt.m, i + ':' + prompt.j);
         let fin = -1;
         if (!live) for (let x = rest.length - 1; x >= 0; x--) if (rest[x].m.role === 'assistant') { fin = x; break; }
@@ -13796,7 +13512,14 @@
         u = e;
       }
     });
-    html += forkNote + pendingHtml(ws);
+    // A sent message shows its agent header right away (when it differs from the last one), not once the transcript has it.
+    // Lines after the last prompt (a server the turn started) go after its response and after any message
+    // still waiting for the transcript, so they read in the order they happened.
+    // While the agent is still answering they wait: they show once the response ends, below it.
+    // A pending message repeats the agent header only when the agent/model differs from the last one shown.
+    // Last: a side chat waiting to go with the next message ("Side chat X goes with your next message · Discard").
+    // It's the user's own pending action, so it shows at once, even mid-response.
+    html += forkNote + pendingHtml(ws, forkNote ? '' : lastHead, ctx) + (working ? '' : ctx.before(Infinity)) + ctx.waiting;
     finishChunk();
     const content = updateThreadHistory(flow, chunks);
     const newImages = content.querySelectorAll('img.thr-img');
@@ -13829,6 +13552,7 @@
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
     }));
     content.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
+    content.querySelectorAll('.thr-sub[data-sub-call]').forEach(b => b.addEventListener('click', () => openSubagentThread(ws, b.dataset)));
     content.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
       const list = b.closest('.thr-changes').querySelector('.thr-changes-list');
       const files = [...list.querySelectorAll('details.thr-change')];
@@ -13837,6 +13561,7 @@
       files.forEach(d => { d.open = openAll; });
     }));
     flow.append(content);
+    refreshAgentProcCards();
     renderChatErrors(ws, flow);
     syncWorking(ws, surface);
     if (surface !== thrPage) disableSnapshotHistoryFocus(flow);
@@ -14111,9 +13836,11 @@
   }
   function procIconHtml(name, fallback = 'ph-terminal-window') {
     const key = String(name).toLowerCase().replace(/[\d.]+$/, '');
-    if (key === 'codex') return '<i class="ws-proc-icon ph ph-open-ai-logo"></i>';
     const img = window.PROC_ICON_IMAGES?.[key];
-    if (img) return `<img class="ws-proc-icon" src="${img}" alt="" aria-hidden="true">`;
+    // One-color logos are masks filled with currentColor, so they follow the theme / tint like the SVG paths.
+    if (img) return window.PROC_ICON_MONO?.includes(key)
+      ? `<span class="ws-proc-icon ws-proc-mono" style="--proc-icon:url(${img})" aria-hidden="true"></span>`
+      : `<img class="ws-proc-icon" src="${img}" alt="" aria-hidden="true">`;
     const slug = window.PROC_ICON_ALIAS?.[key];
     const d = slug && window.PROC_ICON_PATHS?.[slug];
     return d ? `<svg class="ws-proc-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`
@@ -14223,6 +13950,74 @@
     });
   }
 
+  // Processes the chat's agent left running (detached servers etc.). Reuses the existing background-card
+  // components (thr-bg-now / thr-bg-list / thr-bg-task / thr-bg-cmd / thr-link) so it looks like part of the
+  // same surface, plus a Stop action per row. Runs in the renderer only (Electron); browser mode has no
+  // electronAPI.chatBgProcs so it's a no-op there.
+  // Shown as a bubble on the composer's edge (next to the side-chats bubble) that opens a dropdown; see
+  // procsHtml in syncThreadComposer. Only the open chat is polled.
+  let _bgProcsBusy = false;
+  const _chatProcs = new Map(); // chat id → { sig, procs }
+  // Polls the open chat plus any chat with processes still running, so a stop is seen even while you're elsewhere.
+  async function refreshAgentProcCards() {
+    if (!window.electronAPI?.chatBgProcs || _bgProcsBusy) return;
+    const chats = new Set([curChat(), ...[..._chatProcs.keys()].map(findChatThread)].filter(t => t?.chat));
+    if (!chats.size) return;
+    _bgProcsBusy = true;
+    try {
+      for (const chat of chats) {
+        let procs;
+        try { procs = await window.electronAPI.chatBgProcs(chat.id) || []; } catch { continue; }
+        logProcEvents(chat, procs);
+        const sig = JSON.stringify(procs.map(p => [p.pid, p.command, p.urls]));
+        if (_chatProcs.get(chat.id)?.sig === sig) continue;
+        if (procs.length) _chatProcs.set(chat.id, { sig, procs }); else _chatProcs.delete(chat.id);
+        if (curChat() === chat) syncThreadComposer(chat);
+      }
+    } finally { _bgProcsBusy = false; }
+  }
+  // The history keeps an audit of the chat's processes: a "started" line when one appears, "stopped" when it goes.
+  // Open ones are derived from the saved events, so a restart doesn't log them again.
+  // ponytail: pid-keyed; a pid reused by the OS between polls would be missed.
+  const _stoppedByYou = new Set();
+  function logProcEvents(chat, procs) {
+    const events = chat.chat.procEvents ||= [];
+    const open = new Map();
+    for (const ev of events) if (ev.kind === 'start') open.set(ev.pid, ev); else open.delete(ev.pid);
+    // During a turn, an event belongs after that turn's prompt even if the poll beat the transcript's timestamp.
+    const turnAt = Math.max(Date.parse(_turns.get(chat.id)?.promptTs) || 0, ...pendingMessages(chat).map(p => p.at || 0));
+    const now = Math.max(Date.now(), turnAt + 1), live = new Set(procs.map(p => p.pid));
+    let changed = false;
+    for (const p of procs) if (!open.has(p.pid)) { events.push({ at: now, kind: 'start', pid: p.pid, command: p.command || '', urls: p.urls || [] }); changed = true; }
+    for (const [pid, ev] of open) if (!live.has(pid)) {
+      events.push({ at: now, kind: 'stop', pid, command: ev.command, urls: ev.urls, ...(_stoppedByYou.delete(pid) ? { by: 'you' } : {}) });
+      changed = true;
+    }
+    // A server's URL can show up a poll after its process: keep the open start event's URLs current.
+    for (const p of procs) { const ev = open.get(p.pid); if (ev && p.urls?.length && !ev.urls?.length) { ev.urls = p.urls; changed = true; } }
+    if (!changed) return;
+    saveState();
+    if (curChat() === chat) refreshThreadFlow(chat);
+  }
+  // Collapsed: a bubble. Open: the same tray as the side chats (header + one row per process), which replaces them.
+  function procsHtml(ws) {
+    const procs = _chatProcs.get(ws.id)?.procs || [];
+    if (!procs.length) { ws._procsOpen = false; return { bubble: '', tray: '' }; }
+    const label = `${procs.length} running process${procs.length === 1 ? '' : 'es'}`;
+    const bubble = `<button type="button" class="thr-sides-bubble thr-procs-bubble" aria-expanded="false" aria-label="Show ${label}" data-tip="Running processes">`
+      + `<i class="ph ph-play thr-shimmer thr-procs-play" aria-hidden="true"></i><span class="thr-sides-count">${procs.length}</span><i class="ph ph-caret-up" aria-hidden="true"></i></button>`;
+    if (!ws._procsOpen) return { bubble, tray: '' };
+    const rows = procs.map((p, i) => {
+      const cmd = escHtml(p.command || 'Process');
+      const urls = (p.urls || []).map(u => `<button type="button" class="thr-link" data-href="${escHtml(u)}" title="${escHtml(u)}">${escHtml(u)}</button>`).join('');
+      return `<div class="thr-side-row thr-proc-row" style="--i:${i}"><div class="thr-side-chip thr-proc-chip" style="--i:${i}"><i class="ph ph-terminal" aria-hidden="true"></i><span title="${cmd}">${cmd}</span>${urls}</div>`
+        + `<button type="button" class="thr-side-del thr-procs-stop" data-pid="${p.pid}" aria-label="Stop process" data-tip="Stop"><i class="ph ph-stop-circle" aria-hidden="true"></i></button></div>`;
+    }).join('');
+    const tray = `<span class="thr-sides-label thr-procs-label"><i class="ph ph-play thr-shimmer" aria-hidden="true"></i><span class="thr-shimmer">Still running</span></span>${rows}`
+      + `<button type="button" class="thr-sides-toggle thr-procs-bubble" aria-expanded="true" aria-label="Hide ${label}"><i class="ph ph-caret-down" aria-hidden="true"></i></button>`;
+    return { bubble, tray };
+  }
+
   /* ═══════════════════════════════════════════════════════════════
    C O*NTEXT MENU
    ═══════════════════════════════════════════════════════════════ */
@@ -14249,7 +14044,21 @@
     };
     const sep = () => { const el = document.createElement('div'); el.className = 'ctx-sep'; ctxEl.appendChild(el); };
 
-    if (type === 'composer') {
+    if (type === 'thread-shelves') {
+      // Which shelves the threads sidebar shows (status arrangement); same toggle list as the composer's menu.
+      for (const [k, label, icon] of THREAD_SHELVES) {
+        const shown = () => !(threadSettings.shelvesHidden || []).includes(k);
+        const el = item(`<i class="ph ${icon}" aria-hidden="true"></i>`, label, '<i class="ph ph-check" aria-hidden="true"></i>', () => {
+          const hidden = new Set(threadSettings.shelvesHidden || []);
+          if (hidden.has(k)) hidden.delete(k); else hidden.add(k);
+          threadSettings = { ...threadSettings, shelvesHidden: [...hidden] };
+          renderThreadsSidebar(); saveState();
+          el.setAttribute('aria-checked', String(shown()));
+        }, false, ctxEl, true);
+        el.setAttribute('role', 'menuitemcheckbox');
+        el.setAttribute('aria-checked', String(shown()));
+      }
+    } else if (type === 'composer') {
       for (const [k, label, icon] of COMPOSER_PARTS) {
         const shown = () => !(threadSettings.composerHidden || []).includes(k);
         const el = item(`<i class="ph ${icon}" aria-hidden="true"></i>`, label, '<i class="ph ph-check" aria-hidden="true"></i>', () => {
@@ -14595,17 +14404,6 @@
       item('<i class="ph ph-x"></i>', 'Close terminal', 'Ctrl+Shift+W', () => removeTerminal(wsId, termId), true);
     }
 
-    // Plugin-provided context-menu items (appended after built-ins)
-    const pluginItems = _pluginMenuItems[type];
-    if (pluginItems && pluginItems.length) {
-      let addedSep = false;
-      for (const it of pluginItems) {
-        if (it.when && !it.when(data)) continue;
-        if (!addedSep) { sep(); addedSep = true; }
-        item(it.icon, escHtml(it.label), '', () => it.handler(data));
-      }
-    }
-
     // Keep menus in the DOM so motion follows the appearance preference.
     // Browser panes are DOM webviews, covered by this overlay's z-index.
     ctxEl.inert = false;
@@ -14681,7 +14479,60 @@
   const promptIconImg = document.getElementById('prompt-icon-img');
   const promptIconClear = document.getElementById('prompt-icon-clear');
   const promptIconFile = document.getElementById('prompt-icon-file');
+  const promptIconGlyph = document.getElementById('prompt-icon-glyph');
+  const promptIconPlaceholder = document.getElementById('prompt-icon-placeholder');
 
+  // A Lucide icon ref: { lucide: name, cp: codepoint } (the codepoint renders it without loading the icon list).
+  const isLucideIcon = v => !!v && typeof v === 'object' && typeof v.lucide === 'string' && Number.isInteger(v.cp);
+  // The icon picker: every Lucide icon (vendor/lucide/names.js, loaded the first time it opens), searchable by name.
+  // A popover 6px below its trigger; Enter picks the first match, Escape closes it (not the dialog under it).
+  let _lucideNames = null, _iconPicker = null;
+  const loadLucideNames = () => _lucideNames ||= new Promise((resolve, reject) => {
+    if (window.LUCIDE_CODEPOINTS) return resolve(window.LUCIDE_CODEPOINTS);
+    const script = document.createElement('script');
+    script.src = 'vendor/lucide/names.js';
+    script.onload = () => resolve(window.LUCIDE_CODEPOINTS || {});
+    script.onerror = () => { _lucideNames = null; reject(Error('Could not load the icon list')); };
+    document.head.append(script);
+  });
+  function closeIconPicker() { _iconPicker?.close(); }
+  async function openIconPicker(anchor, current, pick) {
+    if (_iconPicker) { closeIconPicker(); return; }
+    let names;
+    try { names = await loadLucideNames(); } catch (err) { zoomBadge(err.message); return; }
+    const pop = document.createElement('div');
+    pop.className = 'icon-picker';
+    pop.setAttribute('role', 'dialog'); pop.setAttribute('aria-label', 'Choose an icon');
+    pop.innerHTML = '<label class="icon-picker-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i>'
+      + '<input type="text" placeholder="Search icons" aria-label="Search icons" spellcheck="false" autocomplete="off"></label>'
+      + '<div class="icon-picker-grid" role="listbox" aria-label="Icons"></div><div class="icon-picker-empty" hidden>No icons match</div>';
+    const input = pop.querySelector('input'), grid = pop.querySelector('.icon-picker-grid'), empty = pop.querySelector('.icon-picker-empty');
+    const all = Object.entries(names).sort(([a], [b]) => a.localeCompare(b));
+    const render = () => {
+      const q = input.value.trim().toLowerCase().replace(/\s+/g, '-');
+      const hits = q ? all.filter(([name]) => name.includes(q)) : all;
+      grid.innerHTML = hits.map(([name, cp]) => `<button type="button" class="icon-picker-item${name === current ? ' selected' : ''}" role="option" aria-selected="${name === current}"`
+        + ` data-name="${escHtml(name)}" data-cp="${cp}" aria-label="${escHtml(name)}" data-tip="${escHtml(name)}"><i class="ph" aria-hidden="true">${String.fromCodePoint(cp)}</i></button>`).join('');
+      empty.hidden = !!hits.length;
+    };
+    const choose = btn => { if (!btn) return; pick({ lucide: btn.dataset.name, cp: Number(btn.dataset.cp) }); closeIconPicker(); anchor.focus?.(); };
+    input.addEventListener('input', render);
+    grid.addEventListener('click', e => choose(e.target.closest('.icon-picker-item')));
+    pop.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeIconPicker(); anchor.focus?.(); }
+      else if (e.key === 'Enter' && e.target === input) { e.preventDefault(); e.stopPropagation(); choose(grid.querySelector('.icon-picker-item')); }
+    });
+    const outside = e => { if (!pop.contains(e.target) && !anchor.contains(e.target)) closeIconPicker(); };
+    document.addEventListener('pointerdown', outside, true);
+    _iconPicker = { close: () => { document.removeEventListener('pointerdown', outside, true); pop.remove(); _iconPicker = null; } };
+    render();
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left)) + 'px';
+    pop.style.top = (r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - 6 - h) : r.bottom + 6) + 'px';
+    input.focus();
+    grid.querySelector('.icon-picker-item.selected')?.scrollIntoView({ block: 'center' });
+  }
   function showPrompt(label, value, opts, callback) {
     if (typeof opts === 'function') { callback = opts; opts = {}; }
     promptLabel.textContent = label;
@@ -14747,17 +14598,24 @@
     // object refs ({ phosphor: name }); those pass through untouched and only
     // strings are previewed (assigning an object to img.src would stick a
     // "[object Object]" URL in the preview and lose the real value).
+    // Workspaces (opts.iconPicker) pick a Lucide icon ({ lucide, cp }) from a searchable picker; profiles upload an image.
     let selectedIcon = '';
     const setIcon = (dataUrl) => {
       selectedIcon = dataUrl || '';
       promptIconBtn.classList.toggle('has-icon', !!selectedIcon);
+      promptIconBtn.classList.toggle('has-glyph', isLucideIcon(selectedIcon));
+      promptIconGlyph.textContent = isLucideIcon(selectedIcon) ? String.fromCodePoint(selectedIcon.cp) : '';
       if (typeof selectedIcon === 'string' && selectedIcon) promptIconImg.src = selectedIcon;
       else promptIconImg.removeAttribute('src');
     };
     if (opts.icon !== undefined) {
       promptIconBtn.style.display = '';
       setIcon(opts.icon || '');
-      promptIconBtn.onclick = () => { promptIconFile.value = ''; promptIconFile.click(); };
+      promptIconPlaceholder.className = `ph ${opts.iconPicker ? 'ph-shapes' : 'ph-image'}`;
+      promptIconBtn.title = opts.iconPicker ? 'Choose an icon' : 'Set workspace icon';
+      promptIconBtn.onclick = opts.iconPicker
+        ? () => openIconPicker(promptIconBtn, isLucideIcon(selectedIcon) ? selectedIcon.lucide : '', setIcon)
+        : () => { promptIconFile.value = ''; promptIconFile.click(); };
       promptIconClear.onclick = (e) => { e.stopPropagation(); setIcon(''); };
       promptIconFile.onchange = () => {
         const file = promptIconFile.files && promptIconFile.files[0];
@@ -14790,6 +14648,7 @@
       promptInput.onkeydown = null;
       promptOverlay.onclick = null;
       promptSwatches.forEach(s => { s.onclick = null; });
+      closeIconPicker();
       promptIconBtn.onclick = null;
       promptIconClear.onclick = null;
       promptIconFile.onchange = null;
@@ -14974,6 +14833,20 @@
     return !!group && group.activeTermId === termId && (!ws._maximizedGroupId || ws._maximizedGroupId === group.id);
   }
   window.addEventListener('focus', syncThreadSelection);
+  // The PTY backend sends this the moment an agent CLI exits and its shell takes over. Waiting for the
+  // 1.5s foreground-process poll left the tab icon and the thread's card highlighted as if it still ran.
+  function handleAgentExit({ id } = {}) {
+    const found = findTermById(id);
+    if (!found) return;
+    const t = found.term;
+    _tabAgent.set(t.id, null);
+    t._agentExited = true;
+    t._agentSince = 0;
+    trackTerminalQuestion(t, null);
+    delete t._terminalQuestionKey;
+    syncTabAgentIcon(t);
+    renderThreadsSidebar();
+  }
   function onTerminalFinished({ id, kind, name, completed = kind === 'agent' }) {
     const found = findTermById(id);
     if (!found || (document.hasFocus() && isTermOnScreen(found.ws, id))) return;
@@ -15278,6 +15151,8 @@
       ['Snippets…', 'snippets', 'ph-lightning', () => openPalette('snips')],
       ['Browser history…', null, 'ph-clock-counter-clockwise', () => openPalette('history')],
       ['Next tab', 'nextTab', 'ph-arrow-right', () => nextTab()],
+      ['Move tab right', 'moveTabRight', 'ph-arrow-line-right', () => moveTab(1)],
+      ['Move tab left', 'moveTabLeft', 'ph-arrow-left', () => moveTab(-1)],
       ['Previous tab', 'prevTab', 'ph-arrow-left', () => prevTab()],
       ['Next workspace', 'nextWorkspace', 'ph-caret-double-down', () => nextWorkspace()],
       ['Previous workspace', 'prevWorkspace', 'ph-caret-double-up', () => prevWorkspace()],
@@ -15288,9 +15163,6 @@
       ['Open settings', null, 'ph-gear', () => openSettingsGlobal()],
     ].map(([label, sc, icon, run]) => ({ label, meta: sc ? key(sc) : '', icon, run }));
     for (const w of workspaces) cmds.push({ label: 'Workspace: ' + w.label, meta: '', icon: 'ph-squares-four', run: () => activateWorkspace(w.id) });
-    for (const c of _pluginCommands.values()) {
-      cmds.push({ label: c.label, meta: 'plugin', metaUi: true, icon: 'ph-puzzle-piece', run: () => { try { c.handler(); } catch (e) { console.error('[plugin] command failed:', c.id, e); } } });
-    }
     return cmds;
   }
 
@@ -15398,6 +15270,7 @@
     const finish = () => {
       if (drawer.classList.contains('is-closing')) return;
       drawer.classList.add('is-closing');
+      stopOutside();
       const done = () => drawer.remove();
       drawer.addEventListener('animationend', done, { once: true });
       setTimeout(done, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 250);
@@ -15409,6 +15282,13 @@
     drawer.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); finish(); } });
     // Keep the slot's mousedown focus handling from pulling focus back to the page.
     drawer.addEventListener('mousedown', e => e.stopPropagation());
+    // A click outside closes it: in the app (pointerdown), or in the page, which the app never sees: the <webview>
+    // gets focus then (the drawer's search box had it). Its toolbar button keeps toggling it.
+    const page = contentWrap.querySelector('webview.browser-surface');
+    const outside = e => { if (!drawer.contains(e.target) && !e.target.closest?.('[data-history-toggle]')) finish(); };
+    document.addEventListener('pointerdown', outside, true);
+    page?.addEventListener('focus', finish);
+    const stopOutside = () => { document.removeEventListener('pointerdown', outside, true); page?.removeEventListener('focus', finish); };
     render();
     contentWrap.append(drawer);
     search.focus();
@@ -15842,7 +15722,7 @@
       const accessibleName = select.getAttribute('aria-label');
       if (accessibleName) btn.setAttribute('aria-label', accessibleName + ': ' + text);
       btn.disabled = select.disabled;
-      for (const option of menu.children) {
+      for (const option of menu.querySelectorAll('.custom-dropdown-option')) {
         const selected = option.dataset.value === select.value;
         option.classList.toggle('selected', selected);
         option.setAttribute('aria-selected', String(selected));
@@ -15861,6 +15741,25 @@
       if (select.disabled) return;
       closeActiveDropdown?.();
       menu.replaceChildren();
+      // Long lists (over 10, or <select data-search>) get a search field on top that filters by label.
+      const searchable = select.options.length > 10 || 'search' in select.dataset;
+      if (searchable) {
+        const wrap = document.createElement('label');
+        wrap.className = 'custom-dropdown-search';
+        wrap.innerHTML = '<i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="text" placeholder="Search" aria-label="Search options" spellcheck="false" autocomplete="off">';
+        const input = wrap.querySelector('input');
+        input.setAttribute('aria-controls', menu.id);
+        input.addEventListener('input', () => {
+          const q = input.value.trim().toLowerCase();
+          let shown = 0;
+          for (const item of menu.querySelectorAll('.custom-dropdown-option')) {
+            item.hidden = !!q && !item.textContent.toLowerCase().includes(q);
+            if (!item.hidden) shown++;
+          }
+          menu.querySelector('.custom-dropdown-empty').hidden = !!shown;
+        });
+        menu.append(wrap);
+      }
       for (const option of select.options) {
         const item = document.createElement('div');
         item.className = 'custom-dropdown-option';
@@ -15887,6 +15786,11 @@
         });
         menu.append(item);
       }
+      if (searchable) {
+        const empty = document.createElement('div');
+        empty.className = 'custom-dropdown-empty'; empty.textContent = 'No matches'; empty.hidden = true;
+        menu.append(empty);
+      }
       refresh();
       btn.classList.add('open'); menu.classList.add('open');
       btn.setAttribute('aria-expanded', 'true');
@@ -15912,7 +15816,9 @@
       menu.style.visibility = '';
       const selected = menu.querySelector('[aria-selected="true"]');
       if (selected) menu.scrollTop = Math.max(0, selected.offsetTop - menu.clientHeight / 2);
-      if (keyboard) (selected || menu.firstElementChild)?.focus({ preventScroll: true });
+      const search = menu.querySelector('.custom-dropdown-search input');
+      if (search) search.focus({ preventScroll: true }); // type to filter right away
+      else if (keyboard) (selected || menu.querySelector('.custom-dropdown-option'))?.focus({ preventScroll: true });
       closeActiveDropdown = close;
       openedEvents = new AbortController();
       const signal = openedEvents.signal;
@@ -15926,11 +15832,22 @@
       const isOpen = menu.matches(':popover-open');
       if (e.key === 'Escape' && isOpen) { e.preventDefault(); e.stopPropagation(); close(true); return; }
       if (e.key === 'Tab' && isOpen) { close(true); return; }
+      const visible = () => [...menu.querySelectorAll('.custom-dropdown-option')].filter(item => !item.hidden && item.getAttribute('aria-disabled') !== 'true');
+      // In the search field: typing filters; arrows step into the list; Enter picks the first match.
+      if (isOpen && e.target.matches?.('.custom-dropdown-search input')) {
+        if (e.key === 'Enter') { e.preventDefault(); visible()[0]?.click(); }
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const list = visible(), target = e.key === 'ArrowDown' ? list[0] : list.at(-1);
+          target?.focus({ preventScroll: true }); target?.scrollIntoView({ block: 'nearest' });
+        }
+        return;
+      }
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(e.key)) return;
       if (!isOpen && ['ArrowDown', 'ArrowUp'].includes(e.key)) { e.preventDefault(); open(true); return; }
       if (!isOpen) return; // Native button Enter/Space triggers click.
       e.preventDefault(); e.stopPropagation();
-      const options = [...menu.children].filter(item => item.getAttribute('aria-disabled') !== 'true');
+      const options = visible();
       const index = options.indexOf(document.activeElement);
       if (e.key === 'Enter' || e.key === ' ') { options[index]?.click(); return; }
       const next = e.key === 'Home' ? 0 : e.key === 'End' ? options.length - 1 : (index + (e.key === 'ArrowUp' ? -1 : 1) + options.length) % options.length;
@@ -16016,6 +15933,42 @@
       select.value = [...select.options].some(o => o.value === threadSettings.harness) ? threadSettings.harness : '';
       const dd = document.querySelector('.custom-dropdown[data-for="set-thread-harness"]');
       if (dd) initCustomDropdown(dd);
+      // Side chats: "Same as thread", or one model of an installed agent ("Claude · Opus").
+      const side = document.getElementById('set-thread-side-model');
+      if (!side) return;
+      side.replaceChildren(new Option('Same as thread', ''));
+      for (const h of THREAD_HARNESSES) {
+        if (h.retired || !CHAT_AGENTS[h.id] || !found[h.bin]) continue;
+        const models = h.id === 'opencode' // its catalog is per folder: every one seen so far
+          ? [{ id: 'default', name: 'OpenCode default' }, ...new Map([...openCodeCatalogs.values()].flat().map(m => [m.id, m])).values()]
+          : chatModels(h.id, null);
+        for (const m of models) {
+          const option = new Option(`${h.name} · ${m.id === 'default' ? 'Default' : m.name || m.id}`, `${h.id}|${m.id}`);
+          option.dataset.agent = h.id;
+          side.add(option);
+        }
+      }
+      side.value = [...side.options].some(o => o.value === threadSettings.sideModel) ? threadSettings.sideModel : '';
+      const sideDd = document.querySelector('.custom-dropdown[data-for="set-thread-side-model"]');
+      if (sideDd) initCustomDropdown(sideDd);
+      // Title generator: the thread's agent, a Claude Code or Codex model ("Small model" = Codex picks one), or Off.
+      // (Titles run on those two CLIs only, see main.js chat:title.)
+      const titles = document.getElementById('set-thread-titles');
+      if (titles) {
+        titles.replaceChildren(new Option("The thread's agent", 'agent'));
+        for (const id of ['claude', 'codex']) {
+          const h = harnessOf(id);
+          if (!h || h.retired || !CHAT_AGENTS[id] || !found[h.bin]) continue;
+          const add = (label, value) => { const o = new Option(`${h.name} · ${label}`, value); o.dataset.agent = id; titles.add(o); };
+          if (id === 'codex') add('Small model', 'codex');
+          for (const m of chatModels(id, null)) if (m.id !== 'default') add(m.name || m.id, `${id}|${m.id}`);
+        }
+        titles.add(new Option('Off', 'off'));
+        const legacy = threadSettings.titles === 'claude' ? 'claude|haiku' : threadSettings.titles; // older pick
+        titles.value = [...titles.options].some(o => o.value === legacy) ? legacy : 'agent';
+        const titlesDd = document.querySelector('.custom-dropdown[data-for="set-thread-titles"]');
+        if (titlesDd) initCustomDropdown(titlesDd);
+      }
     };
     render(_chatAgentsFound || {});
     loadChatAgents().then(r => render(r?.found || {}));
@@ -16140,7 +16093,8 @@
 
     // Threads
     refreshThreadHarnessSetting();
-    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown'], ['set-thread-usernames', 'usernames']]) {
+    // (set-thread-titles is filled and set by refreshThreadHarnessSetting, which maps older picks.)
+    for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-side-effort', 'sideEffort'], ['set-thread-folder', 'folder'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown'], ['set-thread-usernames', 'usernames']]) {
       if (key === 'usernames') document.getElementById(id).checked = threadSettings.usernames === 'blur';
       else document.getElementById(id).value = threadSettings[key];
       const dd = document.querySelector(`.custom-dropdown[data-for="${id}"]`);
@@ -16173,7 +16127,6 @@
 
     settingsOverlay.focus({ preventScroll: true });
     syncBrowserSlots();
-    if (cat === 'plugins') renderPluginsSettings();
   }
 
   function closeSettings() {
@@ -16648,7 +16601,6 @@
     settingsSearchStatus.textContent = '';
     settingsOverlay.querySelector('.settings-search-target')?.classList.remove('settings-search-target');
     if (!document.querySelector(`.settings-cat-btn[data-cat="${CSS.escape(cat)}"]`)) cat = 'general';
-    const prevCat = document.querySelector('.settings-cat-btn.active')?.dataset.cat;
     document.querySelectorAll('.settings-cat-btn').forEach(b => { b.classList.toggle('active', b.dataset.cat === cat); b.setAttribute('aria-pressed', String(b.dataset.cat === cat)); });
     document.querySelectorAll('.settings-section[data-cat]').forEach(s => s.classList.toggle('active', s.dataset.cat === cat));
     // Reset scroll to top of the new section
@@ -16657,10 +16609,8 @@
     if (categoryTitle) categoryTitle.textContent = document.querySelector('.settings-cat-btn.active span')?.textContent || 'Settings';
     settingsCategory = cat;
     saveState();
-    if (cat === 'plugins') renderPluginsSettings();
     if (cat === 'skills') renderSkillsSettings();
     if (cat === 'providers') renderProvidersSettings();
-    if (prevCat === 'plugins' && cat !== 'plugins') _pluginsView = { mode: 'list' };
   }
 
   // Category button click handlers
@@ -16750,15 +16700,8 @@
         for (const [k, v] of Object.entries(state.shortcuts)) {
           if (customShortcuts[k]) customShortcuts[k] = v;
         }
+        migrateShortcuts();
         syncBrowserShortcuts();
-      }
-      if (state.pluginStates) {
-        for (const [k, v] of Object.entries(state.pluginStates)) _pluginStates.set(k, !!v);
-      }
-      if (state.pluginConfigs) {
-        for (const [k, v] of Object.entries(state.pluginConfigs)) {
-          if (v && typeof v === 'object') _pluginConfigs.set(k, Object.assign({}, v));
-        }
       }
     } catch { }
   }
@@ -16792,6 +16735,8 @@
     // Tab switching
     if (matchShortcut(e, 'prevTab')) { e.preventDefault(); e.stopPropagation(); prevTab(); return; }
     if (matchShortcut(e, 'nextTab')) { e.preventDefault(); e.stopPropagation(); nextTab(); return; }
+    if (matchShortcut(e, 'moveTabRight')) { e.preventDefault(); e.stopPropagation(); moveTab(1); return; }
+    if (matchShortcut(e, 'moveTabLeft')) { e.preventDefault(); e.stopPropagation(); moveTab(-1); return; }
     // Close terminal
     if (matchShortcut(e, 'closeTerminal')) {
       e.preventDefault(); e.stopPropagation();
@@ -16906,8 +16851,6 @@
       if (e.code === 'ArrowLeft') { e.preventDefault(); prevTab(); return; }
       if (e.code === 'ArrowRight') { e.preventDefault(); nextTab(); return; }
     }
-    // Plugin command combos (last, so built-in shortcuts win)
-    if (dispatchPluginKeydown(e)) return;
   });
 
   const settingsSearchInput = document.getElementById('settings-nav-search');
@@ -17045,7 +16988,6 @@
   async function settingsOnlyBoot() {
     await loadCustomThemes();
     await restoreSettingsOnly();
-    await loadPlugins();
     applyTheme(currentThemeName);
     document.body.classList.add('settings-only');
     openSettings();
@@ -17216,8 +17158,23 @@
   if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
   // Native browser views sit above DOM overlays; hide them while the picker
   // is visible and restore them when it closes, including Escape and switching.
-  const profilePickerObserver = new MutationObserver(() => syncBrowserSlots());
-  profilePickerObserver.observe(document.getElementById('profile-picker'), { attributes: true, attributeFilter: ['style'] });
+  const profilePickerEl = document.getElementById('profile-picker');
+  const profilePickerObserver = new MutationObserver(() => {
+    syncBrowserSlots();
+    btnProfiles?.setAttribute('aria-expanded', String(profilePickerEl.style.display !== 'none' && !!profilePickerEl.style.display));
+  });
+  profilePickerObserver.observe(profilePickerEl, { attributes: true, attributeFilter: ['style'] });
+  // The titlebar's sidebar button shows as on while the workspaces sidebar is pinned open (not a hover peek).
+  {
+    const sb = document.getElementById('sidebar'), btn = document.getElementById('btn-sidebar-toggle');
+    const sync = () => btn?.setAttribute('aria-pressed', String(sb.classList.contains('expanded') && !sb.classList.contains('hover-expanded') && !document.body.classList.contains('sb-hidden')));
+    if (sb && btn) {
+      const watch = new MutationObserver(sync);
+      watch.observe(sb, { attributes: true, attributeFilter: ['class'] });
+      watch.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      sync();
+    }
+  }
 
   // Live agent orchestration. Launch arguments are passed directly to the PTY,
   // never typed into an interactive shell. Running entries survive rearrangement.
@@ -17554,15 +17511,6 @@
     throw new Error('Unknown method');
   }
 
-  // Plugins: open the plugins directory in the OS file manager
-  const pluginsOpenDir = document.getElementById('plugins-open-dir');
-  if (pluginsOpenDir) {
-    pluginsOpenDir.addEventListener('click', () => {
-      const api = configApi();
-      if (api && api.configOpenPluginsDir) api.configOpenPluginsDir();
-    });
-  }
-
   systemColorScheme.addEventListener('change', () => {
     if (currentColorScheme !== 'system') return;
     applyTheme(currentThemeName);
@@ -17682,7 +17630,7 @@
     terminalLinkTarget = e.target.value === 'external' ? 'external' : 'tab';
     saveState();
   });
-  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown'], ['set-thread-usernames', 'usernames']])
+  for (const [id, key] of [['set-thread-harness', 'harness'], ['set-thread-side-model', 'sideModel'], ['set-thread-side-effort', 'sideEffort'], ['set-thread-folder', 'folder'], ['set-thread-titles', 'titles'], ['set-thread-usage', 'usageDisplay'], ['set-thread-markdown', 'markdown'], ['set-thread-usernames', 'usernames']])
     document.getElementById(id).addEventListener('change', e => {
       threadSettings = { ...threadSettings, [key]: key === 'usernames' ? (e.target.checked ? 'blur' : 'show') : e.target.value };
       if (key === 'usernames') {
@@ -18080,30 +18028,38 @@
     activateTerminal(wsp.id, targetGroup.activeTermId || targetGroup.terminals[0].id);
   }
 
-  function prevTab() {
-    const wsp = activeWs();
-    if (!wsp) return;
-    const active = activeTerminal();
-    if (!active) return;
-    const group = findGroupContainingTerm(wsp.layout, active.id);
-    if (!group || group.terminals.length <= 1) return;
-
-    const idx = group.terminals.findIndex(t => t.id === active.id);
-    const prev = group.terminals[(idx - 1 + group.terminals.length) % group.terminals.length];
-    activateTerminal(wsp.id, prev.id);
+  // Ctrl+Shift+PageDown / PageUp: move the selected tab one place right / left in its pane, as browsers do (no wrap).
+  // Steps over side chats shown in a thread's tab (no tab of their own); a focused one moves its thread's tab.
+  function moveTab(dir) {
+    const wsp = activeWs(), active = activeTerminal();
+    const group = wsp && active && findGroupContainingTerm(wsp.layout, active.id);
+    if (!group) return;
+    const tab = chatPanelHost(active, group) || active;
+    const tabs = group.terminals.filter(t => !chatPanelHost(t, group));
+    const neighbour = tabs[tabs.indexOf(tab) + dir];
+    if (!neighbour) return;
+    group.terminals.splice(group.terminals.indexOf(tab), 1);
+    const at = group.terminals.indexOf(neighbour);
+    group.terminals.splice(dir > 0 ? at + 1 : at, 0, tab);
+    renderPaneArea();
+    saveState();
+    document.querySelector(`.tg-tab[data-termid="${CSS.escape(tab.id)}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
-
-  function nextTab() {
+  function prevTab() { stepTab(-1); }
+  function nextTab() { stepTab(1); }
+  // Ctrl+Tab / Ctrl+PageDown and back: through the pane's visible tabs. A side chat shown in its thread's tab has no
+  // tab of its own (syncChatPanels): it's skipped, and counts as its thread's tab when it has focus.
+  function stepTab(dir) {
     const wsp = activeWs();
     if (!wsp) return;
     const active = activeTerminal();
     if (!active) return;
     const group = findGroupContainingTerm(wsp.layout, active.id);
-    if (!group || group.terminals.length <= 1) return;
-
-    const idx = group.terminals.findIndex(t => t.id === active.id);
-    const next = group.terminals[(idx + 1) % group.terminals.length];
-    activateTerminal(wsp.id, next.id);
+    if (!group) return;
+    const tabs = group.terminals.filter(t => !chatPanelHost(t, group));
+    if (tabs.length <= 1) return;
+    const idx = tabs.indexOf(chatPanelHost(active, group) || active);
+    activateTerminal(wsp.id, tabs[(idx + dir + tabs.length) % tabs.length].id);
   }
 
   // Block middle-click paste on tabs (prevents xterm.js from seeing it)
@@ -18307,7 +18263,6 @@
     } finally {
       document.getElementById('splash')?.classList.add('hide');
     }
-    if (!SETTINGS_ONLY) loadPlugins(); // deferred, non-blocking
 
     // Settings live in a separate Electron window; re-apply on any change
     if (isDesktop() && window.electronAPI && window.electronAPI.onSettingsChanged) {
@@ -18319,7 +18274,6 @@
           applyWsProcsSetting();
           renderSidebar();
           syncBrowserSlots();
-          syncPlugins();
           reloadChatAgents();
         });
       });
@@ -18384,6 +18338,7 @@
 
     // Keep the workspace buttons' running-process lists up to date
     setInterval(() => { if (!document.hidden) refreshAllWorkspaceProcs(); }, 1000);
+    setInterval(() => { if (!document.hidden) refreshAgentProcCards(); }, 1000);
 
     // Save on close (browser)
     window.addEventListener('beforeunload', (e) => {

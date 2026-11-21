@@ -87,7 +87,7 @@ body #sidebar.expanded .ws-btn { border-radius:6px !important; }
 - **Focus ring (buttons/checkboxes)**: `box-shadow:0 0 0 2px <surface>, 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent)`.
 - **Lists**: solid `--ui-line` hairlines (never dashed). Rows highlight on hover with a rounded background.
 - **Badges / counts**: quiet. Use transparent or `--ui-hover` with `--dim-text`, and tabular numbers.
-- **Icons**: Phosphor (`<i class="ph ph-…">`, CDN) at 14–16px in `--muted-text`, brightening to `--fg` on hover. Process/server logos come from `procIconHtml(name, fallback)` in `app.js`.
+- **Icons**: Lucide icon font, vendored. Markup keeps the legacy `<i class="ph ph-…">` names; each is aliased to a Lucide glyph in `scripts/build-icons.js` (add a mapping there for a new icon, or it renders blank). Size 14–16px in 14–16px in `--muted-text`, brightening to `--fg` on hover. Process/server logos come from `procIconHtml(name, fallback)` in `app.js`. **Agent harness logos are always transparent PNG files (no background tile) in `icons/harness/<bin>.png`** (downloaded, mapped in `PROC_ICON_IMAGES` at the end of `proc-icons.js`), never inline SVG.
 - **Status**: show state with a real icon (`ph-check-circle`, `ph-warning-circle`, a spinning `ph-circle-notch`) tinted `--ui-success` or `--ui-error`. **Never** use colored dots or glow rings, and avoid labelled pills as state badges. A maximized pane is shown with an accent frame around the pane.
 - **Checkbox**: custom `appearance:none` 16px box with 4px radius (see `.cc-dont-again input`).
 - **Motion**: transitions 120–180ms on `background-color, color, border-color, box-shadow` only. Respect `prefers-reduced-motion`. No animations on terminal paths.
@@ -104,5 +104,5 @@ body #sidebar.expanded .ws-btn { border-radius:6px !important; }
 - Browser tabs are `<webview>` overlays positioned by `syncBrowserSlots()`. Keep resize syncing in the same frame (ResizeObserver callback, not rAF). `settleBrowserSurfaces()` fixes stale guest widths after a resize.
 - Workspace running-process list: `refreshAllWorkspaceProcs()` polls every 1s, and `refreshWorkspaceProcsSoon()` runs on Enter/Ctrl+C/Ctrl+D.
 - Settings dropdowns are custom (`initCustomDropdown`) over a hidden native `<select class="native-select-hidden">`.
-- Tailwind is prebuilt, not loaded from the CDN: a Tailwind class that is new to `index.html`/`app.js` does nothing until `node scripts/build-dist.js` (or `scripts/build-tailwind.js`) regenerates `vendor/tailwind.css`. Phosphor icons are vendored too, so the app makes no network requests at launch.
+- Tailwind is prebuilt, not loaded from the CDN: a Tailwind class that is new to `index.html`/`app.js` does nothing until `node scripts/build-dist.js` (or `scripts/build-tailwind.js`) regenerates `vendor/tailwind.css`. Lucide icons are vendored too, so the app makes no network requests at launch.
 - PTY output is flow-controlled (`electron/pty-flow.js`): every `terminal:data` chunk must be acked with `terminalAck` once written, or its PTY pauses. Use `writePtyData()` in `app.js`.

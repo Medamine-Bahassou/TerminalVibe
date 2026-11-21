@@ -81,7 +81,6 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 .custom-dropdown-btn { background: var(--ui-surface); min-height: 36px; }
 .custom-dropdown-menu { background: var(--ui-surface); }
 .custom-dropdown-option { min-height: 32px; }
-#statusbar { font-size: 11px; background: var(--ui-surface); min-height: 26px; }
 /* Respect both saved corner styles and the existing terminal font controls. */
 body:not(.roundless) #sidebar-inner { gap: 2px; }
 body:not(.roundless) .term-group-tabs { padding: 2px; }
@@ -430,9 +429,8 @@ body #prompt-ok:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
 #settings-modal .shortcuts-search-box { position:relative; min-width:0; }
 #settings-modal .shortcuts-search-box i { left:12px; width:14px; font-size:14px; pointer-events:none; }
 
-/* Cards rendered by JS (theme editor colors/palette, plugins list) */
-#settings-modal #theme-editor-groups > .border,
-#settings-modal #plugins-list { background:var(--ui-sidebar); border-color:var(--ui-line); border-radius:10px !important; padding:4px 16px; margin-bottom:24px; }
+/* Cards rendered by JS (theme editor colors/palette) */
+#settings-modal #theme-editor-groups > .border { background:var(--ui-sidebar); border-color:var(--ui-line); border-radius:10px !important; padding:4px 16px; margin-bottom:24px; }
 #settings-modal #theme-editor-groups > .uppercase { text-transform:none; letter-spacing:0; font-size:14px; font-weight:600; color:var(--fg); margin:24px 12px 12px; }
 #settings-modal #theme-editor-groups .border > .uppercase { text-transform:none; letter-spacing:0; font:600 12px/16px var(--ui-font); color:var(--muted-text); margin:12px 0 4px; }
 #settings-modal #theme-editor-groups .border > .border-t { border-color:var(--ui-line); margin:8px 0; }
@@ -476,11 +474,6 @@ body #prompt-ok:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
 #settings-modal .theme-action-primary { background:var(--accent); border-color:var(--accent); color:#0d1017; }
 #settings-modal .theme-action-primary:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); border-color:transparent; filter:none; }
 #settings-modal .theme-actions { border-color:var(--ui-line); padding-top:16px; gap:8px; }
-#settings-modal .plugin-icon-btn,
-#settings-modal .plugin-back-btn { width:30px; height:30px; border-radius:var(--ui-radius) !important; background:transparent; border-color:transparent; color:var(--muted-text); transition:background-color 150ms, color 150ms; }
-#settings-modal .plugin-icon-btn:hover,
-#settings-modal .plugin-back-btn:hover { background:var(--ui-hover); color:var(--fg); }
-#settings-modal .plugin-icon-btn i { font-size:16px; }
 
 /* Close-confirm dialog: round icon, aligned checkbox, soft focus ring. */
 body #close-confirm-modal .cc-icon { width:36px; height:36px; margin-bottom:16px; border-radius:50% !important; background:color-mix(in srgb,#f07882 14%,transparent); color:#f07882; font-size:20px; }
@@ -658,7 +651,8 @@ body .pp-add .pp-avatar-ph { background:transparent; border:1px dashed var(--bor
 /* Styled tooltip (app.js replaces native title tooltips). */
 .ui-tooltip {
   position:fixed; top:0; left:0; z-index:100000; pointer-events:none;
-  max-width:280px; padding:5px 9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  /* Never truncated: long text wraps (short tips stay on one line). */
+  max-width:min(360px, calc(100vw - 8px)); box-sizing:border-box; padding:5px 9px; white-space:normal; overflow-wrap:anywhere;
   background:var(--ui-surface); color:var(--fg); border:1px solid var(--border); border-radius:6px !important;
   box-shadow:0 6px 18px #0006; font:400 12px/16px var(--ui-font);
   opacity:0; transition:opacity 120ms;
@@ -1040,23 +1034,6 @@ body #servers-dropdown .server-kill:hover { background:color-mix(in srgb,var(--u
 #servers-dropdown .server-entry.failed .server-address { color:var(--ui-error); }
 @media (prefers-reduced-motion: reduce) { #servers-dropdown .server-entry .server-port, body #servers-dropdown .server-kill { transition:none; } }
 
-/* ── Settings → Plugins: same card/row pattern as Skills. No pill badges:
-   state is quiet text; only an error gets an icon + --ui-error. ── */
-#settings-modal #plugins-list { padding:0; gap:0; background:var(--ui-surface); border:1px solid var(--border); border-radius:var(--ui-radius) !important; overflow:hidden; }
-#plugins-list .plugin-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 16px; }
-#plugins-list .plugin-row + .plugin-row { border-top:1px solid var(--ui-line); }
-#plugins-list .plugin-info { display:flex; flex-direction:column; gap:4px; min-width:0; }
-#plugins-list .plugin-name { font:500 13px/20px var(--ui-font); color:var(--fg); }
-#plugins-list .plugin-state { display:inline-flex; align-items:center; gap:4px; margin-left:8px; font:400 11px/16px var(--ui-font); color:var(--muted-text); }
-#plugins-list .plugin-state.error { color:var(--ui-error); }
-#plugins-list .plugin-state i { font-size:13px; }
-#plugins-list .plugin-desc { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:400 12px/18px var(--ui-font); color:var(--muted-text); }
-#plugins-list .plugin-meta { font:400 11px/16px var(--mono-font); color:var(--dim-text); overflow-wrap:anywhere; }
-#plugins-list .plugin-error { font:400 12px/18px var(--ui-font); color:var(--ui-error); overflow-wrap:anywhere; }
-#plugins-list .plugin-controls { display:flex; align-items:center; gap:4px; flex-shrink:0; }
-#plugins-list .plugin-controls label { margin-left:8px; }
-#plugins-list .plugin-empty { padding:16px; font:400 12px/18px var(--ui-font); color:var(--muted-text); }
-@media (max-width:600px) { #plugins-list .plugin-row { flex-wrap:wrap; } }
 
 /* ── Settings → Appearance: global background image picker. Same control
    shape as the dropdown beside it; with an image it shows a thumbnail and an
@@ -1534,7 +1511,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-turn > summary:focus-visible { outline:none; color:var(--fg); }
 #sbr-thread .thr-turn-caret { font-size:11px; transition:transform 140ms; }
 #sbr-thread .thr-turn[open] > summary .thr-turn-caret { transform:rotate(90deg); }
-#sbr-thread .thr-turn-steps { display:flex; flex-direction:column; gap:8px; padding:4px 0 6px; }
+#sbr-thread .thr-turn-steps { display:flex; flex-direction:column; gap:2px; padding:4px 0 6px; }
 
 #sbr-thread .thr-thought { border-radius:8px !important; }
 #sbr-thread .thr-thought > summary { display:flex; align-items:center; gap:8px; min-height:30px; padding:0; list-style:none; border-radius:8px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
@@ -1544,7 +1521,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-thought-label { font-weight:500; flex-shrink:0; }
 #sbr-thread .thr-thought-peek { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--dim-text); }
 #sbr-thread .thr-thought[open] .thr-thought-peek { visibility:hidden; }
-#sbr-thread .thr-thought-caret { font-size:11px; color:var(--dim-text); transition:transform 140ms; transform:rotate(-90deg); }
+#sbr-thread .thr-thought-caret { font-size:14px; color:var(--dim-text); transition:transform 140ms; transform:rotate(-90deg); }
 #sbr-thread .thr-thought[open] .thr-thought-caret { transform:none; }
 #sbr-thread .thr-thought-text { padding:2px 0 8px 22px; font-size:13px; line-height:1.6; color:var(--muted-text); white-space:pre-wrap; overflow-wrap:anywhere; }
 
@@ -1699,7 +1676,7 @@ body .claude-image-viewer .civ-stage { display:flex; align-items:center; justify
 #sbr-thread .thr-cite > i { font-size:13px; flex-shrink:0; }
 #sbr-thread .thr-cite > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent); text-underline-offset:3px; }
 
-/* Shared tooltip rows (data-tip-rows): Phosphor icons sized like the process logos */
+/* Shared tooltip rows (data-tip-rows): icon-font icons sized like the process logos */
 .ui-tooltip .ws-process-tooltip-row > i { font-size:14px; width:14px; flex-shrink:0; color:var(--muted-text); }
 .ui-tooltip .ws-process-tooltip-row > span { overflow-wrap:anywhere; }
 
@@ -1966,7 +1943,6 @@ body .term-group .tg-tab.unsent:hover { background:color-mix(in srgb,var(--ui-wa
 #sbr-thread .thr-sides:not(.collapsed) .thr-sides-label { grid-row:1; grid-column:1; display:flex; align-items:center; min-height:24px; padding-left:6px; }
 #sbr-thread .thr-sides:not(.collapsed) .thr-sides-toggle { grid-row:1; grid-column:2; }
 #sbr-thread .thr-sides:not(.collapsed) .thr-side-chip { grid-column:1 / -1; width:100%; max-width:none; height:30px; justify-content:flex-start; padding:0 8px; text-align:left; }
-#sbr-thread .thr-sides:not(.collapsed) .thr-bring-back { grid-row:1; grid-column:2; width:auto; height:24px; }
 #sbr-thread .thr-bring-back:disabled { opacity:.55; cursor:wait; }
 /* Tray motion (only with UI animations on): it rises from behind the composer, chips follow one by one;
    collapsing sinks it back and the bubble rises in its place. The composer (position:relative) paints over it. */
@@ -2661,7 +2637,7 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 body.thr-hide-attach .thr-composer .thr-attach,
 body.thr-hide-mode .thr-composer .thr-mode-chip,
 body.thr-hide-ctx .thr-composer .thr-ctx-ring { display:none !important; }
-#ctx [data-composer-part][aria-checked="false"] > .ci-key { visibility:hidden; }
+#ctx :is([role="menuitemcheckbox"], [role="menuitemradio"])[aria-checked="false"] > .ci-key { visibility:hidden; }
 /* A plain 28px icon button (hover background); the ring is drawn by ::before so the mask doesn't cut the button. */
 .thr-composer .thr-ctx-ring { display:grid; place-items:center; flex-shrink:0; width:28px; height:28px; margin:0 2px; padding:0; background:transparent; border:0; border-radius:8px !important; cursor:default; transition:background-color 140ms; }
 .thr-composer .thr-ctx-ring:hover { background:var(--ui-hover); }
@@ -2907,3 +2883,260 @@ body .claude-image-viewer .civ-bar button.civ-save:disabled { background:transpa
 /* Annotate › text: typed in place (fixed at the click point, scaled like the image), then drawn into it */
 body .claude-image-viewer .civ-text-input { position:fixed; z-index:1; min-width:140px; padding:0 2px; margin:0; background:color-mix(in srgb,#000 35%,transparent);
   border:1px solid var(--accent); border-radius:4px !important; outline:none; line-height:1.2; caret-color:currentColor; }
+
+/* ── Agent harness logos: transparent PNGs from icons/harness/ (procIconHtml → PROC_ICON_IMAGES).
+   One-color logos (PROC_ICON_MONO) are alpha masks painted in currentColor. ── */
+img.ws-proc-icon { object-fit:contain; }
+.ws-proc-mono { display:inline-block; flex-shrink:0; background-color:currentColor; -webkit-mask:var(--proc-icon) center / contain no-repeat; mask:var(--proc-icon) center / contain no-repeat; }
+
+/* ── Chat subagents (Claude's Agent tool): a two-line row (harness logo + status, task, progress or report, time)
+   that opens the subagent's own read-only thread. Subagents started together share a "N subagents" card. ── */
+#sbr-thread .thr-subs { min-width:0; }
+#sbr-thread :is(button.thr-sub, .thr-subs > summary) { display:flex; align-items:center; gap:10px; width:calc(100% + 16px); min-width:0; min-height:40px; padding:4px 8px; margin:0 -8px; font:inherit; text-align:left; color:inherit; background:none; border:0; list-style:none; border-radius:10px !important; cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-subs > summary::-webkit-details-marker { display:none; }
+#sbr-thread :is(button.thr-sub:not(:disabled), .thr-subs > summary):hover { background:var(--ui-hover); }
+#sbr-thread button.thr-sub:disabled { cursor:default; }
+#sbr-thread button.thr-sub:disabled .thr-sub-caret { visibility:hidden; }
+#sbr-thread :is(button.thr-sub, .thr-subs > summary):focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-sub-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:24px; height:24px; color:var(--fg); }
+#sbr-thread .thr-sub-avatar .ws-proc-icon { width:20px; height:20px; font-size:20px; fill:currentColor; }
+#sbr-thread .thr-sub-badge { position:absolute; right:-3px; bottom:-3px; font-size:12px; line-height:1; color:var(--muted-text); }
+#sbr-thread .thr-sub-avatar.done .thr-sub-badge { color:var(--ui-success); }
+#sbr-thread .thr-sub-avatar.failed .thr-sub-badge { color:var(--ui-error); }
+#sbr-thread .thr-sub-spin { animation:thr-side-spin 1s linear infinite; }
+#sbr-thread .thr-sub-main { display:flex; flex-direction:column; flex:1; min-width:0; }
+#sbr-thread .thr-sub-title { font-size:12.5px; font-weight:500; color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sbr-thread .thr-sub-detail { font-size:11.5px; color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sbr-thread .thr-sub-detail .thr-shimmer { font-weight:400; }
+#sbr-thread .thr-sub.failed .thr-sub-detail { color:var(--ui-error); }
+#sbr-thread .thr-sub-time { flex:none; font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+#sbr-thread .thr-sub-caret { flex:none; color:var(--dim-text); transition:transform 140ms; }
+#sbr-thread :is(button.thr-sub, .thr-subs > summary):hover .thr-sub-caret { color:var(--fg); }
+#sbr-thread .thr-subs[open] > summary .thr-sub-caret { transform:rotate(90deg); }
+#sbr-thread .thr-subs-list { margin:4px 0 6px; padding:4px 12px; background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--ui-line); border-radius:10px !important; }
+@media (prefers-reduced-motion: reduce) {
+  #sbr-thread .thr-sub-spin { animation:none; }
+  #sbr-thread :is(button.thr-sub, .thr-subs > summary), #sbr-thread .thr-sub-caret { transition:none; }
+}
+
+/* ── Chat history: room for the floating composer at the bottom (its height, set by app.js on each chat surface:
+   a thread and its side chat panel are shown together with composers of different heights). ── */
+#sbr-thread .thr-flow { padding-bottom:var(--thr-composer-pad, 20px); }
+
+/* ── Chat: a side chat's or subagent's parent thread, a slim bar above the history. Its name truncates; the whole
+   link goes to that thread. Aligned with the history column. ── */
+#sbr-thread .thr-parent { display:flex; align-items:center; flex-shrink:0; min-height:36px; padding:4px max(16px, calc((100% - 788px) / 2)); border-bottom:1px solid var(--ui-line); }
+#sbr-thread .thr-parent[hidden] { display:none !important; }
+#sbr-thread .thr-parent-link { display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:100%; height:28px; margin-left:-8px; padding:0 8px; background:transparent; border:0; border-radius:6px !important; font:400 12px var(--ui-font); color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-parent-link > i { flex-shrink:0; font-size:14px; color:var(--dim-text); transition:color 140ms; }
+#sbr-thread .thr-parent-link > .thr-parent-go { font-size:13px; }
+#sbr-thread .thr-parent-kind { flex-shrink:0; color:var(--dim-text); }
+#sbr-thread .thr-parent-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; color:var(--fg); }
+#sbr-thread .thr-parent-link:hover { background:var(--ui-hover); }
+/* "Use as context" at the bar's right end (a side chat's only way to hand itself to its thread). */
+#sbr-thread .thr-parent-action { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; height:28px; margin:0 -8px 0 auto; padding:0 8px; background:transparent; border:0; border-radius:6px !important; font:500 12px var(--ui-font); color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-parent-action > i { font-size:14px; }
+#sbr-thread .thr-parent-action:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-parent-action:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-parent-action { transition:none; } }
+/* In the side-chat panel: "Open in tab" and Close at the bar's right end (icon buttons, like the tab bar's). */
+#sbr-thread .thr-parent-icon { display:grid; place-items:center; flex-shrink:0; width:28px; height:28px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-parent-icon > i { font-size:15px; }
+#sbr-thread .thr-parent-link + .thr-parent-icon { margin-left:auto; }
+#sbr-thread .thr-parent-action + .thr-parent-icon { margin-left:4px; }
+#sbr-thread .thr-parent-icon:last-child { margin-right:-8px; }
+#sbr-thread .thr-parent-icon:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-parent-icon:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-parent-icon { transition:none; } }
+#sbr-thread .thr-parent:has(.thr-parent-icon) .thr-parent-action { margin-right:0; }
+
+#sbr-thread .thr-parent-link:hover > i { color:var(--fg); }
+#sbr-thread .thr-parent-link:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-parent-link, #sbr-thread .thr-parent-link > i { transition:none; } }
+
+/* ── Chat: side chat context lines (a status line). The other thread's name is a link (truncated); the main thread's
+   waiting line has Discard. ── */
+#sbr-thread .thr-context-line { flex-wrap:nowrap; min-width:0; }
+#sbr-thread .thr-context-line > :is(.thr-status-title, .thr-context-state, .thr-context-discard, i) { flex-shrink:0; }
+#sbr-thread .thr-context-link { min-width:0; max-width:240px; height:22px; padding:0 4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:transparent; border:0; border-radius:4px !important; font:500 12px var(--ui-font); color:var(--fg); cursor:pointer; transition:background-color 140ms; }
+#sbr-thread .thr-context-link:hover:not(:disabled) { background:var(--ui-hover); }
+#sbr-thread .thr-context-link:disabled { color:var(--muted-text); cursor:default; }
+#sbr-thread .thr-context-link:focus-visible, #sbr-thread .thr-context-discard:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-context-state { color:var(--dim-text); }
+#sbr-thread .thr-context-line.sent i.ph-check-circle { color:var(--ui-success); }
+#sbr-thread .thr-context-line.discarded { opacity:.7; }
+#sbr-thread .thr-context-discard { height:22px; margin-left:4px; padding:0 8px; background:transparent; border:1px solid var(--border); border-radius:6px !important; font:500 11.5px var(--ui-font); color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms, border-color 140ms; }
+/* Discard: gray at rest, red on hover (destructive, as .thr-side-del). */
+#sbr-thread .thr-context-discard:hover { background:color-mix(in srgb,var(--ui-error) 14%,transparent); color:var(--ui-error); border-color:var(--ui-error); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread :is(.thr-context-link, .thr-context-discard) { transition:none; } }
+
+/* ── Chat: background commands (Claude Code's Bash run in the background). A state icon on the call's row, a status
+   line where one ended, and a card at the end of the chat while any run: opened, each command and its latest output. ── */
+#sbr-thread .thr-bg-state { flex:none; font-size:13px; color:var(--dim-text); }
+#sbr-thread .thr-bg-state.completed { color:var(--ui-success); }
+#sbr-thread .thr-bg-state.failed { color:var(--ui-error); }
+#sbr-thread .thr-bg-line { min-width:0; }
+#sbr-thread .thr-bg-line > :is(i, .thr-status-title) { flex-shrink:0; }
+#sbr-thread .thr-bg-line .thr-status-detail { min-width:0; max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sbr-thread .thr-bg-line.completed > i { color:var(--ui-success); }
+#sbr-thread .thr-bg-line.failed > i { color:var(--ui-error); }
+#sbr-thread .thr-bg-now { flex-shrink:0; margin:4px 0; background:color-mix(in srgb,var(--fg) 3%,var(--bg)); border:1px solid var(--ui-line); border-radius:10px !important; }
+#sbr-thread .thr-bg-now > summary { display:flex; align-items:center; gap:8px; min-height:36px; padding:4px 12px; list-style:none; border-radius:10px !important; cursor:pointer; font:400 12.5px var(--ui-font); color:var(--muted-text); transition:background-color 140ms; }
+#sbr-thread .thr-bg-now > summary::-webkit-details-marker { display:none; }
+#sbr-thread .thr-bg-now > summary:hover { background:var(--ui-hover); }
+#sbr-thread .thr-bg-now > summary:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-bg-icon { flex:none; font-size:14px; color:var(--muted-text); }
+#sbr-thread .thr-bg-title { flex:none; font-weight:500; color:var(--fg); }
+#sbr-thread .thr-bg-what { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#sbr-thread .thr-bg-what code { font:400 12px var(--mono-font); color:var(--muted-text); background:none; padding:0; }
+#sbr-thread .thr-bg-time { flex:none; font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+#sbr-thread .thr-bg-caret { flex:none; font-size:13px; color:var(--dim-text); transition:transform 140ms; }
+#sbr-thread .thr-bg-now[open] .thr-bg-caret { transform:rotate(90deg); }
+#sbr-thread .thr-bg-list { display:flex; flex-direction:column; gap:12px; padding:6px 12px 12px; border-top:1px solid var(--ui-line); }
+#sbr-thread .thr-bg-task { display:flex; flex-direction:column; gap:6px; min-width:0; }
+#sbr-thread .thr-bg-desc { font:500 12px var(--ui-font); color:var(--muted-text); }
+#sbr-thread .thr-bg-cmd { margin:0; padding:6px 8px; font:400 12px/1.5 var(--mono-font); color:var(--fg); white-space:pre-wrap; overflow-wrap:anywhere; background:var(--bg); border:1px solid var(--ui-line); border-radius:6px !important; }
+#sbr-thread .thr-tool-output.thr-bg-out { height:auto; max-height:220px; margin:0; padding:6px 8px; overflow:auto; background:var(--bg); border:1px solid var(--ui-line); border-radius:6px !important; }
+#sbr-thread .thr-bg-empty { font-size:12px; color:var(--dim-text); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-bg-now > summary, #sbr-thread .thr-bg-caret { transition:none; } }
+
+/* ── Chat: processes the agent left running — a bubble beside the side-chats bubble; open, the same tray as the
+   side chats (thr-sides rows), one row per process: command, its URL, Stop where the side chat's delete sits. ── */
+/* Same box as the side-chats bubble, which gets its centering and icon size from .thr-sides-toggle (not used here:
+   the side-chats toggle handler reads the first .thr-sides-toggle in the row). */
+#sbr-thread .thr-sides .thr-procs-bubble.thr-sides-bubble { align-items:center; margin-right:4px; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-sides .thr-procs-bubble.thr-sides-bubble:hover { color:var(--fg); }
+#sbr-thread .thr-procs-bubble > i { font-size:13px; line-height:1; }
+/* Running: a play glyph with the same shimmer sweep as "Thinking" (.thr-shimmer), not a spinner. */
+#sbr-thread .thr-procs-bubble > .thr-procs-play { font-weight:400; }
+/* The open tray's header ("▷ Still running") shimmers the same way. */
+#sbr-thread :is(.thr-procs-label, .thr-sides-label-icon) { gap:6px; }
+#sbr-thread .thr-sides-label-icon > i { font-size:13px; }
+#sbr-thread .thr-procs-label > .thr-shimmer { font-weight:400; }
+#sbr-thread .thr-procs-label > i { font-size:13px; }
+#sbr-thread .thr-procs-bubble:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+/* Room for Stop at the right (it sits on the row like .thr-side-del): the tray's `padding:0 8px` chip rule outranks the
+   side-row padding, so the URL ran under it. */
+#sbr-thread .thr-sides:not(.collapsed) .thr-proc-row .thr-proc-chip { cursor:default; padding-right:36px; }
+#sbr-thread .thr-proc-chip > span { font:400 12px var(--mono-font); }
+/* Their audit in the history: one status line per run of starts or stops, "Stopped  127.0.0.1:4096, python server.py  by user".
+   The items share one ellipsis; full commands are in each item's tooltip. */
+#sbr-thread .thr-proc-line .thr-proc-items { display:block; flex:0 1 auto; min-width:0; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:400 11.5px var(--mono-font); color:var(--muted-text); }
+#sbr-thread .thr-proc-items .thr-link { font:inherit; overflow-wrap:normal; }
+#sbr-thread .thr-proc-sep { margin-right:6px; color:var(--dim-text); }
+#sbr-thread .thr-proc-line.start > i { color:var(--ui-success); }
+#sbr-thread .thr-proc-chip > .thr-link { flex:none; margin-left:auto; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:400 11.5px var(--mono-font); overflow-wrap:normal; }
+
+/* ── Side chat panel inside its thread's tab (like the Ctrl+J terminal, but on the right): the thread's slot and the
+   side chat's slot share the pane, 60/40; the side chat's own tab is hidden (app.js syncChatPanels). ── */
+.term-slot.chat-panel-on { display:block !important; }
+.term-slot.chat-panel-host { right:var(--chat-panel-width, 40%); }
+.term-slot.chat-panel-guest { left:calc(100% - var(--chat-panel-width, 40%)); border-left:1px solid var(--ui-line); }
+.tg-tab.tg-in-panel { display:none !important; }
+/* The thread half stays visible while you type in the side chat (it's then the hidden "warm" slot of the rule above). */
+.term-slot.chat-panel-on.chat-keep-layout:not(.chat-cli)[style*="display: none"] { visibility:visible; pointer-events:auto; }
+/* Its left edge resizes it (a 6px grab area over the hairline; the hairline turns accent while dragged or focused). */
+.term-slot > .chat-panel-sash { display:none; }
+.term-slot.chat-panel-guest > .chat-panel-sash { display:block; position:absolute; top:0; bottom:0; left:0; width:6px; z-index:20; cursor:col-resize; touch-action:none; outline:none; }
+.term-slot.chat-panel-guest > .chat-panel-sash::after { content:''; position:absolute; top:0; bottom:0; left:0; width:1px; background:transparent; transition:background-color 140ms; }
+.term-slot.chat-panel-guest > .chat-panel-sash:is(:hover, .dragging, :focus-visible)::after { background:var(--accent); }
+body.chat-panel-resizing { cursor:col-resize; user-select:none; }
+body.chat-panel-resizing webview, body.chat-panel-resizing iframe { pointer-events:none; }
+@media (prefers-reduced-motion: reduce) { .term-slot.chat-panel-guest > .chat-panel-sash::after { transition:none; } }
+/* …and the side chat half keeps its resize sash when it's that warm slot (the rule above hides all but the snapshot). */
+.term-slot.chat-panel-guest.chat-keep-layout[style*="display: none"] > .chat-panel-sash { display:block !important; }
+
+/* ── Chat at narrow widths (a side chat panel, a thin split) ── */
+/* The top bar: "Side chat of" and the "Use as context" label give way to their icons (tooltips keep the words),
+   so the thread's name keeps the room instead of everything drawing over each other. */
+#sbr-thread .thr-parent { container-type:inline-size; }
+#sbr-thread .thr-parent-link { flex:0 1 auto; }
+@container (max-width: 460px) {
+  #sbr-thread .thr-parent-kind, #sbr-thread .thr-parent-go, #sbr-thread .thr-parent-action > span { display:none; }
+  #sbr-thread .thr-parent-action { width:28px; padding:0; justify-content:center; }
+}
+/* History scrolled under the composer stays behind it: the strip under the composer (its footer row and bottom
+   padding) is solid, not transparent, at every width. */
+#sbr-thread:not(.thr-new) .thr-composer-wrap { background:linear-gradient(to bottom, transparent calc(100% - 46px), var(--bg) calc(100% - 46px)); }
+
+/* ── Titlebar toggles show when their panel is open (sidebar, profiles, servers, threads): the on-state of other
+   toggles (--ui-active, as .ts-modes / the image viewer bar), so an open panel's button reads as pressed. ── */
+body .titlebar-btn:is([aria-expanded="true"], [aria-pressed="true"]) { background:var(--ui-active); color:var(--fg); }
+body .titlebar-btn:is([aria-expanded="true"], [aria-pressed="true"]):hover { background:color-mix(in srgb,var(--ui-active) 80%,var(--fg) 8%); }
+
+/* ── Dropdown search (custom dropdowns with over 10 options): the search-field recipe, pinned to the top of the menu
+   while the options scroll under it. ── */
+.custom-dropdown-search { position:sticky; top:-4px; z-index:1; display:flex; align-items:center; margin:-4px -4px 4px; padding:4px; background:inherit; border-bottom:1px solid var(--ui-line); }
+.custom-dropdown-search > i { position:absolute; left:14px; font-size:14px; color:var(--muted-text); pointer-events:none; }
+/* Its padding beats Settings' generic `#settings-modal input[type="text"]` (padding 0 12px), which put text under the icon. */
+.custom-dropdown-search > input { width:100%; height:32px; padding:0 10px 0 32px !important; background:var(--bg); border:1px solid var(--border); border-radius:6px !important; color:var(--fg); font:400 13px var(--ui-font); outline:none; transition:border-color 140ms, box-shadow 140ms; }
+.custom-dropdown-search > input:hover { border-color:var(--muted-text); }
+.custom-dropdown-search > input:focus { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+.custom-dropdown-search > input::placeholder { color:var(--dim-text); }
+.custom-dropdown-option[hidden], .custom-dropdown-empty[hidden] { display:none !important; }
+.custom-dropdown-empty { padding:8px 10px; font:400 12px var(--ui-font); color:var(--dim-text); }
+@media (prefers-reduced-motion: reduce) { .custom-dropdown-search > input { transition:none; } }
+
+/* ── Queued messages: drag one above or below another to reorder (two or more queued). The dragged one fades;
+   an accent line marks where it lands. ── */
+#sbr-thread .thr-queued-message[draggable="true"] .thr-queued-bubble { cursor:grab; }
+#sbr-thread .thr-queued-message.dragging { opacity:.45; }
+#sbr-thread .thr-queued-message.drop-before { box-shadow:inset 0 2px 0 var(--accent); }
+#sbr-thread .thr-queued-message.drop-after { box-shadow:inset 0 -2px 0 var(--accent); }
+
+/* ── Workspace icon: a Lucide glyph chosen in the icon picker (the prompt's icon button previews it) ── */
+#prompt-icon-glyph { display:none; }
+#prompt-icon-btn.has-glyph > #prompt-icon-glyph { display:block; font-size:18px; color:var(--fg); }
+#prompt-icon-btn.has-glyph img { display:none; }
+/* The picker: popover recipe, a search field on top, then a grid of every icon (name in each tooltip). */
+.icon-picker { position:fixed; z-index:10002; display:flex; flex-direction:column; gap:4px; width:316px; padding:4px; background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; box-shadow:0 8px 24px #0005; }
+.icon-picker-search { position:relative; display:flex; align-items:center; }
+.icon-picker-search > i { position:absolute; left:10px; font-size:14px; color:var(--muted-text); pointer-events:none; }
+.icon-picker-search > input { width:100%; height:32px; padding:0 10px 0 32px; background:var(--bg); border:1px solid var(--border); border-radius:6px !important; color:var(--fg); font:400 13px var(--ui-font); outline:none; transition:border-color 140ms, box-shadow 140ms; }
+.icon-picker-search > input:hover { border-color:var(--muted-text); }
+.icon-picker-search > input:focus { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+.icon-picker-search > input::placeholder { color:var(--dim-text); }
+.icon-picker-grid { display:grid; grid-template-columns:repeat(8, 1fr); gap:2px; max-height:248px; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+.icon-picker-item { display:grid; place-items:center; height:36px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+.icon-picker-item > i { font-size:16px; }
+.icon-picker-item:hover, .icon-picker-item.selected { background:var(--ui-hover); color:var(--fg); }
+.icon-picker-item:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+.icon-picker-empty { padding:12px 8px; font:400 12px var(--ui-font); color:var(--dim-text); text-align:center; }
+@media (prefers-reduced-motion: reduce) { .icon-picker-item, .icon-picker-search > input { transition:none; } }
+
+/* ── Composer-edge bubbles tuck away: after 10s untouched they sink behind the composer (it paints over this row),
+   a 7px edge left; hovering the strip above the composer raises them (a taller invisible hover area while tucked). ── */
+#sbr-thread .thr-sides.collapsed .thr-sides-bubble { position:relative; transition:transform 180ms cubic-bezier(.2,.8,.2,1), background-color 140ms, color 140ms; }
+#sbr-thread .thr-sides.collapsed.tucked .thr-sides-bubble { transform:translateY(calc(100% - 7px)); }
+#sbr-thread .thr-sides.collapsed.tucked .thr-sides-bubble::before { content:''; position:absolute; left:0; right:0; bottom:calc(100% - 7px); height:31px; } /* covers the 7px edge too */
+/* Only the bubbles' own spot answers the pointer: not the full-width row, and not the tucked bubble itself (it sits
+   inside the composer then, so hovering the input would raise it). While tucked, the ::before above it is that spot. */
+#sbr-thread .thr-sides.collapsed { pointer-events:none; }
+#sbr-thread .thr-sides.collapsed .thr-sides-bubble { pointer-events:auto; }
+#sbr-thread .thr-sides.collapsed.tucked .thr-sides-bubble { pointer-events:none; }
+#sbr-thread .thr-sides.collapsed.tucked .thr-sides-bubble::before { pointer-events:auto; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-sides.collapsed .thr-sides-bubble { transition:none; } }
+
+/* Tooltip divider between a workspace's tab counts and its running processes. */
+.ui-tooltip .ui-tip-sep { height:1px; margin:6px 0; background:var(--ui-line); }
+
+/* ── Browser tab: find in page (Ctrl+F). The chat's find bar, floating at the page's top right. ── */
+.browser-content > .browser-find { position:absolute; top:8px; right:12px; z-index:6; display:flex; align-items:center; gap:2px; width:min(340px, calc(100% - 24px)); height:34px; padding:0 3px 0 10px;
+  background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; box-shadow:0 8px 24px #0005; transition:border-color 140ms, box-shadow 140ms; }
+.browser-content > .browser-find[hidden] { display:none; }
+.browser-content > .browser-find:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent), 0 8px 24px #0005; }
+.browser-find > i { flex-shrink:0; font-size:14px; color:var(--muted-text); }
+.browser-find input { flex:1; min-width:0; height:100%; padding:0 6px; background:transparent; border:0; outline:none; box-shadow:none; color:var(--fg); font:400 13px var(--ui-font); }
+.browser-find input::placeholder { color:var(--dim-text); }
+.browser-find-count { padding:0 4px; color:var(--dim-text); font:400 11px var(--ui-font); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.browser-find .sbr-btn { width:26px; height:26px; border-radius:6px !important; }
+@media (prefers-reduced-motion: reduce) { .browser-content > .browser-find { transition:none; } }
+
+/* ── Workspaces header buttons (+ / new folder): the threads sidebar's icon buttons (.ts-icon-btn) — muted icon,
+   a --ui-hover tile and --fg on hover, never an accent tint. Rounded only in the expanded sidebar. ── */
+body #sidebar :is(.ws-add, .ws-folder-add-btn) { display:grid; place-items:center; padding:0; background:transparent; border:0; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+body #sidebar.expanded :is(.ws-add, .ws-folder-add-btn) { width:30px; height:30px; border-radius:6px !important; }
+body #sidebar :is(.ws-add, .ws-folder-add-btn):hover { background:var(--ui-hover); color:var(--fg); }
+body #sidebar :is(.ws-add, .ws-folder-add-btn):focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
+@media (prefers-reduced-motion: reduce) { body #sidebar :is(.ws-add, .ws-folder-add-btn) { transition:none; } }

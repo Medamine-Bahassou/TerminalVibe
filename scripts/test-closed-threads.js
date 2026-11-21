@@ -30,7 +30,7 @@ const context = vm.createContext({
   threadSegments: tab => tab.chat?.segments || [],
   findGroupContainingTerm: (layout, id) => layout.terminals.some(t => t.id === id) ? layout : null,
   countGroups: () => 1, removeEmptyGroups: layout => layout,
-  sendControl() {}, afterTabClosePaint(callback) { callback(); }, disposeChatBottomTerminal() {}, _disposeTermRenderers() {}, renderSidebar() {}, pluginEmit() {},
+  sendControl() {}, afterTabClosePaint(callback) { callback(); }, disposeChatBottomTerminal() {}, _disposeTermRenderers() {}, renderSidebar() {},
   activateTerminal: (wsId, id) => { const w = context.findWs(wsId); w.activeTermId = w.layout.activeTermId = id; },
   activateWorkspace: id => { context.activeWsId = id; },
   findFirstGroup: layout => layout, renderPaneArea() {}, syncBrowserSlots() {},

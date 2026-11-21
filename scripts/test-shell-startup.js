@@ -80,7 +80,7 @@ const context = {
   document: { getElementById: () => null },
   getWorkspaceTerminals: ws => all(ws.layout),
   _createTermEntry: (_ws, id, label) => ({ id, label }),
-  renderPaneArea() {}, activateTerminal() {}, renderSidebar() {}, saveState() {}, pluginEmit() {},
+  renderPaneArea() {}, activateTerminal() {}, renderSidebar() {}, saveState() {},
   getSlotDimensions: () => ({ cols: 120, rows: 40 }),
   sendControl: message => {
     assert(all(workspace.layout).some(t => t.id === message.id));

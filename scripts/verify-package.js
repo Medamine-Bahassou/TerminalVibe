@@ -21,6 +21,12 @@ function verifyPackage(archive) {
   console.log('[build] packaged archive integrity verified');
 }
 
-module.exports = context => verifyPackage(path.join(context.appOutDir, 'resources', 'app.asar'));
+module.exports = context => {
+  verifyPackage(path.join(context.appOutDir, 'resources', 'app.asar'));
+  // Agents run the subagent MCP server with the app's own executable: it must be a real file, outside the archive.
+  if (!require('node:fs').existsSync(path.join(context.appOutDir, 'resources', 'app.asar.unpacked', 'electron', 'delegate-mcp.js'))) {
+    throw new Error('electron/delegate-mcp.js is not unpacked (package.json build.asarUnpack)');
+  }
+};
 module.exports.verifyPackage = verifyPackage;
 if (require.main === module) verifyPackage(process.argv[2]);

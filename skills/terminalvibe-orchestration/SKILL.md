@@ -8,6 +8,18 @@ TerminalVibe must be running with agent control support, either the Electron app
 or `npm run dev` with one TerminalVibe browser tab open. The client needs Node.js
 18+. After updating the server, restart dev mode and refresh the browser tab.
 
+## Subagents: use `delegate_task`, not panes
+
+When the user asks for a **subagent** (for example "a codex subagent", "an
+opencode hy4 subagent that says hi", "have claude review this"), and you have
+the TerminalVibe MCP tool `delegate_task` (`mcp__terminalvibe__delegate_task`,
+`terminalvibe_delegate_task` or `terminalvibe.delegate_task`), call it instead
+of this skill: harness `codex`, `claude` or `opencode`, a short description, the
+full prompt, and optionally the model (OpenCode: `provider/model` from
+`opencode models`). It waits for the subagent, returns its report, and the chat
+shows it as a subagent the user can open. Use the panes below only when the user
+asks for a tab, pane, split or terminal, or when that tool is not available.
+
 ## Placement default: reuse the current split
 
 For an ordinary launch, create a **new tab in the existing split**. Preserve the
