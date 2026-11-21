@@ -112,6 +112,7 @@ function codexTurnParams(o = {}) {
     ...(a.approvalPolicy ? { approvalPolicy: a.approvalPolicy, sandboxPolicy: a.sandboxPolicy } : {}), ...(o.serviceTier ? { serviceTier: o.serviceTier } : {}) };
 }
 const CLAUDE_MODE = access => access === 'default' || !access ? 'manual' : access;
+const DELEGATE_TOOL = /terminalvibe[._]+delegate_task$/; // delegate-mcp.js as each agent names it
 
 class Session {
   constructor(key, harness, emit) {
@@ -423,8 +424,10 @@ const ACP_TOOL_DETAIL = 4000;
 // ACP advertises custom slash actions and skills together with these built-in controls.
 const AGY_CONTROLS = new Set(['goal', 'compact', 'schedule', 'browser', 'plan', 'swarm']);
 class AcpSession extends Session {
-  start({ bin, cwd, env, options = {}, resume, clientVersion, transcriptDir, extraArgs = [] }) {
+  start({ bin, cwd, env, options = {}, resume, clientVersion, transcriptDir, extraArgs = [], mcpServers = [] }) {
     this.options = options; this.dir = transcriptDir; this.tools = new Map(); this.buf = null; this.waiting = 0;
+    // TerminalVibe's subagent tool (delegateMcp); an agent that refuses it still opens the session without it.
+    const open = (method, params) => this.rpc(method, { ...params, mcpServers }).catch(err => mcpServers.length ? this.rpc(method, { ...params, mcpServers: [] }) : Promise.reject(err));
     this.cwd = cwd;
     this.commandsReady = new Promise(resolve => { this.resolveCommands = resolve; });
     // Full access is a start flag (it auto-approves every request); the other permissions are the session's modes.
@@ -437,10 +440,10 @@ class AcpSession extends Session {
       let r;
       if (resume) {
         // Resume without replay; an agent that only loads replays the history, which is already recorded.
-        try { r = await this.rpc('session/resume', { sessionId: resume, cwd, mcpServers: [] }); }
-        catch { this.replaying = true; try { r = await this.rpc('session/load', { sessionId: resume, cwd, mcpServers: [] }); } finally { this.replaying = false; } }
+        try { r = await open('session/resume', { sessionId: resume, cwd }); }
+        catch { this.replaying = true; try { r = await open('session/load', { sessionId: resume, cwd }); } finally { this.replaying = false; } }
         this.sessionId = resume;
-      } else { r = await this.rpc('session/new', { cwd, mcpServers: [] }); this.sessionId = r.sessionId; }
+      } else { r = await open('session/new', { cwd }); this.sessionId = r.sessionId; }
       this.config = r?.configOptions || [];
       this.applied = Object.fromEntries(this.config.map(c => [c.id, c.currentValue]));
       if (r?.modes?.currentModeId) this.applied.mode = r.modes.currentModeId;
@@ -488,11 +491,13 @@ class AcpSession extends Session {
     this.tools.clear();
     this.record({ role: 'interrupt', reason: 'crash', text: why || '' });
   }
-  recordTool(t, error) {
-    const input = t.input ?? {};
+  // started: a delegate_task call recorded when it starts (shown running); its end is recorded under the same callId.
+  recordTool(t, error, started = false) {
+    const input = t.input ?? {}, delegated = DELEGATE_TOOL.test(t.name || '');
     this.record({ role: 'tool', name: t.name, summary: short(t.title || toolSummaryOf(input), 200),
       detail: short(typeof input === 'string' ? input : JSON.stringify(input, null, 2), ACP_TOOL_DETAIL),
-      ...(t.output !== undefined ? { output: require('./threads').toolOutput(t.output) } : {}), ...(error ? { error: true } : {}) });
+      ...(delegated ? { input: typeof input === 'string' ? (() => { try { return JSON.parse(input); } catch { return {}; } })() : input, callId: t.id } : {}),
+      ...(!started && t.output !== undefined ? { output: require('./threads').toolOutput(t.output) } : {}), ...(error ? { error: true } : {}) });
   }
   onMessage(m) {
     if (m.id !== undefined && !m.method) {
@@ -528,7 +533,7 @@ class AcpSession extends Session {
       if (u.content?.type === 'text') this.buf.text += u.content.text || '';
     } else if (kind === 'tool_call' || kind === 'tool_call_update') {
       if (kind === 'tool_call') this.flush();
-      const t = this.tools.get(u.toolCallId) || { name: 'tool' };
+      const t = this.tools.get(u.toolCallId) || { name: 'tool', id: u.toolCallId };
       if (u.name || u.kind) t.name = String(u.name || u.kind);
       if (u.title) t.title = String(u.title);
       if (u.rawInput !== undefined || u.args !== undefined) t.input = u.rawInput ?? u.args;
@@ -536,6 +541,7 @@ class AcpSession extends Session {
       else if (u.content !== undefined) t.output = u.content;
       this.tools.set(u.toolCallId, t);
       if (u.status === 'completed' || u.status === 'failed') { this.recordTool(t, u.status === 'failed'); this.tools.delete(u.toolCallId); }
+      else if (!t.started && t.input !== undefined && DELEGATE_TOOL.test(t.name)) { t.started = true; this.recordTool(t, false, true); } // a subagent: shown running
     }
   }
   async listSkills() {
@@ -599,7 +605,7 @@ async function acpProbe(bin, env, cwd, read) {
 }
 const acpProbeModels = (bin, env, cwd) => acpProbe(bin, env, cwd, (_session, result) => result.models || []);
 // Use the detected executable and TerminalVibe's agent environment for the SDK's local server.
-async function withOpenCodeServer(bin, env, cwd, read) {
+async function startOpenCodeServer(bin, env, cwd) {
   const launch = resolveLaunch(bin, ['serve', '--hostname=127.0.0.1', '--port=0']);
   if (!launch) throw Error('Could not launch OpenCode');
   const { createOpencodeClient } = await import('@opencode-ai/sdk/v2/client');
@@ -631,9 +637,276 @@ async function withOpenCodeServer(bin, env, cwd, read) {
       baseUrl, throwOnError: true,
       headers: { Authorization: 'Basic ' + Buffer.from('opencode:' + password).toString('base64') },
     });
-    return await read(client, signal);
-  } finally {
+    return { client, child, signal };
+  } catch (err) {
     child.kill();
+    throw err;
+  }
+}
+async function withOpenCodeServer(bin, env, cwd, read) {
+  const server = await startOpenCodeServer(bin, env, cwd);
+  try {
+    return await read(server.client, server.signal);
+  } finally {
+    server.child.kill();
+  }
+}
+// "provider/model": the provider ends at the first slash, the model may keep its own.
+const openCodeModel = id => typeof id === 'string' && id !== 'default' && id.includes('/')
+  ? { providerID: id.slice(0, id.indexOf('/')), modelID: id.slice(id.indexOf('/') + 1) } : null;
+const openCodeError = err => short(err?.data?.message || err?.message || (typeof err === 'string' ? err : ''), 400);
+// A permission request in the answer tray's shape, and the SDK reply each choice sends back.
+function openCodePermissionAsk(p = {}) {
+  const detail = [...new Set([...(p.patterns || []).map(String), ...(typeof p.metadata?.description === 'string' ? [short(p.metadata.description, 300)] : [])])].slice(0, 4);
+  const options = [{ label: 'Yes' }], replies = ['once'];
+  if (p.always?.length) { options.push({ label: "Yes, and don't ask again" }); replies.push('always'); }
+  options.push({ label: 'No' }); replies.push('reject');
+  return { ask: { question: `Allow ${String(p.permission || 'this action')}?`, detail, options }, replies };
+}
+// Auto replies use "once", never "always": approving a permission must not write a rule into the user's config.
+const openCodeEditPermission = /^(edit|write|patch|multiedit|apply_patch|applypatch)$/i;
+const openCodeAccessReply = (access, permission) => {
+  if (access === 'auto' || access === 'full') return 'once';
+  if (access === 'plan') return 'reject';
+  if (access === 'accept-edits' && openCodeEditPermission.test(String(permission || ''))) return 'once';
+  return null;
+};
+// OpenCode (`opencode serve` + its SDK): the server's events carry messages, tools and questions; the
+// agent's own history is only in its database, so this session records what the chat shows instead.
+class OpenCodeSession extends Session {
+  async start({ bin, cwd, env, options = {}, resume, fork, transcriptDir }) {
+    this.options = options; this.dir = transcriptDir; this.cwd = cwd;
+    this.tools = new Map(); this.parts = new Map(); this.waiting = 0; this.userMsgs = new Set();
+    this.recordedTools = new Set(); this.recordedParts = new Set(); this.queue = Promise.resolve(); this.lastError = null;
+    this.children = new Set(); // subagent (task tool) sessions: their steps are recorded to their own transcript
+    this.startedCalls = new Set(); // delegate_task calls recorded as running
+    const server = await startOpenCodeServer(bin, env, cwd);
+    this.client = server.client; this.server = server.child;
+    this.alive = true;
+    this.server.once('exit', code => {
+      if (!this.alive) return;
+      const midTurn = this.busy;
+      this.alive = this.busy = false; this.asks.clear();
+      this.abortEvents?.abort();
+      this.emit('exit', { code, error: code ? `OpenCode exited with code ${code}` : null, midTurn });
+    });
+    this.abortEvents = new AbortController();
+    this.consume(this.abortEvents.signal);
+    let r;
+    try {
+      if (resume) r = await this.client.session.get({ sessionID: resume, directory: cwd });
+      else if (fork) r = await this.client.session.fork({ sessionID: fork, directory: cwd });
+      else r = await this.client.session.create({ directory: cwd });
+    } catch (err) {
+      this.stop();
+      throw Error(err.message || 'Could not open the OpenCode session');
+    }
+    const info = r?.data;
+    if (!info?.id) { this.stop(); throw Error('OpenCode did not open a session'); }
+    this.sessionId = info.id;
+    this.emit('session', { sessionId: this.sessionId });
+    return { ok: true, sessionId: this.sessionId };
+  }
+  async consume(signal) {
+    try {
+      const { stream } = await this.client.event.subscribe({ directory: this.cwd }, { signal });
+      for await (const event of stream) {
+        if (!this.alive) break;
+        this.onEvent(event);
+      }
+    } catch (err) {
+      if (this.alive && !signal.aborted) this.lastError ||= err.message || 'The OpenCode event stream ended';
+    }
+  }
+  onEvent(event) {
+    const p = event?.properties || {};
+    // A subagent's session only adds its messages and steps (never ends the turn or asks).
+    if (p.sessionID && p.sessionID !== this.sessionId && !(this.children.has(p.sessionID) && /^message\.(updated|part\.updated)$/.test(event.type))) return;
+    if (event.type === 'message.updated') {
+      if (p.info?.role === 'user') this.userMsgs.add(p.info.id);
+      // The assistant message is complete after its last text delta — flush before the UI reads the transcript.
+      else if (p.info?.role === 'assistant' && (p.info.time?.completed || p.info.finish)) this.flushParts();
+    } else if (event.type === 'message.part.updated') {
+      this.onPart(p.part || {});
+    } else if (event.type === 'permission.asked') {
+      this.onPermission(p);
+    } else if (event.type === 'permission.replied' || event.type === 'question.replied' || event.type === 'question.rejected') {
+      for (const [id, a] of this.asks) if (a.requestId === p.requestID) { this.asks.delete(id); this.emit('ask-done', { id }); }
+    } else if (event.type === 'question.asked') {
+      this.onQuestion(p);
+    } else if (event.type === 'session.error') {
+      this.lastError = openCodeError(p.error) || this.lastError;
+    } else if (event.type === 'session.status') {
+      const st = p.status || {};
+      if (st.type === 'idle') {
+        // A prompt that ends without its reply resolving still ends the turn here.
+        if (!this.inPrompt && this.waiting) this.endTurn(this.lastError || null);
+      } else if (st.type === 'retry') {
+        const msg = short(st.message || st.action?.message || 'OpenCode could not continue', 400);
+        // A retry with an action (quota, auth) never recovers: say why instead of spinning forever.
+        if (st.action && this.waiting) this.endTurn(msg);
+        else this.lastError ||= msg;
+      }
+    } else if (event.type === 'session.idle') {
+      if (!this.inPrompt && this.waiting) this.endTurn(this.lastError || null);
+    }
+  }
+  onPart(part) {
+    if (part.messageID && this.userMsgs.has(part.messageID)) return; // the prompt's own echo
+    if (part.type === 'text' || part.type === 'reasoning') {
+      if (part.type === 'text' && (part.synthetic || part.ignored)) return;
+      const role = part.type === 'text' ? 'assistant' : 'thinking';
+      this.parts.set(part.id, { role, text: String(part.text || ''), sid: part.sessionID });
+      // A streamed part's last delta carries time.end. The prompt can resolve before it arrives,
+      // so never rely on the turn end alone to record the answer.
+      if (part.time?.end) this.recordPart(part.id);
+    } else if (part.type === 'tool') {
+      this.tools.set(part.id, part);
+      const status = part.state?.status;
+      // A subagent starting: follow its session, and record the call now so the chat shows it running.
+      const child = part.tool === 'task' && part.state?.metadata?.sessionId;
+      if (child && !this.children.has(child)) {
+        this.children.add(child);
+        if (status === 'running') this.recordTool(part, true);
+        const prompt = part.state?.input?.prompt;
+        if (prompt) this.record({ role: 'user', text: String(prompt) }, child);
+      }
+      // A delegated subagent (TerminalVibe's delegate_task): shown running too.
+      if (DELEGATE_TOOL.test(part.tool || '') && status === 'running' && !this.startedCalls.has(part.id)) {
+        this.startedCalls.add(part.id);
+        this.recordTool(part, true);
+      }
+      if (status === 'completed' || status === 'error') {
+        this.flushParts();
+        this.tools.delete(part.id);
+        this.recordTool(part);
+      }
+    }
+  }
+  recordPart(id) {
+    const p = this.parts.get(id);
+    if (!p || this.recordedParts.has(id)) return;
+    this.parts.delete(id);
+    if (!p.text.trim()) return;
+    this.recordedParts.add(id);
+    this.record({ role: p.role, text: p.text.trim() }, p.sid);
+  }
+  flushParts() {
+    for (const id of [...this.parts.keys()]) this.recordPart(id);
+  }
+  // sid: the session the item belongs to (a subagent's steps go to its own transcript).
+  record(item, sid) {
+    sid = sid && this.children.has(sid) ? sid : this.sessionId;
+    if (!this.dir || !sid) return;
+    try {
+      fs.mkdirSync(this.dir, { recursive: true });
+      fs.appendFileSync(path.join(this.dir, sid + '.jsonl'), JSON.stringify({ ...item, ts: new Date().toISOString() }) + '\n');
+    } catch (err) { console.error('[chat-sdk] opencode transcript', err.message); }
+  }
+  // started: a subagent's call recorded when it starts; its result is recorded again under the same callId.
+  recordTool(part, started = false) {
+    if (this.recordedTools.has(part.id)) return;
+    if (!started) this.recordedTools.add(part.id);
+    const state = part.state || {}, input = state.input ?? {};
+    const detail = typeof input === 'string' ? input : JSON.stringify(input, null, 2);
+    const meta = state.metadata || {}, threads = require('./threads');
+    const agent = part.tool === 'task' && meta.sessionId ? { agent: { toolUseId: part.id, sessionId: meta.sessionId, type: String(input.subagent_type || 'general'),
+      description: String(input.description || state.title || ''), prompt: String(input.prompt || ''), model: meta.model?.modelID || null,
+      status: started ? 'running' : state.status === 'error' ? 'failed' : 'completed',
+      ms: state.time?.end && state.time?.start ? state.time.end - state.time.start : null }, callId: part.id } : {};
+    // A task's output wraps its report in <task …><task_result>: the report itself.
+    const output = state.status === 'completed' && state.output !== undefined ? threads.toolOutput(state.output) : undefined;
+    const report = agent.agent && output ? (/<task_result>\n?([\s\S]*?)\n?<\/task_result>/.exec(output)?.[1] ?? output).trim() : output;
+    this.record({ role: 'tool', name: String(part.tool || 'tool'),
+      summary: short(state.title || toolSummaryOf(input), 200), detail: short(detail, ACP_TOOL_DETAIL), ...agent,
+      ...(DELEGATE_TOOL.test(part.tool || '') ? { input, callId: part.id } : {}), // a delegated subagent (threads.js delegatedSubagents)
+      ...(!started && report !== undefined ? { output: report } : {}),
+      ...(state.status === 'error' ? { error: true, ...(state.error ? { output: threads.toolOutput(state.error) } : {}) } : {}) }, part.sessionID);
+  }
+  onCrash(why) {
+    this.flushParts();
+    for (const part of this.tools.values()) this.recordTool(part);
+    this.tools.clear();
+    this.record({ role: 'interrupt', reason: 'crash', text: why || '' });
+  }
+  onPermission(p) {
+    const reply = openCodeAccessReply(this.options.access, p.permission);
+    if (reply) { this.client.permission.reply({ requestID: p.id, reply }).catch(() => {}); return; }
+    const c = openCodePermissionAsk(p);
+    const id = this.addAsk(c.ask, a => {
+      this.client.permission.reply({ requestID: p.id, reply: c.replies[a.index] || 'reject', ...(a.text ? { message: a.text } : {}) }).catch(() => {});
+    });
+    this.asks.get(id).requestId = p.id;
+    this.asks.get(id).cancel = () => this.client.permission.reply({ requestID: p.id, reply: 'reject' }).catch(() => {});
+  }
+  onQuestion(p) {
+    const questions = p.questions || [], answers = [];
+    const next = i => {
+      if (i >= questions.length) { this.client.question.reply({ requestID: p.id, answers }).catch(() => {}); return; }
+      const q = questions[i], ask = claudeQuestionAsk({ ...q, multiSelect: q.multiple });
+      const id = this.addAsk(ask, a => {
+        const labels = (a.indices || []).map(k => ask.options[k]?.label).filter(Boolean);
+        answers[i] = a.text != null ? [a.text] : q.multiple ? labels : [ask.options[a.index]?.label ?? ''];
+        next(i + 1);
+      });
+      this.asks.get(id).requestId = p.id;
+      this.asks.get(id).cancel = () => this.client.question.reject({ requestID: p.id }).catch(() => {});
+    };
+    next(0);
+  }
+  async listSkills() {
+    const { data } = await this.client.app.skills({ directory: this.cwd });
+    return (data || []).filter(skill => /^[\w:.-]+$/.test(skill.id || skill.name))
+      .map(skill => ({ name: skill.id || skill.name, description: skill.description }));
+  }
+  send(text, { options, images = [] } = {}) {
+    if (options) this.options = options;
+    this.waiting++;
+    this.setBusy(true);
+    // One turn at a time: a message sent mid-turn runs right after it.
+    const run = async () => {
+      this.aborted = false;
+      this.record({ role: 'user', text });
+      try {
+        const parts = [{ type: 'text', text }];
+        for (const image of images) parts.push({ type: 'file', mime: image.mediaType, url: `data:${image.mediaType};base64,${image.data}` });
+        const model = openCodeModel(this.options.model);
+        this.inPrompt = true;
+        const r = await this.client.session.prompt({ sessionID: this.sessionId, directory: this.cwd,
+          ...(model ? { model } : {}), ...(this.options.access === 'plan' ? { agent: 'plan' } : {}), parts });
+        const error = openCodeError(r?.data?.info?.error) || this.lastError;
+        this.endTurn(this.aborted ? null : error || null);
+      } catch (err) {
+        this.endTurn(this.aborted ? null : err.message || 'OpenCode could not take the message');
+      } finally {
+        this.inPrompt = false; this.aborted = false; this.lastError = null;
+      }
+    };
+    this.queue = this.queue.then(run);
+    return Promise.resolve(true);
+  }
+  endTurn(error) {
+    if (!this.waiting) return; // a fatal status already ended this turn; the prompt settles later
+    this.flushParts();
+    clearTimeout(this.lateFlush);
+    this.lateFlush = setTimeout(() => this.flushParts(), 800); // a final delta can follow the prompt's resolution
+    for (const part of this.tools.values()) this.recordTool(part);
+    this.tools.clear();
+    if (--this.waiting <= 0) { this.waiting = 0; this.setBusy(false, error ? { error } : {}); }
+    else if (error) this.emit('idle', { error });
+  }
+  interrupt() {
+    this.aborted = true;
+    for (const [id, a] of this.asks) { a.cancel?.(); this.asks.delete(id); this.emit('ask-done', { id }); }
+    if (this.sessionId) this.client?.session.abort({ sessionID: this.sessionId }).catch(() => {});
+  }
+  setAccess(access) { this.options = { ...this.options, access }; }
+  stop() {
+    this.silent = true;
+    this.alive = this.busy = false;
+    clearTimeout(this.lateFlush);
+    this.abortEvents?.abort();
+    try { this.server?.kill(); } catch {}
   }
 }
 function openCodeModels(bin, env, cwd) {
@@ -649,10 +922,73 @@ function openCodeModels(bin, env, cwd) {
 }
 const toolSummaryOf = input => { try { return require('./threads').toolSummary(input); } catch { return ''; } };
 
-const SESSIONS = { claude: ClaudeSession, codex: CodexSession, antigravity: AcpSession };
+const SESSIONS = { claude: ClaudeSession, codex: CodexSession, antigravity: AcpSession, opencode: OpenCodeSession };
 const sessions = new Map();
 
 // env(key, harness) / args(harness): the provider's env vars and extra launch arguments (Settings > Providers).
+// TerminalVibe's delegate_task MCP server (delegate-mcp.js) for a chat agent: subagents on Codex, Claude Code or
+// OpenCode. Returns the flags (Claude, Codex) and env that add it to the agent's own MCP servers. Its settings ride in
+// the agent's env (none secret; each harness's API keys are read by the server from providers.json). Only
+// ELECTRON_RUN_AS_NODE goes in the server's own config: in the agent's env it would turn any Electron app the agent
+// runs into Node.
+// ponytail: Antigravity (ACP mcpServers) isn't wired; the server keeps the access picked when the agent started.
+const DELEGATE_ENV = ['TERMINALVIBE_DELEGATE_LAUNCH', 'TERMINALVIBE_DELEGATE_ACCESS', 'TERMINALVIBE_DELEGATE_ACCESS_FILE', 'TERMINALVIBE_DELEGATE_CWD', 'TERMINALVIBE_DATA_DIR'];
+// The chat's permission pick as the subagent's access. A headless subagent can't ask, so it never gets more than
+// the chat allows without asking: Ask first in Codex, OpenCode or Antigravity (which run the tool without a card)
+// is read only; Claude Code asks before the tool runs, so its Ask first may edit.
+function delegateAccess(harness, a) {
+  if (a === 'full' || a === 'bypassPermissions') return 'full';
+  if (a === 'plan' || a === 'read-only') return 'read-only';
+  if (harness === 'claude' || a === 'workspace-write' || a === 'auto' || a === 'accept-edits' || a === 'acceptEdits') return 'edits';
+  return 'read-only';
+}
+// The current pick, read by the server on every call: a permission change in the chat applies to the next subagent.
+const writeDelegateAccess = (file, harness, access) => {
+  if (!file || access === undefined) return;
+  try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, delegateAccess(harness, access)); } catch {}
+};
+function delegateMcp(opts, env, dataDir, platform = process.platform) {
+  if (!['claude', 'codex', 'opencode', 'antigravity'].includes(opts.harness)) return { args: [], env: {} };
+  const found = require('./providers').detect(['codex', 'claude', 'opencode'], env);
+  // A Windows .cmd that isn't an npm shim can't be started without a shell (which would reparse the prompt): left out.
+  const launch = Object.fromEntries(Object.entries(found).filter(([, bin]) => bin).map(([name, bin]) => [name, resolveLaunch(bin, [], platform)])
+    .filter(([, l]) => l?.file && (platform !== 'win32' || !/\.(cmd|bat)$/i.test(l.file))));
+  const accessFile = dataDir && opts.key ? path.join(dataDir, 'delegate', crypto.createHash('sha1').update(String(opts.key)).digest('hex').slice(0, 16) + '.access') : '';
+  writeDelegateAccess(accessFile, opts.harness, opts.access ?? 'default');
+  const serverEnv = {
+    TERMINALVIBE_DELEGATE_LAUNCH: JSON.stringify(launch),
+    TERMINALVIBE_DELEGATE_ACCESS: delegateAccess(opts.harness, opts.access),
+    ...(accessFile ? { TERMINALVIBE_DELEGATE_ACCESS_FILE: accessFile } : {}),
+    TERMINALVIBE_DELEGATE_CWD: opts.cwd || '',
+    ...(dataDir ? { TERMINALVIBE_DATA_DIR: dataDir } : {}),
+  };
+  // Packaged: the script is unpacked from app.asar (asarUnpack) so the agent can run it.
+  const script = path.join(__dirname, 'delegate-mcp.js').replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+  const command = process.execPath;
+  if (opts.harness === 'claude') {
+    return { accessFile, env: { ...serverEnv, MCP_TOOL_TIMEOUT: '3600000' },
+      args: ['--mcp-config', JSON.stringify({ mcpServers: { terminalvibe: { type: 'stdio', command, args: [script], env: { ELECTRON_RUN_AS_NODE: '1' } } } })] };
+  }
+  if (opts.harness === 'codex') {
+    const toml = JSON.stringify; // a JSON string is a valid TOML basic string
+    // Codex passes only a few env vars to MCP servers: env_vars forwards these by name (values never in the args).
+    // approve: Codex would refuse the call under Full access (no approvals) otherwise; the subagent never gets more
+    // than the chat's current pick (delegateAccess), which is how Codex itself treats Ask first.
+    return { accessFile, env: serverEnv, args: ['-c', `mcp_servers.terminalvibe.command=${toml(command)}`, '-c', `mcp_servers.terminalvibe.args=[${toml(script)}]`,
+      '-c', 'mcp_servers.terminalvibe.env={ELECTRON_RUN_AS_NODE="1"}', '-c', `mcp_servers.terminalvibe.env_vars=[${DELEGATE_ENV.map(toml).join(',')}]`,
+      '-c', 'mcp_servers.terminalvibe.tool_timeout_sec=3600', '-c', 'mcp_servers.terminalvibe.default_tools_approval_mode="approve"'] };
+  }
+  if (opts.harness === 'antigravity') {
+    // ACP takes MCP servers on session/new|load|resume, env as name/value pairs (over stdio, never a command line).
+    return { accessFile, env: {}, args: [], mcpServers: [{ name: 'terminalvibe', command, args: [script],
+      env: Object.entries({ ELECTRON_RUN_AS_NODE: '1', ...serverEnv }).map(([name, value]) => ({ name, value })) }] };
+  }
+  let config = {}; try { config = JSON.parse(env.OPENCODE_CONFIG_CONTENT || '{}') || {}; } catch {}
+  if (!config || typeof config !== 'object' || Array.isArray(config)) config = {};
+  config.mcp = { ...config.mcp, terminalvibe: { type: 'local', command: [command, script], environment: { ELECTRON_RUN_AS_NODE: '1' }, enabled: true, timeout: 3600000 } };
+  return { accessFile, env: { ...serverEnv, OPENCODE_CONFIG_CONTENT: JSON.stringify(config) }, args: [] };
+}
+
 function register(ipcMain, { send, env: makeEnv, args: launchArgs = () => [], version, dataDir }) {
   // Cache Antigravity's catalog and coalesce concurrent OpenCode probes for the same project.
   const modelCache = new Map();
@@ -707,7 +1043,12 @@ function register(ipcMain, { send, env: makeEnv, args: launchArgs = () => [], ve
     const s = new S(key, opts.harness, emit);
     sessions.set(key, s);
     try {
-      return await s.start({ ...opts, env: makeEnv(key, opts.harness), extraArgs: launchArgs(opts.harness), clientVersion: version, transcriptDir: dataDir && path.join(dataDir, 'acp') });
+      const env = makeEnv(key, opts.harness);
+      let mcp = { args: [], env: {} };
+      try { mcp = delegateMcp({ ...opts, key }, env, dataDir); } catch (err) { console.error('[chat-sdk] subagent tool', err.message); } // the agent starts without it
+      s.delegateAccessFile = mcp.accessFile;
+      return await s.start({ ...opts, env: { ...env, ...mcp.env }, extraArgs: [...launchArgs(opts.harness), ...mcp.args], mcpServers: mcp.mcpServers || [],
+        clientVersion: version, transcriptDir: dataDir && path.join(dataDir, 'acp') });
     } catch (err) {
       s.stop();
       return { ok: false, error: err.message || 'Could not start the agent' };
@@ -716,18 +1057,22 @@ function register(ipcMain, { send, env: makeEnv, args: launchArgs = () => [], ve
   ipcMain.handle('chat-sdk:send', async (_e, key, text, opts) => {
     const s = get(key);
     if (!s) return { ok: false, error: 'The agent is not running' };
+    writeDelegateAccess(s.delegateAccessFile, s.harness, opts?.options?.access); // the turn's permission pick
     try { await s.send(String(text), opts || {}); return { ok: true }; } catch (err) { return { ok: false, error: err.message }; }
   });
   ipcMain.handle('chat-sdk:interrupt', (_e, key) => { get(key)?.interrupt(); return true; });
   ipcMain.handle('chat-sdk:respond', (_e, key, id, answer) => !!get(key)?.respond(String(id), answer));
-  ipcMain.handle('chat-sdk:set-access', (_e, key, access) => { get(key)?.setAccess(access); return true; });
+  ipcMain.handle('chat-sdk:set-access', (_e, key, access) => { const s = get(key); s?.setAccess(access); writeDelegateAccess(s?.delegateAccessFile, s?.harness, access); return true; });
   ipcMain.handle('chat-sdk:stop', (_e, key) => { sessions.get(key)?.stop(); sessions.delete(key); return true; });
   ipcMain.handle('chat-sdk:status', (_e, key) => { const s = get(key); return s ? { alive: true, busy: s.busy, sessionId: s.sessionId, harness: s.harness } : { alive: false }; });
 }
 function stopAll() { for (const s of sessions.values()) s.stop(); sessions.clear(); }
 function stop(key) { sessions.get(key)?.stop(); sessions.delete(key); }
+// The live agent process of a chat (agent-procs.js skips its tree).
+// The agent's own process, skipped by the leftover-process scan: OpenCode's is its `opencode serve` (this.server).
+function sessionPid(key) { const s = sessions.get(key); return s?.alive ? s.proc?.pid || s.server?.pid || null : null; }
 
-module.exports = { register, stopAll, stop, resolveLaunch, claudePermissionAsk, claudeQuestionAsk, codexAsk, codexAccess, codexTurnParams, acpModels, acpPermissionAsk, AcpSession, openCodeModels };
+module.exports = { register, stopAll, stop, sessionPid, resolveLaunch, claudePermissionAsk, claudeQuestionAsk, codexAsk, codexAccess, codexTurnParams, acpModels, acpPermissionAsk, AcpSession, OpenCodeSession, openCodeModels, openCodeModel, openCodePermissionAsk, openCodeAccessReply };
 
 if (require.main === module) {
   const assert = require('assert');
@@ -771,6 +1116,37 @@ if (require.main === module) {
   assert.deepStrictEqual(p.ask.detail, ['echo hi > hi.txt']);
   assert.deepStrictEqual(p.answer(1), { outcome: { outcome: 'selected', optionId: 'deny' } });
   assert.deepStrictEqual(p.answer(-1), { outcome: { outcome: 'cancelled' } });
+  // OpenCode: a model id keeps the model's own slashes; permissions reply through the SDK's choices.
+  assert.deepStrictEqual(openCodeModel('nvidia/nvidia/active-speaker-detection'), { providerID: 'nvidia', modelID: 'nvidia/active-speaker-detection' });
+  assert.strictEqual(openCodeModel('default'), null);
+  const op = openCodePermissionAsk({ permission: 'bash', patterns: ['npm test'], always: ['bash'], metadata: { description: 'Run the tests' } });
+  assert.strictEqual(op.ask.question, 'Allow bash?');
+  assert.deepStrictEqual(op.ask.detail, ['npm test', 'Run the tests']);
+  assert.deepStrictEqual(op.ask.options.map(o => o.label), ['Yes', "Yes, and don't ask again", 'No']);
+  assert.deepStrictEqual(op.replies, ['once', 'always', 'reject']);
+  assert.strictEqual(openCodeAccessReply('default', 'bash'), null, 'Ask first shows the permission card');
+  assert.strictEqual(openCodeAccessReply('full', 'bash'), 'once');
+  assert.strictEqual(openCodeAccessReply('auto', 'webfetch'), 'once');
+  assert.strictEqual(openCodeAccessReply('plan', 'bash'), 'reject');
+  assert.strictEqual(openCodeAccessReply('accept-edits', 'edit'), 'once');
+  assert.strictEqual(openCodeAccessReply('accept-edits', 'write'), 'once');
+  assert.strictEqual(openCodeAccessReply('accept-edits', 'bash'), null);
+  // A retry with an action (quota, auth) ends the turn with its message instead of spinning forever.
+  const oce = [], ocs = new OpenCodeSession('test', 'opencode', (_k, e) => oce.push(e));
+  ocs.waiting = 1; ocs.busy = true; ocs.sessionId = 'ses_test'; ocs.tools = new Map(); ocs.parts = new Map();
+  ocs.onEvent({ type: 'session.status', properties: { sessionID: 'ses_test', status: { type: 'retry', message: 'Free usage exceeded', action: { reason: 'free_tier_limit' } } } });
+  assert.ok(!ocs.busy && oce.at(-1)?.type === 'idle' && /Free usage/.test(oce.at(-1).error), 'a fatal retry must end the turn with the error');
+  ocs.onEvent({ type: 'session.status', properties: { sessionID: 'ses_test', status: { type: 'idle' } } });
+  assert.strictEqual(oce.filter(e => e.type === 'idle').length, 1, 'a late idle must not end the turn twice');
+  // The final text delta can arrive after the prompt resolves: the answer must still be recorded.
+  const late = [], lateSession = new OpenCodeSession('test', 'opencode', () => {});
+  Object.assign(lateSession, { parts: new Map(), recordedParts: new Set(), tools: new Map(), recordedTools: new Set(), waiting: 1, sessionId: 'ses_late' });
+  lateSession.record = item => late.push(item);
+  lateSession.onPart({ id: 'r1', type: 'reasoning', text: 'thinking' });
+  lateSession.onPart({ id: 't1', type: 'text', text: '' });
+  lateSession.endTurn(null);
+  lateSession.onPart({ id: 't1', type: 'text', text: 'the answer', time: { end: 1 } });
+  assert.deepStrictEqual(late, [{ role: 'thinking', text: 'thinking' }, { role: 'assistant', text: 'the answer' }]);
   const imagePath = '/tmp/terminalvibe-drop/image.png';
   const claude = new ClaudeSession('test', 'claude', () => {});
   claude.write = message => assert.deepStrictEqual(message.message.content, [
@@ -876,6 +1252,53 @@ if (require.main === module) {
     await agy.send('$project-skill src');
     await agy.queue;
     assert.deepStrictEqual(agyCall, { method: 'session/prompt', prompt: [{ type: 'text', text: '/project-skill src' }] });
+
+    // delegate_task MCP wiring: settings ride in the agent's env (never the command line), ELECTRON_RUN_AS_NODE only
+    // in the server's own config, a user's OpenCode config is kept, a Windows .cmd that isn't a shim is left out.
+    const providers = require('./providers'), detect = providers.detect;
+    providers.detect = () => ({ codex: '/bin/codex', claude: 'C:\\x\\claude.cmd', opencode: null });
+    try {
+      const cx = delegateMcp({ harness: 'codex', access: 'full', cwd: '/p' }, {}, '/d', 'linux');
+      assert.equal(cx.env.TERMINALVIBE_DELEGATE_ACCESS, 'full');
+      assert.equal(cx.env.TERMINALVIBE_DELEGATE_CWD, '/p');
+      assert(!cx.env.ELECTRON_RUN_AS_NODE, 'never in the agent env');
+      assert(cx.args.includes('mcp_servers.terminalvibe.env={ELECTRON_RUN_AS_NODE="1"}'));
+      assert(!cx.args.join(' ').includes('TERMINALVIBE_DELEGATE_LAUNCH='), 'values are forwarded by name, not passed as args');
+      const cl = delegateMcp({ harness: 'claude', access: 'plan' }, {}, '/d', 'linux');
+      assert.equal(cl.env.TERMINALVIBE_DELEGATE_ACCESS, 'read-only');
+      assert.deepStrictEqual(JSON.parse(cl.args[1]).mcpServers.terminalvibe.env, { ELECTRON_RUN_AS_NODE: '1' });
+      const oc = delegateMcp({ harness: 'opencode', access: 'default' }, { OPENCODE_CONFIG_CONTENT: '{"mcp":{"mine":{"type":"local","command":["x"]}},"theme":"t"}' }, '/d', 'linux');
+      const occ = JSON.parse(oc.env.OPENCODE_CONFIG_CONTENT);
+      assert(occ.mcp.mine && occ.mcp.terminalvibe && occ.theme === 't', "the user's OpenCode config is kept");
+      assert.equal(oc.env.TERMINALVIBE_DELEGATE_ACCESS, 'read-only', 'OpenCode runs the tool without a card: Ask first stays read only');
+      assert(cx.args.includes('mcp_servers.terminalvibe.default_tools_approval_mode="approve"'), 'Full access Codex can run it');
+      const win = JSON.parse(delegateMcp({ harness: 'codex' }, {}, '/d', 'win32').env.TERMINALVIBE_DELEGATE_LAUNCH);
+      assert(win.codex && !win.claude, 'an unresolvable .cmd is left out on Windows');
+      const agy = delegateMcp({ harness: 'antigravity', access: 'auto' }, {}, '/d', 'linux');
+      assert.equal(agy.mcpServers[0].name, 'terminalvibe');
+      assert(agy.mcpServers[0].env.some(e => e.name === 'ELECTRON_RUN_AS_NODE') && agy.mcpServers[0].env.some(e => e.name === 'TERMINALVIBE_DELEGATE_ACCESS' && e.value === 'edits'));
+      assert.deepStrictEqual(delegateMcp({ harness: 'amp' }, {}, '/d'), { args: [], env: {} });
+      // Each harness's permission picks as the subagent's access.
+      for (const [h, a, want] of [['claude', 'default', 'edits'], ['claude', 'plan', 'read-only'], ['claude', 'bypassPermissions', 'full'], ['codex', 'default', 'read-only'],
+        ['codex', 'workspace-write', 'edits'], ['codex', 'full', 'full'], ['opencode', 'accept-edits', 'edits'], ['antigravity', 'default', 'read-only'], ['opencode', undefined, 'read-only']]) {
+        assert.equal(delegateAccess(h, a), want, `${h} ${a}`);
+      }
+      // A permission change in the chat reaches the next subagent through the access file.
+      const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'tv-delegate-'));
+      const live = delegateMcp({ harness: 'codex', access: 'default', key: 'pane-1' }, {}, tmp, 'linux');
+      assert.equal(fs.readFileSync(live.env.TERMINALVIBE_DELEGATE_ACCESS_FILE, 'utf8'), 'read-only');
+      writeDelegateAccess(live.accessFile, 'codex', 'full');
+      assert.equal(fs.readFileSync(live.accessFile, 'utf8'), 'full');
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } finally { providers.detect = detect; }
+    const { childArgs, delegateKey } = require('./delegate-mcp');
+    assert.deepStrictEqual(childArgs('codex', { prompt: null }, 'read-only').slice(-3), ['-s', 'read-only', '-']);
+    assert(childArgs('codex', { prompt: null }, 'full').includes('--dangerously-bypass-approvals-and-sandbox'));
+    assert.equal(childArgs('opencode', { prompt: '-x go' }, 'edits').at(-1), ' -x go', 'a prompt never reads as a flag');
+    assert(childArgs('opencode', { prompt: 'go' }, 'read-only').includes('plan'));
+    assert(!childArgs('claude', { prompt: null }, 'edits').includes('--'), 'the prompt comes on stdin');
+    assert.equal(delegateKey('codex', 'a'), delegateKey('codex', 'a'));
+    assert.notEqual(delegateKey('codex', 'a'), delegateKey('claude', 'a'));
     console.log('chat-sdk: ok');
   })().catch(error => { console.error(error); process.exitCode = 1; });
 }

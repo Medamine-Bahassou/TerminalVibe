@@ -113,17 +113,17 @@ app.whenReady().then(async () => {
   console.log(await win.webContents.executeJavaScript(`(() => {
     const check = (ok, msg) => { if (!ok) throw new Error(msg); };
     let picked = 0;
-    const _pluginMenuItems = { test: [ { icon:'', label:'First', handler:()=>picked++ }, { icon:'', label:'Second', handler:()=>picked+=10 } ] };
+    const menu = { options: [['a', ['', 'First']], ['b', ['', 'Second']]], current: null, pick: v => { picked += v === 'a' ? 1 : 10; } };
     const escHtml = s => s;
     window.electronAPI = { popupContextMenu: () => { throw new Error('Native menu bypasses motion settings'); } };
     ${contextMenu}
     const key = value => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:value,bubbles:true,cancelable:true}));
     const trigger = document.createElement('button'); document.body.append(trigger); trigger.focus();
-    showCtxMenu({pageX:10,pageY:10}, 'test');
+    showCtxMenu({pageX:10,pageY:10}, 'choice', menu);
     key('ArrowDown'); check(document.activeElement.textContent === 'First', 'ArrowDown must focus first menu action');
     key('Enter'); check(picked === 1 && !ctxEl.classList.contains('open') && ctxEl.inert, 'Menu selection must execute once and close');
     check(document.activeElement === trigger, 'Menu selection must restore focus');
-    showCtxMenu({pageX:20,pageY:20}, 'test');
+    showCtxMenu({pageX:20,pageY:20}, 'choice', menu);
     check(!ctxEl.inert, 'Reopened menu must accept input');
     key('ArrowUp'); check(document.activeElement.textContent === 'Second', 'ArrowUp must focus last menu action');
     key('Escape'); check(!ctxEl.classList.contains('open') && document.activeElement === trigger, 'Escape must dismiss and restore focus');

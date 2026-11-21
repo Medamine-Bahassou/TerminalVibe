@@ -17,7 +17,7 @@
   <link rel="preload" href="fonts/GeistSans.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/GeistMono.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="workspace.css">
-  <link rel="stylesheet" href="vendor/phosphor/style.css">
+  <link rel="stylesheet" href="vendor/lucide/icons.css">
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/xterm-addon-fit.js"></script>
   <script src="vendor/xterm/xterm-addon-web-links.js"></script>
@@ -135,11 +135,6 @@
         </div>
       </div>
 
-      <!-- Plugin widget dock (status bar) -->
-      <div id="statusbar">
-        <div id="statusbar-left"></div>
-        <div id="statusbar-right"></div>
-      </div>
 
     </div>
     <!-- ── Threads sidebar (right): every workspace chat ── -->
@@ -151,7 +146,7 @@
         <button type="button" class="ts-icon-btn" id="ts-new" title="New thread" aria-label="New thread" aria-haspopup="dialog"><i class="ph ph-note-pencil"></i></button>
       </div>
       <div class="ts-list" id="ts-list" role="list"></div>
-      <div class="ts-foot" hidden><button type="button" class="ts-pulls" id="ts-pulls" title="Pull requests" aria-label="Pull requests" aria-haspopup="dialog"><i class="ph ph-git-pull-request" aria-hidden="true"></i></button><button type="button" class="ts-pulls" id="ts-issues" title="Issues" aria-label="Issues" aria-haspopup="dialog"><i class="ph ph-circle issue-icon" aria-hidden="true"></i></button><button type="button" class="ts-usage" id="ts-usage" title="Usage limits" aria-label="Usage limits" aria-haspopup="dialog"><i class="ph ph-chart-bar" aria-hidden="true"></i></button></div>
+      <div class="ts-foot" hidden><button type="button" class="ts-pulls" id="ts-pulls" title="Pull requests" aria-label="Pull requests" aria-haspopup="dialog"><i class="ph ph-git-pull-request" aria-hidden="true"></i></button><button type="button" class="ts-pulls" id="ts-issues" title="Issues" aria-label="Issues" aria-haspopup="dialog"><i class="ph ph-circle-dot" aria-hidden="true"></i></button><button type="button" class="ts-usage" id="ts-usage" title="Usage limits" aria-label="Usage limits" aria-haspopup="dialog"><i class="ph ph-chart-bar" aria-hidden="true"></i></button></div>
     </aside>
   </div>
 
@@ -165,6 +160,7 @@
       <button type="button" class="sbr-btn" id="sbr-thread-find-next" title="Next match (Enter)" aria-label="Next match"><i class="ph ph-caret-down"></i></button>
       <button type="button" class="sbr-btn" id="sbr-thread-find-close" title="Close (Esc)" aria-label="Close find"><i class="ph ph-x"></i></button>
     </div>
+    <div class="thr-parent" id="sbr-thread-parent" role="navigation" aria-label="Parent thread" hidden></div>
     <div id="sbr-thread-flow" class="thr-flow" tabindex="-1" aria-live="polite" aria-label="Thread messages">
       <div class="thr-queue" id="sbr-thread-queue" aria-label="Queued messages" hidden></div>
     </div>
@@ -265,8 +261,9 @@
       <div id="prompt-label"></div>
       <div id="prompt-input-row">
         <div id="prompt-icon-btn" style="display:none" title="Set workspace icon">
-          <i class="ph ph-image"></i>
+          <i class="ph ph-image" id="prompt-icon-placeholder"></i>
           <img id="prompt-icon-img" alt="" draggable="false" />
+          <i class="ph" id="prompt-icon-glyph" aria-hidden="true"></i>
           <span id="prompt-icon-clear" title="Remove icon"><i class="ph ph-x"></i></span>
         </div>
         <input id="prompt-input" type="text" spellcheck="false" />
@@ -337,6 +334,12 @@
           </div>
           <div
             class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
+            data-cat="threads">
+            <i class="ph ph-chats-circle shrink-0"></i>
+            <span>Threads</span>
+          </div>
+          <div
+            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
             data-cat="appearance">
             <i class="ph ph-sun shrink-0"></i>
             <span>Appearance</span>
@@ -360,12 +363,6 @@
           <div class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none" data-cat="skills">
             <i class="ph ph-sparkle shrink-0"></i>
             <span>Skills</span>
-          </div>
-          <div
-            class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
-            data-cat="plugins">
-            <i class="ph ph-puzzle-piece shrink-0"></i>
-            <span>Plugins</span>
           </div>
           <div
             class="settings-cat-btn flex items-center w-full gap-2.5 px-3.5 py-2.5 cursor-pointer text-[12.5px] text-[var(--muted-text)] font-medium transition-all duration-150 select-none"
@@ -459,7 +456,10 @@
                 </div>
               </div>
             </div>
-            <div class="settings-section-label mt-4 mb-1.5 ml-1">Threads</div>
+          </div>
+          <!-- Threads -->
+          <div class="settings-section select-none" data-cat="threads">
+            <div class="settings-section-label mt-0 mb-1.5 ml-1">Sidebar</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
               <div data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
@@ -475,6 +475,10 @@
                   <div class="custom-dropdown" data-for="set-thread-layout"></div>
                 </div>
               </div>
+            </div>
+            <div class="settings-section-label mt-4 mb-1.5 ml-1">New threads</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
               <div
                 data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
@@ -504,6 +508,61 @@
                   <div class="custom-dropdown" data-for="set-thread-folder"></div>
                 </div>
               </div>
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Title generator</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Writes a short title
+                    from a thread's first message. Off keeps the first line</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-thread-titles" class="native-select-hidden" data-search>
+                    <option value="agent">The thread's agent</option>
+                    <option value="off">Off</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-thread-titles"></div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-section-label mt-4 mb-1.5 ml-1">Side chats</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Side chat model</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">The model a new side
+                    chat (/btw) starts with. Another agent than the thread's gets its history to read</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-thread-side-model" class="native-select-hidden">
+                    <option value="">Same as thread</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-thread-side-model"></div>
+                </div>
+              </div>
+              <div
+                data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Side chat effort</span>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Reasoning effort for a
+                    new side chat. A model without that level uses its default</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-thread-side-effort" class="native-select-hidden">
+                    <option value="">Same as thread</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="xhigh">Extra High</option>
+                    <option value="max">Max</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-thread-side-effort"></div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-section-label mt-4 mb-1.5 ml-1">Display</div>
+            <div
+              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
               <div data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
                   <label for="set-thread-usage" class="text-[12.5px] font-medium text-[var(--fg)]">Usage display</label>
@@ -545,22 +604,6 @@
                     <option value="off">Plain text</option>
                   </select>
                   <div class="custom-dropdown" data-for="set-thread-markdown"></div>
-                </div>
-              </div>
-              <div data-setting class="flex items-center justify-between px-3 py-2.5 gap-4 hover:bg-white/[0.01]">
-                <div class="flex flex-col gap-1">
-                  <span class="text-[12.5px] font-medium text-[var(--fg)]">Title generator</span>
-                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Writes a short title
-                    from a thread's first message. Off keeps the first line</span>
-                </div>
-                <div class="flex-1 flex items-center justify-end gap-3">
-                  <select id="set-thread-titles" class="native-select-hidden">
-                    <option value="agent">The thread's agent</option>
-                    <option value="claude">Claude Code (Haiku)</option>
-                    <option value="codex">Codex (small model)</option>
-                    <option value="off">Off</option>
-                  </select>
-                  <div class="custom-dropdown" data-for="set-thread-titles"></div>
                 </div>
               </div>
             </div>
@@ -869,27 +912,10 @@
           </div>
           <div class="settings-section select-none" data-cat="skills">
             <div data-setting="agent splits panes" class="settings-section-label mt-0 mb-1.5 ml-1">TerminalVibe orchestration</div>
-            <p class="skills-description">Let your agent open and arrange splits, inspect output, and use browser panes. Install once, then ask naturally without a slash command.</p>
+            <p class="skills-description">Lets an agent open and arrange splits, inspect output, and use browser panes. Every agent in a TerminalVibe chat already has it, with nothing to install. Install it here only for agents you start yourself in a terminal.</p>
             <div id="skills-list" aria-busy="false"></div>
             <p id="skills-status" class="skills-description" role="status" aria-live="polite"></p>
             <p class="skills-description">Available across projects for your user account. Start a new agent session after installing or toggling. Deactivation affects future discovery; a running conversation may still have the skill loaded. Separately installed project copies remain available.</p>
-          </div>
-          <!-- Plugins -->
-          <div class="settings-section select-none" data-cat="plugins">
-            <div class="flex items-center justify-between mt-0 mb-1.5 ml-1">
-              <div id="plugins-title" class="settings-section-label">
-                Plugins</div>
-              <button data-setting="directory folder" type="button" id="plugins-open-dir" class="plugin-icon-btn" title="Open the plugins directory">
-                <i class="ph ph-folder-open"></i>
-              </button>
-            </div>
-            <div id="plugins-list"
-              class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)] mb-3 flex flex-col">
-            </div>
-            <div class="text-[11px] text-[var(--muted-text)] px-1 leading-relaxed">
-              Plugins live in <code>~/.terminalvibe/plugins/&lt;id&gt;/</code>. Drop a folder there, restart, then
-              activate it here.
-            </div>
           </div>
           <!-- Advanced -->
           <div class="settings-section select-none" data-cat="advanced">

@@ -38,7 +38,7 @@ async function main() {
     // Exercise the real renderer handler without starting the application or paid agents.
     const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
     const start = source.indexOf('  function createAgentTerminal');
-    const handler = source.slice(start, source.indexOf('\n  // Plugins: open the plugins directory', start));
+    const handler = source.slice(start, source.indexOf('\n  systemColorScheme.addEventListener(', start));
     let sequence = 0, activeWsId, spawns = [], writes = [];
     const workspaces = [];
     const all = node => node.type === 'split' ? node.children.flatMap(all) : node.terminals;
@@ -233,7 +233,7 @@ async function main() {
       for (const t of Object.values(entries)) t.term = { write: s => written.push([t.id, s]), options: {} };
       const exits = vm.createContext({ workspaces: [{}, {}], DETACHED_ONLY: false, isDesktop: () => true,
         findTermById: id => ({ ws: { id: 'w' }, term: entries[id] }), getWorkspaceTerminals: () => [{}, {}],
-        pluginEmit() {}, renderPaneArea() {}, saveState() {}, sendControl() {}, removeTerminal: (_w, id) => removed.push(id) });
+        renderPaneArea() {}, saveState() {}, sendControl() {}, removeTerminal: (_w, id) => removed.push(id) });
       vm.runInContext(exitSource, exits);
       exits.handleExit('shell', 0);
       assert.deepEqual(removed, ['shell'], 'Exiting the shell an agent pane returned to closes the tab');

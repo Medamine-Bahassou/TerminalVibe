@@ -21,6 +21,17 @@ Each prompt is a turn. A finished turn folds its steps under **Worked for 16s �
 - **Ctrl+F** in the Chat tab finds text in the history.
 - Hover a message to copy it.
 
+## Thread details
+
+The panel button at the chat's top right (tooltip "Thread details") opens the thread details card inside the chat, like T3 Code's thread panel. It gathers the current chat's folder, git branch and quick action, listening servers and quota windows in one card:
+
+- **Workspace**: the folder (its icon reveals it in Files), **Open in VS Code** (the chevron picks another installed editor), and project scripts from `t3.json` or `package.json` — **Add project script** writes a new one, and a script's chevron lists them all. Clicking a script runs it in a new terminal of the workspace.
+- **Version control**: the branch (click to switch), the quick action — **Commit**, **Commit & push**, or **Commit, push & PR** when the branch is ahead of `origin/main` — with a chevron for Push, Pull and Create PR, and **Changes vs origin/main** with `+additions −deletions`. Click Changes for the full diff; clicking the quick action opens a commit message dialog.
+- **Servers**: every listening port started from the app, labelled `localhost:<port>` and `Terminal · <process>`. Click to open it in a browser tab (Ctrl/Cmd-click for your own browser); the stop button appears on hover.
+- **Usage limits**: **Session** and **Weekly** quota bars for the chat's agent, showing percent left; hovering explains when each resets.
+
+Right-click the card to choose which sections it shows; the choice is remembered. The card stays open while you work and closes on Escape or an outside click. Server and git data refresh whenever you reopen it; quota data is the same cached reading as the sidebar's Usage page.
+
 ## Sending messages
 
 **Enter** sends, **Shift+Enter** adds a new line. Your message shows and the box clears at once, even while an agent starts. A row at the end of the chat shows what is happening ("Starting Claude Haiku", then "Thinking · 4s") until the agent's turn ends; each finished prompt then shows how long it took ("Worked for 12s"). If the agent cannot start, your text goes back into the box.
@@ -32,28 +43,37 @@ Under the box:
 
 ### How the chat talks to the agent
 
-In the desktop app, **Claude Code** and **Codex** chats run through the agents' own structured protocols, not a terminal (`electron/chat-sdk.js`). Both use your installed CLI and its login:
+In the desktop app, **Claude Code**, **Codex** and **OpenCode** chats run through the agents' own structured protocols, not a terminal (`electron/chat-sdk.js`). All use your installed CLI and its login:
 
 - Claude Code runs headless: `claude -p --input-format stream-json --output-format stream-json`, with permission prompts answered over stdio (`--permission-prompt-tool stdio`).
 - Codex runs `codex app-server` (JSON-RPC over stdio), the interface its IDE extension uses.
 - **Antigravity CLI** runs `agy acp`, its [Agent Client Protocol](https://agentclientprotocol.com) server (JSON-RPC over stdio, the protocol editors such as Zed use). Its models (each with Low/Medium/High thinking) and permission modes (Ask first, Auto, Accept edits, Plan only) come from the agent itself; the model list is read once per run from a session opened and closed in the background, and cached. Full access is its `--dangerously-skip-permissions` start flag, so turning it on or off resumes the conversation in a new process.
+- **OpenCode** runs a local `opencode serve` and drives it with the official `@opencode-ai/sdk`. Models come from the project's connected providers; the selected one is passed on every turn. Its access modes are Ask first (answer each permission card), Auto and Full access (approve every request), Accept edits (approve file edits only) and Plan only (its read-only plan agent); each takes effect on the next turn. Question prompts arrive as events and show in the answer tray.
 
-Nothing is typed into or read from a screen. Permission prompts ("Allow Bash?", Codex's "Run this command?", Antigravity's "Allow this command?") and the agent's questions (Claude's `AskUserQuestion`, Codex's `requestUserInput`) arrive as events and show as a card above the message box; your pick goes back over the protocol. **Stop** interrupts the turn. A permission change applies right away: Claude Code switches mode live, Codex and Antigravity take it (with model and effort) on their next turn. There is no trust screen. Claude Code and Codex history is read from their own transcripts; Antigravity's own history isn't readable, so TerminalVibe records each session's messages, thoughts and tool calls from the protocol in `~/.terminalvibe/acp/<session id>.jsonl`. Antigravity has no mid-turn steering: a message sent while it works runs right after the turn.
+Nothing is typed into or read from a screen. Permission prompts ("Allow Bash?", Codex's "Run this command?", Antigravity's "Allow this command?", OpenCode's "Allow bash?") and the agent's questions (Claude's `AskUserQuestion`, Codex's `requestUserInput`, OpenCode's `question`) arrive as events and show as a card above the message box; your pick goes back over the protocol. **Stop** interrupts the turn. A permission change applies right away: Claude Code switches mode live, Codex, Antigravity and OpenCode take model, effort and permissions on their next turn. There is no trust screen. Claude Code and Codex history is read from their own transcripts; Antigravity's and OpenCode's own history isn't readable, so TerminalVibe records each session's messages, thoughts and tool calls from the protocol in `~/.terminalvibe/acp/<session id>.jsonl`. Antigravity and OpenCode have no mid-turn steering: a message sent while they work runs right after the turn.
 
-OpenCode runs in the terminal under the chat. In the desktop app, its official SDK lists models from the project’s connected providers, and TerminalVibe passes the selected model to the CLI. Other agents and browser mode also use the terminal.
+Other agents and browser mode still use the terminal under the chat.
 
-Clicking the agent in the footer shows the terminal and resumes the same session in the real CLI (`claude --resume`, `codex resume`), to type to it directly. The structured session hands the conversation over first; while it is mid-turn the terminal view waits (stop it or let it finish). The next message from the chat takes the session back. One agent runs in a Chat tab at a time.
+Clicking the agent in the footer shows the terminal and resumes the same session in the real CLI (`claude --resume`, `codex resume`, `opencode --session`), to type to it directly. The structured session hands the conversation over first; while it is mid-turn the terminal view waits (stop it or let it finish). The next message from the chat takes the session back. One agent runs in a Chat tab at a time.
 
 What a message does:
 
 - **The running agent matches the picks**: it goes to that agent. An agent you started by hand in the terminal matches by its kind (Claude Code, Codex); a Claude Code or Codex chat takes such a session over as a structured one.
-- **Same agent, other picks**: Codex takes model, effort and permissions per turn. Claude Code switches permissions live; for another model, effort, Fast or Ultracode its session is resumed with the new flags, so the conversation keeps its context.
+- **Same agent, other picks**: Codex and OpenCode take model, effort and permissions per turn. Claude Code switches permissions live; for another model, effort, Fast or Ultracode its session is resumed with the new flags, so the conversation keeps its context.
 - **Nothing running** (the agent exited, or the app restarted): if the chat's latest conversation was with the picked agent, that session is resumed in its own folder, so it remembers everything. Otherwise a new session starts.
 - **Another agent**: the current one quits and a new session starts.
 
 A new session in a chat that already has history gets all of it: TerminalVibe writes the conversation so far to `handoff.xml` and adds a short note pointing to it to your first message (the chat hides the note again). An agent never starts from nothing when the chat has history.
 
 For an agent that runs in the terminal, the first run in a folder may ask whether you trust it: the question shows as a card in the chat when it can be read, otherwise the chat shows the agent's terminal. A message is never typed into a tab whose agent has exited.
+
+## Subagents
+
+A subagent shows as a row in the turn: its harness's logo with a status icon (spinning while it works, a check when done, a warning when it failed), its task, its latest step or its report, and how long it took. Several started together share one "Ran 3 subagents" row. Click a row to open the subagent's own thread with every step it took; send a message there to continue with it. A "Subagent of" chip above the message box leads back.
+
+- **Built-in subagents**: Claude Code's Agent tool and OpenCode's task tool.
+- **Any harness**: Claude Code, Codex, OpenCode and Antigravity chats get TerminalVibe's `delegate_task` tool (a small MCP server, `electron/delegate-mcp.js`), so you can ask any of them for a subagent on Codex, Claude Code or OpenCode, with a model ("a codex subagent", "an opencode hy4 subagent"). It runs headless in the chat's folder (`codex exec`, `claude -p`, `opencode run`) and returns its report. Each harness uses its own settings from Settings > Providers. Stop stops it too, and the same task can be delegated any number of times.
+- **Permissions**: a subagent can't ask, so it gets what the chat allows without asking, at the moment it starts (a change in the chat applies to the next subagent). Full access gives it full access; Plan or Read only makes it read only; Claude Code's other modes ask before the tool runs, then let it edit the workspace; Codex Workspace write and OpenCode or Antigravity Auto / Accept edits let it edit; Ask first in Codex, OpenCode or Antigravity makes it read only.
 
 ## Forking
 

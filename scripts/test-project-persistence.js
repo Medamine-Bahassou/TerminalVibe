@@ -9,7 +9,7 @@ const between = (start, end) => source.slice(source.indexOf(start), source.index
     currentLineHeight:1.2,currentCursorStyle:'block',currentCursorBlink:true,currentScrollback:1000,
     animationsEnabled:true,settingsCategory:'appearance',pinnedCollapsed:false,sidebarMode:'normal',showWsProcs:true,hideEmails:true,
     notifyOnCommandFinish:false,notificationSound:true,terminalLinkTarget:'tab',backgroundMode:'none',globalBackgroundImage:null,backgroundOpacity:0,
-    customShortcuts:{},searchEngine:'google',customSearchUrl:'',defaultTerminalPath:'',defaultShell:'',_pluginStates:new Map(),_pluginConfigs:new Map(),
+    customShortcuts:{},searchEngine:'google',customSearchUrl:'',defaultTerminalPath:'',defaultShell:'',
 
     projectThreadView:null,
     projects:[{id:'p',name:'Project',cwd:'/tmp/project with spaces',collapsed:true}], projectsCollapsed:true,

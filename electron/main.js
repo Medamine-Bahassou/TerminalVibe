@@ -47,7 +47,6 @@ const providers = require('./providers');
 providers.load(); // sets CLAUDE_CONFIG_DIR / CODEX_HOME before anything reads transcripts
 const CONFIG_THEMES_DIR = path.join(CONFIG_DIR, 'themes');
 const CONFIG_IMAGES_DIR = path.join(CONFIG_DIR, 'images');
-const CONFIG_PLUGINS_DIR = path.join(CONFIG_DIR, 'plugins');
 const CONFIG_STATE_FILE = path.join(CONFIG_DIR, 'state.json');
 // Profiles: ~/.terminalvibe/profiles/<id>.json holds a full per-profile state;
 // profiles.json is the meta index ({ active, profiles: [{id, name, avatar}] }).
@@ -61,7 +60,6 @@ function ensureConfigDir() {
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
     if (!fs.existsSync(CONFIG_THEMES_DIR)) fs.mkdirSync(CONFIG_THEMES_DIR, { recursive: true });
     if (!fs.existsSync(CONFIG_IMAGES_DIR)) fs.mkdirSync(CONFIG_IMAGES_DIR, { recursive: true });
-    if (!fs.existsSync(CONFIG_PLUGINS_DIR)) fs.mkdirSync(CONFIG_PLUGINS_DIR, { recursive: true });
     if (!fs.existsSync(CONFIG_PROFILES_DIR)) fs.mkdirSync(CONFIG_PROFILES_DIR, { recursive: true });
   } catch (err) {
     console.error('[config] failed to create config dir:', err);
@@ -560,6 +558,15 @@ ipcMain.handle('shell:open-in-vscode', (_e, target) => new Promise(resolve => {
 // ── IPC: clipboard (terminal text; navigator.clipboard also works) ──
 ipcMain.handle('servers:list', () => listRunningServers(process.pid));
 ipcMain.handle('servers:kill', (_e, { pid, port } = {}) => killServer(pid, port));
+// Processes a chat's agent left running (agent-procs.js): its live agent and the tab's terminal are skipped.
+const chatRoots = id => [require('./chat-sdk').sessionPid(id), ptys.get(id)?.pid || null];
+ipcMain.handle('chat:bg-procs', async (_e, id) => {
+  if (typeof id !== 'string') return [];
+  let listeners = [];
+  try { listeners = await require('./servers').allServers(); } catch {}
+  return require('./agent-procs').agentProcesses(id, chatRoots(id), listeners).catch(() => []);
+});
+ipcMain.handle('chat:bg-stop', (_e, id, pid) => require('./agent-procs').stopAgentProcess(String(id), pid, chatRoots(String(id))));
 
 const skillManager = require('./skill-manager').createSkillManager({
   source: app.isPackaged
@@ -633,33 +640,8 @@ ipcMain.handle('fs:read-image', async (_e, p, opts) => {
   } catch (err) { return { error: ['EACCES', 'EPERM'].includes(err.code) ? 'denied' : 'missing' }; }
 });
 
-// ── IPC: read-only file access for plugins (api.fs.list / api.fs.read) ──
-// Plugins are trusted user code (they can already type into any PTY); this
-// only saves them from shelling out to read files. `~` expands to home.
+// `~` and `~/…` → the home folder.
 const expandHome = (p) => String(p || '').replace(/^~(?=$|[\\/])/, require('os').homedir());
-ipcMain.handle('plugin-fs:list', async (_e, dir) => {
-  try {
-    const d = expandHome(dir);
-    const ents = await fs.promises.readdir(d, { withFileTypes: true });
-    return await Promise.all(ents.map(async (ent) => {
-      let st = null;
-      try { st = await fs.promises.stat(path.join(d, ent.name)); } catch {}
-      return { name: ent.name, dir: ent.isDirectory(), size: st ? st.size : 0, mtime: st ? st.mtimeMs : 0 };
-    }));
-  } catch { return null; }
-});
-// Up to `maxBytes` (default 1 MiB) from the start, or from the end with `fromEnd`.
-ipcMain.handle('plugin-fs:read', async (_e, file, opts = {}) => {
-  let fh = null;
-  try {
-    fh = await fs.promises.open(expandHome(file), 'r');
-    const { size } = await fh.stat();
-    const len = Math.min(size, Math.max(0, Number(opts.maxBytes) || 1 << 20));
-    const buf = Buffer.alloc(len);
-    await fh.read(buf, 0, len, opts.fromEnd ? size - len : 0);
-    return buf.toString('utf8');
-  } catch { return null; } finally { if (fh) fh.close().catch(() => {}); }
-});
 
 // ── IPC: local files ──
 ipcMain.handle('file:save-temp', (_e, name, bytes) => require('./dropped-files').saveDroppedFile(name, bytes));
@@ -1063,88 +1045,6 @@ ipcMain.handle('config:listThemeFiles', () => {
   } catch { return []; }
 });
 
-// ── IPC: plugins (~/.terminalvibe/plugins/<id>/) ──
-// Obsidian-style layout: each plugin is a directory containing a manifest
-// (manifest.json, or legacy plugin.json) + a JS entry (main.js, or the
-// "main" field, or legacy plugin.js) + an optional stylesheet
-// (styles.css, or legacy style.css). The renderer reads manifests + files
-// over IPC and evaluates them in a sandboxed (contextIsolation) page, so
-// only these read handlers are exposed — never a generic write.
-// Enable/disable state is persisted in state.json by the renderer.
-
-// Manifest filenames probed in order (Obsidian name first).
-const PLUGIN_MANIFESTS = ['manifest.json', 'plugin.json'];
-
-function pluginDir(id) {
-  const safe = String(id || '').replace(/[^a-zA-Z0-9_.-]/g, '');
-  if (!safe || safe !== id) return null;
-  return path.join(CONFIG_PLUGINS_DIR, safe);
-}
-
-// Scan ~/.terminalvibe/plugins/ for plugin manifests.
-// The folder name is the canonical id (as in Obsidian); a manifest-level
-// "id" that disagrees is ignored in favour of the folder name.
-ipcMain.handle('config:listPlugins', () => {
-  try {
-    if (!fs.existsSync(CONFIG_PLUGINS_DIR)) return [];
-    const out = [];
-    for (const id of fs.readdirSync(CONFIG_PLUGINS_DIR)) {
-      const dir = pluginDir(id);
-      if (!dir) continue;
-      let manifest = null;
-      let manifestFile = null;
-      for (const name of PLUGIN_MANIFESTS) {
-        const manifestPath = path.join(dir, name);
-        if (!fs.existsSync(manifestPath)) continue;
-        const parsed = readConfigFile(manifestPath);
-        if (parsed && typeof parsed === 'object') { manifest = parsed; manifestFile = name; break; }
-      }
-      if (!manifest) continue;
-      out.push({ ...manifest, id, manifestFile });
-    }
-    return out;
-  } catch (err) {
-    console.error('[plugins] list failed:', err);
-    return [];
-  }
-});
-
-// Reveal a plugin's folder in the OS file manager ("access" a plugin).
-ipcMain.handle('config:openPluginFolder', (_e, id) => {
-  const dir = pluginDir(id);
-  if (!dir) return false;
-  try { shell.openPath(dir); return true; } catch (err) {
-    console.error('[plugins] open folder failed:', id, err);
-    return false;
-  }
-});
-
-// Reveal the plugins directory itself in the OS file manager.
-ipcMain.handle('config:openPluginsDir', () => {
-  try { shell.openPath(CONFIG_PLUGINS_DIR); return true; } catch (err) {
-    console.error('[plugins] open dir failed:', err);
-    return false;
-  }
-});
-
-// Read a plugin file (entry JS, CSS, manifest, assets). Path is resolved
-// against the plugin dir and must stay inside it.
-ipcMain.handle('config:readPluginFile', (_e, id, relPath) => {
-  const dir = pluginDir(id);
-  if (!dir) return null;
-  const rel = String(relPath || '').replace(/^\/+/, '');
-  if (!rel || rel.includes('..')) return null;
-  const fp = path.join(dir, rel);
-  if (!fp.startsWith(dir + path.sep)) return null;
-  try {
-    if (!fs.existsSync(fp)) return null;
-    return fs.readFileSync(fp, 'utf-8');
-  } catch (err) {
-    console.error('[plugins] read failed:', id, rel, err);
-    return null;
-  }
-});
-
 // ── IPC: native PTY (node-pty runs here in the main process) ──
 const ptys = new Map();
 const ptyFlow = new Map();
@@ -1446,17 +1346,19 @@ ipcMain.handle('git:checkout', async (_e, cwd, branch) => {
   return { ok: r.ok, error: r.error };
 });
 // A short title for a new chat, from its first message, by the small model of the agent the chat uses
-// (so it runs on that agent's own login/plan). Run outside any project so no CLAUDE.md/AGENTS.md is loaded.
-ipcMain.handle('chat:title', async (_e, harness, text) => {
+// (so it runs on that agent's own login/plan), or the model picked in Settings > Threads > Title generator.
+// Run outside any project so no CLAUDE.md/AGENTS.md is loaded.
+ipcMain.handle('chat:title', async (_e, harness, text, model) => {
   if (typeof text !== 'string' || !text.trim()) return null;
+  const pick = typeof model === 'string' && /^[\w.:/-]{1,80}$/.test(model) && !model.startsWith('-') ? model : null; // a model name, never a flag
   const prompt = 'Write a 3-6 word title for a coding chat that starts with the message below. Reply with the title only: no quotes, no trailing period.\n\nMessage:\n' + text.slice(0, 2000);
   if (harness !== 'claude' && harness !== 'codex') return null;
   const env = providers.envFor(harness, terminalEnv()), bin = providers.detect([harness], env)[harness];
   let args;
-  if (harness === 'claude') args = ['-p', '--output-format', 'text', '--model', 'haiku', '--effort', 'low', '--tools', '', '--no-session-persistence', '--setting-sources', '', prompt];
+  if (harness === 'claude') args = ['-p', '--output-format', 'text', '--model', pick || 'haiku', '--effort', 'low', '--tools', '', '--no-session-persistence', '--setting-sources', '', prompt];
   else if (harness === 'codex') {
-    let small = null;
-    try { small = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex'), 'models_cache.json'), 'utf8')).models
+    let small = pick;
+    if (!small) try { small = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex'), 'models_cache.json'), 'utf8')).models
       .find(m => m.visibility === 'list' && /luna|mini|nano/.test(m.slug))?.slug; } catch {}
     args = ['exec', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '-c', 'model_reasoning_effort="low"', ...(small ? ['-m', small] : []), prompt];
   }
@@ -1579,9 +1481,14 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       ptys.delete(id);
       // Only natural agent exit returns to a shell. Close/replacement removes
       // this PTY from the map, so its stale exit callback cannot resurrect it.
-      if (executable && returnToShell === true && createTerminal(_e, {
-        id, cols: t.cols || cols, rows: t.rows || rows, cwd: spawnCwd,
-      })) return;
+      if (executable && returnToShell === true) {
+        // Tell the renderer now: the 1.5s foreground-process poll is too slow to drop the thread's
+        // agent highlight and icon after the CLI quits.
+        sendToRenderer('terminal:agent-exit', { id, name: executable });
+        if (createTerminal(_e, {
+          id, cols: t.cols || cols, rows: t.rows || rows, cwd: spawnCwd,
+        })) return;
+      }
       sendToRenderer('terminal:exit', { id, code: exitCode });
     });
 
@@ -1759,6 +1666,58 @@ ipcMain.on('browser:devtools-bounds', (_e, pageId, rect) => {
     view.setVisible(true);
   } else view.setVisible(false);
 });
+// A browser tab's right-click menu (native): link, image, selection or editing actions, then navigation, Find and
+// Inspect. "Open in new tab" and Find go to the renderer (it owns the tabs); Inspect opens the tab's DevTools drawer.
+function browserContextMenu(wc) {
+  wc.on('context-menu', (_event, p) => {
+    const host = wc.hostWebContents, win = host && !host.isDestroyed() && BrowserWindow.fromWebContents(host);
+    if (!win) return;
+    const nav = wc.navigationHistory || wc;
+    const openTab = url => host.send('browser:open-tab', { id: wc.id, url });
+    const web = u => /^https?:\/\//i.test(u || '');
+    const items = [];
+    const group = list => { if (list.length) items.push(...(items.length ? [{ type: 'separator' }] : []), ...list); };
+    if (p.linkURL) group([
+      ...(web(p.linkURL) ? [{ label: 'Open link in new tab', click: () => openTab(p.linkURL) },
+        { label: 'Open link in default browser', click: () => shell.openExternal(p.linkURL) }] : []),
+      { label: 'Copy link address', click: () => clipboard.writeText(p.linkURL) },
+    ]);
+    if (p.mediaType === 'image' && p.srcURL) group([
+      ...(web(p.srcURL) ? [{ label: 'Open image in new tab', click: () => openTab(p.srcURL) }] : []),
+      { label: 'Copy image', click: () => wc.copyImageAt(p.x, p.y) },
+      { label: 'Copy image address', click: () => clipboard.writeText(p.srcURL) },
+    ]);
+    if (p.isEditable) {
+      group((p.dictionarySuggestions || []).map(word => ({ label: word, click: () => wc.replaceMisspelling(word) })));
+      const f = p.editFlags || {};
+      group([{ label: 'Undo', enabled: !!f.canUndo, click: () => wc.undo() }, { label: 'Redo', enabled: !!f.canRedo, click: () => wc.redo() }]);
+      group([{ label: 'Cut', enabled: !!f.canCut, click: () => wc.cut() }, { label: 'Copy', enabled: !!f.canCopy, click: () => wc.copy() },
+        { label: 'Paste', enabled: !!f.canPaste, click: () => wc.paste() }, { label: 'Select all', click: () => wc.selectAll() }]);
+    } else if (p.selectionText?.trim()) group([{ label: 'Copy', click: () => wc.copy() }]);
+    group([
+      { label: 'Back', enabled: nav.canGoBack(), click: () => nav.goBack() },
+      { label: 'Forward', enabled: nav.canGoForward(), click: () => nav.goForward() },
+      { label: 'Reload', click: () => wc.reload() },
+    ]);
+    group([
+      { label: 'Find in page', accelerator: 'CmdOrCtrl+F', registerAccelerator: false, click: () => host.send('browser:find', wc.id) },
+      { label: 'Inspect', click: () => inspectBrowserAt(wc, p.x, p.y) },
+    ]);
+    Menu.buildFromTemplate(items).popup({ window: win });
+  });
+}
+// Inspect: open the tab's DevTools drawer (the renderer places it), then select the element once it's there.
+function inspectBrowserAt(wc, x, y) {
+  const host = wc.hostWebContents;
+  if (!host || host.isDestroyed()) return;
+  if (devtoolsViews.has(wc.id)) { wc.inspectElement(x, y); return; }
+  host.send('browser:devtools-toggle', wc.id);
+  let tries = 0;
+  const wait = setInterval(() => {
+    if (wc.isDestroyed() || ++tries > 40) { clearInterval(wait); return; }
+    if (devtoolsViews.has(wc.id)) { clearInterval(wait); wc.inspectElement(x, y); }
+  }, 50);
+}
 function matchBrowserShortcut(input) {
   return browserShortcuts.some(s => s && s.key
     && (s.key.length === 1 ? input.key.toLowerCase() === s.key.toLowerCase() : input.key === s.key || input.code === s.key)
@@ -1875,12 +1834,21 @@ app.whenReady().then(async () => {
       if (code === -3) _e2.preventDefault();
     });
     if (wc.getType() === 'webview') {
+      browserContextMenu(wc);
       wc.on('before-input-event', (event, input) => {
         // F12 / Ctrl+Shift+I in a browser tab, or in its DevTools drawer, toggles that tab's drawer.
         if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) {
           event.preventDefault();
           const host = wc.hostWebContents;
           if (host && !host.isDestroyed()) host.send('browser:devtools-toggle', wc.id);
+          return;
+        }
+        // Ctrl+F (Cmd+F) in a page: the tab's find bar (the page never sees it).
+        if (input.type === 'keyDown' && input.key.toLowerCase() === 'f' && !input.shift && !input.alt
+            && (process.platform === 'darwin' ? input.meta && !input.control : input.control && !input.meta)) {
+          event.preventDefault();
+          const host = wc.hostWebContents;
+          if (host && !host.isDestroyed()) host.send('browser:find', wc.id);
           return;
         }
         const host = wc.hostWebContents;

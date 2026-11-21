@@ -136,12 +136,34 @@ function toolOutput(value) {
   return text.length > 64000 ? text.slice(0, 64000) + '\n… output truncated' : text;
 }
 
-function parseClaude(list) {
-  const items = [], tools = new Map(), queued = [];
+// Claude Code's note that a background command (or background subagent) ended:
+// <task-notification><task-id>…<tool-use-id>…<status>completed|failed|killed…<summary>…</summary>.
+function taskNotification(text) {
+  if (!/^\s*<task-notification>/.test(text || '')) return null;
+  const tag = name => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim() || null;
+  const status = tag('status') || 'completed';
+  return { taskId: tag('task-id'), toolUseId: tag('tool-use-id'), summary: tag('summary') || '',
+    status: status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'stopped' };
+}
+// side: a subagent's own transcript (subagents/agent-<id>.jsonl), whose rows are all sidechain rows.
+function parseClaude(list, side = false) {
+  const items = [], tools = new Map(), queued = [], ended = new Set();
+  // A background task ended: the line where it happened (role "event", a turn of its own) and its call's status.
+  const onNotification = (n, ts) => {
+    if (!n || ended.has(n.taskId || n.toolUseId)) return; // Claude can log one twice (queued, then as a turn)
+    ended.add(n.taskId || n.toolUseId);
+    const call = n.toolUseId && tools.get(n.toolUseId);
+    if (call?.bg) Object.assign(call.bg, { status: n.status, summary: n.summary, endedAt: ts });
+    if (call?.agent && call.agent.status === 'running') call.agent.status = n.status === 'stopped' ? 'stopped' : n.status;
+    if (!call && !n.summary) return; // a task this transcript says nothing else about: no line to show
+    items.push({ role: 'event', kind: call?.agent ? 'agent' : 'bg', status: n.status, text: n.summary || 'Background task ended',
+      title: call?.bg?.description || call?.agent?.description || '', command: call?.bg?.command || '', ts });
+  };
   for (const row of list) {
     // A message sent while Claude was working (a steer) is recorded only as a queued_command attachment, never as
     // a user row: show it as the user's message. Claude Code's own queued notices (<task-notification>…) stay out.
     const qc = row.type === 'attachment' && row.attachment?.type === 'queued_command' ? row.attachment : null;
+    if (qc && !row.isSidechain && typeof qc.prompt === 'string' && taskNotification(qc.prompt)) { onNotification(taskNotification(qc.prompt), qc.timestamp || row.timestamp || null); continue; }
     if (qc && (qc.commandMode || 'prompt') === 'prompt' && typeof qc.prompt === 'string' && qc.prompt.trim() && !qc.prompt.trim().startsWith('<') && !row.isSidechain) {
       const text = stripNote(qc.prompt.trim());
       items.push({ role: 'user', text, ...threadRefs(qc.prompt), ts: qc.timestamp || row.timestamp || null, steered: true });
@@ -158,7 +180,7 @@ function parseClaude(list) {
       items.session = { ...t, cost: Number.isFinite(row.totalCostUSD) ? row.totalCostUSD : null };
       continue;
     }
-    if (!['user', 'assistant'].includes(row.type) || row.isMeta || row.isSidechain) continue;
+    if (!['user', 'assistant'].includes(row.type) || row.isMeta || (row.isSidechain && !side)) continue;
     // The context in use: the latest reply's prompt (fresh + cached input) plus what it wrote, which the next prompt carries.
     const u = row.type === 'assistant' && row.message?.model !== '<synthetic>' && row.message?.usage;
     if (u) items.last = { model: row.message.model || '', input: u.input_tokens || 0, cacheRead: u.cache_read_input_tokens || 0,
@@ -179,6 +201,7 @@ function parseClaude(list) {
         }
         // A steer Claude Code also wrote as a user row (when it hosts its own turn): shown once, as the steer.
         if (row.type === 'user' && queued.length && queued[0] === stripNote(text)) { queued.shift(); continue; }
+        if (row.type === 'user' && taskNotification(text)) { onNotification(taskNotification(text), row.timestamp || null); continue; }
         if (text && !text.startsWith('<') && !(row.type === 'user' && isOldHandoff(text))) items.push({ role: row.type, text: row.type === 'user' ? stripNote(text) : text, ...(row.type === 'user' ? threadRefs(text) : {}), ts: row.timestamp || null });
       } else if (b?.type === 'thinking' && row.type === 'assistant') {
         const text = String(b.thinking || '').trim();
@@ -187,11 +210,33 @@ function parseClaude(list) {
         const item = { role: 'tool', name: String(b.name || 'tool'), summary: toolSummary(b.input), detail: toolDetail(b.input), ts: row.timestamp || null };
         // Claude's questions to the user: the chat shows each question and the answer given, not the tool's JSON.
         if (b.name === 'AskUserQuestion' && Array.isArray(b.input?.questions)) item.qa = b.input.questions.map(q => ({ question: String(q?.question || q?.header || ''), answer: null }));
+        if (isDelegate(b.name)) item.input = b.input;
+        // A command left running in the background: it runs on after this call (backgroundTails reads its output).
+        if (b.name === 'Bash' && b.input?.run_in_background) {
+          item.bg = { command: String(b.input.command || ''), description: String(b.input.description || ''), status: 'running', taskId: null, file: null, startedAt: row.timestamp || null };
+        }
+        // A subagent: its own steps are read from its transcript (claudeSubagents).
+        if ((b.name === 'Agent' || b.name === 'Task') && b.input && typeof b.input === 'object') {
+          item.agent = { toolUseId: b.id, type: String(b.input.subagent_type || 'general-purpose'), description: String(b.input.description || ''),
+            prompt: String(b.input.prompt || ''), status: 'running', last: null };
+        }
         tools.set(b.id, item); items.push(item);
       } else if (b?.type === 'tool_result' && tools.has(b.tool_use_id)) {
         const item = tools.get(b.tool_use_id);
         item.output = toolOutput(b.content);
         if (b.is_error) item.error = true;
+        if (item.bg) {
+          if (b.is_error) item.bg.status = 'failed';
+          item.bg.taskId = row.toolUseResult?.backgroundTaskId || /with ID: ([\w-]+)/.exec(item.output)?.[1] || null;
+          item.bg.file = /Output is being written to: (\S+\.output)\b/.exec(item.output)?.[1] || null;
+        }
+        if (item.agent) {
+          const r = row.toolUseResult && typeof row.toolUseResult === 'object' ? row.toolUseResult : {};
+          // The report without Claude Code's own wrapper tags; a background agent's launch notice says it still runs.
+          if (Array.isArray(r.content)) item.output = r.content.map(c => String(c?.text || '')).filter(t => t && !t.trimStart().startsWith('<')).join('\n').trim();
+          Object.assign(item.agent, { id: r.agentId || null, model: r.resolvedModel || null, ms: r.totalDurationMs || null,
+            status: b.is_error ? 'failed' : r.status === 'completed' || !r.status ? 'completed' : r.status === 'async_launched' ? 'running' : r.status });
+        }
         if (item.qa) {
           const answers = row.toolUseResult?.answers;
           for (const x of item.qa) {
@@ -213,7 +258,7 @@ function parseClaude(list) {
 
 function parseCodex(list) {
   const items = [], tools = new Map();
-  let id = null, cwd = null, turnState = null, ctx = null;
+  let id = null, cwd = null, turnState = null, ctx = null, model = null;
   for (const r of list) {
     const p = r.payload;
     if (r.type === 'event_msg' && p?.type === 'token_count' && p.info?.last_token_usage) {
@@ -226,6 +271,7 @@ function parseCodex(list) {
       turnState = { status: p.type === 'task_started' ? 'working' : p.type === 'task_complete' ? 'completed' : 'aborted', at: Date.parse(r.timestamp) || 0 };
     }
     if (r.type === 'session_meta') { id = p?.id || null; cwd = p?.cwd || null; continue; }
+    if (r.type === 'turn_context' && p?.model) model = p.model; // the model the latest turn used
     if (r.type === 'event_msg' && p?.type === 'item_completed' && p.item) {
       const it = p.item, ts = r.timestamp || null;
       if (it.type === 'CommandExecution') {
@@ -237,8 +283,10 @@ function parseCodex(list) {
           : ch?.type === 'delete' ? ['-(file deleted)'] : String(ch?.unified_diff || '').split('\n').filter(Boolean)));
         items.push({ role: 'tool', name: 'apply_patch', summary: clip(files.map(f => f.path).join(', ')), detail: files.map(f => f.path).join('\n'), ts, files });
       } else if (it.type === 'McpToolCall') {
-        items.push({ role: 'tool', name: `${it.server || 'mcp'}.${it.tool || 'tool'}`, summary: toolSummary(it.arguments), detail: toolDetail(it.arguments), ts,
-          ...(it.status === 'failed' || it.error ? { error: true } : {}) });
+        const name = `${it.server || 'mcp'}.${it.tool || 'tool'}`;
+        items.push({ role: 'tool', name, summary: toolSummary(it.arguments), detail: toolDetail(it.arguments), ts,
+          ...(it.status === 'failed' || it.error ? { error: true } : {}),
+          ...(isDelegate(name) ? { input: jsonInput(it.arguments), ...(it.result ? { output: toolOutput(it.result.content ?? it.result) } : {}) } : {}) });
       } else if (it.type === 'ImageView' && it.path) {
         const file = String(it.path).replace(/^file:\/\//, '');
         items.push({ role: 'tool', name: 'view_image', summary: clip(file), detail: file, ts });
@@ -265,6 +313,7 @@ function parseCodex(list) {
         const files = patchChanges(typeof input === 'string' ? input : input?.input ?? input?.patch);
         if (files) item.files = files;
       }
+      if (isDelegate(item.name)) item.input = jsonInput(p.arguments ?? p.input);
       if (p.call_id) tools.set(p.call_id, item);
       // Newer Codex wraps its tools in an "exec" script; the steps it ran come as item_completed events below.
       if (item.name !== 'exec') items.push(item);
@@ -275,23 +324,77 @@ function parseCodex(list) {
       if ((typeof code === 'number' && code !== 0) || out?.success === false) tools.get(p.call_id).error = true;
     }
   }
-  return { id, cwd, items, ...(turnState ? { turnState } : {}), ...(ctx ? { ctx } : {}) };
+  return { id, cwd, items, ...(turnState ? { turnState } : {}), ...(ctx ? { ctx } : {}), ...(model ? { model } : {}) };
 }
 
 const claudeFiles = new Map(); // sessionId -> transcript path
-async function claudeSegment({ sessionId, cwd, since, exclude = [] }, home) {
+async function claudeFile(sessionId, home) {
+  let file = claudeFiles.get(sessionId);
+  if (file && fs.existsSync(file)) return file;
+  const projects = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'projects');
+  let folders = []; try { folders = await fs.promises.readdir(projects); } catch {}
+  file = folders.map(f => path.join(projects, f, sessionId + '.jsonl')).find(f => fs.existsSync(f));
+  if (file) claudeFiles.set(sessionId, file);
+  return file || null;
+}
+async function claudeSegment({ sessionId, cwd, since, exclude = [], subagent }, home) {
   if (!sessionId && cwd) sessionId = await findClaudeSession(cwd, since, exclude, home);
   if (!/^[\w-]{8,64}$/.test(sessionId || '')) return { items: [] };
-  let file = claudeFiles.get(sessionId);
-  if (!file || !fs.existsSync(file)) {
-    const projects = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'projects');
-    let folders = []; try { folders = await fs.promises.readdir(projects); } catch {}
-    file = folders.map(f => path.join(projects, f, sessionId + '.jsonl')).find(f => fs.existsSync(f));
-    if (!file) return { sessionId, items: [] };
-    claudeFiles.set(sessionId, file);
+  const file = await claudeFile(sessionId, home);
+  if (!file) return { sessionId, items: [] };
+  const dir = path.join(path.dirname(file), sessionId, 'subagents');
+  // A subagent's thread (seg.subagent = the Agent call's id): its own transcript, read only.
+  if (subagent) {
+    const meta = (await subagentMetas(dir)).find(x => x.toolUseId === subagent);
+    const items = meta ? await parseFile(meta.file, parseSidechain).catch(() => []) : [];
+    await claudeSubagents(items, dir);
+    return { sessionId, items };
   }
   const items = await parseFile(file, parseClaude);
+  await claudeSubagents(items, dir);
+  await backgroundTails(items);
   return { sessionId, items, ...(items.last ? { ctx: claudeContext(items.last, items.session) } : {}) };
+}
+const parseSidechain = list => parseClaude(list, true);
+// A running background command's latest output (Claude Code writes it to <session>/tasks/<id>.output): the last
+// lines, re-read on each history read while it runs (the transcript itself doesn't change meanwhile).
+async function backgroundTails(items) {
+  await Promise.all(items.filter(x => x.bg?.status === 'running' && x.bg.file && /[\\/]tasks[\\/][\w-]+\.output$/.test(x.bg.file)).map(async ({ bg }) => {
+    try {
+      const st = await fs.promises.stat(bg.file);
+      bg.size = st.size;
+      if (bg.tailSize === st.size) return;
+      const fh = await fs.promises.open(bg.file, 'r');
+      try {
+        const n = Math.min(st.size, 6000), buf = Buffer.alloc(n);
+        await fh.read(buf, 0, n, st.size - n);
+        bg.tail = buf.toString('utf8').replace(/^[^\n]*\n(?=[\s\S])/, n < st.size ? '' : '$&').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split('\n').slice(-40).join('\n');
+        bg.tailSize = st.size;
+      } finally { await fh.close(); }
+    } catch {}
+  }));
+}
+// Each subagent keeps its own transcript and a meta file naming the Agent call that started it (toolUseId).
+async function subagentMetas(dir) {
+  let names = []; try { names = await fs.promises.readdir(dir); } catch { return []; }
+  return (await Promise.all(names.filter(n => n.endsWith('.meta.json')).map(async n => {
+    try { return { ...JSON.parse(await fs.promises.readFile(path.join(dir, n), 'utf8')), file: path.join(dir, n.replace(/\.meta\.json$/, '.jsonl')) }; } catch { return null; }
+  }))).filter(x => x?.toolUseId);
+}
+async function claudeSubagents(items, dir) {
+  if (!items.some(x => x.agent)) return;
+  const metas = new Map((await subagentMetas(dir)).map(m => [m.toolUseId, m]));
+  await Promise.all(items.filter(x => x.agent).map(async ({ agent }) => {
+    const meta = metas.get(agent.toolUseId);
+    if (!meta) return;
+    agent.model ||= meta.model || null;
+    if (agent.status === 'running' && meta.finished) agent.status = 'completed';
+    // The row shows the latest step; the steps themselves open in the subagent's own thread.
+    try {
+      const all = await parseFile(meta.file, parseSidechain), x = all.length > 1 ? all.at(-1) : null; // [0] is the prompt
+      agent.last = x && { role: x.role, name: x.name, summary: x.summary, text: x.text?.slice(0, 300), ts: x.ts, steps: all.length };
+    } catch {}
+  }));
 }
 // Claude's window isn't in the transcript: it follows the model. Every current model has 1M; Haiku 4.5 and
 // models before the 4.6 generation have 200k ("[1m]" ids opt into 1M).
@@ -352,25 +455,29 @@ async function codexSegment({ sessionId, cwd, since, exclude = [] }, home) {
       if (codexFiles.size >= 128) codexFiles.delete(codexFiles.keys().next().value);
       codexFiles.set(path.join(root, res.id || sessionId), f);
     }
-    return { sessionId: res.id || sessionId, items: res.items, ...(res.turnState ? { turnState: res.turnState } : {}), ...(res.ctx ? { ctx: res.ctx } : {}) };
+    return { sessionId: res.id || sessionId, items: res.items, ...(res.turnState ? { turnState: res.turnState } : {}), ...(res.ctx ? { ctx: res.ctx } : {}), ...(res.model ? { model: res.model } : {}) };
   }
   return { sessionId, items: [] };
 }
 
-// Agents driven over the Agent Client Protocol (Antigravity CLI): their own history isn't readable, so the chat
-// records each session's messages and tool calls from the protocol (electron/chat-sdk.js) in
+// Agents whose own history isn't readable (Antigravity CLI's ACP, OpenCode's server): the chat records each
+// session's messages and tool calls from the protocol (electron/chat-sdk.js) in
 // ~/.terminalvibe/acp/<session id>.jsonl, one chat item per line.
 const acpFile = (sessionId, home) => path.join(home, '.terminalvibe', 'acp', sessionId + '.jsonl');
 function parseAcp(list) {
   // An "interrupt" record (the agent exited mid-turn) flags the step before it, like Claude Code's interrupt marker.
-  const items = [];
+  const items = [], calls = new Map();
   for (const r of list) {
     if (r.role === 'interrupt') { if (items.length) Object.assign(items[items.length - 1], { interrupted: r.reason || 'reply', interruptedAt: r.ts || null }); continue; }
+    // A subagent's call is recorded when it starts and again when it ends: the end replaces the start in place.
+    if (r.callId && calls.has(r.callId)) { items[calls.get(r.callId)] = { ...r, ts: items[calls.get(r.callId)].ts }; continue; }
+    if (r.callId) calls.set(r.callId, items.length);
     items.push(r);
   }
   return items.filter(r => ['user', 'assistant', 'thinking', 'tool'].includes(r.role)).map(r => ({ ...(r.role === 'user'
     ? { role: 'user', text: stripNote(String(r.text || '')), ...threadRefs(String(r.text || '')), ts: r.ts || null }
-    : r.role === 'tool' ? { role: 'tool', name: String(r.name || 'tool'), summary: String(r.summary || ''), detail: String(r.detail || ''), ...(r.output !== undefined ? { output: toolOutput(r.output) } : {}), ts: r.ts || null, ...(r.error ? { error: true } : {}) }
+    : r.role === 'tool' ? { role: 'tool', name: String(r.name || 'tool'), summary: String(r.summary || ''), detail: String(r.detail || ''), ...(r.output !== undefined ? { output: toolOutput(r.output) } : {}), ts: r.ts || null, ...(r.error ? { error: true } : {}),
+      ...(r.agent && typeof r.agent === 'object' ? { agent: { ...r.agent, last: null } } : {}), ...(r.input ? { input: r.input } : {}) }
     : { role: r.role, text: String(r.text || ''), ts: r.ts || null }), ...(r.interrupted ? { interrupted: r.interrupted, interruptedAt: r.interruptedAt } : {}) }))
     .filter(r => r.role === 'tool' || r.text || r.interrupted);
 }
@@ -379,14 +486,81 @@ async function acpSegment({ sessionId }, home) {
   if (!/^[\w-]{8,64}$/.test(sessionId || '')) return { items: [], unsupported: true };
   const file = acpFile(sessionId, home);
   if (!fs.existsSync(file)) return { sessionId, items: [] };
-  return { sessionId, items: await parseFile(file, parseAcp) };
+  const items = await parseFile(file, parseAcp);
+  // A subagent (OpenCode's task tool) has its own session transcript: the row shows its latest step.
+  await Promise.all(items.filter(x => x.agent?.sessionId && /^[\w-]{8,64}$/.test(x.agent.sessionId)).map(async ({ agent }) => {
+    try {
+      const all = await parseFile(acpFile(agent.sessionId, home), parseAcp), x = all.length > 1 ? all.at(-1) : null;
+      agent.last = x && { role: x.role, name: x.name, summary: x.summary, text: x.text?.slice(0, 300), ts: x.ts, steps: all.length };
+    } catch {}
+  }));
+  return { sessionId, items };
 }
 
-function readSegment(seg = {}, home = os.homedir()) {
-  if (seg.harness === 'claude') return claudeSegment(seg, home);
-  if (seg.harness === 'codex') return codexSegment(seg, home);
-  if (seg.harness === 'antigravity') return acpSegment(seg, home);
-  return Promise.resolve({ items: [], unsupported: true });
+async function readSegment(seg = {}, home = os.homedir()) {
+  const r = seg.harness === 'claude' ? await claudeSegment(seg, home)
+    : seg.harness === 'codex' ? await codexSegment(seg, home)
+    : seg.harness === 'antigravity' || seg.harness === 'opencode' ? await acpSegment(seg, home)
+    : { items: [], unsupported: true };
+  await delegatedSubagents(r.items, home);
+  return r;
+}
+
+// TerminalVibe's delegate_task (delegate-mcp.js): a subagent on another harness. Its run file
+// (~/.terminalvibe/subagents/<key>.json) names the session it runs in; that session's transcript is its thread.
+const isDelegate = name => /terminalvibe[._]+delegate_task$/.test(name || '');
+const jsonInput = v => { if (typeof v === 'string') { try { v = JSON.parse(v); } catch { return null; } } return v && typeof v === 'object' ? v : null; };
+const DELEGATE_NAMES = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode' };
+// A run still marked running whose process is gone (TerminalVibe or the agent was killed) was stopped.
+const alive = pid => { if (!Number.isInteger(pid) || pid <= 1) return false; try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; } };
+async function delegatedSubagents(items, home) {
+  const calls = items.filter(x => x.role === 'tool' && isDelegate(x.name) && x.input && typeof x.input.prompt === 'string' && DELEGATE_NAMES[x.input.harness]);
+  if (!calls.length) return;
+  const { delegateKey } = require('./delegate-mcp');
+  // Every run of a call's harness + prompt (one file each: <key>.<startedAt>.<pid>.<request>.json; <key>.json before that).
+  const dir = path.join(home, '.terminalvibe', 'subagents');
+  let names = []; try { names = await fs.promises.readdir(dir); } catch {}
+  const runsOf = new Map();
+  for (const key of new Set(calls.map(x => delegateKey(x.input.harness, x.input.prompt.trim())))) {
+    const files = names.filter(n => n.startsWith(key + '.') && n.endsWith('.json'));
+    const runs = (await Promise.all(files.map(n => fs.promises.readFile(path.join(dir, n), 'utf8').then(JSON.parse).catch(() => null))))
+      .filter(r => r && typeof r === 'object').sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+    runsOf.set(key, runs);
+  }
+  // A finished call names its session in its result: that run. A call still running: the earliest run started
+  // after it that no other call has, in the order the calls were made.
+  const claimed = new Set();
+  const sessionOf = x => typeof x.output === 'string' ? /^\[[^\]\n]+ session ([^\]\n]+)\]\n/.exec(x.output)?.[1] || null : null;
+  const pick = new Map();
+  for (const x of calls) {
+    const sid = sessionOf(x), run = sid && runsOf.get(delegateKey(x.input.harness, x.input.prompt.trim())).find(r => r.sessionId === sid);
+    if (run) { pick.set(x, run); claimed.add(run); }
+  }
+  for (const x of calls) {
+    if (pick.has(x) || sessionOf(x)) continue;
+    const at = Date.parse(x.ts) || 0;
+    const run = runsOf.get(delegateKey(x.input.harness, x.input.prompt.trim())).find(r => !claimed.has(r) && (r.startedAt || 0) >= at - 5000);
+    if (run) { pick.set(x, run); claimed.add(run); }
+  }
+  await Promise.all(calls.map(async (x, n) => {
+    const { harness, prompt, description, model } = x.input;
+    const run = pick.get(x) || null;
+    const sid = sessionOf(x);
+    if (typeof x.output === 'string') x.output = x.output.replace(/^\[[^\]\n]+ session [^\]\n]+\]\n/, ''); // the report, without its session line
+    const runStatus = run?.status === 'running' && !alive(run.pid) ? 'stopped' : run?.status;
+    // One id per call (a thread opened for it is found again by this id).
+    const agent = x.agent = { toolUseId: `tv-${delegateKey(harness, prompt.trim())}-${Date.parse(x.ts) || n}`, harness, sessionId: run?.sessionId || sid || null, type: DELEGATE_NAMES[harness],
+      description: String(description || ''), prompt, model: model || run?.model || null, since: run?.startedAt || Date.parse(x.ts) || null,
+      status: runStatus === 'stopped' && x.output === undefined ? 'stopped'
+        : x.error || runStatus === 'failed' || runStatus === 'stopped' ? 'failed' : x.output !== undefined || runStatus === 'completed' ? 'completed' : 'running',
+      ms: run?.endedAt && run.startedAt ? run.endedAt - run.startedAt : null, last: null };
+    if (!agent.sessionId) return;
+    try {
+      const child = await readSegment({ harness, sessionId: agent.sessionId, since: agent.since }, home), all = child.items, l = all.length > 1 ? all.at(-1) : null;
+      agent.last = l && { role: l.role, name: l.name, summary: l.summary, text: l.text?.slice(0, 300), ts: l.ts, steps: all.length };
+      agent.model ||= child.model || child.ctx?.model || null; // the model it ran on
+    } catch {}
+  }));
 }
 
 // ── Thread folders: ~/.terminalvibe/threads/<id>/ ──
@@ -471,7 +645,7 @@ async function syncThread(meta = {}, home = os.homedir(), root = threadsRoot(hom
     const f = fresh[i];
     const items = f.items.length || !old ? f.items : old.items;
     return { harness: s.harness, sessionId: f.sessionId || s.sessionId || old?.sessionId || null, since: s.since,
-      model: s.model || null, effort: s.effort || null, handoff: !!s.handoff, ...(s.frozen ? { frozen: true } : {}), ...(f.unsupported ? { unsupported: true } : {}), ...(f.turnState ? { turnState: f.turnState } : {}), ...(f.ctx ? { ctx: f.ctx } : {}), items };
+      model: s.model || null, usedModel: f.model || f.ctx?.model || null, effort: s.effort || null, handoff: !!s.handoff, ...(s.frozen ? { frozen: true } : {}), ...(f.unsupported ? { unsupported: true } : {}), ...(f.turnState ? { turnState: f.turnState } : {}), ...(f.ctx ? { ctx: f.ctx } : {}), items };
   });
   const thread = { id: meta.id, title: String(meta.title || 'New thread'), projectId: meta.projectId || null, cwd: meta.cwd || null,
     createdAt: meta.createdAt || null, segments: merged.map(({ items, unsupported, ...s }) => s) };

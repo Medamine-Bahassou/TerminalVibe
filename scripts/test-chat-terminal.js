@@ -22,7 +22,7 @@ function setup(segments, picks = { harness: 'claude', model: 'sonnet', effort: '
     createAgentTerminal: async request => { state.starts.push(request); state.process = path.basename(request.executable); return true; },
     modelName: o => o.harness, syncThreadComposer() {}, saveState() {}, curChat: () => null,
     removeTerminal: () => { throw Error('Unexpected removal of another chat tab'); },
-    waitAgentReady: async () => { state.waits++; return 'ready'; },
+    waitAgentReady: async () => { state.waits++; return 'ready'; }, ensureThreadBranch: async () => {},
     isLiveTerminal: () => state.live, agentRunning: async () => true, agentLocked: () => false, syncTabAgentIcon() {}, refreshWorkspaceProcsSoon() {},
     sendToAgent: async (_, text) => { state.sent.push(text); return true; },
     zoomBadge: text => state.notices.push(text), uuid: () => 'new-claude-id',
@@ -165,6 +165,21 @@ function setup(segments, picks = { harness: 'claude', model: 'sonnet', effort: '
   assert.equal(agyStarts[0].options.access, 'auto');
   const agyArgv = vm.runInContext('CHAT_AGENTS', agy.context).antigravity.argv({ model: 'gemini-3.8-flash', effort: 'low', access: 'auto' }, 'conv-1', true);
   assert.deepEqual(Array.from(agyArgv), ['--model', 'gemini-3.8-flash', '--effort', 'low', '--mode', 'auto', '--conversation', 'conv-1']);
+  // OpenCode resumes its session by id; the terminal view runs the real CLI with --session.
+  const ocHarnesses = [...harnesses, { id: 'opencode', name: 'OpenCode', bin: 'opencode' }];
+  const oc = setup([{ harness: 'opencode', sessionId: 'ses_oc1', cwd: '/tmp/oc', model: 'opencode/deepseek-v4.1-flash-free', used: true }], { harness: 'opencode', model: 'opencode/deepseek-v4.1-flash-free', effort: 'default', access: 'default' });
+  oc.context.THREAD_HARNESSES = ocHarnesses; oc.context.harnessOf = id => ocHarnesses.find(h => h.id === id);
+  oc.context.loadChatAgents = async () => ({ found: { opencode: '/bin/opencode' } });
+  assert(await oc.context.ensureChatTerminalSession(oc.tab));
+  assert.equal(oc.state.starts[0].executable, '/bin/opencode');
+  assert.deepEqual(Array.from(oc.state.starts[0].argv), ['--model', 'opencode/deepseek-v4.1-flash-free', '--session', 'ses_oc1']);
+  const ocArgv = vm.runInContext('CHAT_AGENTS', oc.context).opencode.argv({ model: 'default' }, 'ses_old', true, 'ses_fork');
+  assert.deepEqual(Array.from(ocArgv), ['--session', 'ses_fork', '--fork']);
+  const ocArgvs = vm.runInContext('CHAT_AGENTS', oc.context).opencode.argv;
+  assert.deepEqual(Array.from(ocArgvs({ model: 'm', access: 'full' })), ['--model', 'm', '--auto']);
+  assert.deepEqual(Array.from(ocArgvs({ model: 'm', access: 'auto' })), ['--model', 'm', '--auto']);
+  assert.deepEqual(Array.from(ocArgvs({ model: 'm', access: 'plan' })), ['--model', 'm', '--agent', 'plan']);
+  assert.deepEqual(Array.from(ocArgvs({ model: 'm', access: 'accept-edits' })), ['--model', 'm']);
   // The terminal view hands an idle structured session over to the real CLI; a busy one is never cut off.
   let stops = 0;
   sdk.context.window.electronAPI.chatSdkStop = async () => { stops++; };

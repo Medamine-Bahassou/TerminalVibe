@@ -15,7 +15,7 @@ app.whenReady().then(async()=>{
   await win.webContents.executeJavaScript(fs.readFileSync(path.join(root,'vendor/xterm/xterm.js'),'utf8'));
   const src=fs.readFileSync(path.join(root,'app.js'),'utf8');
   const termRow=src.slice(src.indexOf('  function termRow('),src.indexOf('  // Join terminal rows'));
-  const blur=src.slice(src.indexOf('  const EMAIL_RE ='),src.indexOf('  // opts (plugins: api.terminal.open)'));
+  const blur=src.slice(src.indexOf('  const EMAIL_RE ='),src.indexOf('  // opts: { cwd, cmd, label }'));
   try {
     console.log(await win.webContents.executeJavaScript(`(async()=>{
       const check=(ok,m)=>{if(!ok)throw Error(m);};

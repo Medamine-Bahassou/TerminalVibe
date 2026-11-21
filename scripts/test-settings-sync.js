@@ -12,7 +12,7 @@ const save=source.slice(source.indexOf('  let navigationSaveTimer;'),source.inde
     currentLineHeight:1.2,currentCursorStyle:'block',currentCursorBlink:true,currentScrollback:1000,
     animationsEnabled:true,settingsCategory:'appearance',pinnedCollapsed:false,sidebarMode:'normal',showWsProcs:true,hideEmails:true,
     notifyOnCommandFinish:false,notificationSound:true,terminalLinkTarget:'tab',threadSettings:{harness:'',folder:'scratch',titles:'agent'},backgroundMode:'none',globalBackgroundImage:null,backgroundOpacity:0,
-    customShortcuts:{},searchEngine:'google',customSearchUrl:'',defaultTerminalPath:'',defaultShell:'',_pluginStates:new Map(),_pluginConfigs:new Map(),
+    customShortcuts:{},searchEngine:'google',customSearchUrl:'',defaultTerminalPath:'',defaultShell:'',
     localStorage:{getItem:()=>JSON.stringify(live)},
     persistStateToStorage:state=>{writes++;return new Promise(resolve=>{complete=()=>{disk=state;resolve();};});},
     window:{electronAPI:{settingsChanged:()=>{notifications++;observed=disk.showWsProcs;}}},
