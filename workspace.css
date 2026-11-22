@@ -3199,3 +3199,6 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 #sbr-thread .thr-svg-toggle i { font-size:13px; }
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-svg-toggle { transition:none; } }
 #sbr-thread .thr-svg-wrap > .thr-code { padding-right:72px; }
+
+/* Queued/scheduled message: when it was queued, left of the actions (same quiet timestamp as the transcript). */
+#sbr-thread .thr-queued-actions > .thr-time { margin-right:4px; }

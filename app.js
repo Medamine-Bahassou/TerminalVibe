@@ -9734,7 +9734,7 @@
     const merge = async pr => {
       if (curChat() !== tab || chatCwd(tab) !== cwd) return;
       const text = `Please merge GitHub PR #${pr.number} (${pr.url}). If GitHub blocks the merge, tell me why.`;
-      const message = { id: uuid(), text, typed: text, files: [], after: _turns.get(tab.id)?.sentAt || Date.now() };
+      const message = { id: uuid(), text, typed: text, files: [], at: Date.now(), after: _turns.get(tab.id)?.sentAt || Date.now() };
       const busy = chatWorking(tab) || _chatStarting.has(tab.id) || _chatSending.has(tab.id);
       if (!busy && await deliverChatMessage(tab, message)) return;
       if (!findTermById(tab.id)) return;
@@ -11821,7 +11821,7 @@
     if (!text) { scheduleDialog.close(); return; }
     ws.chat ||= { createdAt: now };
     ws.chat.opts ??= chatOpts(ws);
-    (ws.chat.queuedMessages ||= []).push({ id: uuid(), typed, files, text, sendAt, scheduleMode });
+    (ws.chat.queuedMessages ||= []).push({ id: uuid(), typed, files, text, sendAt, scheduleMode, at: now });
     scheduleDialog.close();
     clearChatDraft(ws);
     updateChatQueue(ws);
@@ -11942,7 +11942,7 @@
     ws.chat ||= { createdAt: Date.now() };
     const sideAsk = /^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(typed);
     if (sideAsk) { clearChatDraft(ws); void openSideChat(ws, (sideAsk[1] || '').trim(), files); return; }
-    const message = { id: uuid(), text, typed, files, after: _turns.get(ws.id)?.sentAt || Date.now() }, working = !!chatWorking(ws);
+    const message = { id: uuid(), text, typed, files, at: Date.now(), after: _turns.get(ws.id)?.sentAt || Date.now() }, working = !!chatWorking(ws);
     if ((working && _chatCtrl) || _chatStarting.has(ws.id) || _chatSending.has(ws.id)) {
       (ws.chat.queuedMessages ||= []).push(message);
       clearChatDraft(ws); renderChatQueue(ws); saveState();
@@ -12176,7 +12176,7 @@
         : m.sendAt ? `<div class="thr-queued-schedule"><i class="ph ph-clock" aria-hidden="true"></i><span>Scheduled for ${escHtml(new Date(m.sendAt).toLocaleString())}</span></div>` : '';
       const previews = (m.files || []).map((file, i) => !file.image ? '' : `<button type="button" class="thr-queued-preview" data-queue-act="preview" data-file-i="${i}" aria-label="Preview ${escHtml(file.name)}">${file.preview ? `<img src="${escHtml(file.preview)}" alt="${escHtml(file.name)}">` : '<i class="ph ph-image" aria-hidden="true"></i>'}</button>`).join('');
       return `<div class="thr-queued-message thr-msg user" data-queue-id="${escHtml(m.id)}"${reorder ? ' draggable="true" aria-roledescription="draggable message"' : ''}><div class="thr-queued-bubble">${schedule}${previews ? `<div class="thr-queued-images">${previews}</div>` : ''}<div class="thr-queued-text">${label}</div></div>`
-        + '<div class="thr-queued-actions"><button type="button" data-queue-act="send" aria-label="Send queued message now"><i class="ph ph-arrow-up" aria-hidden="true"></i><span>Send now</span></button><button type="button" data-queue-act="edit" aria-label="Edit queued message"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button><button type="button" data-queue-act="remove" aria-label="Remove queued message"><i class="ph ph-x" aria-hidden="true"></i></button></div></div>';
+        + `<div class="thr-queued-actions">${m.at ? `<span class="thr-time" title="Queued ${escHtml(new Date(m.at).toLocaleString())}">${clockTime(m.at)}</span>` : ''}<button type="button" data-queue-act="send" aria-label="Send queued message now"><i class="ph ph-arrow-up" aria-hidden="true"></i><span>Send now</span></button><button type="button" data-queue-act="edit" aria-label="Edit queued message"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button><button type="button" data-queue-act="remove" aria-label="Remove queued message"><i class="ph ph-x" aria-hidden="true"></i></button></div></div>`;
     }).join('');
     const moved = box.parentElement !== flow || box !== flow.lastElementChild;
     const changed = box._queueHtml !== html || box.hidden !== !queue.length;
