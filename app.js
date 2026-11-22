@@ -13169,7 +13169,7 @@
   }
   // The composer's context ring: how full the agent's context window was at its latest reply.
   // Plan usage of the picked model's agent (its session/weekly windows, from the same cache as the Usage page): the ring
-  // fills with the window closest to its limit, the tooltip shows each window as a bar. Click opens the Usage page.
+  // fills with the window closest to its limit, the tooltip shows each window as a bar (a click pins it).
   let _usageRingAskAt = 0;
   function syncUsageRing(ws, surface = thrPage) {
     const el = threadPart(surface, 'usage');
@@ -13188,6 +13188,7 @@
     el.classList.toggle('high', top.used >= 90);
     el.setAttribute('aria-label', `${h.name} usage: ${top.label} ${clamp(top.used)}% used`);
     el.dataset.tip = `${h.name} usage`;
+    el.dataset.tipPin = '1'; // click keeps the bars open, like the context ring
     const rows = windows.map(w => ({ bar: clamp(w.used), text: `${w.label} · ${clamp(w.used)}% used${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
     const sig = JSON.stringify(rows);
     if (el.dataset.tipRows !== sig) el.dataset.tipRows = sig;
@@ -13199,8 +13200,6 @@
     e.preventDefault();
     openClaudeRefViewer(null, { kind: 'file', path: img.currentSrc || img.src, label: img.alt || 'Image' }, '', img.currentSrc || img.src);
   });
-  // On the page, not the ring: the ring is moved and cloned between chat surfaces, a listener on one copy misses the others.
-  onThreadPage('click', e => { if (e.target.closest?.('.thr-usage-ring')) { e.preventDefault(); openUsageModal(); } });
   function syncContextRing(el, ctx) {
     if (!el) return;
     el.hidden = !ctx?.max;
