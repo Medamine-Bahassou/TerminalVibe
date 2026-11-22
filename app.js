@@ -12962,7 +12962,7 @@
     let out = '', last = 0;
     for (const m of text.matchAll(/```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g)) {
       const svg = svgPreviewHtml(m[1].trim(), m[2]);
-      out += inline(text.slice(last, m.index)) + `<div class="thr-code-wrap${svg ? ' thr-svg-wrap' : ''}"${svg ? ' data-view="preview"' : ''}>${svg}<pre class="thr-code" data-lang="${escHtml(m[1].trim())}"><code class="hljs">${hlFence(m[2].replace(/\n$/, ''), m[1].trim())}</code></pre>`
+      out += inline(text.slice(last, m.index)) + `<div class="thr-code-wrap${svg ? ' thr-svg-wrap' : ''}"${svg ? ' data-view="preview"' : ''}>${svg}<pre class="thr-code" data-lang="${escHtml(m[1].trim())}" data-label="${escHtml(m[1].trim().split(/[\s{]/)[0].toLowerCase())}"><code class="hljs">${hlFence(m[2].replace(/\n$/, ''), m[1].trim())}</code></pre>`
         + '<button type="button" class="thr-code-copy" title="Copy code" aria-label="Copy code"><i class="ph ph-copy" aria-hidden="true"></i></button>'
         + (svg ? '<button type="button" class="thr-svg-toggle" title="Show code" aria-label="Show code"><i class="ph ph-code" aria-hidden="true"></i></button>' : '') + '</div>';
       last = m.index + m[0].length;

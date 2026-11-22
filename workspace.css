@@ -3204,3 +3204,10 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 
 /* Queued/scheduled message: when it was queued, left of the actions (same quiet timestamp as the transcript). */
 #sbr-thread .thr-queued-actions > .thr-time { margin-right:4px; }
+
+/* Code block language: a quiet label over the code, from the fence tag (a pseudo-element, so copy and selection skip it).
+   Sticky, so it stays put while long lines scroll sideways. */
+#sbr-thread .thr-code-wrap > .thr-code[data-label]:not([data-label=""])::before {
+  content:attr(data-label); display:block; position:sticky; left:0; width:max-content; margin-bottom:6px;
+  font:500 11px/16px var(--ui-font); color:var(--dim-text); user-select:none; -webkit-user-select:none;
+}
