@@ -1404,7 +1404,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-send:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 85%,#fff); }
 #sbr-thread .thr-send:disabled { background:var(--ui-hover); color:var(--dim-text); cursor:default; }
 #sbr-thread .thr-send:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
-#sbr-thread .thr-send i { display:block; font-size:15px; line-height:1; }
+#sbr-thread .thr-send i { display:block; font-size:14px; line-height:1; } /* even sizes in the 28px button: whole-pixel offsets, no half-pixel blur */
 #sbr-thread .thr-send svg { display:block; }
 #sbr-thread .thr-send-icon { grid-area:1 / 1; display:grid; place-items:center; pointer-events:none; }
 #sbr-thread .thr-composer-foot { display:flex; align-items:center; gap:4px; min-height:28px; padding:4px 6px 0; font-size:12px; color:var(--muted-text); }
@@ -1723,7 +1723,9 @@ body.ui-animations.resizing #threads-sidebar { transition:none; }
 /* ── Composer: the send button turns into a red stop button while the agent works ── */
 #sbr-thread .thr-send.stop { background:#ef3340; color:#fff; }
 #sbr-thread .thr-send.stop:hover { background:#d92330; }
-#sbr-thread .thr-send.stop i { font-size:13px; }
+/* Stop: a drawn square (12px box, 2px stroke) instead of a glyph, so it sits on whole pixels in the middle of the circle. */
+#sbr-thread .thr-send.stop i { box-sizing:border-box; width:12px; height:12px; border:2px solid currentColor; border-radius:3px !important; font-size:0; }
+#sbr-thread .thr-send.stop i::before { content:none; }
 
 /* Center history and context notices within the chat column. */
 #sbr-thread .thr-note { justify-content:center; text-align:center; }
