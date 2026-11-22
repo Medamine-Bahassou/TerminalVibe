@@ -1171,7 +1171,9 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 }
 #sbr-thread .thr-prompts[hidden], .thr-snapshot .thr-prompts { display:none; }
 #sbr-thread .thr-prompts::before { content:""; position:absolute; inset:-4px 0; }
-#sbr-thread .thr-prompt-ticks, #sbr-thread .thr-prompt-preview { pointer-events:none; }
+#sbr-thread .thr-prompt-ticks { pointer-events:none; }
+/* The preview is hoverable (and clickable, it jumps to its prompt): it is part of the rail, so resting on it keeps it open. */
+#sbr-thread .thr-prompt-preview { pointer-events:auto; cursor:pointer; }
 #sbr-thread .thr-prompt-ticks::before {
   content:""; position:absolute; top:0; bottom:0; left:12px; width:1px;
   background:color-mix(in srgb, var(--border) 15%, transparent);

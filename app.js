@@ -11510,11 +11510,15 @@
     return Math.round(progress * (checkpointPrompts.length - 1));
   }
   promptNav.addEventListener('pointermove', event => {
-    if (event.buttons) return;
+    clearTimeout(checkpointHide);
+    if (event.buttons || event.target.closest?.('.thr-prompt-preview')) return; // over the preview: keep it as it is
     const index = checkpointAtPointer(event);
     if (index !== activeCheckpoint || promptPreview.hidden) showCheckpoint(index);
   });
-  promptNav.addEventListener('pointerleave', () => showCheckpoint(-1));
+  // Leaving the rail closes the preview after a beat, so the pointer can cross the gap onto the card (part of the rail).
+  let checkpointHide;
+  promptNav.addEventListener('pointerleave', () => { clearTimeout(checkpointHide); checkpointHide = setTimeout(() => showCheckpoint(-1), 250); });
+  promptNav.addEventListener('pointerenter', () => clearTimeout(checkpointHide));
   promptNav.addEventListener('focus', () => showCheckpoint(Math.max(0, activeCheckpoint)));
   promptNav.addEventListener('blur', () => showCheckpoint(-1));
   promptNav.addEventListener('mousedown', event => event.preventDefault());
@@ -11529,7 +11533,7 @@
   });
   let stopCheckpointScroll;
   promptNav.addEventListener('click', event => {
-    const index = event.detail ? checkpointAtPointer(event) : Math.max(0, activeCheckpoint);
+    const index = event.detail && !event.target.closest?.('.thr-prompt-preview') ? checkpointAtPointer(event) : Math.max(0, activeCheckpoint);
     const prompt = checkpointPrompts[index];
     if (!prompt) return;
     stopCheckpointScroll?.();
