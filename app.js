@@ -9576,7 +9576,7 @@
     }
     const branchHtml = `<i class="ph ${branchMismatch ? 'ph-warning' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
     if (shownBranch && branch._html !== branchHtml) { branch._html = branchHtml; branch.innerHTML = branchHtml; }
-    thrInput.placeholder = ws._elsewhere ? 'This thread is working in another app. Wait for it to finish to send from here.' : h && h.id === o.harness ? `Message ${h.name}` : 'Ask anything';
+    thrInput.placeholder = ws._elsewhere ? 'This thread is working in another app. Wait for it to finish to send from here.' : 'Ask anything. @ files, $ skills, / commands';
     const editor = threadPart(surface, 'input-links');
     if (editor) editor.dataset.placeholder = thrInput.placeholder;
     syncWorking(ws, surface);
@@ -10677,7 +10677,7 @@
     const signature = JSON.stringify([...references].map(([key, f]) => [key, f.cite, f.name, f.size, !!f.preview]));
     const editable = surface === thrPage && !input.disabled ? 'true' : 'false';
     if (editor.contentEditable !== editable) editor.contentEditable = editable;
-    editor.dataset.placeholder = input.placeholder || 'Ask anything';
+    editor.dataset.placeholder = input.placeholder || 'Ask anything. @ files, $ skills, / commands';
     editor.dataset.empty = String(!input.value);
     editor.setAttribute('aria-disabled', String(input.disabled));
     const md = threadSettings.markdown !== 'off';
