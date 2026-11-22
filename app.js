@@ -8494,9 +8494,12 @@
   // Runs of process events of one kind, each within 10s of the run's first (a stop also takes down its children).
   function procEventGroups(events) {
     const groups = [];
-    // The OpenCode harness's own server (chat-sdk.js launches exactly this) was logged before sessionPid skipped it.
-    const harnessServer = ev => /\bopencode(\.exe)?\s+serve\s+--hostname=127\.0\.0\.1\s+--port=0$/.test(ev.command || '');
-    for (const ev of [...events].filter(ev => !harnessServer(ev)).sort((a, b) => a.at - b.at)) {
+    // Only servers the agent left listening are history-worthy. Tool commands inherit the same pane id but aren't
+    // background servers (an old "Process started git" line is dropped here too); a chat's own structured agent was
+    // logged before agent-procs.js skipped it ("claude -p … stream-json", opencode serve, etc.).
+    const harnessServer = ev => /\bopencode(\.exe)?\s+serve\s+--hostname=127\.0\.0\.1\s+--port=0$/.test(ev.command || '')
+      || /(^|[\\/])claude(\.exe)?\s(.*\s)?-p\s.*stream-json|(^|[\\/])codex(\.exe|\.js)?\s+app-server\b|(^|[\\/])agy(\.exe)?\s+acp\b/.test(ev.command || '');
+    for (const ev of [...events].filter(ev => ev.urls?.length && !harnessServer(ev)).sort((a, b) => a.at - b.at)) {
       const g = groups.at(-1);
       if (g && g[0].kind === ev.kind && ev.at - g[0].at <= 10000) g.push(ev); else groups.push([ev]);
     }
@@ -9046,7 +9049,9 @@
     claude: {
       // CLI aliases: each always means that family's latest model.
       models: [{ id: 'opus', name: 'Claude Opus' }, { id: 'sonnet', name: 'Claude Sonnet' }, { id: 'haiku', name: 'Claude Haiku' }, { id: 'fable', name: 'Claude Fable' }]
-        .map(m => ({ ...m, efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'default' })),
+        // Claude Code 2.1.330's own default for these aliases is medium (its model registry's default_effort; a server
+        // setting or the user's effortLevel can override it): that row is marked Default and picking it passes no flag.
+        .map(m => ({ ...m, efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' })),
       // --permission-mode values (Claude Code 2.1.325); "auto" lets a classifier approve safe actions.
       access: [['default', 'Ask first', 'ph-shield'], ['auto', 'Auto', 'ph-magic-wand'], ['acceptEdits', 'Accept edits', 'ph-pencil-simple'], ['plan', 'Plan only', 'ph-list-checks'], ['bypassPermissions', 'Full access', 'ph-shield-slash']],
       argv: (o, sid, resume, fork, threadsDir) => [...(o.model !== 'default' ? ['--model', o.model] : []), ...(o.effort !== 'default' ? ['--effort', o.effort] : []),
@@ -9104,6 +9109,8 @@
   let openCodeCatalogs;
   try { openCodeCatalogs = new Map(Object.entries(JSON.parse(localStorage.getItem(OPENCODE_MODELS_KEY)) || {})); }
   catch { openCodeCatalogs = new Map(); }
+  // A folder not probed yet (every new scratch chat) shows the newest catalog while its own loads.
+  const openCodeCatalog = cwd => openCodeCatalogs.get(cwd) || [...openCodeCatalogs.values()].pop() || null;
   const saveOpenCodeCatalogs = () => { try { localStorage.setItem(OPENCODE_MODELS_KEY, JSON.stringify(Object.fromEntries(openCodeCatalogs))); } catch {} };
   const openCodeModelRequests = new Map(); // cwd -> one in-flight probe, shared by the picker and the background load
   function loadOpenCodeModels(bin, cwd) {
@@ -9114,7 +9121,9 @@
       window.electronAPI.chatSdkModels('opencode', bin, cwd).catch(() => null).then(models => {
         openCodeModelRequests.delete(cwd);
         if (Array.isArray(models) && models.length) {
+          openCodeCatalogs.delete(cwd); // re-insert as newest; keep the 5 newest folders
           openCodeCatalogs.set(cwd, models);
+          for (const old of [...openCodeCatalogs.keys()].slice(0, -5)) openCodeCatalogs.delete(old);
           saveOpenCodeCatalogs();
           const chat = curChat();
           if (chat && chatCwd(chat) === cwd) syncThreadComposer(chat);
@@ -9125,7 +9134,7 @@
   }
   const chatModels = (harness, ws) => harness === 'opencode'
     ? [{ id: 'default', name: 'OpenCode default', efforts: ['default'], defaultEffort: 'default' },
-      ...(openCodeCatalogs.get(chatCwd(ws)) || [])]
+      ...(openCodeCatalog(chatCwd(ws)) || [])]
     : CHAT_AGENTS[harness].models.length ? CHAT_AGENTS[harness].models
     : [{ id: 'default', name: harnessOf(harness).name, efforts: CHAT_AGENTS[harness].efforts || ['default', 'low', 'medium', 'high'], defaultEffort: 'default' }];
   // Offer supported agents until the PATH check narrows the list to installed agents.
@@ -9189,7 +9198,9 @@
     const m = models.find(x => x.id === o.model);
     // A model with a known default effort lists real levels only; an unknown one has a "Default" row.
     const mm = m || models[0];
-    if (!mm.efforts.includes(o.effort)) o.effort = mm.efforts.includes(mm.defaultEffort) ? mm.defaultEffort : 'default';
+    // 'default' (no flag: the agent's own default, which can follow its settings) stays valid; the picker shows it as
+    // the default level's row.
+    if (o.effort !== 'default' && !mm.efforts.includes(o.effort)) o.effort = mm.efforts.includes(mm.defaultEffort) ? mm.defaultEffort : 'default';
     // Unset or not offered by this agent: its Full access mode (an agent without one keeps its default).
     if (!CHAT_AGENTS[o.harness].access.some(a => a[0] === o.access)) o.access = CHAT_AGENTS[o.harness].access.find(a => a[1] === 'Full access')?.[0] || 'default';
     // Fast / Ultracode only where the agent and model have them.
@@ -9867,9 +9878,10 @@
     function requestOpenCode() {
       if (openCodeRequested || !found?.opencode || !window.electronAPI?.chatSdkModels) return;
       openCodeRequested = true;
-      openCodeLoading = !openCodeCatalogs.has(openCodeCwd);
-      loadOpenCodeModels(found.opencode, openCodeCwd).then(models => {
+      openCodeLoading = !openCodeCatalog(openCodeCwd);
+      loadOpenCodeModels(found.opencode, openCodeCwd).then(() => {
         openCodeLoading = false;
+        const models = openCodeCatalog(openCodeCwd);
         if (Array.isArray(models)) openCodeStatus = models.length ? '' : 'No models from connected OpenCode providers';
         else openCodeStatus = 'Could not load OpenCode models';
         if (_modelPicker === pop) render();
@@ -9919,9 +9931,13 @@
       status.hidden = !status.textContent;
       const cur = chatModels(o.harness, ws).find(x => x.id === o.model) || chatModels(o.harness, ws)[0];
       pop.querySelector('.mp-side-model').textContent = modelName(o, true, ws);
-      side.innerHTML = cur.efforts.map(e => `<button type="button" role="option" class="mp-row mp-effort${o.effort === e ? ' selected' : ''}" data-e="${e}" aria-selected="${o.effort === e}">`
-        + `<span class="mp-name">${escHtml(EFFORT_NAMES[e] || e)}</span>${e !== 'default' && e === cur.defaultEffort ? '<span class="mp-hint">Default</span>' : ''}`
-        + (o.effort === e ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + '</button>').join('');
+      // The default level's row stands for "default" (no flag), so a saved 'default' checks it and picking it keeps it.
+      side.innerHTML = cur.efforts.map(e => {
+        const isDefault = e !== 'default' && e === cur.defaultEffort, on = o.effort === e || (isDefault && o.effort === 'default');
+        return `<button type="button" role="option" class="mp-row mp-effort${on ? ' selected' : ''}" data-e="${isDefault ? 'default' : e}" aria-selected="${on}">`
+          + `<span class="mp-name">${escHtml(EFFORT_NAMES[e] || e)}</span>${isDefault ? '<span class="mp-hint">Default</span>' : ''}`
+          + (on ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + '</button>';
+      }).join('');
       const caps = chatCaps(o), speed = pop.querySelector('.mp-speed'), ultra = pop.querySelector('.mp-ultra');
       speed.hidden = !caps.fast; ultra.hidden = !caps.ultra;
       speed.querySelectorAll('button').forEach(b => { const on = (b.dataset.fast === '1') === !!o.fast; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
@@ -11424,6 +11440,25 @@
     flash.cleanup = setTimeout(() => { if (_citationFlash === flash) clearCitationFlash(); }, motion ? 2500 : 1400);
     return true;
   }
+  // Where a selection's text ends. A range's own last rect can be a whole block's box (a triple-click selects up to the
+  // next element, e.g. an A2UI title or a table cell), which put Cite at the far edge; this measures the last selected
+  // characters of the last text node with any.
+  function selectionEndRect(range) {
+    const root = range.commonAncestorContainer;
+    const walker = document.createTreeWalker(root.nodeType === 1 ? root : root.parentNode, NodeFilter.SHOW_TEXT);
+    let last = null;
+    for (let node; (node = walker.nextNode());) {
+      if (!range.intersectsNode(node)) continue;
+      const start = node === range.startContainer ? range.startOffset : 0, end = node === range.endContainer ? range.endOffset : node.length;
+      const text = node.data.slice(start, end);
+      if (text.trim()) last = { node, start, end: start + text.trimEnd().length };
+    }
+    if (!last) return range.getBoundingClientRect();
+    const sub = document.createRange();
+    sub.setStart(last.node, last.start); sub.setEnd(last.node, last.end);
+    const rects = sub.getClientRects();
+    return rects[rects.length - 1] || sub.getBoundingClientRect();
+  }
   const citeBtn = document.createElement('button');
   citeBtn.type = 'button'; citeBtn.className = 'thr-cite-btn'; citeBtn.hidden = true;
   citeBtn.innerHTML = '<i class="ph ph-quotes" aria-hidden="true"></i><span>Cite</span>';
@@ -11438,7 +11473,7 @@
       if (!text || !sel.rangeCount || !flow.contains(sel.anchorNode) || !flow.contains(sel.focusNode)) return hideCite();
       const parts = selectedResponseCitations(sel, flow);
       if (!parts.length) return hideCite();
-      const range = parts[parts.length - 1].range, rects = range.getClientRects(), r = rects[rects.length - 1] || range.getBoundingClientRect();
+      const r = selectionEndRect(parts[parts.length - 1].range);
       citeBtn.hidden = false;
       citeBtn.style.left = Math.max(8, Math.min(r.right - citeBtn.offsetWidth / 2, innerWidth - citeBtn.offsetWidth - 8)) + 'px';
       citeBtn.style.top = Math.max(8, r.top - citeBtn.offsetHeight - 6) + 'px';
@@ -12117,6 +12152,7 @@
         flow.querySelectorAll('.thr-pending').forEach(el => el.remove());
         flow.insertAdjacentHTML('beforeend', pendingHtml(ws, [...flow.querySelectorAll(':scope > .thr-seg')].at(-1)?.dataset.head || ''));
         flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
+        flow.querySelectorAll('.thr-pending .thr-a2ui-answer').forEach(el => fillA2uiAnswer(ws, el));
         if (atBottom) flow.scrollTop = flow.scrollHeight;
         syncWorking(ws);
       }
@@ -12962,6 +12998,19 @@
     };
     let out = '', last = 0;
     for (const m of text.matchAll(/```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g)) {
+      // A complete ```a2ui block of A2UI messages renders as part of the reply, not as code: an empty host that
+      // mountA2ui fills after render. (An unfinished one, still streaming, shows as code until it closes.)
+      if (/^a2ui$/i.test(m[1].trim()) && m[0].endsWith('```') && window.A2UI?.parse(m[2])) {
+        out += inline(text.slice(last, m.index)) + `<div class="thr-a2ui a2ui-host" data-src="${escHtml(m[2])}"></div>`;
+        last = m.index + m[0].length;
+        continue;
+      }
+      // A submitted A2UI form (sent from a surface's button): shown as the answers, not JSON; fillA2uiAnswer fills it.
+      if (/^a2ui-action$/i.test(m[1].trim()) && m[0].endsWith('```')) {
+        out += inline(text.slice(last, m.index)) + `<div class="thr-a2ui-answer" data-src="${escHtml(m[2])}"></div>`;
+        last = m.index + m[0].length;
+        continue;
+      }
       const svg = svgPreviewHtml(m[1].trim(), m[2]);
       out += inline(text.slice(last, m.index)) + `<div class="thr-code-wrap${svg ? ' thr-svg-wrap' : ''}"${svg ? ' data-view="preview"' : ''}>${svg}<pre class="thr-code" data-lang="${escHtml(m[1].trim())}" data-label="${escHtml(m[1].trim().split(/[\s{]/)[0].toLowerCase())}"><code class="hljs">${hlFence(m[2].replace(/\n$/, ''), m[1].trim())}</code></pre>`
         + '<button type="button" class="thr-code-copy" title="Copy code" aria-label="Copy code"><i class="ph ph-copy" aria-hidden="true"></i></button>'
@@ -13110,7 +13159,8 @@
       // One row per gap: a second interruption before the same prompt adds nothing.
       if (want.some(w => w.anchor === anchor)) continue;
       let previous = anchor ? anchor.previousElementSibling : [...flow.children].filter(el => !el.matches('.thr-queue, .thr-working, .thr-interruption-status')).at(-1);
-      while (previous?.matches('.thr-interruption-status')) previous = previous.previousElementSibling;
+      // An error row between them (the stopped turn's) doesn't make the transcript's "Interrupted" line a different stop.
+      while (previous?.matches('.thr-interruption-status, .thr-chat-error')) previous = previous.previousElementSibling;
       if (previous?.matches('.thr-status-line:not(.thr-resumed, .thr-merge-status)')) continue;
       want.push({ at, anchor });
     }
@@ -13139,7 +13189,8 @@
   function renderChatErrors(tab, flow) {
     flow.querySelectorAll('.thr-chat-error').forEach(el => el.remove());
     const boundaries = [...flow.querySelectorAll(':is(.thr-msg.user, .thr-resumed, .thr-merge-status)[data-ts], .thr-interruption-status')];
-    for (const error of tab.chat?.errors || []) {
+    // Claude Code's "[ede_diagnostic] …" closes a turn the user stopped; saved as an error before chat-sdk.js dropped it.
+    for (const error of (tab.chat?.errors || []).filter(e => !/\[ede_diagnostic\]/.test(e.message))) {
       flow.querySelector('.thr-empty')?.remove();
       let next = boundaries.find(el => el.dataset.interruptedAt
         ? Number(el.dataset.interruptedAt) >= error.at
@@ -13716,6 +13767,8 @@
       b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; }, 1200);
     }));
+    content.querySelectorAll('.a2ui-host').forEach(host => mountA2ui(ws, host));
+    content.querySelectorAll('.thr-a2ui-answer').forEach(el => fillA2uiAnswer(ws, el)); // after the surfaces it names
     content.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     content.querySelectorAll('.thr-sub[data-sub-call]').forEach(b => b.addEventListener('click', () => openSubagentThread(ws, b.dataset)));
     content.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
@@ -13884,6 +13937,61 @@
     details.querySelectorAll('img.thr-img').forEach(bindThreadImage);
   }
   document.addEventListener('toggle', e => { if (e.target.open && e.target.matches?.('details[data-key]')) fillLazyDetails(e.target); }, true);
+  // ── A2UI surfaces in agent replies (a2ui.js): one surface registry per chat, so a later block can update an earlier
+  // surface. A rendered block is cached by message + position + source and moved into the re-rendered host, so a
+  // streaming update or a chat switch keeps what the user entered. A button action goes to the agent as a message. ──
+  const _a2ui = new Map();
+  function mountA2ui(ws, host) {
+    const src = host.dataset.src || '', msgs = window.A2UI?.parse(src);
+    if (!msgs) return;
+    let state = _a2ui.get(ws.id);
+    if (!state) _a2ui.set(ws.id, state = window.A2UI.state());
+    const msg = host.closest('[data-key]');
+    const key = `${msg?.dataset.key || ''}:${msg ? [...msg.querySelectorAll('.a2ui-host')].indexOf(host) : 0}\u0000${src}`;
+    let el = state.blocks.get(key);
+    if (!el) {
+      el = window.A2UI.mount(state, msgs, {
+        markdown: mdLite,
+        openUrl: url => { if (/^https?:/i.test(url)) openChatWebLink(url, false); },
+        loadImage: async path => {
+          const file = path.startsWith('~') ? path : chatLinkPath(path).path; // main expands ~
+          const r = await window.electronAPI?.readImageFile?.(file, { svg: true }).catch(() => null);
+          return r?.data ? `data:${r.mediaType};base64,${r.data}` : null;
+        },
+        onAction: ({ message, userMessage, dataModel }) => sendChatText(ws, `${userMessage || `A2UI action: ${message.action.name}`}\n\n`
+          + '```a2ui-action\n' + JSON.stringify(message) + (dataModel ? '\n' + JSON.stringify(dataModel) : '') + '\n```'),
+      });
+      state.blocks.set(key, el);
+    }
+    host.replaceChildren(el);
+  }
+  // A submitted A2UI form in the user's message: label / answer rows (textContent: the values are user input). Its
+  // surface counts as answered, so after a reload or restart it stays locked too.
+  function fillA2uiAnswer(ws, el) {
+    const state = _a2ui.get(ws.id), sent = window.A2UI?.answer(state, el.dataset.src || '');
+    if (sent) window.A2UI.lock(state, sent.surfaceId);
+    if (!sent?.rows.length) { el.remove(); return; }
+    el.replaceChildren(...sent.rows.flatMap(([label, value]) => {
+      const k = document.createElement('span'), v = document.createElement('span');
+      k.className = 'thr-a2ui-answer-label'; k.textContent = label;
+      v.className = 'thr-a2ui-answer-value'; v.textContent = value;
+      return [k, v];
+    }));
+  }
+  // Sends text to the chat's agent as if typed, or queues it while the agent is busy.
+  function sendChatText(ws, text) {
+    ws.chat ||= { createdAt: Date.now() };
+    const message = { id: uuid(), text, typed: text, files: [], at: Date.now(), after: _turns.get(ws.id)?.sentAt || Date.now() };
+    if (chatWorking(ws) || _chatStarting.has(ws.id) || _chatSending.has(ws.id)) {
+      (ws.chat.queuedMessages ||= []).push(message);
+      renderChatQueue(ws); saveState();
+      return;
+    }
+    void deliverChatMessage(ws, message, false).then(ok => {
+      if (ok) return;
+      (ws.chat.queuedMessages ||= []).unshift(message); ws.chat.queuePaused = true; renderChatQueue(ws); saveState();
+    });
+  }
   function updateThreadHistory(flow, chunks) {
     const previous = flow._historyChunks || [];
     let first = 0;
@@ -14152,18 +14260,21 @@
       }
     } finally { _bgProcsBusy = false; }
   }
-  // The history keeps an audit of the chat's processes: a "started" line when one appears, "stopped" when it goes.
+  // The history keeps an audit of the chat's servers: a "started" line when one appears, "stopped" when it goes.
   // Open ones are derived from the saved events, so a restart doesn't log them again.
   // ponytail: pid-keyed; a pid reused by the OS between polls would be missed.
   const _stoppedByYou = new Set();
   function logProcEvents(chat, procs) {
     const events = chat.chat.procEvents ||= [];
+    // Drop lines from before only servers were reported (e.g. "Process started git"): they're not this audit anymore.
+    let pruned = false;
+    for (let i = events.length - 1; i >= 0; i--) if (!events[i].urls?.length) { events.splice(i, 1); pruned = true; }
     const open = new Map();
     for (const ev of events) if (ev.kind === 'start') open.set(ev.pid, ev); else open.delete(ev.pid);
     // During a turn, an event belongs after that turn's prompt even if the poll beat the transcript's timestamp.
     const turnAt = Math.max(Date.parse(_turns.get(chat.id)?.promptTs) || 0, ...pendingMessages(chat).map(p => p.at || 0));
     const now = Math.max(Date.now(), turnAt + 1), live = new Set(procs.map(p => p.pid));
-    let changed = false;
+    let changed = pruned;
     for (const p of procs) if (!open.has(p.pid)) { events.push({ at: now, kind: 'start', pid: p.pid, command: p.command || '', urls: p.urls || [] }); changed = true; }
     for (const [pid, ev] of open) if (!live.has(pid)) {
       events.push({ at: now, kind: 'stop', pid, command: ev.command, urls: ev.urls, ...(_stoppedByYou.delete(pid) ? { by: 'you' } : {}) });

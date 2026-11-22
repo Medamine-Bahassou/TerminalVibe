@@ -10,6 +10,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { A2UI_BRIEF } = require('./delegate-mcp'); // Codex gets the A2UI brief as developer instructions
 
 const ASK_INPUT = 'Type something';
 const skillReferences = text => text.matchAll(/(?:^|[\s([{])\$([\w:.-]+?)(?=$|[\s,!?;)\]}]|\.(?=$|\s))/g);
@@ -201,7 +202,11 @@ class ClaudeSession extends Session {
     // turn after this result, so the session stays busy until every steer is taken (else the queue sends early).
     if (m.type === 'user' && m.isReplay) this.steers.delete(m.uuid);
     if (m.type === 'result' && m.is_error) this.steers.clear();
-    if (m.type === 'result' && !this.steers.size) this.setBusy(false, m.is_error ? { error: String(m.result || (m.errors || []).join('\n') || m.subtype) } : {});
+    // A turn the user stopped ends with an error result (Claude Code's "[ede_diagnostic] … stop_reason=null"): that's
+    // the stop, already shown as "Interrupted", not a failure to report.
+    const stopped = m.type === 'result' && this.stopping;
+    if (m.type === 'result') this.stopping = false;
+    if (m.type === 'result' && !this.steers.size) this.setBusy(false, m.is_error && !stopped ? { error: String(m.result || (m.errors || []).join('\n') || m.subtype) } : {});
     if (m.type === 'control_request') this.onControl(m);
   }
   onControl(m) {
@@ -266,6 +271,7 @@ class ClaudeSession extends Session {
     // An open permission / question request would keep the turn waiting on its answer: deny it (and interrupt) first.
     for (const [id, a] of this.asks) { a.cancel?.(); this.asks.delete(id); this.emit('ask-done', { id }); }
     this.steers.clear(); // Stop always ends the turn, even if Claude never takes a steer in
+    if (this.busy) this.stopping = true; // its closing result is the stop, not an error
     this.control({ subtype: 'interrupt' });
   }
   setAccess(access) {
@@ -287,7 +293,7 @@ class CodexSession extends Session {
     this.options = options;
     const a = codexAccess(options.access);
     const params = { cwd, ...(options.model && options.model !== 'default' ? { model: options.model } : {}), ...(a.approvalPolicy ? { approvalPolicy: a.approvalPolicy, sandbox: a.sandbox } : {}),
-      ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}) };
+      ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}), developerInstructions: A2UI_BRIEF };
     await this.initialize({ bin, cwd, env, clientVersion, extraArgs });
     const r = resume ? await this.rpc('thread/resume', { ...params, threadId: resume, excludeTurns: true })
       : fork ? await this.rpc('thread/fork', { ...params, threadId: fork, excludeTurns: true })
@@ -643,13 +649,20 @@ async function startOpenCodeServer(bin, env, cwd) {
     throw err;
   }
 }
-async function withOpenCodeServer(bin, env, cwd, read) {
-  const server = await startOpenCodeServer(bin, env, cwd);
-  try {
-    return await read(server.client, server.signal);
-  } finally {
-    server.child.kill();
-  }
+// One throwaway server at a time: concurrent `opencode serve` boots (a model probe per open chat folder, skill
+// probes) contend with each other and all blow the 12s timeout. Each one alone takes ~5s.
+let openCodeProbes = Promise.resolve();
+function withOpenCodeServer(bin, env, cwd, read) {
+  const run = openCodeProbes.then(async () => {
+    const server = await startOpenCodeServer(bin, env, cwd);
+    try {
+      return await read(server.client, server.signal);
+    } finally {
+      server.child.kill();
+    }
+  });
+  openCodeProbes = run.catch(() => {});
+  return run;
 }
 // "provider/model": the provider ends at the first slash, the model may keep its own.
 const openCodeModel = id => typeof id === 'string' && id !== 'default' && id.includes('/')
@@ -1167,6 +1180,14 @@ if (require.main === module) {
   steerer.onMessage({ type: 'user', isReplay: true, uuid: inputs[2] });
   steerer.onMessage({ type: 'result' });
   assert.ok(!steerer.busy && events.at(-1) === 'idle');
+  // Stop: the turn's closing error result is the stop, not an error to show; the next turn's real error still is.
+  const idles = [], stopper = new ClaudeSession('test', 'claude', (_k, e) => { if (e.type === 'idle') idles.push(e.error); });
+  stopper.write = () => {};
+  stopper.send('go'); stopper.setBusy(true); stopper.interrupt();
+  stopper.onMessage({ type: 'result', is_error: true, result: '[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null' });
+  stopper.send('again'); stopper.setBusy(true);
+  stopper.onMessage({ type: 'result', is_error: true, result: 'API Error: overloaded' });
+  assert.deepStrictEqual(idles, [undefined, 'API Error: overloaded']);
   const claudeConfig = fs.mkdtempSync(path.join(require('os').tmpdir(), 'tv-claude-skills-'));
   try {
     const skillDir = path.join(claudeConfig, 'skills', 'lint');

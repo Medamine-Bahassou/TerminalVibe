@@ -628,7 +628,9 @@ ipcMain.handle('fs:attachment-info', async (_e, p) => {
 ipcMain.handle('fs:read-image', async (_e, p, opts) => {
   if (typeof p !== 'string' || p.length > 4096) return { error: 'invalid' };
   const fp = expandHome(p);
-  if (!path.isAbsolute(fp) || !/\.(png|jpe?g|gif|webp|bmp)$/i.test(fp)) return { error: 'invalid' };
+  // SVG only for callers that ask (A2UI images): it's shown through <img>, which never runs its scripts or loads its resources.
+  const svg = !!opts?.svg && /\.svg$/i.test(fp);
+  if (!path.isAbsolute(fp) || !(svg || /\.(png|jpe?g|gif|webp|bmp)$/i.test(fp))) return { error: 'invalid' };
   try {
     const real = await fs.promises.realpath(fp); // a symlink is judged by its target
     const st = await fs.promises.stat(real);
@@ -636,7 +638,8 @@ ipcMain.handle('fs:read-image', async (_e, p, opts) => {
     if (opts?.probe) return { ok: true }; // existence check for links, no read
     if (st.size > 20 * 1024 * 1024) return { error: 'too-large', size: st.size };
     const buf = await fs.promises.readFile(real);
-    const type = buf.length >= 12 && IMAGE_SNIFF.find(([, ok]) => ok(buf))?.[0];
+    const type = svg ? /^﻿?\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(buf.subarray(0, 4096).toString('utf8')) && 'image/svg+xml'
+      : buf.length >= 12 && IMAGE_SNIFF.find(([, ok]) => ok(buf))?.[0];
     return type ? { mediaType: type, data: buf.toString('base64'), size: st.size } : { error: 'not-image' };
   } catch (err) { return { error: ['EACCES', 'EPERM'].includes(err.code) ? 'denied' : 'missing' }; }
 });

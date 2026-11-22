@@ -42,7 +42,7 @@ require('./build-icons.js');
 // Always regenerated: the class list changes with every frontend edit.
 require('./build-tailwind.js');
 
-const assets = ['index.html', 'app.js', 'browser-snapshot.js', 'proc-icons.js', 'style.css', 'workspace.css', 'logo.png', 'logo-app.svg'];
+const assets = ['index.html', 'app.js', 'browser-snapshot.js', 'proc-icons.js', 'a2ui.js', 'style.css', 'workspace.css', 'logo.png', 'logo-app.svg'];
 
 fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist, { recursive: true });

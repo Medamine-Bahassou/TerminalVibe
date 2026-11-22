@@ -522,10 +522,14 @@ body #sidebar .ws-btn.active .ws-proc, body #sidebar .ws-btn.active .ws-proc-ico
 /* Keep pin and count together in flow so wider counts never overlap the pin
    or the title. Match the pinned heading's count to the card count column. */
 .ws-btn .ws-meta { display:none; }
-#sidebar.expanded .ws-btn .ws-meta { display:flex; align-items:center; align-self:flex-start; flex-shrink:0; gap:6px; height:20px; }
+#sidebar.expanded .ws-btn .ws-meta { display:flex; align-items:center; flex-shrink:0; gap:6px; height:20px; }
 #sidebar.expanded .ws-btn .ws-name { padding-right:0; }
 #sidebar.expanded .ws-btn .ws-count { position:static; box-sizing:border-box; min-width:20px; height:20px; }
 #sidebar.expanded .ws-btn .ws-pin-icon { position:static; justify-content:center; width:12px; height:20px; }
+/* Icon and count sit on the title's 20px line. A one-line card is centered as is; with a process line under the
+   title they pin to the top instead of centering on the whole card. */
+body:not(.no-ws-procs) #sidebar.expanded .ws-btn:has(.ws-procs:not(:empty)) :is(.ws-icon, .ws-meta) { align-self:flex-start; }
+body:not(.no-ws-procs) #sidebar.expanded .ws-btn:has(.ws-procs:not(:empty)) .ws-icon { margin-top:2px; }
 #sidebar.expanded .ws-pin-label { padding-right:17px; }
 .ws-pin-count { min-width:20px; text-align:center; font-variant-numeric:tabular-nums; }
 
@@ -2913,7 +2917,7 @@ img.ws-proc-icon { object-fit:contain; }
 #sbr-thread :is(button.thr-sub, .thr-subs > summary):focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #sbr-thread .thr-sub-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:24px; height:24px; color:var(--fg); }
 #sbr-thread .thr-sub-avatar .ws-proc-icon { width:20px; height:20px; font-size:20px; fill:currentColor; }
-#sbr-thread .thr-sub-badge { position:absolute; right:-3px; bottom:-3px; font-size:12px; line-height:1; color:var(--muted-text); }
+#sbr-thread .thr-sub-badge { position:absolute; right:-3px; bottom:-3px; display:grid; place-items:center; width:12px; height:12px; font-size:12px; line-height:1; color:var(--muted-text); }
 #sbr-thread .thr-sub-avatar.done .thr-sub-badge { color:var(--ui-success); }
 #sbr-thread .thr-sub-avatar.failed .thr-sub-badge { color:var(--ui-error); }
 #sbr-thread .thr-sub-spin { animation:thr-side-spin 1s linear infinite; }
@@ -3222,4 +3226,168 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 #sbr-thread .thr-rimg-wrap:hover > .thr-rimg:not(.failed):not([alt=""]) + .thr-rimg-alt {
   display:block; position:absolute; top:6px; left:6px; max-width:calc(100% - 12px); padding:2px 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   font:500 11px/16px var(--ui-font); color:var(--fg); background:color-mix(in srgb,var(--bg) 82%,transparent); border-radius:4px !important; pointer-events:none;
+}
+
+/* A2UI surfaces in chat replies (a2ui.js, an ```a2ui fence): part of the reply itself, no code-block frame and no
+   boxes (Cards render flat); inputs, buttons, checkboxes and chips follow the design-system recipes. */
+/* More air than text blocks (8px): it's a surface. Stated at the message-text level so the first/last-child resets
+   don't zero it when the reply's text around it is a bare text node. */
+#sbr-thread .thr-msg-text > .thr-a2ui { display:block; width:100%; margin:12px 0; }
+/* Its own stacking context: the chart's table button and tooltip layer over the chart only, never over the composer,
+   header or "Scroll to end" while the history scrolls under them. */
+#sbr-thread .thr-a2ui { isolation:isolate; }
+
+/* A submitted A2UI form in the user's message: its answers as label / value rows, not the JSON the agent gets. */
+#sbr-thread .thr-a2ui-answer { display:grid; grid-template-columns:minmax(0,max-content) minmax(0,1fr); gap:4px 16px; margin-top:8px;
+  padding-top:8px; border-top:1px solid var(--ui-line); font-size:12px; line-height:1.5; white-space:normal; }
+#sbr-thread .thr-a2ui-answer:empty { display:none; }
+#sbr-thread .thr-a2ui-answer-label { color:var(--muted-text); overflow-wrap:anywhere; }
+#sbr-thread .thr-a2ui-answer-value { color:var(--fg); overflow-wrap:anywhere; }
+#sbr-thread .thr-a2ui:empty { display:none; }
+#sbr-thread .a2ui-block { display:flex; flex-direction:column; gap:12px; font:400 13px/1.5 var(--ui-font); color:var(--fg); white-space:normal; }
+#sbr-thread .a2ui-surface:empty { display:none; }
+#sbr-thread .a2ui-unknown { font-size:12px; color:var(--dim-text); }
+#sbr-thread .a2ui-row { display:flex; flex-direction:row; flex-wrap:wrap; gap:8px; min-width:0; }
+#sbr-thread .a2ui-column { display:flex; flex-direction:column; gap:8px; min-width:0; }
+#sbr-thread .a2ui-fill > * { flex:1 1 0; }
+/* Fields and containers side by side share the row (a "weight" still sets their share); they wrap when narrow. */
+#sbr-thread .a2ui-row > :is(.a2ui-field, .a2ui-column, .a2ui-card, .a2ui-list) { flex:1 1 0; min-width:160px; }
+#sbr-thread .a2ui-list { display:flex; gap:8px; min-width:0; }
+#sbr-thread .a2ui-list-vertical { flex-direction:column; }
+#sbr-thread .a2ui-list-horizontal { flex-direction:row; overflow-x:auto; padding-bottom:4px; }
+/* A Card renders flat: its content belongs to the reply, so no box, background or padding of its own. */
+#sbr-thread .a2ui-card { min-width:0; }
+#sbr-thread .a2ui-divider-horizontal { align-self:stretch; height:1px; background:var(--ui-line); }
+#sbr-thread .a2ui-divider-vertical { align-self:stretch; width:1px; background:var(--ui-line); }
+#sbr-thread .a2ui-text { min-width:0; overflow-wrap:anywhere; white-space:pre-wrap; }
+#sbr-thread .a2ui-caption { font-size:12px; color:var(--muted-text); }
+#sbr-thread .a2ui-text .thr-h1 { font-size:15px; font-weight:600; margin:0; }
+#sbr-thread .a2ui-text .thr-h2, #sbr-thread .a2ui-text .thr-h3 { font-size:14px; font-weight:600; margin:0; }
+#sbr-thread .a2ui-icon { font-size:16px; color:var(--muted-text); }
+#sbr-thread .a2ui-image { display:block; max-width:100%; border-radius:8px !important; background:var(--ui-surface); }
+#sbr-thread .a2ui-img-icon { width:24px; height:24px; border-radius:4px !important; }
+#sbr-thread .a2ui-img-avatar { width:40px; height:40px; border-radius:50% !important; }
+#sbr-thread .a2ui-img-smallFeature { width:96px; height:96px; }
+#sbr-thread .a2ui-img-mediumFeature { width:100%; max-height:200px; }
+#sbr-thread .a2ui-img-largeFeature, #sbr-thread .a2ui-img-header { width:100%; max-height:320px; }
+#sbr-thread .a2ui-video { width:100%; max-height:320px; border-radius:8px !important; background:var(--ui-surface); }
+#sbr-thread .a2ui-audio { display:flex; flex-direction:column; gap:4px; }
+#sbr-thread .a2ui-audio audio { width:100%; height:32px; }
+
+/* Buttons: secondary (default), primary, borderless. */
+#sbr-thread .a2ui-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 12px; font:500 13px var(--ui-font);
+  color:var(--fg); background:transparent; border:1px solid var(--border); border-radius:6px !important; cursor:pointer;
+  transition:background-color 140ms, border-color 140ms, color 140ms, box-shadow 140ms; }
+#sbr-thread .a2ui-btn:hover:not(:disabled) { background:var(--ui-hover); }
+#sbr-thread .a2ui-btn-primary { background:var(--accent); border-color:var(--accent); color:#0d1017; }
+#sbr-thread .a2ui-btn-primary:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 85%,#fff); }
+#sbr-thread .a2ui-btn-borderless { border-color:transparent; }
+#sbr-thread .a2ui-btn:disabled { opacity:.5; cursor:default; }
+/* A submitted form (a2ui-locked): its controls keep showing the answers, quietly, and take no input. */
+#sbr-thread .a2ui-locked :is(.a2ui-input, .a2ui-checkbox, .a2ui-slider, .a2ui-choice, .a2ui-chip):disabled { opacity:.6; cursor:default; }
+#sbr-thread .a2ui-locked :is(.a2ui-choice, .a2ui-chip):disabled:hover { background:transparent; }
+#sbr-thread .a2ui-locked .a2ui-chip[aria-checked="true"]:disabled { background:var(--ui-hover); }
+#sbr-thread .a2ui-locked .a2ui-field-inline { cursor:default; }
+#sbr-thread .a2ui-btn:focus-visible, #sbr-thread .a2ui-tab:focus-visible, #sbr-thread .a2ui-choice:focus-visible, #sbr-thread .a2ui-chip:focus-visible,
+#sbr-thread .a2ui-checkbox:focus-visible, #sbr-thread .a2ui-dialog-close:focus-visible {
+  outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .a2ui-btn .a2ui-text { white-space:nowrap; }
+#sbr-thread .a2ui-btn-primary .a2ui-text, #sbr-thread .a2ui-btn-primary .a2ui-icon { color:inherit; }
+
+/* Fields: label over the control, validation message under it. */
+#sbr-thread .a2ui-field { display:flex; flex-direction:column; gap:6px; min-width:0; }
+#sbr-thread .a2ui-field-inline { flex-direction:row; flex-wrap:wrap; align-items:center; gap:8px; cursor:pointer; }
+#sbr-thread .a2ui-field-inline > .a2ui-error { flex-basis:100%; }
+#sbr-thread .a2ui-label { font-size:12px; font-weight:500; color:var(--muted-text); }
+#sbr-thread .a2ui-field-inline > .a2ui-label { font-size:13px; font-weight:400; color:var(--fg); }
+#sbr-thread .a2ui-error { font-size:11.5px; color:var(--ui-error); }
+#sbr-thread .a2ui-input { width:100%; height:34px; padding:0 10px; font:400 13px var(--ui-font); color:var(--fg); background:var(--bg);
+  border:1px solid var(--border); border-radius:6px !important; outline:none;
+  transition:border-color 140ms, box-shadow 140ms; }
+#sbr-thread textarea.a2ui-input { height:auto; min-height:72px; padding:8px 10px; resize:vertical; line-height:1.5; }
+#sbr-thread .a2ui-input:hover { border-color:var(--muted-text); }
+#sbr-thread .a2ui-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+#sbr-thread .a2ui-input[aria-invalid="true"] { border-color:var(--ui-error); }
+#sbr-thread .a2ui-checkbox { appearance:none; -webkit-appearance:none; flex:none; width:16px; height:16px; margin:0; border:1px solid var(--border);
+  border-radius:4px !important; background:var(--bg); display:grid; place-items:center; cursor:pointer;
+  transition:background-color 140ms, border-color 140ms, box-shadow 140ms; }
+#sbr-thread .a2ui-checkbox:hover { border-color:var(--muted-text); }
+#sbr-thread .a2ui-checkbox:checked { background:var(--accent); border-color:var(--accent); }
+#sbr-thread .a2ui-checkbox:checked::after { content:""; width:4px; height:8px; margin-top:-2px; border:solid #0d1017; border-width:0 2px 2px 0; transform:rotate(45deg); }
+
+/* Choice picker: rows with a check/radio mark, or chips. Selection uses the hover tone, never an accent fill. */
+#sbr-thread .a2ui-choice-wrap { display:flex; flex-direction:column; gap:6px; }
+#sbr-thread .a2ui-choices { display:flex; flex-direction:column; gap:2px; }
+#sbr-thread .a2ui-choice { display:flex; align-items:center; gap:8px; min-height:32px; padding:6px 8px; font:400 13px var(--ui-font); color:var(--fg);
+  text-align:left; background:transparent; border:0; border-radius:6px !important; cursor:pointer; transition:background-color 140ms, box-shadow 140ms; }
+#sbr-thread .a2ui-choice:hover { background:var(--ui-hover); }
+#sbr-thread .a2ui-choice-mark { flex:none; width:16px; height:16px; border:1px solid var(--border); border-radius:4px !important; background:var(--bg); display:grid; place-items:center; }
+#sbr-thread .a2ui-choice-mark.a2ui-radio { border-radius:50% !important; }
+#sbr-thread .a2ui-choice[aria-checked="true"] .a2ui-choice-mark { background:var(--accent); border-color:var(--accent); }
+#sbr-thread .a2ui-choice[aria-checked="true"] .a2ui-choice-mark::after { content:""; width:4px; height:8px; margin-top:-2px; border:solid #0d1017; border-width:0 2px 2px 0; transform:rotate(45deg); }
+#sbr-thread .a2ui-choice[aria-checked="true"] .a2ui-radio::after { width:6px; height:6px; margin:0; border:0; border-radius:50% !important; background:#0d1017; transform:none; }
+#sbr-thread .a2ui-chips { display:flex; flex-wrap:wrap; gap:6px; }
+#sbr-thread .a2ui-chip { height:28px; padding:0 10px; font:400 12px var(--ui-font); color:var(--muted-text); background:transparent;
+  border:1px solid var(--border); border-radius:9999px !important; cursor:pointer; transition:background-color 140ms, color 140ms, border-color 140ms, box-shadow 140ms; }
+#sbr-thread .a2ui-chip:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .a2ui-chip[aria-checked="true"] { background:var(--ui-hover); color:var(--fg); border-color:var(--muted-text); }
+
+/* Slider, tabs, modal. */
+#sbr-thread .a2ui-slider-row { display:flex; align-items:center; gap:10px; }
+#sbr-thread .a2ui-slider { flex:1; min-width:0; accent-color:var(--accent); }
+#sbr-thread .a2ui-slider-value { min-width:32px; text-align:right; font:400 12px var(--mono-font); color:var(--muted-text); font-variant-numeric:tabular-nums; }
+#sbr-thread .a2ui-tabbar { display:flex; gap:2px; border-bottom:1px solid var(--ui-line); margin-bottom:12px; overflow-x:auto; }
+#sbr-thread .a2ui-tab { height:32px; padding:0 10px; font:500 13px var(--ui-font); color:var(--muted-text); background:transparent; border:0;
+  border-bottom:2px solid transparent; cursor:pointer; transition:color 140ms, border-color 140ms, box-shadow 140ms; }
+#sbr-thread .a2ui-tab:hover { color:var(--fg); }
+#sbr-thread .a2ui-tab[aria-selected="true"] { color:var(--fg); border-bottom-color:var(--accent); }
+#sbr-thread .a2ui-dialog { position:fixed; width:min(520px, calc(100vw - 48px)); max-height:calc(100vh - 96px); overflow:auto; padding:20px; color:var(--fg);
+  background:var(--ui-surface); border:1px solid var(--border); border-radius:12px !important; box-shadow:0 8px 24px #0005; font:400 13px/1.5 var(--ui-font); }
+#sbr-thread .a2ui-dialog::backdrop { background:rgba(0,0,0,0.5); backdrop-filter:blur(8px); }
+#sbr-thread .a2ui-dialog-close { float:right; display:grid; place-items:center; width:28px; height:28px; margin:-8px -8px 0 8px; color:var(--muted-text);
+  background:transparent; border:0; border-radius:6px !important; cursor:pointer; transition:background-color 140ms, color 140ms, box-shadow 140ms; }
+#sbr-thread .a2ui-dialog-close:hover { background:var(--ui-hover); color:var(--fg); }
+/* Chart (a2ui.js): recessive hairline grid and ticks in text tokens; series hues live only on the marks and keys.
+   The surface ring around end dots matches what the chart sits on (a Card or the reply). */
+#sbr-thread .a2ui-block { --a2ui-surface:var(--bg); }
+#sbr-thread .a2ui-chart { position:relative; display:flex; flex-direction:column; gap:8px; min-width:0; }
+#sbr-thread .a2ui-chart-legend { display:flex; flex-wrap:wrap; gap:4px 14px; min-width:0; padding-right:36px; font-size:12px; color:var(--muted-text); }
+#sbr-thread .a2ui-chart-key { display:inline-flex; align-items:center; gap:6px; min-height:20px; }
+#sbr-thread .a2ui-chart-swatch-bar { width:10px; height:10px; border-radius:2px !important; }
+#sbr-thread .a2ui-chart-swatch-line { width:12px; height:2px; border-radius:1px !important; }
+/* Table toggle: a corner button revealed on hover or focus (like a code block's copy), so it takes no row of its own. */
+#sbr-thread .a2ui-chart-toggle { position:absolute; top:-4px; right:0; z-index:1; display:grid; place-items:center; width:28px; height:28px; padding:0; color:var(--muted-text);
+  background:var(--a2ui-surface); border:0; border-radius:6px !important; cursor:pointer; opacity:0;
+  transition:opacity 140ms, background-color 140ms, color 140ms, box-shadow 140ms; }
+#sbr-thread .a2ui-chart:hover > .a2ui-chart-toggle, #sbr-thread .a2ui-chart-toggle:focus-visible, #sbr-thread .a2ui-chart-toggle[aria-pressed="true"] { opacity:1; }
+#sbr-thread .a2ui-chart-toggle:hover, #sbr-thread .a2ui-chart-toggle[aria-pressed="true"] { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .a2ui-chart-toggle:focus-visible { outline:none; box-shadow:0 0 0 2px var(--a2ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .a2ui-chart-toggle i { font-size:14px; }
+#sbr-thread .a2ui-chart-plot { position:relative; min-width:0; }
+#sbr-thread .a2ui-chart-svg { display:block; overflow:visible; border-radius:4px !important; }
+#sbr-thread .a2ui-chart-svg:focus { outline:none; }
+#sbr-thread .a2ui-chart-svg:focus-visible { box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .a2ui-chart-grid { stroke:var(--ui-line); stroke-width:1; shape-rendering:crispEdges; }
+#sbr-thread .a2ui-chart-base { stroke:var(--border); stroke-width:1; shape-rendering:crispEdges; }
+#sbr-thread .a2ui-chart-tick { fill:var(--muted-text); font:400 11px var(--ui-font); font-variant-numeric:tabular-nums; }
+#sbr-thread .a2ui-chart-cross { stroke:var(--muted-text); stroke-width:1; shape-rendering:crispEdges; pointer-events:none; }
+#sbr-thread .a2ui-chart-dot { stroke:var(--a2ui-surface); stroke-width:2; }
+#sbr-thread .a2ui-chart-hit { fill:transparent; }
+#sbr-thread .a2ui-chart-group.hover, #sbr-thread .a2ui-chart-slice.hover { filter:brightness(1.15); }
+#sbr-thread .a2ui-chart-slice { stroke:var(--a2ui-surface); stroke-width:2; stroke-linejoin:round; } /* the 2px surface gap between slices */
+#sbr-thread .a2ui-chart-key-note { color:var(--dim-text); font-variant-numeric:tabular-nums; }
+#sbr-thread .a2ui-chart-tip { position:absolute; top:4px; z-index:2; min-width:120px; max-width:240px; padding:8px 10px; pointer-events:none;
+  background:var(--bg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; box-shadow:0 8px 24px #0005; font-size:12px; color:var(--muted-text); }
+#sbr-thread .a2ui-chart-tip-title { margin-bottom:4px; color:var(--muted-text); }
+#sbr-thread .a2ui-chart-tip-row { display:flex; align-items:center; gap:6px; min-height:20px; }
+#sbr-thread .a2ui-chart-tip-row strong { font-weight:600; color:var(--fg); font-variant-numeric:tabular-nums; }
+#sbr-thread .a2ui-chart-tip-key { flex:none; width:10px; height:2px; border-radius:1px !important; }
+#sbr-thread .a2ui-chart-table { margin:0; }
+#sbr-thread .a2ui-block [hidden] { display:none !important; } /* beats component display rules (filtered choices, tab panes, the table) */
+@media (prefers-reduced-motion: reduce) {
+  #sbr-thread .a2ui-chart-toggle { transition:none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #sbr-thread .a2ui-btn, #sbr-thread .a2ui-input, #sbr-thread .a2ui-checkbox, #sbr-thread .a2ui-choice, #sbr-thread .a2ui-chip, #sbr-thread .a2ui-tab, #sbr-thread .a2ui-dialog-close { transition:none; }
 }

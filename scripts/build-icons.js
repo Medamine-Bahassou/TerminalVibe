@@ -18,7 +18,7 @@ const out = path.join(root, 'vendor', 'lucide');
 const PH_TO_LUCIDE = {
   'arrow-bend-down-right': 'corner-down-right', 'arrow-bend-up-left': 'corner-up-left',
   'arrow-clockwise': 'rotate-cw', 'arrow-counter-clockwise': 'rotate-ccw',
-  'arrow-elbow-up-right': 'corner-left-up', 'arrow-left': 'arrow-left', 'arrow-line-right': 'arrow-right-to-line',
+  'arrow-elbow-up-right': 'corner-up-right', 'arrow-left': 'arrow-left', 'arrow-line-right': 'arrow-right-to-line',
   'arrow-right': 'arrow-right', 'arrows-clockwise': 'refresh-cw', 'arrows-down-up': 'arrow-down-up',
   'arrows-left-right': 'arrow-left-right', 'arrows-out': 'expand', 'arrow-square-out': 'external-link',
   'arrow-up': 'arrow-up', 'arrow-up-right': 'arrow-up-right', 'arrow-u-up-left': 'undo-2',
@@ -62,6 +62,21 @@ const PH_TO_LUCIDE = {
   'timer': 'timer', 'trash': 'trash-2', 'trend-down': 'trending-down', 'trend-up': 'trending-up', 'user': 'user',
   'user-circle': 'circle-user', 'users': 'users', 'user-switch': 'user-round-cog', 'warning': 'triangle-alert',
   'warning-circle': 'circle-alert', 'wrench': 'wrench', 'x': 'x', 'x-circle': 'circle-x', 'x-square': 'square-x',
+  // A2UI 1.0 basic catalog Icon names (a2ui.js renders `ph-a2ui-<name>`).
+  'a2ui-accountCircle': 'circle-user', 'a2ui-add': 'plus', 'a2ui-arrowBack': 'arrow-left', 'a2ui-arrowForward': 'arrow-right',
+  'a2ui-attachFile': 'paperclip', 'a2ui-calendarToday': 'calendar', 'a2ui-call': 'phone', 'a2ui-camera': 'camera',
+  'a2ui-check': 'check', 'a2ui-close': 'x', 'a2ui-delete': 'trash-2', 'a2ui-download': 'download', 'a2ui-edit': 'pencil',
+  'a2ui-event': 'calendar-days', 'a2ui-error': 'circle-alert', 'a2ui-fastForward': 'fast-forward', 'a2ui-favorite': 'heart',
+  'a2ui-favoriteOff': 'heart-off', 'a2ui-folder': 'folder', 'a2ui-help': 'circle-help', 'a2ui-home': 'house', 'a2ui-info': 'info',
+  'a2ui-locationOn': 'map-pin', 'a2ui-lock': 'lock', 'a2ui-lockOpen': 'lock-open', 'a2ui-mail': 'mail', 'a2ui-menu': 'menu',
+  'a2ui-moreVert': 'ellipsis-vertical', 'a2ui-moreHoriz': 'ellipsis', 'a2ui-notificationsOff': 'bell-off',
+  'a2ui-notifications': 'bell', 'a2ui-pause': 'pause', 'a2ui-payment': 'credit-card', 'a2ui-person': 'user',
+  'a2ui-phone': 'smartphone', 'a2ui-photo': 'image', 'a2ui-play': 'play', 'a2ui-print': 'printer', 'a2ui-refresh': 'refresh-cw',
+  'a2ui-rewind': 'rewind', 'a2ui-search': 'search', 'a2ui-send': 'send', 'a2ui-settings': 'settings', 'a2ui-share': 'share-2',
+  'a2ui-shoppingCart': 'shopping-cart', 'a2ui-skipNext': 'skip-forward', 'a2ui-skipPrevious': 'skip-back', 'a2ui-star': 'star',
+  'a2ui-starHalf': 'star-half', 'a2ui-starOff': 'star-off', 'a2ui-stop': 'square', 'a2ui-upload': 'upload',
+  'a2ui-visibility': 'eye', 'a2ui-visibilityOff': 'eye-off', 'a2ui-volumeDown': 'volume-1', 'a2ui-volumeMute': 'volume',
+  'a2ui-volumeOff': 'volume-x', 'a2ui-volumeUp': 'volume-2', 'a2ui-warning': 'triangle-alert',
 };
 
 const codepoints = JSON.parse(fs.readFileSync(path.join(src, 'codepoints.json'), 'utf8'));

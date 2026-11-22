@@ -12,8 +12,16 @@ const { execFile } = require('child_process');
 // "ran". /proc names are cut at 15 characters.
 const DAEMONS = /^(gpg-agent|ssh-agent|scdaemon|dirmngr|keyboxd|dbus-daemon|dbus-launch|git-credential-ca.*|at-spi-bus-laun.*|pulseaudio|pipewire|gitstatusd.*)$/;
 // A bare shell (no command) left over is a prompt's helper (powerlevel10k forks one for gitstatusd), not a task.
-const isHarnessServer = p => p.match && /^opencode(\.exe)?$/.test(path.basename(p.args?.[0] || p.comm))
-  && (p.args || []).slice(1).join(' ') === 'serve --hostname=127.0.0.1 --port=0';
+// A chat's structured agent, as chat-sdk.js launches it (claude -p stream-json, codex app-server, agy acp, opencode
+// serve), is the agent itself, never something it left running: also while it exits after handing the session to the
+// terminal view (its pid leaves the chat's roots at once, the process a beat later, which logged a started/stopped pair).
+const HARNESS_LAUNCH = { claude: a => a.includes('-p') && a.includes('stream-json'), codex: a => a[0] === 'app-server', agy: a => a[0] === 'acp',
+  opencode: a => a.join(' ') === 'serve --hostname=127.0.0.1 --port=0' };
+const isHarnessServer = p => {
+  if (!p.match) return false;
+  const args = p.args || [p.comm], at = args.findIndex((a, i) => i < 2 && HARNESS_LAUNCH[path.basename(a).replace(/(\.exe|\.js)$/, '')]);
+  return at >= 0 && HARNESS_LAUNCH[path.basename(args[at]).replace(/(\.exe|\.js)$/, '')](args.slice(at + 1));
+};
 const isBareShell = p => /^-?(ba|z|da|fi|k)?sh$/.test(path.basename(p.args?.[0] || p.comm)) && (p.args?.length || 1) <= 1;
 
 async function scanLinux(paneId, ids = []) {
@@ -75,9 +83,13 @@ const MIN_AGE_MS = 3000;
 const isAppHelper = p => APP.test(path.basename(p.args?.[0] || p.comm)) && (p.args || []).slice(1)
   .some(a => /\.js$/.test(a) && path.basename(path.dirname(a)) === 'electron' && fs.existsSync(path.join(__dirname, path.basename(a))));
 
+// Only a process the agent left listening on a port is a server it left running: a tool command (git, a build)
+// inherits the pane id too, but isn't one. URLs are attached to the row owning the whole tree, so a listener's
+// parent (npm -> node) is kept with its child.
+const isServer = row => row.urls?.length > 0;
 // roots: the chat's live processes (its structured agent, its terminal) whose trees are skipped; listeners:
-// [{ pid, url }] from servers.js.
-async function agentProcesses(paneId, roots = [], listeners = []) {
+// [{ pid, url }] from servers.js. serversOnly is relaxed for the stop re-check, which must find any listed tree.
+async function agentProcesses(paneId, roots = [], listeners = [], serversOnly = true) {
   if (!/^[\w-]{1,128}$/.test(paneId || '')) return [];
   const all = process.platform === 'linux' ? await scanLinux(paneId) : process.platform === 'darwin' ? await scanMac(paneId) : null;
   if (!all) return [];
@@ -103,7 +115,7 @@ async function agentProcesses(paneId, roots = [], listeners = []) {
     const row = rows.get(top(l.pid));
     if (row && !row.urls.includes(l.url)) row.urls.push(l.url);
   }
-  return [...rows.values()].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+  return [...rows.values()].filter(serversOnly ? isServer : () => true).sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
 }
 
 // The conversation open somewhere else: an agent of another TerminalVibe instance for this chat, or any process outside
@@ -139,10 +151,22 @@ async function sessionElsewhere(paneId, sessionIds = []) {
 
 // Stop one row: its whole tree, after checking (again) that it is still this chat's, so a reused pid is never hit.
 async function stopAgentProcess(paneId, pid, roots) {
-  const row = (await agentProcesses(paneId, roots)).find(r => r.pid === Number(pid));
+  const row = (await agentProcesses(paneId, roots, [], false)).find(r => r.pid === Number(pid));
   if (!row) throw new Error('That process is no longer running.');
   for (const p of [...row.pids].reverse()) { try { process.kill(p, 'SIGTERM'); } catch {} }
   return true;
 }
 
 module.exports = { agentProcesses, stopAgentProcess, sessionElsewhere };
+
+if (require.main === module) {
+  const assert = require('assert');
+  const h = args => isHarnessServer({ match: true, args });
+  assert.ok(h(['/home/u/.local/bin/claude', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json']), 'structured claude');
+  assert.ok(h(['codex', 'app-server', '--listen', 'stdio://']) && h(['node', '/npm/codex.js', 'app-server']), 'codex app-server (also via node)');
+  assert.ok(h(['agy', 'acp']) && h(['opencode', 'serve', '--hostname=127.0.0.1', '--port=0']), 'agy acp, opencode serve');
+  assert.ok(!h(['claude', '--resume', 'abc']) && !h(['claude']) && !h(['codex', 'exec', 'x']) && !h(['opencode', 'serve']) && !h(['node', 'server.js']), 'terminal agents and user processes still count');
+  assert.ok(!isHarnessServer({ match: false, args: ['codex', 'app-server'] }), 'other panes');
+  assert.ok(isServer({ urls: ['http://localhost:3000'] }) && !isServer({ urls: [] }) && !isServer({}), 'only listeners are servers');
+  console.log('agent-procs: ok');
+}

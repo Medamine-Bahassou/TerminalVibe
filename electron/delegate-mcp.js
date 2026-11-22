@@ -183,6 +183,100 @@ const GUIDE = {
   inputSchema: { type: 'object', properties: {} },
   annotations: { title: 'TerminalVibe orchestration guide', readOnlyHint: true, destructiveHint: false, openWorldHint: false },
 };
+// A2UI: the chat renders ```a2ui fences of A2UI 1.0 messages as live UI (a2ui.js). The brief rides in the server's
+// instructions (Claude Code keeps up to 4096 chars) and Codex's developerInstructions (chat-sdk.js), so agents can
+// answer with UI without calling a2ui_guide first; the guide is the full reference.
+const A2UI_BRIEF = `The TerminalVibe chat renders A2UI 1.0 (Google's generative UI protocol) as live UI. Use it, without asking or calling a tool first, when the user asks for a form, UI, picker, buttons or A2UI, or when an interactive choice, form or confirmation clearly serves better than prose: put an \`\`\`a2ui fenced block in your reply holding a JSON array of A2UI messages. Keep prose outside the block; no HTML.
+Message: {"version":"1.0","createSurface":{"surfaceId":"s1","sendDataModel":true,"dataModel":{...},"components":[...]}}. A later block may send {"version":"1.0","updateComponents":{surfaceId,components}}, {"version":"1.0","updateDataModel":{surfaceId,path,value}} or {"version":"1.0","deleteSurface":{surfaceId}}.
+Components are a flat list of {"id","component",...props}; the root has id "root"; child/children hold ids.
+Text{text (simple markdown), variant caption|body} Image{url} Icon{name} Row/Column{children,justify,align} List{children,direction} Card{child} Divider Tabs{tabs:[{title,child}]} Modal{trigger,content} Button{child (id of a Text), variant primary|default|borderless, action} TextField{label,value,placeholder,variant shortText|longText|number|obscured} CheckBox{label,value} ChoicePicker{label,options:[{label,value}],value (string array),variant mutuallyExclusive|multipleSelection,displayStyle checkbox|chips} Slider{label,min,max,value} DateTimeInput{label,value,enableDate,enableTime}.
+TerminalVibe extras: Chart{type bar|line|area|pie|donut, stacked (bar/area), labels:[x labels or slice names], series:[{name,values:[numbers]}] (pie/donut: series[0] split across labels), unit, min, max, height} draws real charts (legend, tooltip, table view; up to 8 series) - use it for any chart, never text bars or hand-made images. Image.url may be https or a local file path (absolute or relative to the project; png, jpg, gif, webp, svg).
+A value is a literal, {"@path":"/json/pointer"} (bind every input this way) or {"@call":"formatString","args":{"value":"Hi \${/name}"}}.
+Validation: "checks":[{"condition":{"@call":"required","args":{"value":{"@path":"/name"}}},"message":"Name is required"}] (also email, regex, length, numeric); a Button's checks keep it disabled until they pass.
+Button action: {"event":{"name":"create","userMessage":"Create it","context":{"name":{"@path":"/name"}}}}. When pressed, the user's next message is that userMessage plus an \`\`\`a2ui-action block with the event and the data model: act on it.
+For list templates, functions and every property, call a2ui_guide.`;
+const A2UI_TOOL = {
+  name: 'a2ui_guide',
+  description: 'How to show interactive UI (forms, pickers, buttons, cards, lists, tabs) in the TerminalVibe chat with A2UI 1.0. '
+    + 'Call this before writing an ```a2ui block.',
+  inputSchema: { type: 'object', properties: {} },
+  annotations: { title: 'A2UI guide', readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+};
+const A2UI_GUIDE = `# A2UI 1.0 in the TerminalVibe chat
+
+Put a fenced code block with the language \`a2ui\` in your reply. It holds a JSON array of A2UI 1.0 messages (or JSON
+lines). The chat renders it in place as UI. Keep prose outside the block. Every message has "version": "1.0".
+
+## Messages
+- {"version":"1.0","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json","sendDataModel":true,"components":[...],"dataModel":{...}}}
+- {"version":"1.0","updateComponents":{"surfaceId":"s1","components":[...]}}   (upsert by id)
+- {"version":"1.0","updateDataModel":{"surfaceId":"s1","path":"/form/name","value":"Ada"}}   (path omitted = whole model)
+- {"version":"1.0","deleteSurface":{"surfaceId":"s1"}}
+A later \`a2ui\` block may update or delete a surface from an earlier reply of this chat. Use a new surfaceId for a new UI.
+
+## Components (flat list, referenced by id; the root component has id "root")
+Each: {"id":"x","component":"<Name>", ...props}. Optional on any: "weight" (flex-grow inside Row/Column),
+"accessibility":{"label","description"}.
+- Text: text, variant caption|body. Text supports simple markdown (# headings, **bold**, lists, \`code\`).
+- Image: url (https), description, fit contain|cover|fill|none|scaleDown, variant icon|avatar|smallFeature|mediumFeature|largeFeature|header
+- Icon: name (accountCircle add arrowBack arrowForward attachFile calendarToday call camera check close delete download edit
+  event error fastForward favorite favoriteOff folder help home info locationOn lock lockOpen mail menu moreVert moreHoriz
+  notificationsOff notifications pause payment person phone photo play print refresh rewind search send settings share
+  shoppingCart skipNext skipPrevious star starHalf starOff stop upload visibility visibilityOff volumeDown volumeMute volumeOff volumeUp warning)
+- Video: url, posterUrl. AudioPlayer: url, description
+- Row / Column: children, justify start|center|end|spaceBetween|spaceAround|spaceEvenly|stretch, align start|center|end|stretch
+- List: children, direction vertical|horizontal, align
+- Card: child. Divider: axis horizontal|vertical
+- Tabs: tabs [{"title":..., "child":"id"}]. Modal: trigger (id), content (id)
+- Button: child (id, usually a Text), variant default|primary|borderless, action, checks
+- TextField: label, value, placeholder, variant shortText|longText|number|obscured, checks
+- CheckBox: label, value (boolean), checks
+- ChoicePicker: label, options [{"label","value"}], value (string array), variant mutuallyExclusive|multipleSelection,
+  displayStyle checkbox|chips, filterable, checks
+- Slider: label, min, max, value (number), steps. DateTimeInput: value (ISO string), enableDate, enableTime, min, max, label
+- Chart (TerminalVibe extension): type bar|line|area|pie|donut, stacked (true: stacked bars/areas), labels (string
+  array: x labels, or a pie's slice names), series [{"name","values":[numbers]}] (up to 8; null = missing; a pie/donut
+  uses series[0], one value per label, past 8 slices folded into "Other"), unit ("%", or "$" "€" "£" which lead the
+  number), min, max (y range), height (px, default 220). Legend, hover tooltip and a table view are built in.
+  labels/series/values may be {"@path"} bindings.
+Image.url may be https, data:, or a local file path (absolute, ~/, or relative to the project folder; png jpg gif webp svg).
+Strings must be valid JSON: write line breaks inside text as \\n.
+
+children is ["id", ...] or a template {"path":"/items","componentId":"row"}: one copy per item, where paths without a
+leading "/" are relative to the item ({"@path":"name"}).
+
+## Values
+A dynamic value is a literal, a data binding {"@path":"/json/pointer"}, or a function call {"@call":"name","args":{...}}.
+Bind inputs to the data model with {"@path":...} so what the user enters is kept (two-way binding).
+Functions: required(value) regex(value,pattern) length(value,min,max) numeric(value,min,max) email(value)
+formatString(value:"Hi \${/user/name}") formatNumber(value,decimals,grouping) formatCurrency(value,currency,decimals)
+formatDate(value,format:"MMM d, yyyy") pluralize(value,one,other) openUrl(url) and(values) or(values) not(value).
+No operators: build text with formatString. Checks: "checks":[{"condition":{"@call":"required","args":{"value":{"@path":"/f/email"}}},"message":"Email is required"}];
+a Button's checks disable it until they pass.
+
+## Actions
+Button "action": {"event":{"name":"submit","userMessage":"Submit the form","context":{"email":{"@path":"/f/email"}}}}
+or {"functionCall":{"@call":"openUrl","args":{"url":"https://..."}}}.
+When the user presses it, your next user message is userMessage (or "A2UI action: <name>") followed by an \`a2ui-action\`
+block: {"version":"1.0","action":{"name","surfaceId","sourceComponentId","timestamp","context"}} and, when the surface
+has "sendDataModel": true, {"version":"1.0","surfaces":{"<surfaceId>":<data model>}}. Act on it like any user request.
+
+## Example
+\`\`\`a2ui
+[{"version":"1.0","createSurface":{"surfaceId":"deploy","catalogId":"https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+ "dataModel":{"env":["staging"],"notes":""},
+ "components":[
+  {"id":"root","component":"Card","child":"col"},
+  {"id":"col","component":"Column","children":["title","env","notes","go"]},
+  {"id":"title","component":"Text","text":"### Deploy"},
+  {"id":"env","component":"ChoicePicker","label":"Environment","displayStyle":"chips","value":{"@path":"/env"},
+   "options":[{"label":"Staging","value":"staging"},{"label":"Production","value":"production"}]},
+  {"id":"notes","component":"TextField","label":"Notes","variant":"longText","value":{"@path":"/notes"}},
+  {"id":"go","component":"Button","variant":"primary","child":"goText",
+   "action":{"event":{"name":"deploy","userMessage":"Deploy","context":{"env":{"@path":"/env"},"notes":{"@path":"/notes"}}}}},
+  {"id":"goText","component":"Text","text":"Deploy"}]}}]
+\`\`\`
+`;
 function guideText() {
   const dir = skillDir();
   if (!dir) return null;
@@ -198,14 +292,15 @@ async function handle(msg) {
   if (method === 'notifications/cancelled') { running.get(params?.requestId)?.cancel(); return; }
   if (id === undefined) return; // other notifications
   if (method === 'initialize') return send({ id, result: { protocolVersion: params?.protocolVersion || '2025-06-18', capabilities: { tools: {} },
-    serverInfo: { name: 'terminalvibe', version: '1.0.0' }, ...(skillDir() ? { instructions: INSTRUCTIONS } : {}) } });
+    serverInfo: { name: 'terminalvibe', version: '1.0.0' }, instructions: (skillDir() ? INSTRUCTIONS + '\n\n' : '') + A2UI_BRIEF } });
   if (method === 'ping') return send({ id, result: {} });
   // In a read-only chat the subagent is read only too: say so, so agents needn't ask before each call.
   if (method === 'tools/list') {
     const readOnly = currentAccess() === 'read-only';
     return send({ id, result: { tools: [{ ...TOOL, annotations: { title: 'Run a subagent', readOnlyHint: readOnly, destructiveHint: !readOnly, openWorldHint: true } },
-      ...(skillDir() ? [GUIDE] : [])] } });
+      ...(skillDir() ? [GUIDE] : []), A2UI_TOOL] } });
   }
+  if (method === 'tools/call' && params?.name === A2UI_TOOL.name) return send({ id, result: { content: [{ type: 'text', text: A2UI_GUIDE }] } });
   if (method === 'tools/call' && params?.name === GUIDE.name) {
     const text = guideText();
     return send({ id, result: { content: [{ type: 'text', text: text || 'The TerminalVibe orchestration skill is not available in this build.' }], isError: !text } });
@@ -242,4 +337,4 @@ if (require.main === module) {
   process.on('SIGINT', quit);
 }
 
-module.exports = { delegateKey, childArgs };
+module.exports = { delegateKey, childArgs, A2UI_BRIEF };
