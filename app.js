@@ -9579,6 +9579,7 @@
     thrInput.placeholder = ws._elsewhere ? 'This thread is working in another app. Wait for it to finish to send from here.' : 'Ask anything. @ files, $ skills, / commands';
     const editor = threadPart(surface, 'input-links');
     if (editor) editor.dataset.placeholder = thrInput.placeholder;
+    syncUsageRing(ws, surface);
     syncWorking(ws, surface);
     if (surface === thrPage) syncSendBtn();
   }
@@ -13167,6 +13168,31 @@
     saveState();
   }
   // The composer's context ring: how full the agent's context window was at its latest reply.
+  // Plan usage of the picked model's agent (its session/weekly windows, from the same cache as the Usage page): the ring
+  // fills with the window closest to its limit, the tooltip shows each window as a bar. Click opens the Usage page.
+  let _usageRingAskAt = 0;
+  function syncUsageRing(ws, surface = thrPage) {
+    const el = threadPart(surface, 'usage');
+    if (!el) return;
+    const h = harnessOf(chatOpts(ws).harness), u = h && _usageLimits?.[h.id];
+    if (window.electronAPI?.usageLimits && h && usageProviderIds.includes(h.id) && Date.now() - _usageRingAskAt > 5 * 60000) {
+      _usageRingAskAt = Date.now(); // at most every 5 min from here (a refresh starts the agent's CLI)
+      void refreshUsageLimits().then(() => { if (curChat()) syncUsageRing(curChat()); });
+    }
+    const windows = (u?.windows || []).filter(w => Number.isFinite(w.used));
+    el.hidden = !windows.length;
+    if (el.hidden) return;
+    const clamp = v => Math.min(100, Math.max(0, Math.round(v)));
+    const top = windows.reduce((a, b) => (b.used > a.used ? b : a));
+    el.style.setProperty('--p', clamp(top.used));
+    el.classList.toggle('high', top.used >= 90);
+    el.setAttribute('aria-label', `${h.name} usage: ${top.label} ${clamp(top.used)}% used`);
+    el.dataset.tip = `${h.name} usage`;
+    const rows = windows.map(w => ({ bar: clamp(w.used), text: `${w.label} · ${clamp(w.used)}% used${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
+    const sig = JSON.stringify(rows);
+    if (el.dataset.tipRows !== sig) el.dataset.tipRows = sig;
+    if (!el._usageBound) { el._usageBound = true; el.addEventListener('click', () => { if (el.closest('.thr-snapshot')) return; openUsageModal(); }); }
+  }
   function syncContextRing(el, ctx) {
     if (!el) return;
     el.hidden = !ctx?.max;

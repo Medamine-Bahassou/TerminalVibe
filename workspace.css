@@ -3211,3 +3211,8 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
   content:attr(data-label); display:block; position:sticky; left:0; width:max-content; margin-bottom:6px;
   font:500 11px/16px var(--ui-font); color:var(--dim-text); user-select:none; -webkit-user-select:none;
 }
+
+/* Composer usage ring: the picked agent's plan usage (same ring as the context one); red near the limit. Opens the Usage page. */
+.thr-composer .thr-usage-ring { cursor:pointer; }
+.thr-composer .thr-usage-ring.high::before { background:conic-gradient(var(--ui-error) calc(var(--p, 0) * 1%), color-mix(in srgb,var(--fg) 14%,transparent) 0); }
+@container chat-composer (max-width: 300px) { #sbr-thread .thr-composer-bar .thr-usage-ring { display:none; } }
