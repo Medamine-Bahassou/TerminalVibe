@@ -13191,8 +13191,9 @@
     const rows = windows.map(w => ({ bar: clamp(w.used), text: `${w.label} · ${clamp(w.used)}% used${w.resetsAt ? ` · resets in ${fmtLeft(w.resetsAt - Date.now())}` : ''}` }));
     const sig = JSON.stringify(rows);
     if (el.dataset.tipRows !== sig) el.dataset.tipRows = sig;
-    if (!el._usageBound) { el._usageBound = true; el.addEventListener('click', () => { if (el.closest('.thr-snapshot')) return; openUsageModal(); }); }
   }
+  // On the page, not the ring: the ring is moved and cloned between chat surfaces, a listener on one copy misses the others.
+  onThreadPage('click', e => { if (e.target.closest?.('.thr-usage-ring')) { e.preventDefault(); openUsageModal(); } });
   function syncContextRing(el, ctx) {
     if (!el) return;
     el.hidden = !ctx?.max;
