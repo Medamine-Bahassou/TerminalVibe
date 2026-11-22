@@ -71,6 +71,10 @@ async function scanMac(paneId) {
 const APP = /^(electron|terminalvibe)$/i;
 const foreignOf = all => pid => { let other = false; for (let p = all.get(pid)?.ppid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) { if (p === process.pid) return false; if (APP.test(all.get(p)?.comm || '')) other = true; } return other; };
 
+const MIN_AGE_MS = 3000;
+const isAppHelper = p => APP.test(path.basename(p.args?.[0] || p.comm)) && (p.args || []).slice(1)
+  .some(a => /\.js$/.test(a) && path.basename(path.dirname(a)) === 'electron' && fs.existsSync(path.join(__dirname, path.basename(a))));
+
 // roots: the chat's live processes (its structured agent, its terminal) whose trees are skipped; listeners:
 // [{ pid, url }] from servers.js.
 async function agentProcesses(paneId, roots = [], listeners = []) {
@@ -81,13 +85,18 @@ async function agentProcesses(paneId, roots = [], listeners = []) {
   const self = new Set(); for (let p = process.pid; p; p = all.get(p)?.ppid) { if (self.has(p)) break; self.add(p); }
   // OpenCode's harness server (chat-sdk.js launches exactly this) and its helpers are the agent, not something it
   // left running, even orphaned by an app instance that was killed before it could stop it.
-  roots = [...roots, ...[...all.values()].filter(isHarnessServer).map(p => p.pid)];
+  // TerminalVibe's own helpers too: the delegate MCP server every agent is given is the app's binary running one of its
+  // electron/*.js scripts. It dies with its agent, a beat later, which logged it as "started"/"stopped" in the history.
+  roots = [...roots, ...[...all.values()].filter(p => isHarnessServer(p) || (p.match && isAppHelper(p))).map(p => p.pid)];
   const foreign = foreignOf(all);
   const kept = [...all.values()].filter(p => p.match && !self.has(p.pid) && !DAEMONS.test(p.comm) && !foreign(p.pid) && !roots.some(r => r && under(p.pid, r)));
   const keptIds = new Set(kept.map(p => p.pid));
   // One row per tree: a process whose parent is also listed belongs to that row (npm -> node -> esbuild).
   const top = pid => { let t = pid; for (let p = all.get(pid)?.ppid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) if (keptIds.has(p)) t = p; return t; };
-  const rows = new Map(kept.filter(p => !keptIds.has(p.ppid) && !isBareShell(p)).map(p => [p.pid, { pid: p.pid, command: (p.args || [p.comm]).join(' '), cwd: p.cwd, startedAt: p.startedAt, urls: [], pids: [p.pid] }]));
+  // Something that has run for under MIN_AGE_MS isn't "left running" yet: a tool call finishing, a helper exiting with its
+  // agent. Listing it only adds a started/stopped pair to the history a poll later.
+  const settled = p => !p.startedAt || Date.now() - p.startedAt >= MIN_AGE_MS;
+  const rows = new Map(kept.filter(p => !keptIds.has(p.ppid) && !isBareShell(p) && settled(p)).map(p => [p.pid, { pid: p.pid, command: (p.args || [p.comm]).join(' '), cwd: p.cwd, startedAt: p.startedAt, urls: [], pids: [p.pid] }]));
   for (const p of kept) if (rows.has(top(p.pid)) && p.pid !== top(p.pid)) rows.get(top(p.pid)).pids.push(p.pid);
   for (const l of listeners) {
     if (!keptIds.has(l.pid)) continue;
