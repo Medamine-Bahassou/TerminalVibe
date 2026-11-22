@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setSkillEnabled: (id, enabled) => ipcRenderer.invoke('skills:set-enabled', id, enabled),
   listRunningServers: () => ipcRenderer.invoke('servers:list'),
   chatBgProcs: (id) => ipcRenderer.invoke('chat:bg-procs', id),
+  chatBusyElsewhere: (id, sessionIds) => ipcRenderer.invoke('chat:busy-elsewhere', id, sessionIds),
   chatBgStop: (id, pid) => ipcRenderer.invoke('chat:bg-stop', id, pid),
   killRunningServer: (pid, port) => ipcRenderer.invoke('servers:kill', { pid, port }),
   onAgentRequest: (cb) => {

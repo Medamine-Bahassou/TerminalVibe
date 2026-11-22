@@ -566,6 +566,7 @@ ipcMain.handle('chat:bg-procs', async (_e, id) => {
   try { listeners = await require('./servers').allServers(); } catch {}
   return require('./agent-procs').agentProcesses(id, chatRoots(id), listeners).catch(() => []);
 });
+ipcMain.handle('chat:busy-elsewhere', (_e, id, sessionIds) => typeof id === 'string' && Array.isArray(sessionIds) ? require('./agent-procs').sessionElsewhere(id, sessionIds.filter(x => typeof x === 'string').slice(0, 20)).catch(() => []) : []);
 ipcMain.handle('chat:bg-stop', (_e, id, pid) => require('./agent-procs').stopAgentProcess(String(id), pid, chatRoots(String(id))));
 
 const skillManager = require('./skill-manager').createSkillManager({

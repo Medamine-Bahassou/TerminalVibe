@@ -9576,7 +9576,7 @@
     }
     const branchHtml = `<i class="ph ${branchMismatch ? 'ph-warning' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
     if (shownBranch && branch._html !== branchHtml) { branch._html = branchHtml; branch.innerHTML = branchHtml; }
-    thrInput.placeholder = h && h.id === o.harness ? `Message ${h.name}` : 'Ask anything';
+    thrInput.placeholder = ws._elsewhere ? 'This thread is working in another app. Wait for it to finish to send from here.' : h && h.id === o.harness ? `Message ${h.name}` : 'Ask anything';
     const editor = threadPart(surface, 'input-links');
     if (editor) editor.dataset.placeholder = thrInput.placeholder;
     syncWorking(ws, surface);
@@ -11849,7 +11849,7 @@
     const queue = !scheduling && !editing && working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = !editing && working && !typed && !queue;
     thrSend.classList.toggle('stop', stop);
     const resume = !editing && !working && !typed && !!c?.chat?.interruptedAt && !c._resuming && !_chatSending.has(c.id);
-    thrSend.disabled = !stop && !typed && !resume;
+    thrSend.disabled = (!!c?._elsewhere && !stop) || (!stop && !typed && !resume);
     const scheduled = !editing && !typed && !working && !resume && c?.chat?.queuedMessages?.some(message => message.sendAt);
     const label = scheduling ? 'Schedule message' : scheduled ? 'Message scheduled' : editing ? 'Save queued message' : queue ? 'Queue message' : stop ? 'Stop' : working ? 'Steer' : resume ? 'Continue' : 'Send';
     const sameTab = thrSend._tab === c;
@@ -11927,6 +11927,7 @@
   });
   thrPage.querySelector('#sbr-thread-composer')?.addEventListener('submit', async e => {
     e.preventDefault();
+    if (curChat()?._elsewhere && !thrSend.classList.contains('stop')) { zoomBadge('This thread is working in another app'); return; }
     if (thrSend.dataset.mode === 'Schedule message') { openChatSchedule(curChat()); return; }
     if (thrSend.dataset.mode === 'Continue' && !thrInput.value.trim() && !_chatFiles.length) { void continueInterruptedChat(curChat()); return; }
     if (e.submitter === thrSend && thrSend.classList.contains('stop')) { if (curChat()) stopChatTurn(curChat()); return; }
@@ -14086,6 +14087,16 @@
   let _bgProcsBusy = false;
   const _chatProcs = new Map(); // chat id → { sig, procs }
   // Polls the open chat plus any chat with processes still running, so a stop is seen even while you're elsewhere.
+  // The open chat's conversation running in another app (a second TerminalVibe, a terminal's --resume) would collide
+  // with anything sent from here: note it on the chat so the composer can refuse.
+  async function refreshChatElsewhere(chat) {
+    const ids = (chat.chat?.segments || []).map(x => x?.sessionId).filter(Boolean);
+    const rows = await window.electronAPI.chatBusyElsewhere(chat.id, ids).catch(() => []);
+    const next = rows?.find(r => r.busy) || null; // only a conversation that is working elsewhere blocks sending
+    if ((chat._elsewhere?.pid || 0) === (next?.pid || 0)) return;
+    chat._elsewhere = next;
+    if (curChat() === chat) syncThreadComposer(chat);
+  }
   async function refreshAgentProcCards() {
     if (!window.electronAPI?.chatBgProcs || _bgProcsBusy) return;
     const chats = new Set([curChat(), ...[..._chatProcs.keys()].map(findChatThread)].filter(t => t?.chat));
@@ -14095,6 +14106,7 @@
       for (const chat of chats) {
         let procs;
         try { procs = await window.electronAPI.chatBgProcs(chat.id) || []; } catch { continue; }
+        if (chat === curChat() && window.electronAPI.chatBusyElsewhere) await refreshChatElsewhere(chat);
         logProcEvents(chat, procs);
         const sig = JSON.stringify(procs.map(p => [p.pid, p.command, p.urls]));
         if (_chatProcs.get(chat.id)?.sig === sig) continue;

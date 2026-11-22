@@ -16,7 +16,7 @@ const isHarnessServer = p => p.match && /^opencode(\.exe)?$/.test(path.basename(
   && (p.args || []).slice(1).join(' ') === 'serve --hostname=127.0.0.1 --port=0';
 const isBareShell = p => /^-?(ba|z|da|fi|k)?sh$/.test(path.basename(p.args?.[0] || p.comm)) && (p.args?.length || 1) <= 1;
 
-async function scanLinux(paneId) {
+async function scanLinux(paneId, ids = []) {
   const needle = Buffer.from(`\0TERMINALVIBE_PANE_ID=${paneId}\0`), first = Buffer.from(`TERMINALVIBE_PANE_ID=${paneId}\0`);
   const ticks = 100; // USER_HZ on every Linux build Node targets
   let boot = 0;
@@ -28,13 +28,17 @@ async function scanLinux(paneId) {
     let stat;
     try { stat = fs.readFileSync(path.join(dir, 'stat'), 'utf8'); } catch { continue; }
     const close = stat.lastIndexOf(')'), comm = stat.slice(stat.indexOf('(') + 1, close), f = stat.slice(close + 2).split(' ');
-    const p = { pid, ppid: Number(f[1]), comm, match: false };
+    const p = { pid, ppid: Number(f[1]), comm, match: false, ticks: Number(f[11]) + Number(f[12]) }; // CPU time used (utime + stime)
     all.set(pid, p);
+    if (ids.length) { // a process with the session id as an argument (--resume <id>, --session-id=<id>) has the conversation open
+      try { p.args = fs.readFileSync(path.join(dir, 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { p.args = []; }
+      p.hasSession = p.args.some(x => ids.some(id => x === id || x.endsWith('=' + id)));
+    }
     let env;
     try { env = fs.readFileSync(path.join(dir, 'environ')); } catch { continue; } // another user's process
     if (!(env.indexOf(needle) >= 0 || env.subarray(0, first.length).equals(first))) continue;
     p.match = true;
-    try { p.args = fs.readFileSync(path.join(dir, 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { p.args = [comm]; }
+    if (!p.args?.length) try { p.args = fs.readFileSync(path.join(dir, 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { p.args = [comm]; }
     try { p.cwd = fs.readlinkSync(path.join(dir, 'cwd')); } catch { p.cwd = null; }
     p.startedAt = boot ? boot + Number(f[19]) / ticks * 1000 : null; // field 22: start time, in ticks since boot
   }
@@ -62,6 +66,11 @@ async function scanMac(paneId) {
   return all;
 }
 
+// Another TerminalVibe (a packaged build next to this dev app) shares ~/.terminalvibe, so its chats carry the same
+// pane ids and its agents match here. Anything running under a different app instance is that instance's, not ours.
+const APP = /^(electron|terminalvibe)$/i;
+const foreignOf = all => pid => { let other = false; for (let p = all.get(pid)?.ppid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) { if (p === process.pid) return false; if (APP.test(all.get(p)?.comm || '')) other = true; } return other; };
+
 // roots: the chat's live processes (its structured agent, its terminal) whose trees are skipped; listeners:
 // [{ pid, url }] from servers.js.
 async function agentProcesses(paneId, roots = [], listeners = []) {
@@ -73,10 +82,7 @@ async function agentProcesses(paneId, roots = [], listeners = []) {
   // OpenCode's harness server (chat-sdk.js launches exactly this) and its helpers are the agent, not something it
   // left running, even orphaned by an app instance that was killed before it could stop it.
   roots = [...roots, ...[...all.values()].filter(isHarnessServer).map(p => p.pid)];
-  // Another TerminalVibe (a packaged build next to this dev app) shares ~/.terminalvibe, so its chats carry the same
-  // pane ids and its agents match here. Anything running under a different app instance is that instance's, not ours.
-  const APP = /^(electron|terminalvibe)$/i;
-  const foreign = pid => { let other = false; for (let p = all.get(pid)?.ppid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) { if (p === process.pid) return false; if (APP.test(all.get(p)?.comm || '')) other = true; } return other; };
+  const foreign = foreignOf(all);
   const kept = [...all.values()].filter(p => p.match && !self.has(p.pid) && !DAEMONS.test(p.comm) && !foreign(p.pid) && !roots.some(r => r && under(p.pid, r)));
   const keptIds = new Set(kept.map(p => p.pid));
   // One row per tree: a process whose parent is also listed belongs to that row (npm -> node -> esbuild).
@@ -91,6 +97,37 @@ async function agentProcesses(paneId, roots = [], listeners = []) {
   return [...rows.values()].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
 }
 
+// The conversation open somewhere else: an agent of another TerminalVibe instance for this chat, or any process outside
+// this app with the chat's session id in its arguments (a terminal's `claude --resume <id>`). Sending from here would
+// collide with it. Linux only (it needs /proc); anything else answers "not found". Rows: [{ pid, command }].
+const cpuSeen = new Map(); // pid -> { ticks, active }: the last poll's CPU time of an agent's tree, and when it last moved
+const BUSY_MS = 4000, BUSY_TICKS = 3; // 3 ticks = 30ms of CPU between two polls (about a second apart)
+async function sessionElsewhere(paneId, sessionIds = []) {
+  if (process.platform !== 'linux' || !/^[\w-]{1,128}$/.test(paneId || '')) return [];
+  const ids = sessionIds.filter(id => /^[\w-]{8,128}$/.test(id || ''));
+  const all = await scanLinux(paneId, ids);
+  const foreign = foreignOf(all);
+  const ours = pid => { for (let p = pid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) if (p === process.pid) return true; return false; };
+  // Another instance's shell or dev server for the same tab isn't the conversation: only an agent binary counts.
+  const AGENT = /^(claude|codex|opencode|gemini|agy|amp|cursor-agent|kimi|copilot|qwen|droid)(\.exe)?$/;
+  const isAgent = p => [p.args?.[0] || p.comm, p.args?.[1] || ''].some(x => AGENT.test(path.basename(x)));
+  const flagged = new Map([...all].filter(([pid, p]) => !ours(pid) && !DAEMONS.test(p.comm) && (p.hasSession || (p.match && foreign(pid) && isAgent(p)))));
+  // Open elsewhere isn't a conflict, working elsewhere is: an agent's tree (it and its tool processes) that used CPU since the
+  // last poll is working, and stays "busy" for BUSY_MS after it last did (the gaps between streamed chunks, an API wait).
+  const kids = new Map();
+  for (const p of all.values()) (kids.get(p.ppid) || kids.set(p.ppid, []).get(p.ppid)).push(p.pid);
+  const treeTicks = root => { let n = 0; const stack = [root]; for (let seen = 0; stack.length && seen < 500; seen++) { const x = stack.pop(); n += all.get(x)?.ticks || 0; stack.push(...(kids.get(x) || [])); } return n; };
+  const now = Date.now(), rows = [...flagged.values()].filter(p => !flagged.has(p.ppid)).map(p => {
+    const ticks = treeTicks(p.pid), prev = cpuSeen.get(p.pid);
+    let active = prev?.active || 0;
+    if (prev && ticks - prev.ticks >= BUSY_TICKS) active = now;
+    cpuSeen.set(p.pid, { ticks, active });
+    return { pid: p.pid, command: (p.args?.length ? p.args : [p.comm]).join(' ').slice(0, 200), busy: now - active < BUSY_MS };
+  });
+  for (const pid of cpuSeen.keys()) if (!rows.some(r => r.pid === pid)) cpuSeen.delete(pid);
+  return rows;
+}
+
 // Stop one row: its whole tree, after checking (again) that it is still this chat's, so a reused pid is never hit.
 async function stopAgentProcess(paneId, pid, roots) {
   const row = (await agentProcesses(paneId, roots)).find(r => r.pid === Number(pid));
@@ -99,4 +136,4 @@ async function stopAgentProcess(paneId, pid, roots) {
   return true;
 }
 
-module.exports = { agentProcesses, stopAgentProcess };
+module.exports = { agentProcesses, stopAgentProcess, sessionElsewhere };
