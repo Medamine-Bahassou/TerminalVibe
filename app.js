@@ -13192,6 +13192,13 @@
     const sig = JSON.stringify(rows);
     if (el.dataset.tipRows !== sig) el.dataset.tipRows = sig;
   }
+  // Markdown images and SVG previews open full screen in the image viewer (zoom, pan, rotate), like attached images.
+  onThreadPage('click', e => {
+    const img = e.target.closest?.('img.thr-rimg');
+    if (!img || img.classList.contains('failed') || !img.complete || !img.naturalWidth) return;
+    e.preventDefault();
+    openClaudeRefViewer(null, { kind: 'file', path: img.currentSrc || img.src, label: img.alt || 'Image' }, '', img.currentSrc || img.src);
+  });
   // On the page, not the ring: the ring is moved and cloned between chat surfaces, a listener on one copy misses the others.
   onThreadPage('click', e => { if (e.target.closest?.('.thr-usage-ring')) { e.preventDefault(); openUsageModal(); } });
   function syncContextRing(el, ctx) {

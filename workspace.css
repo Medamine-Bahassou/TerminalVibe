@@ -3216,3 +3216,11 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 .thr-composer .thr-usage-ring { cursor:pointer; }
 .thr-composer .thr-usage-ring.high::before { background:conic-gradient(var(--ui-error) calc(var(--p, 0) * 1%), color-mix(in srgb,var(--fg) 14%,transparent) 0); }
 @container chat-composer (max-width: 300px) { #sbr-thread .thr-composer-bar .thr-usage-ring { display:none; } }
+
+/* Markdown images: click for the full-screen viewer; on hover the title (alt text) shows small at the top left. */
+#sbr-thread .thr-rimg-wrap { position:relative; }
+#sbr-thread .thr-rimg:not(.failed) { cursor:zoom-in; }
+#sbr-thread .thr-rimg-wrap:hover > .thr-rimg:not(.failed):not([alt=""]) + .thr-rimg-alt {
+  display:block; position:absolute; top:6px; left:6px; max-width:calc(100% - 12px); padding:2px 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font:500 11px/16px var(--ui-font); color:var(--fg); background:color-mix(in srgb,var(--bg) 82%,transparent); border-radius:4px !important; pointer-events:none;
+}
