@@ -27,15 +27,17 @@ const MIME = {
 http.createServer((req, res) => {
   // npm run dev also serves the UI from this origin. Keep local history
   // available here rather than letting /api requests fall through to files.
+  if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(req.headers.host || '')) { res.writeHead(403); return res.end(); }
   const parsed = new URL(req.url, `http://${HOST}:${PORT}`);
   if (parsed.pathname === '/api/skills') {
     require('./skill-http').handleSkillRequest(req, res, skillManager);
     return;
   }
-  let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  let urlPath;
+  try { urlPath = decodeURIComponent((req.url || '/').split('?')[0]); } catch { res.writeHead(400); return res.end(); }
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.join(ROOT, path.normalize(urlPath));
-  if (!filePath.startsWith(ROOT)) { res.writeHead(403); return res.end('Forbidden'); }
+  if (!filePath.startsWith(ROOT + path.sep)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });

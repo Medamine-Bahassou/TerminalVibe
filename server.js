@@ -83,6 +83,8 @@ const MIME_TYPES = {
 const skillManager = require('./electron/skill-manager').createSkillManager();
 
 const appServer = http.createServer((req, res) => {
+  // Refuse DNS-rebinding: a hostile page resolving its own name to 127.0.0.1 could otherwise read /local/* and kill servers.
+  if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(req.headers.host || '')) { res.writeHead(403); res.end(); return; }
   const parsed = url.parse(req.url, true);
   if (parsed.pathname === '/api/skills') {
     require('./electron/skill-http').handleSkillRequest(req, res, skillManager);
@@ -120,8 +122,9 @@ const appServer = http.createServer((req, res) => {
 
   // Local file serving: /local/<encoded-path>
   if (parsed.pathname.startsWith("/local/")) {
-    const filePath = decodeURIComponent(parsed.pathname.slice(7));
-    if (!fs.existsSync(filePath)) { res.writeHead(404); res.end("Not found"); return; }
+    let filePath;
+    try { filePath = decodeURIComponent(parsed.pathname.slice(7)); } catch { res.writeHead(400); res.end(); return; }
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) { res.writeHead(404); res.end("Not found"); return; }
     const ext = path.extname(filePath).toLowerCase();
     const mime = MIME_TYPES[ext] || "application/octet-stream";
     const stat = fs.statSync(filePath);
@@ -139,7 +142,7 @@ const appServer = http.createServer((req, res) => {
 
   const fullPath = path.resolve(path.join(APP_DIR, filePath));
 
-  if (!fullPath.startsWith(APP_DIR)) {
+  if (fullPath !== APP_DIR && !fullPath.startsWith(APP_DIR + path.sep)) {
     res.writeHead(403);
     res.end();
     return;
