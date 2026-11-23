@@ -9555,7 +9555,9 @@
     const thrChip = id => threadPart(surface, id), thrInput = threadPart(surface, 'input');
     const t = liveThreadAgent(ws), h = t && harnessOf(_tabAgent.get(t.id));
     const o = chatOpts(ws), ho = harnessOf(o.harness);
-    const effort = o.effort !== 'default' ? EFFORT_NAMES[o.effort] || o.effort : '';
+    const defEffort = (chatModels(o.harness, ws).find(x => x.id === o.model) || {}).defaultEffort;
+    const shown = o.effort === 'default' && defEffort && defEffort !== 'default' ? defEffort : o.effort;
+    const effort = EFFORT_NAMES[shown] || shown;
     const sig = [o.harness, o.model, o.effort, o.fast, o.ultra].join('|');
     const chip = thrChip('model');
     if (chip.dataset.sig !== sig) {
@@ -10000,11 +10002,11 @@
       renderModel = ({ h, m }, index) => {
         const key = favKey(h.id, m.id), n = favOrder.get(key), favorite = favs.has(key);
         const sel = o.harness === h.id && (o.model === m.id || (m.id === 'default' && o.model === 'default'));
-        return `<button type="button" role="option" class="mp-row${sel ? ' selected' : ''}" data-index="${index}" data-h="${h.id}" data-m="${escHtml(m.id)}" aria-selected="${sel}" aria-posinset="${index + 1}" aria-setsize="${rows.length}">`
+        return `<button type="button" role="option" class="mp-row${sel ? ' selected' : ''}" data-index="${index}" data-h="${h.id}" data-m="${escHtml(m.id)}" aria-selected="${sel}" aria-posinset="${index + 1}" aria-setsize="${rows.length}" title="${escHtml(m.name)}">`
           + `<span class="mp-logo"${h.color ? ` style="color:${h.color}"` : ''}>${logos.get(h.id)}</span><span class="mp-name">${escHtml(m.name)}</span>`
           + (sel ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + (!found || found[h.bin] ? '' : '<span class="mp-hint">not installed</span>')
           + `<span class="mp-fav${favorite ? ' on' : ''}" title="${favorite ? 'Remove from favorites' : 'Add to favorites'}">${favorite ? STAR_FILLED : '<i class="ph ph-star" aria-hidden="true"></i>'}</span>`
-          + (n ? `<kbd class="mp-kbd">Ctrl+${n}</kbd>` : '') + '</button>';
+          + (n ? `<kbd class="mp-kbd" title="Quick switch shortcut">Ctrl+${n}</kbd>` : '') + '</button>';
       };
       firstRendered = lastRendered = -1;
       if (list.scrollTop > rows.length * rowHeight) list.scrollTop = 0;
@@ -14084,7 +14086,11 @@
     decorateWorkUsernames(details);
     details.querySelectorAll('img.thr-img').forEach(bindThreadImage);
   }
-  document.addEventListener('toggle', e => { if (e.target.open && e.target.matches?.('details[data-key]')) fillLazyDetails(e.target); }, true);
+  document.addEventListener('toggle', e => {
+    if (e.target.open && e.target.matches?.('details[data-key]')) fillLazyDetails(e.target);
+    // Folding the changed-files card folds each file's diff too.
+    else if (!e.target.open && e.target.matches?.('.thr-changes-list')) e.target.querySelectorAll('.thr-change[open]').forEach(d => { d.open = false; });
+  }, true);
   // ── A2UI surfaces in agent replies (a2ui.js): one surface registry per chat, so a later block can update an earlier
   // surface. A rendered block is cached by message + position + source and moved into the re-rendered host, so a
   // streaming update or a chat switch keeps what the user entered. A button action goes to the agent as a message. ──

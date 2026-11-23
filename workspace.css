@@ -3402,3 +3402,8 @@ body .tv-model-picker .mp-status.mp-retry:focus-visible { outline:none; box-shad
 @media (prefers-reduced-motion: reduce) {
   body .tv-model-picker .mp-status.mp-retry { transition:none; }
 }
+
+/* Chat: a sent message's image previews use the message bubble's radius. */
+#sbr-thread .thr-msg.user > .thr-images > .thr-img-wrap,
+#sbr-thread .thr-msg.user > .thr-images .thr-img { border-radius:14px !important; }
+#sbr-thread .thr-msg.user > .thr-images > .thr-img-wrap { overflow:hidden; }
