@@ -11438,7 +11438,7 @@
     document.documentElement.style.setProperty('--thr-zoom', String(_chatZoom));
     try { localStorage.setItem('tv-chat-zoom', String(_chatZoom)); } catch {}
     if (atBottom) flow.scrollTop = flow.scrollHeight; // keep the latest message in view
-    zoomBadge(`Chat ${Math.round(_chatZoom * 100)}%`, 800);
+    zoomBadge(`Chat ${Math.round(_chatZoom * 100)}%`, { id: 'zoom', duration: 800 });
   }, { capture: true, passive: false });
   // ── Cite: select text in the chat, a "Cite" button appears; it adds the passage to the next message ──
   let _citationFlash = null;
@@ -14722,11 +14722,10 @@
         item('<i class="ph ph-terminal-window"></i>', `Show ${escHtml(h.name)} terminal`, '', () => { if (viewSwitchBlocked(tab)) return; openChatTab(tab); setChatView(tab, true); });
         item('<i class="ph ph-stop-circle"></i>', `Stop ${escHtml(h.name)}`, '', () => stopTabAgent(tab).then(ok => { if (!ok) zoomBadge(`${h.name} did not stop`); syncThreadPanel(); renderThreadsSidebar(); }));
       }
-      const cwd = chatCwd(tab);
-      if (cwd) {
-        sep();
-        item('<i class="ph ph-copy"></i>', 'Copy folder path', '', () => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(cwd); else navigator.clipboard?.writeText(cwd).catch(() => {}); });
-      }
+      const cwd = chatCwd(tab), copy = s => { if (window.electronAPI?.clipboardWrite) window.electronAPI.clipboardWrite(s); else navigator.clipboard?.writeText(s).catch(() => {}); };
+      sep();
+      if (cwd) item('<i class="ph ph-copy"></i>', 'Copy folder path', '', () => copy(cwd));
+      item('<i class="ph ph-copy"></i>', 'Copy thread ID', '', () => copy(threadKey(tab)));
       sep();
       item('<i class="ph ph-trash"></i>', 'Delete thread', '', () => confirmDeleteThread(tab, w), true);
     } else if (type === 'chat-terminal') {
@@ -15437,36 +15436,159 @@
   const FONT_MIN = 8;
   const FONT_MAX = 32;
 
-  /* ── App toast ── */
+  /* ── App toast: a Sonner (shadcn/ui) style stack ──
+     zoomBadge(title, opts | duration) and zoomBadge.success / .error / .warning / .info / .loading / .promise / .dismiss.
+     opts: { id (same id updates in place), type, description, duration (ms, Infinity = sticky),
+             action: { label, onClick }, cancel: { label, onClick }, onDismiss, onAutoClose }.
+     Newest in front, 3 visible, the stack fans out on hover/focus, timers pause meanwhile and while the window
+     is hidden, swipe right to dismiss. Skipped Sonner's Alt+T hotkey: it is a shell key in a terminal app. */
   const zoomBadge = (function () {
-    const el = document.createElement('div');
-    el.className = 'app-toast app-toast-fixed';
-    el.innerHTML = '<i class="ph ph-info" aria-hidden="true"></i><span role="status"></span>'
-      + '<button type="button" class="app-toast-close" aria-label="Dismiss notification" hidden><i class="ph ph-x" aria-hidden="true"></i></button>';
-    const label = el.querySelector('[role="status"]'), close = el.querySelector('button');
-    document.body.appendChild(el);
-    let timer, duration;
-    const hide = () => {
-      clearTimeout(timer);
-      el.classList.remove('visible');
-      close.hidden = true;
+    const GAP = 14, VISIBLE = 3, EXIT_MS = 200;
+    const ICONS = { success: 'ph-check-circle', error: 'ph-x-circle', warning: 'ph-warning', info: 'ph-info', loading: 'ph-circle-notch' };
+    const region = document.createElement('section');
+    region.setAttribute('aria-label', 'Notifications');
+    region.setAttribute('aria-live', 'polite');
+    const list = document.createElement('ol');
+    list.className = 'toaster';
+    region.append(list);
+    document.body.append(region);
+    let toasts = [], seq = 0, expanded = false; // toasts[0] is the front (newest)
+
+    const paused = () => expanded || document.hidden;
+    const startTimer = t => {
+      clearTimeout(t.timer);
+      if (t.remaining === Infinity || paused()) return;
+      t.started = Date.now();
+      t.timer = setTimeout(() => { t.onAutoClose?.(); remove(t); }, t.remaining);
     };
-    const resume = () => {
-      clearTimeout(timer);
-      if (el.classList.contains('visible') && !el.matches(':hover, :focus-within')) timer = setTimeout(hide, duration);
+    const pauseTimer = t => { if (!t.started) return; clearTimeout(t.timer); t.remaining -= Date.now() - t.started; t.started = 0; };
+    const syncTimers = () => toasts.forEach(paused() ? pauseTimer : startTimer);
+
+    const layout = () => {
+      let offset = 0;
+      toasts.forEach((t, i) => {
+        const s = t.el.style;
+        t.el.dataset.front = i === 0;
+        t.el.dataset.hidden = i >= VISIBLE;
+        s.setProperty('--index', i);
+        s.setProperty('--offset', offset + 'px');
+        s.setProperty('--height', t.height + 'px');
+        s.zIndex = toasts.length - i;
+        offset += t.height + GAP;
+      });
+      list.style.setProperty('--front-height', (toasts[0]?.height || 0) + 'px');
+      list.dataset.expanded = expanded;
     };
-    close.addEventListener('click', hide);
-    el.addEventListener('pointerenter', () => clearTimeout(timer));
-    el.addEventListener('pointerleave', resume);
-    el.addEventListener('focusin', () => clearTimeout(timer));
-    el.addEventListener('focusout', () => queueMicrotask(resume));
-    return function showToast(text, timeout = 4000) {
-      duration = timeout;
-      label.textContent = text;
-      close.hidden = false;
-      el.classList.add('visible');
-      resume();
+    const setExpanded = v => { if (v === expanded) return; expanded = v; layout(); syncTimers(); };
+    const hoverOrFocus = () => list.matches(':hover') || list.contains(document.activeElement);
+    list.addEventListener('pointerenter', () => setExpanded(true));
+    list.addEventListener('pointerleave', () => { if (!list.contains(document.activeElement)) setExpanded(false); });
+    list.addEventListener('focusin', () => setExpanded(true));
+    list.addEventListener('focusout', () => queueMicrotask(() => setExpanded(hoverOrFocus())));
+    document.addEventListener('visibilitychange', syncTimers);
+
+    function remove(t) {
+      if (!toasts.includes(t)) return;
+      clearTimeout(t.timer);
+      toasts = toasts.filter(x => x !== t);
+      t.el.dataset.removed = 'true';
+      t.onDismiss?.();
+      setTimeout(() => t.el.remove(), EXIT_MS);
+      layout();
+      if (!toasts.length || !hoverOrFocus()) setExpanded(false);
+    }
+
+    function render(t) {
+      const el = t.el;
+      el.dataset.type = t.type || 'default';
+      el.innerHTML = '';
+      const body = document.createElement('div');
+      body.className = 'toast-body';
+      if (ICONS[t.type]) body.insertAdjacentHTML('beforeend', `<i class="ph ${ICONS[t.type]} toast-icon" aria-hidden="true"></i>`);
+      const content = document.createElement('div');
+      content.className = 'toast-content';
+      const title = document.createElement('div');
+      title.className = 'toast-title';
+      title.textContent = t.title;
+      content.append(title);
+      if (t.description) {
+        const d = document.createElement('div');
+        d.className = 'toast-description';
+        d.textContent = t.description;
+        content.append(d);
+      }
+      body.append(content);
+      const button = (cls, label, onClick) => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = cls; b.textContent = label;
+        b.addEventListener('click', e => { onClick?.(e); if (!e.defaultPrevented) remove(t); });
+        body.append(b);
+      };
+      if (t.cancel) button('toast-cancel', t.cancel.label, t.cancel.onClick);
+      if (t.action) button('toast-action', t.action.label, t.action.onClick);
+      body.insertAdjacentHTML('beforeend', '<button type="button" class="toast-close" aria-label="Dismiss notification"><i class="ph ph-x" aria-hidden="true"></i></button>');
+      body.lastChild.addEventListener('click', () => remove(t));
+      el.append(body);
+      t.height = body.offsetHeight;
+    }
+
+    // Swipe right to dismiss: past 45px or a quick flick; a left drag is damped.
+    function swipeable(t) {
+      const el = t.el;
+      el.addEventListener('pointerdown', e => {
+        if (e.button !== 0 || e.target.closest('button') || t.type === 'loading') return;
+        const x0 = e.clientX, t0 = Date.now();
+        let dx = 0;
+        el.setPointerCapture(e.pointerId);
+        el.dataset.swiping = 'true';
+        const move = ev => {
+          const d = ev.clientX - x0;
+          dx = d >= 0 ? d : -Math.sqrt(-d);
+          el.style.setProperty('--swipe', dx + 'px');
+        };
+        const up = () => {
+          el.removeEventListener('pointermove', move);
+          delete el.dataset.swiping;
+          if (dx > 45 || dx / (Date.now() - t0) > 0.11) { el.dataset.swipeOut = 'true'; remove(t); }
+          else el.style.setProperty('--swipe', '0px');
+        };
+        el.addEventListener('pointermove', move);
+        el.addEventListener('pointerup', up, { once: true });
+        el.addEventListener('pointercancel', up, { once: true });
+      });
+    }
+
+    function toast(title, opts = {}) {
+      if (typeof opts === 'number') opts = { duration: opts };
+      let t = opts.id != null && toasts.find(x => x.id === opts.id);
+      const fresh = !t;
+      if (fresh) {
+        t = { id: opts.id ?? ++seq, el: document.createElement('li') };
+        t.el.className = 'toast';
+        list.prepend(t.el);
+        swipeable(t);
+        toasts.unshift(t);
+      }
+      Object.assign(t, { type: undefined, description: undefined, action: undefined, cancel: undefined, onDismiss: undefined, onAutoClose: undefined }, opts, { title: String(title ?? '') });
+      t.remaining = opts.duration ?? (t.type === 'loading' ? Infinity : 4000);
+      t.started = 0;
+      render(t);
+      layout();
+      if (fresh) requestAnimationFrame(() => requestAnimationFrame(() => { t.el.dataset.mounted = 'true'; }));
+      startTimer(t);
+      return t.id;
+    }
+    for (const type of ['success', 'error', 'warning', 'info', 'loading']) toast[type] = (title, opts) => toast(title, { ...(typeof opts === 'number' ? { duration: opts } : opts), type });
+    toast.dismiss = id => (id == null ? [...toasts] : toasts.filter(t => t.id === id)).forEach(remove);
+    toast.promise = (promise, { loading = 'Loading…', success, error, ...rest } = {}) => {
+      const id = toast.loading(loading, rest);
+      const text = (m, v) => typeof m === 'function' ? m(v) : m;
+      Promise.resolve(promise).then(
+        v => success != null ? toast.success(text(success, v), { ...rest, id }) : toast.dismiss(id),
+        e => error != null ? toast.error(text(error, e), { ...rest, id }) : toast.dismiss(id));
+      return promise;
     };
+    return toast;
   })();
 
   document.getElementById('pane-area').addEventListener('wheel', (e) => {
@@ -15500,7 +15622,7 @@
     // fitTerm tells the PTY shortly after, so a TUI redraws over xterm's reflow of its old
     // layout quickly; writePtyData paints that redraw in one frame.
     fitTerm(active);
-    zoomBadge(newSize + 'px', 800);
+    zoomBadge(newSize + 'px', { id: 'zoom', duration: 800 });
 
   }, { capture: true, passive: false });
 

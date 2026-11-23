@@ -560,19 +560,6 @@ body #servers-dropdown :focus-visible { outline:none; box-shadow:0 0 0 2px color
 }
 .app-toast > i { flex-shrink:0; font-size:16px; line-height:20px; color:var(--muted-text); }
 .app-toast > span { min-width:0; }
-.app-toast-fixed {
-  position:fixed; right:16px; bottom:40px; z-index:9999;
-  width:min(356px, calc(100vw - 32px)); opacity:0; visibility:hidden; pointer-events:none;
-  transform:translateY(8px); transition:opacity 160ms, transform 160ms, visibility 0s 160ms;
-}
-.app-toast-fixed.visible { visibility:visible; opacity:1; transform:none; pointer-events:auto; transition-delay:0s; }
-.app-toast-close {
-  display:grid; place-items:center; flex:0 0 24px; height:24px; margin:-2px -2px -2px auto;
-  border:0; border-radius:4px; background:transparent; color:var(--muted-text); cursor:pointer;
-}
-.app-toast-close[hidden] { display:none; }
-.app-toast-close:hover { background:var(--ui-hover); color:var(--fg); }
-.app-toast-close:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 .session-drop-feedback { position:absolute; top:12px; right:12px; max-width:min(356px,90%); z-index:70; pointer-events:none; animation:toast-in 160ms ease-out; }
 .app-toast.is-pending > i { animation:toast-spin 900ms linear infinite; }
 .app-toast.is-success > i { color:var(--ui-success); }
@@ -580,7 +567,6 @@ body #servers-dropdown :focus-visible { outline:none; box-shadow:0 0 0 2px color
 @keyframes toast-spin { to { transform:rotate(360deg); } }
 @keyframes toast-in { from { opacity:0; transform:translateY(-4px); } }
 @media (prefers-reduced-motion: reduce) {
-  .app-toast-fixed { transform:none; transition:none; }
   .session-drop-feedback, .app-toast.is-pending > i { animation:none; }
 }
 
@@ -3407,3 +3393,63 @@ body .tv-model-picker .mp-status.mp-retry:focus-visible { outline:none; box-shad
 #sbr-thread .thr-msg.user > .thr-images > .thr-img-wrap,
 #sbr-thread .thr-msg.user > .thr-images .thr-img { border-radius:14px !important; }
 #sbr-thread .thr-msg.user > .thr-images > .thr-img-wrap { overflow:hidden; }
+
+/* App toasts: a Sonner (shadcn/ui) stack, bottom right. Newest in front; older ones peek 14px above it,
+   5% smaller each, as blank cards. Hover/focus fans the stack out with 14px gaps. Built by zoomBadge in app.js. */
+.toaster {
+  position:fixed; right:16px; bottom:40px; z-index:9999; margin:0; padding:0; list-style:none;
+  width:min(356px, calc(100vw - 32px)); height:var(--front-height, 0px);
+}
+.toaster .toast {
+  position:absolute; right:0; bottom:0; width:100%; height:var(--height);
+  background:var(--ui-surface); color:var(--fg); border:1px solid var(--ui-line);
+  border-radius:var(--ui-radius) !important; box-shadow:0 4px 12px #0003;
+  transform:translateY(100%); opacity:0; translate:var(--swipe, 0px) 0; touch-action:none;
+  transition:transform 400ms ease, opacity 400ms ease, height 400ms ease, translate 200ms ease, box-shadow 200ms;
+}
+/* Covers the gap above each toast, so moving between fanned-out toasts keeps the stack open. */
+.toaster .toast::after { content:''; position:absolute; left:0; right:0; bottom:100%; height:15px; }
+.toaster .toast[data-mounted="true"] {
+  opacity:1; transform:translateY(calc(var(--index) * -14px)) scale(calc(1 - var(--index) * 0.05));
+}
+.toaster:not([data-expanded="true"]) .toast[data-front="false"] { height:var(--front-height); }
+.toaster:not([data-expanded="true"]) .toast[data-front="false"] .toast-body { opacity:0; pointer-events:none; }
+.toaster[data-expanded="true"] .toast[data-mounted="true"] { transform:translateY(calc(var(--offset) * -1)); }
+.toaster .toast[data-hidden="true"] { opacity:0 !important; pointer-events:none; }
+.toaster .toast[data-removed="true"] { opacity:0; pointer-events:none; }
+.toaster .toast[data-removed="true"][data-front="true"]:not([data-swipe-out]) { transform:translateY(100%); }
+.toaster .toast[data-swipe-out] { translate:100% 0; }
+.toaster .toast[data-swiping] { transition:none; user-select:none; }
+.toaster .toast-body {
+  display:flex; align-items:center; gap:10px; padding:14px 16px;
+  font:400 13px/20px var(--ui-font); transition:opacity 400ms ease;
+}
+.toaster .toast-icon {
+  flex:0 0 16px; height:16px; display:grid; place-items:center; font-size:16px; line-height:1; color:var(--muted-text);
+}
+.toaster [data-type="success"] .toast-icon { color:var(--ui-success); }
+.toaster [data-type="error"] .toast-icon { color:var(--ui-error); }
+.toaster [data-type="warning"] .toast-icon { color:var(--ui-warning); }
+.toaster [data-type="loading"] .toast-icon { animation:toast-spin 900ms linear infinite; }
+.toaster .toast-content { flex:1; min-width:0; overflow-wrap:anywhere; }
+.toaster .toast-title { font-weight:500; }
+.toaster .toast-description { font-size:12px; line-height:18px; color:var(--muted-text); }
+.toaster .toast-action, .toaster .toast-cancel {
+  flex-shrink:0; height:24px; padding:0 8px; border:0; border-radius:6px !important; cursor:pointer;
+  font:500 12px/24px var(--ui-font); transition:background-color 150ms, color 150ms;
+}
+.toaster .toast-action { background:var(--accent); color:#0d1017; }
+.toaster .toast-action:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
+.toaster .toast-cancel { background:var(--ui-hover); color:var(--muted-text); }
+.toaster .toast-cancel:hover { color:var(--fg); }
+.toaster .toast-close {
+  display:grid; place-items:center; flex:0 0 24px; height:24px; margin:-2px -6px -2px 0; padding:0;
+  border:0; border-radius:6px !important; background:transparent; color:var(--muted-text); cursor:pointer;
+  font-size:14px; transition:background-color 150ms, color 150ms;
+}
+.toaster .toast-close:hover { background:var(--ui-hover); color:var(--fg); }
+.toaster button:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .toaster .toast, .toaster .toast-body { transition:none; }
+  .toaster [data-type="loading"] .toast-icon { animation:none; }
+}
