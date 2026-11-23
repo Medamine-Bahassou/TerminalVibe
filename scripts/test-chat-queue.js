@@ -21,6 +21,11 @@ tab._chatTurnState = { status: 'completed', at: 19 };
 assert(busyContext.chatWorking(tab), 'old completion must not finish the new turn');
 tab._chatTurnState = { status: 'completed', at: 21 };
 assert.equal(busyContext.chatWorking(tab), null);
+// A subagent thread has no live agent: its parent's running call must show the working row, then settle.
+const subTab = { id: 'sub', chat: { subagent: { status: 'running', since: 10, last: { role: 'tool', name: 'Bash', summary: 'npm test' } } } };
+assert.equal(busyContext.chatWorking(subTab).label, 'Bash npm test');
+subTab.chat.subagent.status = 'completed';
+assert.equal(busyContext.chatWorking(subTab), null, 'a finished subagent must not keep the thread "Thinking"');
 vm.runInContext(source.slice(source.indexOf('  function serializeChat('), source.indexOf('  function serializeLayout(')), busyContext);
 const serialized = busyContext.serializeChat({ queuedMessages: [{ text: 'next', files: [{ path: '/tmp/image.png', preview: 'data:image/png;base64,big' }] }] });
 assert.equal(serialized.queuedMessages[0].files[0].path, '/tmp/image.png');

@@ -7,7 +7,7 @@ const path = require('path');
 
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
-const { saveThreadAttachment, syncThread, threadHistory, threadHistoryPreview, writeHandoff, forkThread, deleteThread, parseCodex } = require('../electron/threads');
+const { saveThreadAttachment, syncThread, threadHistory, threadHistoryPreview, subagentStatus, writeHandoff, forkThread, deleteThread, parseCodex } = require('../electron/threads');
 
 const task = (type, timestamp) => ({ type: 'event_msg', timestamp, payload: { type } });
 assert.deepStrictEqual(parseCodex([task('task_started', '2026-01-01T10:00:00Z')]).turnState,
@@ -204,6 +204,9 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
     const agents = seg.items.filter(x => x.agent).map(x => [x.agent.sessionId, x.agent.status, x.output ?? null]);
     assert.deepStrictEqual(agents, [['ses_first00001', 'completed', 'hi one'], ['ses_second0001', 'running', null], ['ses_third00001', 'stopped', null]]);
     assert.strictEqual(new Set(seg.items.filter(x => x.agent).map(x => x.agent.toolUseId)).size, 3, 'one id per call');
+    const runningCall = seg.items.find(x => x.agent?.status === 'running').agent.toolUseId;
+    const live = await subagentStatus({ id: 'deleg', segments: [{ harness: 'opencode', sessionId: sid, since: 0 }] }, runningCall, home);
+    assert.deepStrictEqual([live.status, live.since > 0, live.last], ['running', true, null], 'a subagent thread reads its live state from the parent call');
   }
 
   // Background commands (Claude Code's Bash with run_in_background): a running one has its latest output read live,
@@ -230,6 +233,12 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
       { type: 'attachment', timestamp: '2026-05-02T10:00:20Z', attachment: { type: 'queued_command', prompt: note('run2', 'tu2', 'failed'), timestamp: '2026-05-02T10:00:20Z' } },
       { type: 'user', timestamp: '2026-05-02T10:00:21Z', message: { role: 'user', content: note('run2', 'tu2', 'failed') } },
       { type: 'user', timestamp: '2026-05-02T10:00:30Z', message: { role: 'user', content: note('a1', 'tu3', 'completed') } },
+      // Ended while the agent was still between tool steps: queued mid-turn.
+      { type: 'user', timestamp: '2026-05-02T10:01:00Z', message: { role: 'user', content: 'serve it' } },
+      use('tu4', 'Bash', { command: 'vercel dev', description: 'Serve', run_in_background: true }, '2026-05-02T10:01:01Z'),
+      result('tu4', 'Command running in background with ID: run4.', { backgroundTaskId: 'run4' }, '2026-05-02T10:01:02Z'),
+      use('tu5', 'Bash', { command: 'sleep 5' }, '2026-05-02T10:01:03Z'),
+      { type: 'attachment', timestamp: '2026-05-02T10:01:04Z', attachment: { type: 'queued_command', prompt: note('run4', 'tu4', 'failed'), timestamp: '2026-05-02T10:01:04Z' } },
     ]));
     const [seg] = await threadHistory({ id: 'bg', segments: [{ harness: 'claude', sessionId: bgSid, since: 0 }] }, home);
     const byId = n => seg.items.find(x => x.role === 'tool' && x.summary === n || x.input?.description === n);
@@ -237,7 +246,8 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
     assert.deepStrictEqual([watch.bg.status, watch.bg.taskId, watch.bg.tail], ['running', 'run1', 'line 1\nline 2\n'], 'running: live output, colors stripped');
     assert.deepStrictEqual([build.bg.status, build.bg.summary.includes('exit code 2')], ['failed', true]);
     const events = seg.items.filter(x => x.role === 'event');
-    assert.deepStrictEqual(events.map(e => [e.kind, e.status, e.title]), [['bg', 'failed', 'Build'], ['agent', 'completed', 'Research']], 'one event per task, where it ended');
+    assert.deepStrictEqual(events.map(e => [e.kind, e.status, e.title]), [['bg', 'failed', 'Build'], ['agent', 'completed', 'Research'], ['bg', 'failed', 'Serve']], 'one event per task, where it ended');
+    assert.deepStrictEqual(events.map(e => !!e.inTurn), [false, false, true], 'only one that ended mid-turn stays in its turn');
     assert.strictEqual(seg.items.find(x => x.agent)?.agent.status, 'completed', 'the background subagent is finished by its notification');
     assert(!seg.items.some(x => x.role === 'user' && /task-notification/.test(x.text || '')), 'notifications are not shown as prompts');
     void byId;

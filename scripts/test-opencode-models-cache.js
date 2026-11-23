@@ -10,6 +10,7 @@ function context(store = {}) {
     chatSdkModels: async (_harness, _bin, cwd) => { calls.push(cwd); return [{ id: 'opencode/model-' + cwd, name: 'Model', efforts: ['default'] }]; },
   };
   const ctx = vm.createContext({
+    setTimeout: fn => { fn(); return 0; },
     localStorage: {
       getItem: k => store[k] ?? null,
       setItem: (k, v) => { store[k] = v; },
@@ -36,8 +37,14 @@ function context(store = {}) {
   await vm.runInContext(`loadOpenCodeModels('/bin/opencode', ${JSON.stringify(cwd)})`, restored.ctx);
   assert.deepEqual(restored.calls, [], 'a cached folder must never re-probe');
   const other = context();
-  other.ctx.window.electronAPI.chatSdkModels = async () => { throw Error('offline'); };
+  let attempts = 0;
+  other.ctx.window.electronAPI.chatSdkModels = async () => { attempts++; throw Error('offline'); };
   assert.equal(await vm.runInContext(`loadOpenCodeModels('/bin/opencode', ${JSON.stringify(cwd)})`, other.ctx), null);
+  assert.equal(attempts, 2, 'a failed probe is retried once');
   assert.equal(vm.runInContext(`openCodeCatalogs.has(${JSON.stringify(cwd)})`, other.ctx), false, 'a failed probe must not be cached');
-  console.log('PASS: OpenCode models are cached per folder, restored on startup and probed once.');
+  // A chat with no folder still probes: the main process falls back to the home directory.
+  const noFolder = context();
+  assert.ok(await vm.runInContext(`loadOpenCodeModels('/bin/opencode', '')`, noFolder.ctx), 'a chat without a cwd must still load models');
+  assert.deepEqual(noFolder.calls, [''], 'the probe is sent even when the cwd is empty');
+  console.log('PASS: OpenCode models are cached per folder, restored on startup, probed once, retried on failure and loaded without a cwd.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

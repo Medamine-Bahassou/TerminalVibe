@@ -3693,6 +3693,16 @@
         overlay.append(editing.el);
       };
       if (opts.onEdit) { btn('pencil-simple', 'Annotate (E)', startEdit); viewKeys.e = startEdit; sep(); }
+      // Several images (composer files, or the thread's images): step through them with the arrows.
+      const gal = opts.gallery, at = opts.index ?? 0;
+      if (gal?.length > 1) {
+        const go = d => { const i = (at + d + gal.length) % gal.length, n = gal[i]; close(); openClaudeRefViewer(null, n.ref, '', n.src, { ...n.opts, gallery: gal, index: i }); };
+        btn('caret-left', 'Previous image (←)', () => go(-1));
+        bar.appendChild(Object.assign(document.createElement('span'), { className: 'civ-zoom', textContent: `${at + 1}/${gal.length}` }));
+        btn('caret-right', 'Next image (→)', () => go(1));
+        viewKeys.ArrowLeft = () => go(-1); viewKeys.ArrowRight = () => go(1);
+        sep();
+      }
       btn('x', 'Close (Esc)', () => close());
       keys = viewKeys;
       apply();
@@ -7907,6 +7917,15 @@
   // Codex is judged by its output during a turn sent from the chat.
   function chatWorking(ws) {
     if (!ws || ws._closed) return null;
+    // A subagent's thread has no live agent of its own: its run state comes from the call in its parent thread
+    // (kept current by the subagent status poll). Show the same "Thinking" row while that call is running.
+    const sub = ws.chat?.subagent;
+    if (sub?.status === 'running') {
+      const last = sub.last;
+      const detail = last?.role === 'tool' ? `${last.name || 'Tool'} ${String(last.summary || '').replace(/\s+/g, ' ').trim()}`.trim()
+        : last?.role === 'thinking' ? 'Thinking' : String(last?.text || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      return { label: detail || 'Thinking', since: sub.since || Date.now() };
+    }
     let turn = _turns.get(ws.id);
     const lockedBy = liveThreadAgent(ws) || ws;
     if (agentLocked(lockedBy)) return { label: `${harnessOf(_tabAgent.get(lockedBy.id))?.name || 'The agent'} has this conversation open in another app`, wait: true, lock: true, since: turn?.since || Date.now() };
@@ -7925,7 +7944,11 @@
     const finished = sdk ? (sdk.idleAt || 0) >= (turn?.sentAt || turn?.since || 0)
       : codex ? status && status.status !== 'working' && status.at >= (turn?.sentAt || turn?.since || 0)
       : turn && (turn.sawBusy || (turn.sentAt && t?._idleAt > turn.sentAt + 300) || (!_pendingMsgs.has(ws.id) && Date.now() - turn.since > 1500));
-    if (turn && !busy && finished) { _turns.delete(ws.id); turn = null; }
+    if (turn && !busy && finished) {
+      _turns.delete(ws.id); turn = null;
+      const snap = ws.chat?.snaps?.at(-1); // when it ended: another chat's diff in this folder is checked against it
+      if (snap && !snap.endAt) { snap.endAt = Date.now(); saveState(); }
+    }
     if (!busy && !turn) return null;
     return { label: 'Thinking', since: turn ? turn.since : (t._workSince || Date.now()) };
   }
@@ -8457,14 +8480,15 @@
   // A subagent's own thread: a read-only Chat tab showing its transcript (every step it took). One per subagent.
   // Claude Code: the parent session plus the call (its subagents/ transcript); OpenCode: the subagent's own session;
   // delegated (delegate_task, another harness): that harness's own session, an ordinary one it can resume.
-  function openSubagentThread(parent, { subCall: call, subHarness: harness = 'claude', subSession: sessionId, subTitle: title, subModel: model, subDelegated: delegated, subSince: since }) {
+  function openSubagentThread(parent, { subCall: call, subHarness: harness = 'claude', subSession: sessionId, subTitle: title, subModel: model, subDelegated: delegated, subSince: since, subStatus: status }) {
     if (!call || !sessionId) return;
     const open = allChatTabs().find(t => t.chat?.subagent?.call === call);
     if (open) { openChatTab(open); return; }
     const ws = wsOf(parent) || activeWs();
     const tab = ws && newChatTab(ws, findGroupContainingTerm(ws.layout, parent.id)?.id, harness, chatCwd(parent) || undefined);
     if (!tab) return;
-    Object.assign(tab.chat, { title: title || 'Subagent', subagent: { parentId: threadKey(parent), call },
+    Object.assign(tab.chat, { title: title || 'Subagent', subagent: { parentId: threadKey(parent), call,
+      status: status === 'running' ? 'running' : null, since: Number(since) || Date.now() },
       // since: when it started (Codex looks its session up by date)
       segments: [{ harness, sessionId, ...(delegated ? {} : { subagent: call }), since: Number(since) || Date.now(), model: model || undefined }] });
     setChatTabLabel(tab);
@@ -8734,7 +8758,22 @@
     }
     _threadPoll = setInterval(() => {
       if (!page.isConnected || page.parentElement !== tab.el) { syncThreadPanel(); return; } // tab closed or moved
-      if (_curChat === tab && !document.hidden && page.offsetParent) { refreshThreadFlow(tab); syncThreadComposer(tab); }
+      if (_curChat === tab && !document.hidden && page.offsetParent) {
+        // A subagent thread borrows its run state from the parent thread's call. Poll it so the thread shows the
+        // live "Thinking" row (and its steps unfold) while the subagent works, and settles when it finishes.
+        const sub = tab.chat?.subagent;
+        if (sub && Date.now() - (tab._subStatusAt || 0) > 2000 && window.electronAPI?.threadSubagentStatus) {
+          tab._subStatusAt = Date.now();
+          const parent = findThreadByKey(sub.parentId);
+          if (parent) void window.electronAPI.threadSubagentStatus(threadMeta(parent), sub.call).then(st => {
+            if (!st || (st.status === sub.status && (st.last?.ts || null) === (sub.last?.ts || null))) return;
+            sub.status = st.status; sub.last = st.last || null; sub.since = st.since || sub.since;
+            _flowSig = '';
+            if (curChat() === tab) { refreshThreadFlow(tab); syncWorking(tab); }
+          }).catch(() => {});
+        }
+        refreshThreadFlow(tab); syncThreadComposer(tab);
+      }
     }, 1000);
   }
 
@@ -9113,13 +9152,32 @@
   const openCodeCatalog = cwd => openCodeCatalogs.get(cwd) || [...openCodeCatalogs.values()].pop() || null;
   const saveOpenCodeCatalogs = () => { try { localStorage.setItem(OPENCODE_MODELS_KEY, JSON.stringify(Object.fromEntries(openCodeCatalogs))); } catch {} };
   const openCodeModelRequests = new Map(); // cwd -> one in-flight probe, shared by the picker and the background load
+  const openCodeModelErrors = new Map(); // cwd -> last probe error message
+  // A probe boots a throwaway `opencode serve`; under load it can miss its deadline once. Retry before telling
+  // the user models are unavailable, since no other path re-probes a folder whose load failed.
+  function probeOpenCode(bin, cwd, retry = true) {
+    return window.electronAPI.chatSdkModels('opencode', bin, cwd)
+      .catch(err => {
+        const why = err?.message || String(err || 'unknown error');
+        openCodeModelErrors.set(cwd, why);
+        console.error('[OpenCode models] probe failed:', why);
+        if (retry) {
+          return new Promise(resolve => setTimeout(resolve, 1200)).then(() => probeOpenCode(bin, cwd, false));
+        }
+        return null;
+      });
+  }
   function loadOpenCodeModels(bin, cwd) {
-    if (!bin || !cwd) return Promise.resolve(null);
+    // A chat without a folder (or with a folder that was deleted) still gets models: the main process falls back
+    // to the home directory when the cwd isn't an existing absolute path.
+    if (!bin) return Promise.resolve(null);
+    cwd = cwd || '';
     const cached = openCodeCatalogs.get(cwd);
     if (cached) return Promise.resolve(cached);
     if (!openCodeModelRequests.has(cwd)) openCodeModelRequests.set(cwd,
-      window.electronAPI.chatSdkModels('opencode', bin, cwd).catch(() => null).then(models => {
+      probeOpenCode(bin, cwd).then(models => {
         openCodeModelRequests.delete(cwd);
+        openCodeModelErrors.delete(cwd);
         if (Array.isArray(models) && models.length) {
           openCodeCatalogs.delete(cwd); // re-insert as newest; keep the 5 newest folders
           openCodeCatalogs.set(cwd, models);
@@ -9129,6 +9187,10 @@
           if (chat && chatCwd(chat) === cwd) syncThreadComposer(chat);
         }
         return openCodeCatalogs.get(cwd) || null;
+      }).catch(err => {
+        openCodeModelRequests.delete(cwd);
+        openCodeModelErrors.set(cwd, err?.message || String(err || 'unknown error'));
+        return null;
       }));
     return openCodeModelRequests.get(cwd);
   }
@@ -9367,7 +9429,11 @@
     const b = e.target.closest('.thr-img-link');
     if (b) {
       e.preventDefault();
-      openChatAttachment({ path: b.dataset.path });
+      const links = [...thrPage.querySelectorAll('.thr-img-link[data-path]')].filter(a => /\.(png|jpe?g|gif|webp|bmp)$/i.test(a.dataset.path));
+      const gallery = links.map(a => ({ ref: { kind: 'file', path: a.dataset.path, label: a.dataset.path.split(/[\\/]/).pop() }, src: _thrImgCache.get(a.dataset.path) }));
+      const index = links.indexOf(b);
+      if (index < 0) openChatAttachment({ path: b.dataset.path });
+      else openClaudeRefViewer(null, gallery[index].ref, '', gallery[index].src, { gallery, index });
     }
     const href = e.target.closest('button.thr-link')?.dataset.href;
     if (!href) return;
@@ -9443,6 +9509,7 @@
   // A "No project" thread (chat.scratch) has no folder until its agent first starts in its own scratch folder.
   const chatCwd = tab => tab?.chat?.scratch ? tab.chat.cwd || '' : tab?.chat?.cwd || tab?.cwd || wsOf(tab)?.cwd || getWorkspaceTerminals(wsOf(tab) || {}).find(t => t.cwd)?.cwd || '';
   const isScratchDir = d => /[\\/]\.terminalvibe[\\/]scratch[\\/][^\\/]+[\\/]?$/.test(d || '');
+  const isWorktreeDir = d => /[\\/]\.terminalvibe[\\/]worktrees[\\/]/.test(d || ''); // a thread's own worktree, not a project
   const chatFolderName = cwd => !cwd || isScratchDir(cwd) ? 'No project' : cwd.split(/[\\/]/).filter(Boolean).pop() || cwd;
   async function ensureThreadBranch(tab, cwd = chatCwd(tab)) {
     if (!cwd || !window.electronAPI?.gitBranch) return;
@@ -9466,7 +9533,7 @@
     const trailingSeparators = windows ? /[\\/]+$/ : /\/+$/;
     const projects = new Map();
     for (const dir of [current, ...workspaces.map(w => w.cwd), ...allChatTabs().map(chatCwd)]) {
-      if (!dir || isScratchDir(dir)) continue;
+      if (!dir || isScratchDir(dir) || isWorktreeDir(dir)) continue;
       const trimmed = dir.replace(trailingSeparators, '');
       const key = windows && /^[a-z]:$/i.test(trimmed) && trimmed !== dir
         ? trimmed + '\\'
@@ -9476,7 +9543,9 @@
     return [...projects.values()];
   }
   function syncThreadComposer(ws, surface = thrPage) {
-    if (!ws) return;
+    // The live page shows the current chat only. A new side chat's setup (setChatOpts) ran before it took the page
+    // and painted its empty "What should we work on?" state onto the parent thread's page, which froze as its snapshot.
+    if (!ws || (surface === thrPage && ws !== _curChat)) return;
     const thrChip = id => threadPart(surface, id), thrInput = threadPart(surface, 'input');
     const t = liveThreadAgent(ws), h = t && harnessOf(_tabAgent.get(t.id));
     const o = chatOpts(ws), ho = harnessOf(o.harness);
@@ -9585,7 +9654,11 @@
       pr.title = prs?.auth ? 'Sign in to GitHub to see pull requests' : 'Show open pull requests';
       pr.setAttribute('aria-label', pr.title);
     }
-    const branchHtml = `<i class="ph ${branchMismatch ? 'ph-warning' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
+    const newWorktree = ws.chat?.worktree === true; // picked in the branch menu, made on the first send
+    if (newWorktree) branch.dataset.tip = `A new worktree and branch from ${b || 'HEAD'}, made when you send`;
+    else if (ws.chat?.worktree) branch.dataset.tip = `Worktree: ${cwd}`;
+    const branchHtml = newWorktree ? '<i class="ph ph-git-fork" aria-hidden="true"></i><span>New worktree</span>'
+      : `<i class="ph ${branchMismatch ? 'ph-warning' : ws.chat?.worktree ? 'ph-git-fork' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
     if (shownBranch && branch._html !== branchHtml) { branch._html = branchHtml; branch.innerHTML = branchHtml; }
     thrInput.placeholder = ws._elsewhere ? 'This thread is working in another app. Wait for it to finish to send from here.' : 'Ask anything. @ files, $ skills, / commands';
     const editor = threadPart(surface, 'input-links');
@@ -9801,7 +9874,7 @@
   }
   function setChatCwd(tab, dir, scratch = false) {
     if (!tab || (!dir && !scratch) || threadHasMessages(tab)) return;
-    if (scratch) { if (tab.chat.scratch) return; tab.chat.scratch = true; delete tab.chat.cwd; }
+    if (scratch) { if (tab.chat.scratch) return; tab.chat.scratch = true; delete tab.chat.cwd; delete tab.chat.worktree; }
     else { delete tab.chat.scratch; tab.chat.cwd = tab.cwd = dir; }
     delete tab.chat.branch;
     saveState(); syncThreadComposer(tab); renderThreadsSidebar();
@@ -9875,18 +9948,24 @@
       modelRows.querySelector(`[data-index="${index}"]`)?.focus({ preventScroll: true });
     }
     list.addEventListener('scroll', renderModelRows, { passive: true });
-    function requestOpenCode() {
-      if (openCodeRequested || !found?.opencode || !window.electronAPI?.chatSdkModels) return;
+    function requestOpenCode(force) {
+      if ((openCodeRequested && !force) || !found?.opencode || !window.electronAPI?.chatSdkModels) return;
       openCodeRequested = true;
+      openCodeStatus = '';
       openCodeLoading = !openCodeCatalog(openCodeCwd);
       loadOpenCodeModels(found.opencode, openCodeCwd).then(() => {
         openCodeLoading = false;
         const models = openCodeCatalog(openCodeCwd);
+        const why = openCodeModelErrors.get(openCodeCwd);
         if (Array.isArray(models)) openCodeStatus = models.length ? '' : 'No models from connected OpenCode providers';
-        else openCodeStatus = 'Could not load OpenCode models';
+        else openCodeStatus = `Could not load OpenCode models${why ? ': ' + why : ''}`; // the status row and reopening the picker retry
         if (_modelPicker === pop) render();
       });
     }
+    status.addEventListener('click', () => {
+      if (!status.classList.contains('mp-retry')) return;
+      requestOpenCode(true);
+    });
     const render = () => {
       const o = chatOpts(ws), favorites = favList();
       const favOrder = new Map(favorites.slice(0, 9).map(({ h, m }, i) => [favKey(h.id, m.id), i + 1]));
@@ -9925,8 +10004,12 @@
       if (list.scrollTop > rows.length * rowHeight) list.scrollTop = 0;
       renderModelRows();
       const showLoading = openCodeLoading && (filter === 'opencode' || (q && !rows.length));
+      const failed = !q && filter === 'opencode' && openCodeStatus === 'Could not load OpenCode models';
       status.textContent = (!q && filter === 'opencode' && openCodeStatus)
         || (rows.length ? '' : !q && filter === 'fav' ? 'Star a model to add it here' : 'No models match');
+      if (failed) status.textContent += ' — click to retry';
+      status.classList.toggle('mp-retry', failed);
+      status.title = failed ? 'Click to retry' : '';
       if (showLoading) status.innerHTML = '<span class="tv-loading-spinner" aria-hidden="true"></span>Loading OpenCode models…';
       status.hidden = !status.textContent;
       const cur = chatModels(o.harness, ws).find(x => x.id === o.model) || chatModels(o.harness, ws)[0];
@@ -10389,6 +10472,14 @@
     // Transcripts are found by folder: always launch in a known one.
     // (and a resumed session in its own folder: Claude keeps sessions per project folder).
     if (ws.chat?.scratch && !ws.chat.cwd && window.electronAPI?.threadScratch) { ws.chat.cwd = ws.cwd = await window.electronAPI.threadScratch(); saveState(); }
+    // "New worktree" (the branch menu): the thread's first start makes its worktree and works there from then on.
+    if (ws.chat?.worktree === true && window.electronAPI?.gitWorktreeAdd) {
+      const r = await window.electronAPI.gitWorktreeAdd(chatCwd(ws));
+      if (!r.ok) throw Object.assign(Error(`Could not create the worktree: ${r.error}`), { toast: true });
+      ws.chat.worktree = { root: r.root, branch: r.branch };
+      ws.chat.cwd = ws.cwd = r.path; ws.chat.branch = r.branch;
+      saveState(); renderThreadsSidebar();
+    }
     const cwd = resumeSeg?.cwd || replace?.cwd || chatCwd(ws) || undefined;
     await ensureThreadBranch(ws, cwd);
     // The PTY spawn falls back to ~ for a missing folder: never run a thread's agent somewhere else.
@@ -10659,15 +10750,20 @@
     if (!file?.path) return;
     const image = file.image ?? /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.path);
     // The annotated copy is a new file in the thread's attachments; the draft then sends it instead.
-    const onEdit = draftTab && window.electronAPI?.saveThreadAttachment ? async (bytes, dataUrl) => {
+    const onEditFor = file => async (bytes, dataUrl) => {
       const path = await window.electronAPI.saveThreadAttachment(threadKey(draftTab), `${(file.name || 'image').replace(/\.[^.]+$/, '')}-annotated.png`, bytes);
       if (!path) throw Error('Could not save the annotated image');
       Object.assign(file, { path, preview: dataUrl, size: bytes.length, image: true });
       cacheThreadImage(path, dataUrl);
       if (curChat() === draftTab) renderChatFiles();
       saveState();
-    } : null;
-    if (image) openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name || file.path.split(/[\\/]/).pop() }, '', file.preview, { onEdit });
+    };
+    const onEdit = draftTab && window.electronAPI?.saveThreadAttachment ? onEditFor(file) : null;
+    if (image) {
+      const imgs = draftTab ? _chatFiles.filter(f => f.path && (f.image ?? /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.path))) : [];
+      const gallery = imgs.map(f => ({ ref: { kind: 'file', path: f.path, label: f.name || f.path.split(/[\\/]/).pop() }, src: f.preview, opts: { onEdit: draftTab && window.electronAPI?.saveThreadAttachment ? onEditFor(f) : null } }));
+      openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name || file.path.split(/[\\/]/).pop() }, '', file.preview, { onEdit, gallery, index: Math.max(0, imgs.indexOf(file)) });
+    }
     else openClaudeRefViewer(null, { kind: 'text-file', path: file.path, label: file.name || file.path }, '');
   }
   function hydrateChatAttachmentSizes(surface) {
@@ -12119,6 +12215,22 @@
     window.electronAPI.gitTurnDiff(s.cwd, s.from, to).then(files => { _turnDiffs.set(key, files || []); rerender(); }, () => _turnDiffs.set(key, []));
     return null;
   }
+  // The git diff is the whole folder's: another chat working in it at the same time adds its changes too. Then only
+  // files this turn touched or named in a command are its own.
+  // ponytail: in that overlap a file only a script or subagent changed (never named) is left out; per-process write
+  // tracking would fix it.
+  function ownTurnFiles(ws, promptTs, rest, files) {
+    const start = Date.parse(promptTs) || 0, end = Math.max(start, ...rest.map(x => Date.parse(x.m.ts) || 0)), cwd = chatCwd(ws);
+    const chats = [...workspaces.flatMap(getWorkspaceTerminals), ...closedThreads].filter(c => c !== ws && c.chat?.snaps?.length);
+    const overlapped = chats.some(c => c.chat.snaps.some((s, n, all) => {
+      const stop = s.endAt ?? all[n + 1]?.at ?? (n === all.length - 1 && _turns.has(c.id) ? Infinity : s.at);
+      return s.cwd === cwd && s.at <= end && stop >= start;
+    }));
+    if (!overlapped) return files;
+    const touched = new Set(rest.flatMap(({ m }) => (m.files || []).map(f => f.path)));
+    const said = rest.map(({ m }) => m.role === 'tool' ? `${m.detail || ''}\n${m.summary || ''}` : '').join('\n');
+    return files.filter(f => touched.has(f.path) || said.includes(f.path.split(/[\\/]/).pop()));
+  }
   async function deliverChatMessage(ws, message, steer = false) {
     if (_chatSending.has(ws.id) || _chatStarting.has(ws.id) || !findTermById(ws.id)) return false;
     _chatSending.add(ws.id);
@@ -13132,7 +13244,10 @@
     if (!tab?.chat?.interruptedAt || tab._resuming || chatWorking(tab) || _chatStarting.has(tab.id) || _chatSending.has(tab.id)) return;
     tab._resuming = true;
     try {
-      await deliverChatMessage(tab, { id: uuid(), text: resumePrompt, typed: resumePrompt, files: [], resume: true, after: Date.now() });
+      // The agent may have been stopped before it did anything (no session history to continue), so say what the task was.
+      const last = (tab.chat.stopped || []).filter(m => !m.resume && m.text).at(-1)?.text;
+      const text = last ? `${resumePrompt}. The interrupted request was: ${last}` : resumePrompt;
+      await deliverChatMessage(tab, { id: uuid(), text, typed: text, files: [], resume: true, after: Date.now() });
     } finally {
       delete tab._resuming;
       if (curChat() === tab) syncWorking(tab);
@@ -13601,7 +13716,7 @@
         // never started a session (not installed, failed at launch) has no thread to open.
         const session = a.sessionId || (a.harness ? '' : res.sessionId || '');
         return `<button type="button" class="thr-sub ${state}" data-key="${key}" data-sub-call="${escHtml(a.toolUseId)}" data-sub-harness="${escHtml(a.harness || seg.harness)}"${a.harness ? ' data-sub-delegated="1"' : ''} data-sub-session="${escHtml(session)}"`
-          + `${a.since ? ` data-sub-since="${a.since}"` : ''} data-sub-title="${escHtml(a.description || 'Subagent')}" data-sub-model="${escHtml(a.model || '')}"`
+          + `${a.since ? ` data-sub-since="${a.since}"` : ''} data-sub-status="${escHtml(a.status || '')}" data-sub-title="${escHtml(a.description || 'Subagent')}" data-sub-model="${escHtml(a.model || '')}"`
           + (session ? ` title="Open ${escHtml([a.type, a.model].filter(Boolean).join(' · ') || 'subagent')} thread">` : ` disabled title="${state === 'running' ? 'Starting' : 'This subagent has no session to open'}">`)
           + subAvatar(state, state === 'done' ? 'Finished' : state[0].toUpperCase() + state.slice(1), a.harness)
           + `<span class="thr-sub-main"><span class="thr-sub-title">${escHtml(a.description || 'Subagent')}</span>`
@@ -13671,13 +13786,16 @@
       // steps, then the final reply and the files it changed. The turn in progress shows its steps live.
       const list = res.items.map((m, j) => ({ m, j: j + (res.previewOffset || 0) }));
       // A background task ending (role "event") starts a turn of its own, like a prompt: the agent's reply to it follows.
-      const firstPrompt = list.findIndex(x => x.m.role === 'user' || x.m.role === 'event');
+      // One that ended mid-turn (inTurn) stays in its turn.
+      const startsTurn = m => m.role === 'user' || (m.role === 'event' && !m.inTurn);
+      const firstPrompt = list.findIndex(x => startsTurn(x.m));
       if (firstPrompt !== 0) html += stepsHtml(firstPrompt < 0 ? list : list.slice(0, firstPrompt), i + ':pre', !working || i < segs.length - 1 || firstPrompt > 0); // a resumed session's start
       finishChunk();
       for (let u = firstPrompt; u >= 0 && u < list.length;) {
         let e = u + 1;
-        while (e < list.length && list[e].m.role !== 'user' && list[e].m.role !== 'event') e++;
-        const prompt = list[u], rest = list.slice(u + 1, e);
+        while (e < list.length && !startsTurn(list[e].m)) e++;
+        // A mid-turn event gets no line: its call's row in the steps shows how it ended, and the reply says what it means.
+        const prompt = list[u], rest = list.slice(u + 1, e).filter(x => x.m.role !== 'event');
         const live = working && !awaitingTurnPrompt && i === segs.length - 1 && e === list.length;
         const options = ws.chat?.turnOptions?.[prompt.m.ts];
         html += ctx.before(Date.parse(prompt.m.ts) || 0); // side chat context shared before this prompt
@@ -13694,7 +13812,7 @@
         const running = working && !awaitingTurnPrompt && i === segs.length - 1
           && (e === list.length || (turnPromptTs && Date.parse(prompt.m.ts) >= turnPromptTs));
         const git = !live && !running ? turnGitFiles(ws, prompt.m.ts, list[e]?.m.ts) : 'later';
-        const changedFiles = git === 'later' ? [] : git?.length ? git : rest.flatMap(({ m }) => m.files || []);
+        const changedFiles = git === 'later' ? [] : git?.length ? ownTurnFiles(ws, prompt.m.ts, rest, git) : rest.flatMap(({ m }) => m.files || []);
         if (live) html += stepsHtml(steps, i + ':' + prompt.j);
         else if (steps.length) {
           const tk = 'turn:' + i + ':' + prompt.j;
@@ -13702,8 +13820,7 @@
             + `<div class="thr-turn-steps">${stepsHtml(steps, i + ':' + prompt.j, !running, changedFiles)}</div></details>`;
         } else if (took) html += `<div class="thr-worked">${took}</div>`;
         const changes = changesHtml(changedFiles, 'chg:' + i + ':' + prompt.j);
-        html += fin >= 0 ? msgHtml(rest[fin].m, i + ':' + rest[fin].j, true, changes) : changes;
-        // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
+        html += fin >= 0 ? msgHtml(rest[fin].m, i + ':' + rest[fin].j, true, changes) : changes;        // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
         const stopped = !live && (prompt.m.interrupted || rest.find(x => x.m.interrupted)?.m.interrupted);
         if (stopped && !preview && i === segs.length - 1 && e === list.length) {
           const at = Math.max(Date.parse(prompt.m.ts) || 0, ...rest.map(x => Date.parse(x.m.interruptedAt || x.m.ts) || 0));
@@ -14102,7 +14219,7 @@
       const storeId = tab.chat?.storeId || tab.id;
       if (!tab._closed) removeTerminal(w.id, tab.id, false, false, true, true); // already confirmed: close now, no second prompt
       closedThreads = closedThreads.filter(t => (t.chat.storeId || t.id) !== storeId);
-      window.electronAPI?.threadDelete?.(storeId, tab.chat?.scratch ? tab.chat.cwd : null); // only its own scratch folder
+      window.electronAPI?.threadDelete?.(storeId, tab.chat?.scratch ? tab.chat.cwd : null, tab.chat?.worktree?.root || null); // only its own scratch folder / worktree
       saveState(); renderThreadsSidebar();
       const cur = curChat(); if (cur) syncThreadComposer(cur); // its row leaves the side chats tray
     });
@@ -14250,7 +14367,7 @@
     try {
       for (const chat of chats) {
         let procs;
-        try { procs = await window.electronAPI.chatBgProcs(chat.id) || []; } catch { continue; }
+        try { procs = await window.electronAPI.chatBgProcs(chat.id, !!chatWorking(chat)) || []; } catch { continue; }
         if (chat === curChat() && window.electronAPI.chatBusyElsewhere) await refreshChatElsewhere(chat);
         logProcEvents(chat, procs);
         const sig = JSON.stringify(procs.map(p => [p.pid, p.command, p.urls]));
@@ -14465,6 +14582,13 @@
       list.className = 'ctx-list';
       list.append(...ctxEl.querySelectorAll(':scope > .ctx-item'));
       ctxEl.append(list);
+      // Before the first message: work in the project folder, or in a new worktree of it (T3 Code's Local / New worktree).
+      if (tab?.chat && !threadHasMessages(tab) && !tab.chat.worktree?.root && cur && window.electronAPI?.gitWorktreeAdd) {
+        const pick = on => () => { if (on) tab.chat.worktree = true; else delete tab.chat.worktree; saveState(); syncThreadComposer(tab); };
+        sep();
+        item('<i class="ph ph-folder"></i>', 'Project folder' + (tab.chat.worktree ? '' : ' (thread)'), '', pick(false));
+        item('<i class="ph ph-git-fork"></i>', 'New worktree' + (tab.chat.worktree ? ' (thread)' : ''), '', pick(true));
+      }
     } else if (type === 'ts-project') {
       // The threads sidebar's project filter: All projects, then each folder threads use (most recent first).
       const search = document.createElement('label');

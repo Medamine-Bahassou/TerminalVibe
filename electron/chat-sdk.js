@@ -610,13 +610,17 @@ async function acpProbe(bin, env, cwd, read) {
   }
 }
 const acpProbeModels = (bin, env, cwd) => acpProbe(bin, env, cwd, (_session, result) => result.models || []);
+// A boot alone takes ~5s on an idle machine; with a live chat and other probes queued it can take much longer.
+// Keep the startup budget separate from each request's budget: a slow boot must not eat the reader's deadline.
+const OPENCODE_START_MS = 30000, OPENCODE_READ_MS = 30000;
 // Use the detected executable and TerminalVibe's agent environment for the SDK's local server.
 async function startOpenCodeServer(bin, env, cwd) {
   const launch = resolveLaunch(bin, ['serve', '--hostname=127.0.0.1', '--port=0']);
   if (!launch) throw Error('Could not launch OpenCode');
   const { createOpencodeClient } = await import('@opencode-ai/sdk/v2/client');
   const password = require('crypto').randomBytes(32).toString('hex');
-  const signal = AbortSignal.timeout(12000);
+  const startup = new AbortController();
+  const timer = setTimeout(() => startup.abort(Error('OpenCode server did not start in time')), OPENCODE_START_MS);
   const child = spawn(launch.file, launch.args, {
     cwd,
     env: { ...env, OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_SERVER_PASSWORD: password },
@@ -625,8 +629,8 @@ async function startOpenCodeServer(bin, env, cwd) {
   });
   try {
     const baseUrl = await new Promise((resolve, reject) => {
-      const abort = () => reject(signal.reason);
-      signal.addEventListener('abort', abort, { once: true });
+      const abort = () => reject(startup.signal.reason);
+      startup.signal.addEventListener('abort', abort, { once: true });
       child.once('error', reject);
       child.once('exit', () => reject(Error('OpenCode server exited')));
       let output = '';
@@ -634,7 +638,7 @@ async function startOpenCodeServer(bin, env, cwd) {
         output = (output + chunk).slice(-8192);
         const address = /^opencode server listening on (http:\/\/127\.0\.0\.1:\d+)\s*$/m.exec(output);
         if (address) {
-          signal.removeEventListener('abort', abort);
+          startup.signal.removeEventListener('abort', abort);
           resolve(address[1]);
         }
       });
@@ -643,21 +647,26 @@ async function startOpenCodeServer(bin, env, cwd) {
       baseUrl, throwOnError: true,
       headers: { Authorization: 'Basic ' + Buffer.from('opencode:' + password).toString('base64') },
     });
-    return { client, child, signal };
+    return { client, child };
   } catch (err) {
     child.kill();
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 // One throwaway server at a time: concurrent `opencode serve` boots (a model probe per open chat folder, skill
-// probes) contend with each other and all blow the 12s timeout. Each one alone takes ~5s.
+// probes) contend with each other and all blow the startup timeout. Each one alone takes ~5s.
 let openCodeProbes = Promise.resolve();
 function withOpenCodeServer(bin, env, cwd, read) {
   const run = openCodeProbes.then(async () => {
     const server = await startOpenCodeServer(bin, env, cwd);
+    const request = new AbortController();
+    const timer = setTimeout(() => request.abort(Error('OpenCode request timed out')), OPENCODE_READ_MS);
     try {
-      return await read(server.client, server.signal);
+      return await read(server.client, request.signal);
     } finally {
+      clearTimeout(timer);
       server.child.kill();
     }
   });
@@ -668,6 +677,9 @@ function withOpenCodeServer(bin, env, cwd, read) {
 const openCodeModel = id => typeof id === 'string' && id !== 'default' && id.includes('/')
   ? { providerID: id.slice(0, id.indexOf('/')), modelID: id.slice(id.indexOf('/') + 1) } : null;
 const openCodeError = err => short(err?.data?.message || err?.message || (typeof err === 'string' ? err : ''), 400);
+// Node's fetch reports a dropped HTTP connection as a bare "fetch failed" (or an UND_ERR_* code). It says nothing
+// about the turn, so never surface it as the reason the agent stopped.
+const openCodeTransportError = err => /^(fetch failed|terminated|socket hang up)$|UND_ERR_/i.test(openCodeError(err));
 // A permission request in the answer tray's shape, and the SDK reply each choice sends back.
 function openCodePermissionAsk(p = {}) {
   const detail = [...new Set([...(p.patterns || []).map(String), ...(typeof p.metadata?.description === 'string' ? [short(p.metadata.description, 300)] : [])])].slice(0, 4);
@@ -691,6 +703,7 @@ class OpenCodeSession extends Session {
     this.options = options; this.dir = transcriptDir; this.cwd = cwd;
     this.tools = new Map(); this.parts = new Map(); this.waiting = 0; this.userMsgs = new Set();
     this.recordedTools = new Set(); this.recordedParts = new Set(); this.queue = Promise.resolve(); this.lastError = null;
+    this.pendingIdle = false;
     this.children = new Set(); // subagent (task tool) sessions: their steps are recorded to their own transcript
     this.startedCalls = new Set(); // delegate_task calls recorded as running
     const server = await startOpenCodeServer(bin, env, cwd);
@@ -721,14 +734,21 @@ class OpenCodeSession extends Session {
     return { ok: true, sessionId: this.sessionId };
   }
   async consume(signal) {
-    try {
-      const { stream } = await this.client.event.subscribe({ directory: this.cwd }, { signal });
-      for await (const event of stream) {
-        if (!this.alive) break;
-        this.onEvent(event);
+    // The SDK's SSE client retries failed fetches itself, but a *clean* stream end (the server closing an idle
+    // connection) just ends our for-await. Keep resubscribing: the agent's turn lives on the server, and this
+    // stream is how we learn that it ended. A drop is never an agent error.
+    while (this.alive && !signal.aborted) {
+      try {
+        const { stream } = await this.client.event.subscribe({ directory: this.cwd }, { signal });
+        for await (const event of stream) {
+          if (!this.alive || signal.aborted) break;
+          this.onEvent(event);
+        }
+      } catch (err) {
+        if (!this.alive || signal.aborted) return;
       }
-    } catch (err) {
-      if (this.alive && !signal.aborted) this.lastError ||= err.message || 'The OpenCode event stream ended';
+      if (!this.alive || signal.aborted) return;
+      await new Promise(resolve => setTimeout(resolve, this.sseRetryMs ?? 500));
     }
   }
   onEvent(event) {
@@ -752,8 +772,10 @@ class OpenCodeSession extends Session {
     } else if (event.type === 'session.status') {
       const st = p.status || {};
       if (st.type === 'idle') {
-        // A prompt that ends without its reply resolving still ends the turn here.
-        if (!this.inPrompt && this.waiting) this.endTurn(this.lastError || null);
+        // The async prompt returns before the turn does: an idle is what ends it. One racing the POST is held
+        // until the POST settles, so it still closes the turn instead of being lost.
+        if (this.inPrompt) this.pendingIdle = true;
+        else if (this.waiting) this.endTurn(this.aborted ? null : this.lastError || null);
       } else if (st.type === 'retry') {
         const msg = short(st.message || st.action?.message || 'OpenCode could not continue', 400);
         // A retry with an action (quota, auth) never recovers: say why instead of spinning forever.
@@ -761,7 +783,8 @@ class OpenCodeSession extends Session {
         else this.lastError ||= msg;
       }
     } else if (event.type === 'session.idle') {
-      if (!this.inPrompt && this.waiting) this.endTurn(this.lastError || null);
+      if (this.inPrompt) this.pendingIdle = true;
+      else if (this.waiting) this.endTurn(this.aborted ? null : this.lastError || null);
     }
   }
   onPart(part) {
@@ -879,20 +902,27 @@ class OpenCodeSession extends Session {
     // One turn at a time: a message sent mid-turn runs right after it.
     const run = async () => {
       this.aborted = false;
+      this.lastError = null; // an error between turns (a dropped event stream) must not fail this one
+      this.pendingIdle = false;
       this.record({ role: 'user', text });
       try {
         const parts = [{ type: 'text', text }];
         for (const image of images) parts.push({ type: 'file', mime: image.mediaType, url: `data:${image.mediaType};base64,${image.data}` });
         const model = openCodeModel(this.options.model);
         this.inPrompt = true;
-        const r = await this.client.session.prompt({ sessionID: this.sessionId, directory: this.cwd,
+        // A synchronous `session.prompt` holds its HTTP response open for the whole turn. Node's fetch gives up
+        // after 5 minutes of waiting for response headers, so a long turn dies with a bare "fetch failed" while
+        // OpenCode is still working. The async endpoint returns at once; the SSE stream carries the result and
+        // the turn's idle event, so a turn can run for hours.
+        const r = await this.client.session.promptAsync({ sessionID: this.sessionId, directory: this.cwd,
           ...(model ? { model } : {}), ...(this.options.access === 'plan' ? { agent: 'plan' } : {}), parts });
         const error = openCodeError(r?.data?.info?.error) || this.lastError;
-        this.endTurn(this.aborted ? null : error || null);
+        if (error) this.endTurn(this.aborted ? null : error);
+        else if (this.pendingIdle) { this.pendingIdle = false; this.endTurn(this.aborted ? null : this.lastError || null); }
       } catch (err) {
-        this.endTurn(this.aborted ? null : err.message || 'OpenCode could not take the message');
+        this.endTurn(this.aborted ? null : openCodeTransportError(err) ? 'connection lost' : openCodeError(err) || 'OpenCode could not take the message');
       } finally {
-        this.inPrompt = false; this.aborted = false; this.lastError = null;
+        this.inPrompt = false; this.aborted = false;
       }
     };
     this.queue = this.queue.then(run);
@@ -924,13 +954,18 @@ class OpenCodeSession extends Session {
 }
 function openCodeModels(bin, env, cwd) {
   return withOpenCodeServer(bin, env, cwd, async (client, signal) => {
-    const { data } = await client.provider.list({ directory: cwd }, { signal });
-    const connected = new Set(data.connected);
-    return data.all.filter(provider => connected.has(provider.id)).flatMap(provider =>
-      Object.values(provider.models).map(model => ({
-        id: `${provider.id}/${model.id}`, name: `${model.name} · ${provider.name}`,
-        efforts: ['default'], defaultEffort: 'default',
-      }))).sort((a, b) => a.name.localeCompare(b.name));
+    try {
+      const { data } = await client.provider.list({ directory: cwd }, { signal });
+      const connected = new Set(data.connected);
+      return data.all.filter(provider => connected.has(provider.id)).flatMap(provider =>
+        Object.values(provider.models).map(model => ({
+          id: `${provider.id}/${model.id}`, name: `${model.name} · ${provider.name}`,
+          efforts: ['default'], defaultEffort: 'default',
+        }))).sort((a, b) => a.name.localeCompare(b.name));
+    } catch (err) {
+      console.error('[chat-sdk] OpenCode models probe failed:', err?.message || err);
+      throw err;
+    }
   });
 }
 const toolSummaryOf = input => { try { return require('./threads').toolSummary(input); } catch { return ''; } };
@@ -1008,10 +1043,11 @@ function register(ipcMain, { send, env: makeEnv, args: launchArgs = () => [], ve
   ipcMain.handle('chat-sdk:models', async (_e, harness, bin, cwd) => {
     if (harness === 'opencode' && typeof bin === 'string') {
       const home = require('os').homedir();
-      const directory = typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : home;
+      const directory = typeof cwd === 'string' && path.isAbsolute(cwd) && fs.existsSync(cwd) ? cwd : home;
       const key = JSON.stringify([bin, directory]);
       if (!modelCache.has(key)) modelCache.set(key, openCodeModels(bin, makeEnv('models-probe', harness), directory)
-        .catch(() => null).finally(() => modelCache.delete(key)));
+        .then(models => { if (Array.isArray(models) && models.length) modelCache.set(key, Promise.resolve(models)); return models; })
+        .catch(() => { modelCache.delete(key); return null; })); // only failures re-probe; a good catalog is kept
       return modelCache.get(key);
     }
     if (harness !== 'antigravity' || typeof bin !== 'string') return [];
@@ -1219,6 +1255,50 @@ if (require.main === module) {
     await codex.send('Check this image', { images: [imagePath] });
     await codex.send('Check this image', { images: [imagePath], steer: true });
     assert.deepStrictEqual(methods, ['turn/start', 'turn/steer']);
+    // A dropped event stream between turns must not surface as the next turn's error ("OpenCode: fetch failed").
+    const turnErrors = [], stale = new OpenCodeSession('test', 'opencode', (_k, e) => { if (e.type === 'idle') turnErrors.push(e.error); });
+    Object.assign(stale, { sessionId: 'ses_stale', waiting: 0, lastError: 'fetch failed', tools: new Map(), parts: new Map(),
+      recordedTools: new Set(), recordedParts: new Set(), queue: Promise.resolve() });
+    stale.record = () => {};
+    stale.client = { session: { promptAsync: async () => {
+      stale.onEvent({ type: 'session.status', properties: { sessionID: 'ses_stale', status: { type: 'idle' } } });
+      return { data: { info: {} } };
+    } } };
+    await stale.send('go', { options: {} });
+    await stale.queue;
+    assert.deepStrictEqual(turnErrors, [undefined], 'a stale transport error must not fail a successful turn');
+    // A long turn must not hold an HTTP response open: promptAsync returns at once and the stream's idle ends
+    // the turn, including one that races ahead of the POST (Node's fetch times out a sync prompt after 5 minutes).
+    const asyncCalls = [], asyncEvents = [], asyncSession = new OpenCodeSession('test', 'opencode', (_k, e) => asyncEvents.push(e));
+    Object.assign(asyncSession, { parts: new Map(), recordedParts: new Set(), tools: new Map(), recordedTools: new Set(),
+      waiting: 0, sessionId: 'ses_async', options: {}, alive: true, queue: Promise.resolve() });
+    asyncSession.record = () => {};
+    asyncSession.client = { session: { promptAsync: async args => {
+      asyncCalls.push(args);
+      asyncSession.onEvent({ type: 'session.status', properties: { sessionID: 'ses_async', status: { type: 'idle' } } });
+      return {};
+    } } };
+    asyncSession.send('hello');
+    await asyncSession.queue;
+    assert.strictEqual(asyncCalls.length, 1, 'the turn uses the async prompt endpoint');
+    assert.ok(asyncEvents.some(e => e.type === 'idle'), 'an idle racing the POST still settles the turn');
+    const dropEvents = [], dropSession = new OpenCodeSession('test', 'opencode', (_k, e) => dropEvents.push(e));
+    Object.assign(dropSession, { parts: new Map(), recordedParts: new Set(), tools: new Map(), recordedTools: new Set(),
+      waiting: 0, sessionId: 'ses_drop', options: {}, alive: true, queue: Promise.resolve() });
+    dropSession.record = () => {};
+    dropSession.client = { session: { promptAsync: async () => { throw TypeError('fetch failed'); } } };
+    dropSession.send('hello');
+    await dropSession.queue;
+    assert.strictEqual(dropEvents.at(-1)?.error, 'connection lost', 'a dropped fetch must not surface as a bare "fetch failed"');
+    // A clean SSE end (server closing an idle connection) must resubscribe, not fail the turn.
+    const subs = [], sse = new OpenCodeSession('test', 'opencode', () => {});
+    Object.assign(sse, { alive: true, cwd: '/tmp', sseRetryMs: 5, lastError: null });
+    sse.client = { event: { subscribe: async () => { subs.push(1); return { stream: (async function* () {})() }; } } };
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 100);
+    await sse.consume(ctrl.signal);
+    assert.ok(subs.length >= 2, 'an ended event stream is resubscribed');
+    assert.strictEqual(sse.lastError, null, 'a transport drop must not fail the turn');
     const text = 'Use $project-skill with $project-skill and $disabled.';
     codex.cwd = '/project';
     codex.rpc = async (method, params) => {

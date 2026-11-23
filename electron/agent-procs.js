@@ -87,13 +87,30 @@ const isAppHelper = p => APP.test(path.basename(p.args?.[0] || p.comm)) && (p.ar
 // inherits the pane id too, but isn't one. URLs are attached to the row owning the whole tree, so a listener's
 // parent (npm -> node) is kept with its child.
 const isServer = row => row.urls?.length > 0;
+// Part of a live root's own tree (the agent, its MCP servers, the shell of one of its tool calls): not left running.
+// What a tool call's shell (`sh -c …`, how every harness runs a command) started is, though: Claude Code keeps a
+// run_in_background server under its own process for as long as the session lives, so skipping the whole tree hid
+// every server the agent was still running. Only once the turn is over, though: mid-turn a foreground command (a test
+// server, an app boot check) looks the same, and listing it logged a "Server started/stopped" pair.
+// Returns 'agent' (its own tree), 'tool' (started by one of its commands) or null (outside every root).
+const isToolShell = p => /^(ba|z|da|fi|k)?sh$/.test(path.basename(p?.args?.[0] || p?.comm || '')) && (p.args || []).slice(1).some(a => /^-\w*c\w*$/.test(a));
+function insideAgent(all, roots, pid) {
+  let tool = false;
+  for (let p = pid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) {
+    if (roots.includes(p)) return tool ? 'tool' : 'agent';
+    if (p !== pid && isToolShell(all.get(p))) tool = true;
+  }
+  return null;
+}
+// paneId -> pids a tool call left running, seen while the agent was idle: they stay listed through its next turn.
+const leftByTools = new Map();
 // roots: the chat's live processes (its structured agent, its terminal) whose trees are skipped; listeners:
 // [{ pid, url }] from servers.js. serversOnly is relaxed for the stop re-check, which must find any listed tree.
-async function agentProcesses(paneId, roots = [], listeners = [], serversOnly = true) {
+// idle: the chat's agent isn't in a turn, so whatever its commands started and is still alive was left running.
+async function agentProcesses(paneId, roots = [], listeners = [], serversOnly = true, idle = true) {
   if (!/^[\w-]{1,128}$/.test(paneId || '')) return [];
   const all = process.platform === 'linux' ? await scanLinux(paneId) : process.platform === 'darwin' ? await scanMac(paneId) : null;
   if (!all) return [];
-  const under = (pid, root) => { for (let p = pid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) if (p === root) return true; return false; };
   const self = new Set(); for (let p = process.pid; p; p = all.get(p)?.ppid) { if (self.has(p)) break; self.add(p); }
   // OpenCode's harness server (chat-sdk.js launches exactly this) and its helpers are the agent, not something it
   // left running, even orphaned by an app instance that was killed before it could stop it.
@@ -101,7 +118,14 @@ async function agentProcesses(paneId, roots = [], listeners = [], serversOnly = 
   // electron/*.js scripts. It dies with its agent, a beat later, which logged it as "started"/"stopped" in the history.
   roots = [...roots, ...[...all.values()].filter(p => isHarnessServer(p) || (p.match && isAppHelper(p))).map(p => p.pid)];
   const foreign = foreignOf(all);
-  const kept = [...all.values()].filter(p => p.match && !self.has(p.pid) && !DAEMONS.test(p.comm) && !foreign(p.pid) && !roots.some(r => r && under(p.pid, r)));
+  const known = leftByTools.get(paneId) || new Set(), byTools = new Set();
+  const kept = [...all.values()].filter(p => {
+    if (!p.match || self.has(p.pid) || DAEMONS.test(p.comm) || foreign(p.pid)) return false;
+    const where = insideAgent(all, roots, p.pid);
+    if (where === 'tool' && (idle || known.has(p.pid))) byTools.add(p.pid);
+    return !where || byTools.has(p.pid);
+  });
+  if (serversOnly && idle) { if (byTools.size) leftByTools.set(paneId, byTools); else leftByTools.delete(paneId); }
   const keptIds = new Set(kept.map(p => p.pid));
   // One row per tree: a process whose parent is also listed belongs to that row (npm -> node -> esbuild).
   const top = pid => { let t = pid; for (let p = all.get(pid)?.ppid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) if (keptIds.has(p)) t = p; return t; };
@@ -167,6 +191,11 @@ if (require.main === module) {
   assert.ok(h(['agy', 'acp']) && h(['opencode', 'serve', '--hostname=127.0.0.1', '--port=0']), 'agy acp, opencode serve');
   assert.ok(!h(['claude', '--resume', 'abc']) && !h(['claude']) && !h(['codex', 'exec', 'x']) && !h(['opencode', 'serve']) && !h(['node', 'server.js']), 'terminal agents and user processes still count');
   assert.ok(!isHarnessServer({ match: false, args: ['codex', 'app-server'] }), 'other panes');
+  // agent 10 -> tool shell 11 -> server 12; agent 10 -> MCP server 13
+  const tree = new Map([[10, { ppid: 1, comm: 'claude', args: ['claude', '-p'] }], [11, { ppid: 10, comm: 'zsh', args: ['/usr/bin/zsh', '-c', 'node dev.js'] }],
+    [12, { ppid: 11, comm: 'node', args: ['node', 'dev.js'] }], [13, { ppid: 10, comm: 'node', args: ['node', 'mcp.js'] }]]);
+  assert.deepStrictEqual([10, 11, 12, 13].map(pid => insideAgent(tree, [10], pid)), ['agent', 'agent', 'tool', 'agent'], 'a server a tool call started is the tool\'s; the agent, its shell and MCP servers are the agent\'s');
+  assert.strictEqual(insideAgent(tree, [99], 12), null, 'outside every root');
   assert.ok(isServer({ urls: ['http://localhost:3000'] }) && !isServer({ urls: [] }) && !isServer({}), 'only listeners are servers');
   console.log('agent-procs: ok');
 }

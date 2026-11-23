@@ -10,6 +10,16 @@ const { listRunningServers, killServer } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
 const { prepareShellStartup } = require('./shell-startup');
 const { listShells, findShell, resolveExecutable } = require('./shells');
+// A desktop-launched app doesn't get the PATH that ~/.zshrc etc. build, so agent CLIs (opencode, …) are not found.
+// Merge in the PATH of the user's interactive shell.
+if (process.platform !== 'win32') {
+  try {
+    const out = require('child_process').execFileSync(process.env.SHELL || '/bin/sh', ['-ilc', 'echo "__TV_PATH__$PATH"'],
+      { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const shellPath = /__TV_PATH__(.*)/.exec(out)?.[1];
+    if (shellPath) process.env.PATH = [...new Set([...shellPath.split(':'), ...(process.env.PATH || '').split(':')])].filter(Boolean).join(':');
+  } catch {}
+}
 let agentControl = null;
 const agentRequests = new Map();
 ipcMain.on('agent:result', (event, { id, result, error }) => {
@@ -560,11 +570,11 @@ ipcMain.handle('servers:list', () => listRunningServers(process.pid));
 ipcMain.handle('servers:kill', (_e, { pid, port } = {}) => killServer(pid, port));
 // Processes a chat's agent left running (agent-procs.js): its live agent and the tab's terminal are skipped.
 const chatRoots = id => [require('./chat-sdk').sessionPid(id), ptys.get(id)?.pid || null];
-ipcMain.handle('chat:bg-procs', async (_e, id) => {
+ipcMain.handle('chat:bg-procs', async (_e, id, working) => {
   if (typeof id !== 'string') return [];
   let listeners = [];
   try { listeners = await require('./servers').allServers(); } catch {}
-  return require('./agent-procs').agentProcesses(id, chatRoots(id), listeners).catch(() => []);
+  return require('./agent-procs').agentProcesses(id, chatRoots(id), listeners, true, !working).catch(() => []);
 });
 ipcMain.handle('chat:busy-elsewhere', (_e, id, sessionIds) => typeof id === 'string' && Array.isArray(sessionIds) ? require('./agent-procs').sessionElsewhere(id, sessionIds.filter(x => typeof x === 'string').slice(0, 20)).catch(() => []) : []);
 ipcMain.handle('chat:bg-stop', (_e, id, pid) => require('./agent-procs').stopAgentProcess(String(id), pid, chatRoots(String(id))));
@@ -1085,13 +1095,33 @@ ipcMain.handle('usage:limits', (_e, fresh) => {
 ipcMain.handle('threads:save-attachment', (_e, id, name, bytes) => require('./threads').saveThreadAttachment(id, name, bytes));
 ipcMain.handle('threads:history', (_e, query) => require('./threads').threadHistory(query));
 ipcMain.handle('threads:history-preview', (_e, query) => require('./threads').threadHistoryPreview(query));
+ipcMain.handle('threads:subagent-status', (_e, query, call) => require('./threads').subagentStatus(query, call));
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
 ipcMain.handle('threads:fork', (_e, query) => require('./threads').forkThread(query));
 // A scratch thread's folder goes with it; only a direct child of ~/.terminalvibe/scratch is ever removed.
-ipcMain.handle('threads:delete', async (_e, id, scratchDir) => {
+// A worktree thread's worktree goes too, but only when it has no uncommitted changes (no --force); its branch stays.
+ipcMain.handle('threads:delete', async (_e, id, scratchDir, worktreeDir) => {
   const dir = typeof scratchDir === 'string' && path.resolve(scratchDir);
   if (dir && path.dirname(dir) === path.join(CONFIG_DIR, 'scratch')) await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+  const wt = typeof worktreeDir === 'string' && path.resolve(worktreeDir);
+  if (wt && path.dirname(path.dirname(wt)) === path.join(CONFIG_DIR, 'worktrees')
+    && (await runGit(wt, ['worktree', 'remove', wt])).ok) await fs.promises.rmdir(path.dirname(wt)).catch(() => {});
   return require('./threads').deleteThread(id);
+});
+// A thread that works in its own git worktree: a new branch tv/<id> from the project's HEAD, checked out in
+// ~/.terminalvibe/worktrees/<id>/<repo name> (so the folder chip still shows the repo's name).
+ipcMain.handle('git:worktree-add', async (_e, cwd) => {
+  if (!cwd || typeof cwd !== 'string') return { ok: false, error: 'No project folder' };
+  const top = await runGit(cwd, ['rev-parse', '--show-toplevel']);
+  if (!top.ok) return { ok: false, error: 'The project folder is not a git repository.' };
+  const root = top.out.trim(), id = require('crypto').randomBytes(4).toString('hex'), branch = `tv/${id}`;
+  const dir = path.join(CONFIG_DIR, 'worktrees', id, path.basename(root));
+  await fs.promises.mkdir(path.dirname(dir), { recursive: true });
+  const r = await runGit(cwd, ['worktree', 'add', '-b', branch, dir, 'HEAD']);
+  if (!r.ok) { await fs.promises.rm(path.dirname(dir), { recursive: true, force: true }).catch(() => {}); return { ok: false, error: r.error }; }
+  // Started from a subfolder of the repo: the same subfolder of the worktree (its root if git doesn't track that folder).
+  const sub = path.join(dir, path.relative(root, path.resolve(cwd)));
+  return { ok: true, root: dir, path: fs.existsSync(sub) ? sub : dir, branch };
 });
 // A thread started with no project gets its own folder that TerminalVibe owns.
 ipcMain.handle('threads:scratch', async () => {

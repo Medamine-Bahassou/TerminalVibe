@@ -1263,6 +1263,7 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 #sbr-thread .thr-tools summary:hover .thr-tools-caret { color:var(--fg); }
 #sbr-thread .thr-tools summary:focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #sbr-thread .thr-tools summary > i { font-size:14px; flex-shrink:0; }
+#sbr-thread .thr-tools summary > :is(.thr-tools-text, .thr-tools-count, .thr-tools-time) { line-height:20px; }
 #sbr-thread .thr-tools-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #sbr-thread .thr-tools-count { font-size:11px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
 #sbr-thread .thr-tools-time { font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
@@ -3390,4 +3391,12 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 
 @media (prefers-reduced-motion: reduce) {
   #sbr-thread .a2ui-btn, #sbr-thread .a2ui-input, #sbr-thread .a2ui-checkbox, #sbr-thread .a2ui-choice, #sbr-thread .a2ui-chip, #sbr-thread .a2ui-tab, #sbr-thread .a2ui-dialog-close { transition:none; }
+}
+
+/* A failed OpenCode probe is retryable from the picker's status row. */
+body .tv-model-picker .mp-status.mp-retry { cursor:pointer; color:var(--muted-text); border-radius:6px !important; }
+body .tv-model-picker .mp-status.mp-retry:hover { color:var(--fg); background:var(--ui-hover); }
+body .tv-model-picker .mp-status.mp-retry:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) {
+  body .tv-model-picker .mp-status.mp-retry { transition:none; }
 }

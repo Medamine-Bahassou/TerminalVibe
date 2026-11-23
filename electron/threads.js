@@ -156,7 +156,10 @@ function parseClaude(list, side = false) {
     if (call?.bg) Object.assign(call.bg, { status: n.status, summary: n.summary, endedAt: ts });
     if (call?.agent && call.agent.status === 'running') call.agent.status = n.status === 'stopped' ? 'stopped' : n.status;
     if (!call && !n.summary) return; // a task this transcript says nothing else about: no line to show
-    items.push({ role: 'event', kind: call?.agent ? 'agent' : 'bg', status: n.status, text: n.summary || 'Background task ended',
+    // Arriving between tool steps, it was queued while the agent worked: part of that turn, not a turn of its own.
+    const prev = items[items.length - 1];
+    const inTurn = !!prev && (prev.role === 'tool' || prev.role === 'thinking' || (prev.role === 'event' && prev.inTurn));
+    items.push({ role: 'event', ...(inTurn ? { inTurn } : {}), kind: call?.agent ? 'agent' : 'bg', status: n.status, text: n.summary || 'Background task ended',
       title: call?.bg?.description || call?.agent?.description || '', command: call?.bg?.command || '', ts });
   };
   for (const row of list) {
@@ -700,6 +703,17 @@ async function threadHistory(meta, home = os.homedir(), root = threadsRoot(home)
   return result;
 }
 
+// Live state of one subagent call, used by that subagent's own thread view to show its working row. Reuses the
+// parent's history (which already carries the call's status and latest step), without sending all its items.
+async function subagentStatus(meta, call, home = os.homedir()) {
+  if (!call || !meta) return null;
+  try {
+    const segments = await threadHistory(meta, home);
+    const a = segments.flatMap(s => s.items || []).find(x => x.role === 'tool' && x.agent?.toolUseId === call)?.agent;
+    return a ? { status: a.status, since: a.since || null, last: a.last || null } : null;
+  } catch { return null; }
+}
+
 // What the next agent is told about the history file. One list, so the wording is easy to tune.
 const HANDOFF_INSTRUCTIONS = [
   'This is the conversation so far in this TerminalVibe thread, from earlier coding agents. Treat it as your own memory: the user is continuing the same work with you.',
@@ -772,7 +786,7 @@ async function deleteThread(id, home = os.homedir(), root = threadsRoot(home)) {
   return true;
 }
 
-module.exports = { detectAgents, saveThreadAttachment, syncThread, threadHistory, threadHistoryPreview, writeHandoff, forkThread, deleteThread, toolSummary, toolOutput, parseClaude, parseCodex, parseAcp, acpFile, fileChange };
+module.exports = { detectAgents, saveThreadAttachment, syncThread, threadHistory, threadHistoryPreview, subagentStatus, writeHandoff, forkThread, deleteThread, toolSummary, toolOutput, parseClaude, parseCodex, parseAcp, acpFile, fileChange };
 
 if (require.main === module) {
   const assert = require('assert');
