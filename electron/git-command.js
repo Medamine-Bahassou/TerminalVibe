@@ -32,4 +32,12 @@ function runGit(cwd, args, env) {
       error: err && (String(errOut || '').trim().split(/\r?\n/).pop() || err.message) })));
 }
 
-module.exports = { gitInvocation, gitHostPath, runGit };
+// A WSL folder's Linux $HOME in its distro ('' when it can't be read); null for a folder outside WSL.
+function wslHome(cwd) {
+  const wsl = wslLocation(cwd, process.platform);
+  if (!wsl) return Promise.resolve(null);
+  return new Promise(resolve => execFile(gitInvocation(cwd, []).file, ['--distribution', wsl[1], '--exec', 'sh', '-c', 'printf %s "$HOME"'],
+    { windowsHide: true, timeout: 15000 }, (err, out) => resolve(err ? '' : String(out || '').trim())));
+}
+
+module.exports = { gitInvocation, gitHostPath, runGit, wslHome };

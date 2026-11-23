@@ -102,7 +102,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   threadSubagentStatus: (query, call) => ipcRenderer.invoke('threads:subagent-status', query, call),
   threadHandoff: (query) => ipcRenderer.invoke('threads:handoff', query),
   threadFork: (query) => ipcRenderer.invoke('threads:fork', query),
-  threadDelete: (id, scratchDir, worktreeDir) => ipcRenderer.invoke('threads:delete', id, scratchDir, worktreeDir),
+  threadDelete: (id, scratchDir, worktree) => ipcRenderer.invoke('threads:delete', id, scratchDir, worktree),
   gitWorktreeAdd: (cwd) => ipcRenderer.invoke('git:worktree-add', cwd),
   threadScratch: () => ipcRenderer.invoke('threads:scratch'),
   gitBranch: (cwd) => ipcRenderer.invoke('git:branch', cwd),

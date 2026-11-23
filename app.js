@@ -9510,6 +9510,12 @@
   const chatCwd = tab => tab?.chat?.scratch ? tab.chat.cwd || '' : tab?.chat?.cwd || tab?.cwd || wsOf(tab)?.cwd || getWorkspaceTerminals(wsOf(tab) || {}).find(t => t.cwd)?.cwd || '';
   const isScratchDir = d => /[\\/]\.terminalvibe[\\/]scratch[\\/][^\\/]+[\\/]?$/.test(d || '');
   const isWorktreeDir = d => /[\\/]\.terminalvibe[\\/]worktrees[\\/]/.test(d || ''); // a thread's own worktree, not a project
+  // A worktree thread (and a fork or side chat sharing its folder) belongs to the project its worktree came from.
+  const chatProject = tab => {
+    const cwd = chatCwd(tab);
+    if (!isWorktreeDir(cwd)) return cwd;
+    return allChatTabs().find(x => x.chat?.worktree?.project && cwd.startsWith(x.chat.worktree.root))?.chat.worktree.project || cwd;
+  };
   const chatFolderName = cwd => !cwd || isScratchDir(cwd) ? 'No project' : cwd.split(/[\\/]/).filter(Boolean).pop() || cwd;
   async function ensureThreadBranch(tab, cwd = chatCwd(tab)) {
     if (!cwd || !window.electronAPI?.gitBranch) return;
@@ -9532,7 +9538,7 @@
     const windows = (window.electronAPI?.platform || terminalBackendPlatform) === 'win32';
     const trailingSeparators = windows ? /[\\/]+$/ : /\/+$/;
     const projects = new Map();
-    for (const dir of [current, ...workspaces.map(w => w.cwd), ...allChatTabs().map(chatCwd)]) {
+    for (const dir of [current, ...workspaces.map(w => w.cwd), ...allChatTabs().map(chatProject)]) {
       if (!dir || isScratchDir(dir) || isWorktreeDir(dir)) continue;
       const trimmed = dir.replace(trailingSeparators, '');
       const key = windows && /^[a-z]:$/i.test(trimmed) && trimmed !== dir
@@ -10474,9 +10480,9 @@
     if (ws.chat?.scratch && !ws.chat.cwd && window.electronAPI?.threadScratch) { ws.chat.cwd = ws.cwd = await window.electronAPI.threadScratch(); saveState(); }
     // "New worktree" (the branch menu): the thread's first start makes its worktree and works there from then on.
     if (ws.chat?.worktree === true && window.electronAPI?.gitWorktreeAdd) {
-      const r = await window.electronAPI.gitWorktreeAdd(chatCwd(ws));
+      const project = chatCwd(ws), r = await window.electronAPI.gitWorktreeAdd(project);
       if (!r.ok) throw Object.assign(Error(`Could not create the worktree: ${r.error}`), { toast: true });
-      ws.chat.worktree = { root: r.root, branch: r.branch };
+      ws.chat.worktree = { root: r.root, branch: r.branch, project };
       ws.chat.cwd = ws.cwd = r.path; ws.chat.branch = r.branch;
       saveState(); renderThreadsSidebar();
     }
@@ -12488,7 +12494,7 @@
     const savedProject = localStorage.getItem('tv-threads-project');
     if (savedProject != null) tsProject = normalizeThreadProjectPath(savedProject);
   } catch {}
-  const tsProjectKey = x => x.folder === 'No project' ? '' : normalizeThreadProjectPath(x.cwd || '');
+  const tsProjectKey = x => x.folder === 'No project' ? '' : normalizeThreadProjectPath(x.project || x.cwd || '');
   // A project's own icon (favicon / app icon, found by the main process like T3 Code), else the folder icon.
   // Looked up once per folder per session; the sidebar and composer update when one arrives.
   const _projIcons = new Map(); // cwd -> { value: dataUrl | null } (value absent while loading)
@@ -12575,7 +12581,7 @@
     // One per agent the thread used, with its latest session's model (the card shows the same agents).
     const models = hs.map(x => ({ h: x, text: modelLabel(segs.findLast(sg => sg.harness === x.id)) || x.name }));
     const draft = threadDraft(w);
-    return { w, ws: wsOf(w) || findWs(w.workspaceId), h, hs, cwd, folder: chatFolderName(cwd), branch: w.chat?.branch || _gitBranch.get(cwd) || '',
+    return { w, ws: wsOf(w) || findWs(w.workspaceId), h, hs, cwd, project: chatProject(w), folder: chatFolderName(cwd), branch: w.chat?.branch || _gitBranch.get(cwd) || '',
       draft: !!(w._closed && draft), unsent: !!w.chat.draft?.trim(), title: w.chat.title || draft.split('\n')[0].slice(0, 80) || w.label, updated: w.chat.updatedAt || last?.since || w.chat.createdAt || 0, work: chatWorking(w),
       model: modelLabel(last), models, openIn: w._closed ? null : wsOf(w) };
   }
@@ -14219,7 +14225,12 @@
       const storeId = tab.chat?.storeId || tab.id;
       if (!tab._closed) removeTerminal(w.id, tab.id, false, false, true, true); // already confirmed: close now, no second prompt
       closedThreads = closedThreads.filter(t => (t.chat.storeId || t.id) !== storeId);
-      window.electronAPI?.threadDelete?.(storeId, tab.chat?.scratch ? tab.chat.cwd : null, tab.chat?.worktree?.root || null); // only its own scratch folder / worktree
+      // Its own worktree goes with it, unless a fork or side chat still works there: then that one owns it.
+      let worktree = tab.chat?.worktree?.root ? tab.chat.worktree : null; // { root, branch, project }
+      const heir = worktree && allChatTabs().filter(t => t !== tab && chatCwd(t).startsWith(worktree.root)).sort((a, b) => !!a.chat.side - !!b.chat.side)[0];
+      if (heir) { heir.chat.worktree = tab.chat.worktree; worktree = null; }
+      window.electronAPI?.threadDelete?.(storeId, tab.chat?.scratch ? tab.chat.cwd : null, worktree) // only its own scratch folder / worktree
+        .then(r => { if (r?.worktreeKept) zoomBadge(`Kept its worktree, ${r.worktreeKept}: ${worktree.root}`); }, () => {});
       saveState(); renderThreadsSidebar();
       const cur = curChat(); if (cur) syncThreadComposer(cur); // its row leaves the side chats tray
     });
@@ -14583,7 +14594,8 @@
       list.append(...ctxEl.querySelectorAll(':scope > .ctx-item'));
       ctxEl.append(list);
       // Before the first message: work in the project folder, or in a new worktree of it (T3 Code's Local / New worktree).
-      if (tab?.chat && !threadHasMessages(tab) && !tab.chat.worktree?.root && cur && window.electronAPI?.gitWorktreeAdd) {
+      // Not for a side chat or subagent: they work in their thread's folder.
+      if (tab?.chat && !tab.chat.side && !tab.chat.subagent && !threadHasMessages(tab) && !tab.chat.worktree?.root && cur && window.electronAPI?.gitWorktreeAdd) {
         const pick = on => () => { if (on) tab.chat.worktree = true; else delete tab.chat.worktree; saveState(); syncThreadComposer(tab); };
         sep();
         item('<i class="ph ph-folder"></i>', 'Project folder' + (tab.chat.worktree ? '' : ' (thread)'), '', pick(false));

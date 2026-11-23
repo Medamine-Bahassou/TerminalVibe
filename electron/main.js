@@ -1099,29 +1099,59 @@ ipcMain.handle('threads:subagent-status', (_e, query, call) => require('./thread
 ipcMain.handle('threads:handoff', (_e, query) => require('./threads').writeHandoff(query));
 ipcMain.handle('threads:fork', (_e, query) => require('./threads').forkThread(query));
 // A scratch thread's folder goes with it; only a direct child of ~/.terminalvibe/scratch is ever removed.
-// A worktree thread's worktree goes too, but only when it has no uncommitted changes (no --force); its branch stays.
-ipcMain.handle('threads:delete', async (_e, id, scratchDir, worktreeDir) => {
+// A worktree thread's worktree goes too (see removeThreadWorktree). Returns why it was kept, if it was.
+ipcMain.handle('threads:delete', async (_e, id, scratchDir, worktree) => {
   const dir = typeof scratchDir === 'string' && path.resolve(scratchDir);
   if (dir && path.dirname(dir) === path.join(CONFIG_DIR, 'scratch')) await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
-  const wt = typeof worktreeDir === 'string' && path.resolve(worktreeDir);
-  if (wt && path.dirname(path.dirname(wt)) === path.join(CONFIG_DIR, 'worktrees')
-    && (await runGit(wt, ['worktree', 'remove', wt])).ok) await fs.promises.rmdir(path.dirname(wt)).catch(() => {});
-  return require('./threads').deleteThread(id);
+  const worktreeKept = worktree ? await removeThreadWorktree(worktree).catch(err => err.message) : null;
+  await require('./threads').deleteThread(id);
+  return { worktreeKept };
 });
+// Only a worktree TerminalVibe made (.terminalvibe/worktrees/<id>/<name>, in ~ or a WSL distro's ~). Git refuses one
+// with uncommitted or untracked files (no --force), and its tv/<id> branch goes only when merged (no work of its own).
+// Git runs from the repo's git dir, not the worktree: Windows can't remove a folder that is a process's cwd.
+// Returns null when it's gone, else the reason it stays.
+const THREAD_WORKTREE = /[\\/]\.terminalvibe[\\/]worktrees[\\/][0-9a-f]{8}[\\/][^\\/]+[\\/]?$/;
+async function removeThreadWorktree({ root: dir, project, branch: tvBranch } = {}) {
+  if (typeof dir !== 'string' || !THREAD_WORKTREE.test(dir)) return null;
+  if (!fs.existsSync(dir)) {
+    // Deleted by hand: drop git's stale record of it (and its branch, if merged) in the project it came from.
+    if (typeof project === 'string' && fs.existsSync(project) && (await runGit(project, ['worktree', 'prune'])).ok
+      && /^tv\/[0-9a-f]{8}$/.test(tvBranch)) await runGit(project, ['branch', '-d', tvBranch]);
+    await fs.promises.rmdir(path.dirname(path.resolve(dir))).catch(() => {});
+    return null;
+  }
+  const info = await runGit(dir, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir', '--abbrev-ref', 'HEAD']);
+  if (!info.ok) return info.error;
+  const [top, common, branch] = info.out.trim().split(/\r?\n/), gitDir = gitHostPath(dir, common);
+  const r = await runGit(gitDir, ['worktree', 'remove', top]);
+  if (!r.ok) return /modified or untracked/.test(r.error) ? 'it has uncommitted changes' : r.error;
+  await fs.promises.rmdir(path.dirname(path.resolve(dir))).catch(() => {});
+  if (/^tv\/[0-9a-f]{8}$/.test(branch)) await runGit(gitDir, ['branch', '-d', branch]);
+  return null;
+}
 // A thread that works in its own git worktree: a new branch tv/<id> from the project's HEAD, checked out in
-// ~/.terminalvibe/worktrees/<id>/<repo name> (so the folder chip still shows the repo's name).
+// ~/.terminalvibe/worktrees/<id>/<repo name> (so the folder chip still shows the repo's name). A repo inside WSL
+// gets it in the distro's own ~ instead: git runs there and can't write to a Windows path.
 ipcMain.handle('git:worktree-add', async (_e, cwd) => {
   if (!cwd || typeof cwd !== 'string') return { ok: false, error: 'No project folder' };
-  const top = await runGit(cwd, ['rev-parse', '--show-toplevel']);
+  const top = await runGit(cwd, ['rev-parse', '--show-toplevel', '--show-prefix']);
   if (!top.ok) return { ok: false, error: 'The project folder is not a git repository.' };
-  const root = top.out.trim(), id = require('crypto').randomBytes(4).toString('hex'), branch = `tv/${id}`;
-  const dir = path.join(CONFIG_DIR, 'worktrees', id, path.basename(root));
-  await fs.promises.mkdir(path.dirname(dir), { recursive: true });
-  const r = await runGit(cwd, ['worktree', 'add', '-b', branch, dir, 'HEAD']);
+  if (!(await runGit(cwd, ['rev-parse', '--verify', '-q', 'HEAD'])).ok) return { ok: false, error: 'The project has no commits yet.' };
+  await runGit(cwd, ['worktree', 'prune']); // forget worktrees whose folders were deleted by hand
+  const [root, prefix = ''] = top.out.split(/\r?\n/);
+  const id = require('crypto').randomBytes(4).toString('hex'), branch = `tv/${id}`, name = path.posix.basename(root.replace(/\\/g, '/'));
+  const home = await wslHome(cwd);
+  if (home === '') return { ok: false, error: "Could not read the WSL distro's home folder." };
+  const target = home ? path.posix.join(home, '.terminalvibe', 'worktrees', id, name) : path.join(CONFIG_DIR, 'worktrees', id, name);
+  const dir = home ? gitHostPath(cwd, target) : target; // the same folder, as this side sees it
+  try { await fs.promises.mkdir(path.dirname(dir), { recursive: true }); }
+  catch (err) { return { ok: false, error: err.message }; }
+  const r = await runGit(cwd, ['worktree', 'add', '-b', branch, target, 'HEAD']);
   if (!r.ok) { await fs.promises.rm(path.dirname(dir), { recursive: true, force: true }).catch(() => {}); return { ok: false, error: r.error }; }
   // Started from a subfolder of the repo: the same subfolder of the worktree (its root if git doesn't track that folder).
-  const sub = path.join(dir, path.relative(root, path.resolve(cwd)));
-  return { ok: true, root: dir, path: fs.existsSync(sub) ? sub : dir, branch };
+  const sub = prefix && path.join(dir, prefix.replace(/\/$/, '')); // "src/"
+  return { ok: true, root: dir, path: sub && fs.existsSync(sub) ? sub : dir, branch };
 });
 // A thread started with no project gets its own folder that TerminalVibe owns.
 ipcMain.handle('threads:scratch', async () => {
@@ -1207,7 +1237,7 @@ ipcMain.handle('git:branch', async (_e, cwd) => {
     if (path.dirname(dir) === dir) return null;
   }
 });
-const { runGit, gitHostPath } = require('./git-command');
+const { runGit, gitHostPath, wslHome } = require('./git-command');
 
 // A chat turn's changes, whatever made them (edit tools, sed, scripts, formatters): the folder's working
 // tree is snapshotted as a git tree when the turn starts and diffed against its state when it ends.
