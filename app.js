@@ -10934,7 +10934,7 @@
       try {
         const image = /^image\/(png|jpeg|gif|webp|bmp)$/i.test(file.type) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name);
         const saveAttachment = window.electronAPI?.saveThreadAttachment;
-        const persistImage = image && saveAttachment;
+        const persistImage = (image || file.tvPasted) && saveAttachment; // pasted text has no disk path: keep it with the thread
         const path = persistImage ? null : await localPathForFile(tab, file);
         if (!path && !persistImage) throw new Error('Could not read ' + file.name);
         const preview = image ? await new Promise(resolve => {
@@ -10947,7 +10947,7 @@
         const attached = curChat() === tab ? _chatFiles : (tab._files ||= tab.chat?.draftFiles || []);
         const duplicate = await findChatImageDuplicate(attached, attachment);
         if (!duplicate && persistImage) {
-          const name = isImagePath(file.name) ? file.name : `${file.name || 'image'}.${file.type.split('/')[1]}`;
+          const name = isImagePath(file.name) || !image ? file.name : `${file.name || 'image'}.${file.type.split('/')[1]}`;
           attachment.path = await saveAttachment(threadKey(tab), name, new Uint8Array(await file.arrayBuffer()));
           if (!attachment.path) throw new Error('Could not save ' + name);
           attachment.name ||= name;
@@ -11147,6 +11147,11 @@
           rememberChatEditorSelection(editor);
           const text = (e.clipboardData?.getData('text/plain') || '').replace(/\r\n?/g, '\n');
           if (!text) return;
+          // A long paste becomes an attached text file (a chip, like images) instead of flooding the draft.
+          if (text.length > 2000 || text.split('\n').length > 40) {
+            addChatFiles([Object.assign(new File([text], `pasted-${text.split('\n').length}-lines.txt`, { type: 'text/plain' }), { tvPasted: true })]);
+            return;
+          }
           const v = thrInput.value, s = thrInput.selectionStart, end = thrInput.selectionEnd;
           const pasted = prepareChatPastedText(text);
           applyDraft(v.slice(0, s) + pasted.text + v.slice(end), s + pasted.text.length, s + pasted.text.length, pasted.files);
@@ -11313,6 +11318,9 @@
     }).join('') + (c.status && (!c.items.length || c.loading)
       ? `<div class="thr-complete-status" role="status">${c.loading ? '<span class="tv-loading-spinner" aria-hidden="true"></span>' : ''}${escHtml(c.status)}</div>` : '');
     thrComplete.hidden = false;
+    // 50vh in CSS ignores short panels; cap to the room between the composer and the chat's top.
+    const room = (thrComplete.offsetParent?.getBoundingClientRect().top ?? 0) - thrPage.getBoundingClientRect().top - 8;
+    thrComplete.style.maxHeight = room > 0 ? `min(300px, 50vh, ${Math.round(room)}px)` : '';
     const editor = threadPart(thrPage, 'input-links');
     if (c.items.length) editor?.setAttribute('aria-activedescendant', 'thr-complete-' + c.index);
     else editor?.removeAttribute('aria-activedescendant');
@@ -13011,6 +13019,8 @@
       fragment = wrapper;
       ancestor = ancestor.parentElement;
     }
+    // A collapsed section (Worked for…, thinking, steps) copies nothing of what it hides.
+    for (const d of fragment.querySelectorAll?.('details:not([open])') || []) [...d.childNodes].forEach(c => { if (c.nodeName !== 'SUMMARY') c.remove(); });
     return mdFromDom(fragment).trim();
   }
   // A complete ```svg block (or an <svg> in an xml/html/untagged fence) also renders as an image. An <img> never runs the
@@ -13680,7 +13690,11 @@
         const mergePr = m.role === 'user' && mergePrNumber(m.text);
         if (mergePr) return mergeStatusHtml(mergePr, Date.parse(m.ts) || 0, false, m.stopped);
         const cls = `thr-msg ${m.role}`;
-        texts.set(key, m.text);
+        // A prompt's image paths render as images and its context notes as chips: copy only the typed text.
+        texts.set(key, m.role !== 'user' ? m.text : String(m.text)
+          .replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '')
+          .replace(new RegExp(ATTACHMENT_PATH_RE.source, 'gi'), (all, q, quoted, bare) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(quoted || bare) ? '' : all)
+          .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim());
         // Copy + time under the message, shown on hover.
         // A reply can be forked: a new thread with the history up to it. The fork point is the full (untrimmed)
         // item index, which is what the main process slices.
@@ -13860,8 +13874,14 @@
     flow._texts = texts;
     hydrateChatAttachmentSizes(content);
     bindThreadCopy(flow);
-    content.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', () => {
-      const text = b.closest('.thr-flow')?._texts?.get(b.closest('.thr-msg').dataset.key) || '';
+    content.querySelectorAll('.thr-copy').forEach(b => b.addEventListener('click', async () => {
+      let text = b.closest('.thr-flow')?._texts?.get(b.closest('.thr-msg').dataset.key) || '';
+      // A long paste was sent as an attached file: copy its text back in place of the path.
+      const pasted = [...text.matchAll(/(['"]?)((?:~|[A-Za-z]:)?[\\/][^'"\n]*?pasted-\d+-lines\.txt)\1/g)];
+      for (const [all, , path] of pasted) {
+        const r = await window.electronAPI?.readAttachmentPreview?.(path).catch(() => null);
+        if (r?.text != null) text = text.replace(all, r.text);
+      }
       void copyPrivateText(text).catch(() => {});
       b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
       b.setAttribute('aria-label', 'Copied');
@@ -14017,7 +14037,9 @@
           if (r.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(r.endContainer, r.endOffset);
           return part;
         };
-        const covers = m => { if (!r.intersectsNode(m)) return false; const part = within(m); return !part.collapsed && part.toString().trim() !== ''; };
+        // Messages folded inside a collapsed "Worked for" still have layout boxes in Chromium: skip them outright.
+        const covers = m => { if (!r.intersectsNode(m) || m.parentElement?.closest('details:not([open])')) return false; const part = within(m); return !part.collapsed && part.toString().trim() !== ''
+          && [...part.getClientRects()].some(rect => rect.width > 1 && rect.height > 0); }; // hidden text (collapsed thinking) doesn't count
         const msgs = [...flow.querySelectorAll('.thr-msg[data-key]')].filter(covers);
         if (!msgs.length) {
           const start = r.startContainer.nodeType === Node.ELEMENT_NODE ? r.startContainer : r.startContainer.parentElement;
@@ -14029,7 +14051,10 @@
           return; // tool output etc.: the browser's own copy
         }
         // Inside one message: the selected part as markdown source.
-        const text = mdFromRange(r, flow).trim();
+        // Clip to the messages that really have selected text, so a range spilling into the next reply's hidden
+        // parts (thinking, steps) doesn't copy them.
+        // Each message on its own: the collapsed steps/thinking between messages never join the copy.
+        const text = msgs.map(m => mdFromRange(within(m), m)).filter(Boolean).join('\n\n').trim();
         e.clipboardData.setData('text/plain', text);
         e.preventDefault();
       });
@@ -17170,7 +17195,10 @@
     // Copy
     if (matchShortcut(e, 'copy')) {
       const t = keyTerminal();
-      if (t && t.type !== 'browser' && t.term.hasSelection()) {
+      // Text selected outside the terminal (a chat message) beats a leftover terminal selection.
+      const page = getSelection();
+      const elsewhere = page && !page.isCollapsed && !t?.term?.element?.contains(page.anchorNode);
+      if (t && t.type !== 'browser' && t.term.hasSelection() && !elsewhere) {
         e.preventDefault(); e.stopPropagation();
         void copyPrivateTerminal(t.term).catch(() => {});
       }
