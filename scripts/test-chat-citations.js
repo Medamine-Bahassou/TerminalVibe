@@ -15,9 +15,9 @@ app.whenReady().then(async () => {
   for (const file of ['style.css', 'workspace.css']) await win.webContents.insertCSS(fs.readFileSync(path.join(root, file), 'utf8'));
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
   const copyHelpers = source.slice(source.indexOf('  function mdFromDom('), source.indexOf('  // Escape first, then the markdown agents use:'));
-  const copyBinding = source.slice(source.indexOf('  function bindThreadCopy('), source.indexOf('  function updateThreadHistory('));
+  const copyBinding = source.slice(source.indexOf('  function bindThreadCopy('), source.indexOf('  function expandThreadDetails('));
   const privacyCopy = source.slice(source.indexOf('  function copyPrivateWorkSelection('), source.indexOf("  document.addEventListener('copy', copyPrivateWorkSelection"));
-  const citations = source.slice(source.indexOf('  let _citationFlash = null;'), source.indexOf('  let _chatCtrl = false;'));
+  const citations = source.slice(source.indexOf('  let _citationFlash = null;'), source.indexOf('  const scrollEndBtn = threadPart(thrPage'));
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     ${copyHelpers}
@@ -47,6 +47,56 @@ app.whenReady().then(async () => {
       flow.dispatchEvent(event);
       check(copied === ['.', 'test', 'Last'].join(String.fromCharCode(10, 10)), 'Cross-message copy must clip boundary messages and exclude role labels');
       selection.removeAllRanges(); flow.remove();
+    }
+    {
+      // Triple-click on a prompt with an image link: the range spills into the next reply's hidden thinking.
+      const flow = document.createElement('div'); document.body.append(flow);
+      flow.innerHTML = '<div class="thr-msg user" data-key="u"><div class="thr-bubble"><div class="thr-msg-text">fix that <button class="thr-link" data-href="/tmp/image.png"><i></i>image.png</button></div></div></div>'
+        + '<div class="thr-msg assistant" data-key="r"><div class="thr-think" style="display:none">Thought hidden steps</div><div class="thr-msg-text">The reply.</div></div>';
+      ${copyBinding}
+      bindThreadCopy(flow);
+      const range = document.createRange();
+      range.setStart(flow.querySelector('[data-key="u"] .thr-msg-text').firstChild, 0);
+      range.setEnd(flow.querySelector('.thr-think').firstChild, 7);
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      const event = new Event('copy', { bubbles: true, cancelable: true });
+      let copied; event.clipboardData = { setData: (_type, value) => copied = value };
+      flow.dispatchEvent(event);
+      check(copied === 'fix that [image.png](/tmp/image.png)', 'Copying a prompt must not take hidden text from the next reply, got: ' + copied);
+      selection.removeAllRanges(); flow.remove();
+    }
+    {
+      // A selection from a prompt into the reply's first word skips the collapsed thinking between them.
+      const flow = document.createElement('div'); document.body.append(flow);
+      flow.innerHTML = '<div class="thr-msg user" data-key="u"><div class="thr-msg-text">fix the style</div></div>'
+        + '<details class="thr-turn"><summary>Worked for 7m</summary><div>Thought about many things</div><div class="thr-msg assistant" data-key="h"><div class="thr-msg-text">Hidden step reply.</div></div></details>'
+        + '<div class="thr-msg assistant" data-key="r"><div class="thr-msg-text">The popup needs work.</div></div>';
+      ${copyBinding}
+      bindThreadCopy(flow);
+      const range = document.createRange();
+      range.setStart(flow.querySelector('[data-key="u"] .thr-msg-text').firstChild, 0);
+      range.setEnd(flow.querySelector('[data-key="r"] .thr-msg-text').firstChild, 3);
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      const event = new Event('copy', { bubbles: true, cancelable: true });
+      let copied; event.clipboardData = { setData: (_type, value) => copied = value };
+      flow.dispatchEvent(event);
+      check(copied === 'fix the style' + String.fromCharCode(10, 10) + 'The', 'Copy must skip collapsed thinking between messages, got: ' + copied);
+      range.setEnd(flow.querySelector('[data-key="h"] .thr-msg-text').firstChild, 6);
+      selection.removeAllRanges(); selection.addRange(range);
+      flow.dispatchEvent(event);
+      check(copied === 'fix the style', 'A prompt selection ending in a collapsed reply must copy only the prompt, got: ' + copied);
+      selection.removeAllRanges(); flow.remove();
+    }
+    {
+      // A collapsed "Worked for" inside a reply: selecting across it copies none of its hidden steps.
+      const scope = document.createElement('div'); document.body.append(scope);
+      scope.innerHTML = '<div class="thr-msg-text">Before.</div><details class="thr-turn"><summary>Worked for 7m</summary><div>Thought secret steps</div>loose step</details><div class="thr-msg-text">After.</div>';
+      const range = document.createRange(); range.selectNodeContents(scope);
+      const out = mdFromRange(range, scope);
+      check(!/secret|loose/.test(out) && out.includes('Before.') && out.includes('After.'), 'Collapsed section contents must not be copied, got: ' + out);
+      scope.querySelector('details').open = true;
+      check(/secret/.test(mdFromRange(range, scope)), 'An open section is still copied');
+      scope.remove();
     }
     {
       const section = document.createElement('div'); document.body.append(section);

@@ -530,6 +530,8 @@ body #sidebar .ws-btn.active .ws-proc, body #sidebar .ws-btn.active .ws-proc-ico
    title they pin to the top instead of centering on the whole card. */
 body:not(.no-ws-procs) #sidebar.expanded .ws-btn:has(.ws-procs:not(:empty)) :is(.ws-icon, .ws-meta) { align-self:flex-start; }
 body:not(.no-ws-procs) #sidebar.expanded .ws-btn:has(.ws-procs:not(:empty)) .ws-icon { margin-top:2px; }
+/* Process lines start under the icon (16px + 8px gap), not indented under the title. */
+body #sidebar.expanded .ws-btn:has(.ws-icon) .ws-procs { margin-left:-24px; }
 #sidebar.expanded .ws-pin-label { padding-right:17px; }
 .ws-pin-count { min-width:20px; text-align:center; font-variant-numeric:tabular-nums; }
 
