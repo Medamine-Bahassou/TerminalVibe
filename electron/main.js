@@ -566,7 +566,7 @@ ipcMain.handle('shell:show-in-folder', (_e, file) => {
 ipcMain.handle('shell:open-in-vscode', (_e, target) => new Promise(resolve => {
   if (typeof target !== 'string' || !path.isAbsolute(target)) return resolve(false);
   // ponytail: no shell (the path comes from agent text), so Windows' code.cmd isn't found; a vscode:// URL if Windows matters.
-  const child = require('child_process').spawn('code', ['-g', target], { detached: true, stdio: 'ignore' });
+  const child = require('child_process').spawn('code', ['-g', target], { detached: true, stdio: 'ignore', windowsHide: true });
   child.once('error', () => resolve(false));
   child.once('spawn', () => { child.unref(); resolve(true); });
 }));
@@ -1295,7 +1295,8 @@ async function turnDiff(cwd, from, to) {
   const r = await runGit(cwd, ['rev-parse', '--show-toplevel']);
   if (!r.ok) return null;
   const root = gitHostPath(cwd, r.out.trimEnd());
-  const d = await runGit(cwd, ['diff', '--no-color', '--no-ext-diff', '--no-renames', from, to]);
+  // Line-ending-only changes (CRLF/LF flips from Windows tools) are noise, not edits.
+  const d = await runGit(cwd, ['diff', '--no-color', '--no-ext-diff', '--no-renames', '--ignore-cr-at-eol', from, to]);
   if (!d.ok) return null;
   const files = [];
   let cur = null;
@@ -1434,7 +1435,7 @@ ipcMain.handle('chat:title', async (_e, harness, text, model) => {
   }
   if (!bin || !args) return null; // ponytail: Claude Code and Codex only; other agents keep the first-message title
   const out = await new Promise(res => {
-    const child = require('child_process').execFile(bin, args, { cwd: require('os').tmpdir(), env, timeout: 60000 },
+    const child = require('child_process').execFile(bin, args, { cwd: require('os').tmpdir(), env, timeout: 60000, windowsHide: true },
       (err, stdout) => res(err ? '' : String(stdout)));
     // Non-interactive CLIs read piped stdin even with a prompt argument. Signal EOF so they can finish.
     child.stdin?.end();

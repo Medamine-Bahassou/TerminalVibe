@@ -19,7 +19,7 @@ function createSkillManager({ home = os.homedir(), source = path.join(__dirname,
   function exists(file) {
     try { fs.lstatSync(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
   }
-  function list() {
+  function details() {
     return providers.map(provider => {
       const p = locations(provider.id);
       const active = exists(p.active);
@@ -28,13 +28,28 @@ function createSkillManager({ home = os.homedir(), source = path.join(__dirname,
         conflict: active && inactive };
     });
   }
+  // One install for every harness: Claude Code reads ~/.claude/skills, Codex and the others ~/.agents/skills.
+  function list() {
+    const rows = details();
+    return [{ id: 'all', name: 'All agents', path: rows.map(r => r.path).join('\n'), installed: rows.some(r => r.installed),
+      enabled: rows.every(r => r.enabled), conflict: rows.some(r => r.conflict) }];
+  }
   function setEnabled(id, enabled) {
     if (typeof enabled !== 'boolean') throw new Error('enabled must be a boolean');
+    if (id === 'all') {
+      if (details().some(r => r.conflict)) throw new Error('Both active and inactive copies exist. Resolve these copies before toggling.');
+      for (const p of providers) setOne(p.id, enabled);
+      return list();
+    }
+    setOne(id, enabled);
+    return list();
+  }
+  function setOne(id, enabled) {
     const p = locations(id);
     const from = enabled ? p.inactive : p.active;
     const to = enabled ? p.active : p.inactive;
     if (exists(from) && exists(to)) throw new Error('Both active and inactive copies exist. Resolve these copies before toggling.');
-    if (exists(to)) return list();
+    if (exists(to)) return;
     fs.mkdirSync(path.dirname(to), { recursive: true });
     if (exists(from)) {
       // Rename also preserves manually installed skills and symlinks verbatim.
@@ -49,9 +64,8 @@ function createSkillManager({ home = os.homedir(), source = path.join(__dirname,
         fs.rmSync(staging, { recursive: true, force: true });
       }
     }
-    return list();
   }
-  return { list, setEnabled };
+  return { list, details, setEnabled };
 }
 
 module.exports = { createSkillManager };

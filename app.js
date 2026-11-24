@@ -12834,6 +12834,15 @@
     if (act === 'parent') { const p = findThreadByKey(tab.chat?.forkOf); if (p) openChatTab(p); return; }
     openChatTab(tab);
   });
+  // Middle-click a thread: open it as a tab (a closed thread reopens in a new tab) without autoscroll or paste.
+  tsList.addEventListener('mousedown', e => { if (e.button === 1 && e.target.closest('.ts-card')) e.preventDefault(); });
+  tsList.addEventListener('auxclick', e => {
+    if (e.button !== 1) return;
+    const c = e.target.closest('.ts-card'), tab = c && findChatThread(c.dataset.tab);
+    if (!tab) return;
+    e.preventDefault(); e.stopPropagation(); _suppressPasteUntil = Date.now() + 200;
+    openChatTab(tab);
+  });
   tsList.addEventListener('dblclick', e => {
     if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.target.closest('button, input')) return;
     const c = e.target.closest('.ts-card:not(.draft)');
