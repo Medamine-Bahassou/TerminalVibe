@@ -401,7 +401,10 @@ body #prompt-icon-clear { border-radius:50% !important; }
 body .prompt-swatch { width:24px; height:24px; border:0; border-radius:50% !important; box-shadow:inset 0 0 0 1px #ffffff14; transition:box-shadow 150ms, transform 150ms; }
 body .prompt-swatch[data-color=""]:not(.prompt-swatch-custom) { background:var(--bg); box-shadow:inset 0 0 0 1px var(--border); }
 .prompt-swatch span { font-size:11px; color:var(--muted-text); }
-body .prompt-swatch:hover { transform:scale(1.08); border:0; }
+body .prompt-swatch:hover { border:0; box-shadow:inset 0 0 0 1px var(--muted-text); }
+body .prompt-swatch.active:hover { box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px var(--accent); }
+body .prompt-swatch { padding:0; cursor:pointer; }
+body .prompt-swatch:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 body .prompt-swatch.active { box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px var(--accent); }
 .prompt-actions { gap:8px; margin-top:20px; }
 body .prompt-actions button { height:32px; padding:0 14px; font:500 13px/1 var(--ui-font); border-radius:var(--ui-radius) !important; border:1px solid var(--border); background:transparent; color:var(--fg); transition:background-color 150ms, border-color 150ms; }
@@ -476,7 +479,7 @@ body #prompt-ok:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
 #settings-modal .theme-actions { border-color:var(--ui-line); padding-top:16px; gap:8px; }
 
 /* Close-confirm dialog: round icon, aligned checkbox, soft focus ring. */
-body #close-confirm-modal .cc-icon { width:36px; height:36px; margin-bottom:16px; border-radius:50% !important; background:color-mix(in srgb,#f07882 14%,transparent); color:#f07882; font-size:20px; }
+body #close-confirm-modal .cc-icon { width:36px; height:36px; margin-bottom:16px; border-radius:50% !important; background:color-mix(in srgb,var(--ui-error) 14%,transparent); color:var(--ui-error); font-size:20px; }
 #cc-title { font:600 15px/22px var(--ui-font); margin-bottom:6px; }
 #cc-message { font:400 13px/20px var(--ui-font); }
 .cc-dont-again { margin-top:16px; padding:0; gap:8px; font:400 13px/20px var(--ui-font); width:max-content; }
@@ -487,8 +490,8 @@ body .cc-dont-again input:checked::after { content:''; width:8px; height:4px; ma
 body #close-confirm-modal .prompt-actions button:focus-visible,
 body #prompt-modal .prompt-actions button:focus-visible,
 body .cc-dont-again input:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
-body #cc-close { background:#f07882; border-color:#f07882; color:#0d1017; font-weight:500; }
-body #cc-close:hover { background:color-mix(in srgb,#f07882 85%,#fff); filter:none; }
+body #cc-close { background:var(--ui-error); border-color:var(--ui-error); color:#0d1017; font-weight:500; }
+body #cc-close:hover { background:color-mix(in srgb,var(--ui-error) 85%,#fff); filter:none; }
 
 /* Context menus + tab dropdowns: same popover style as settings dropdowns. */
 body #ctx, body .ctx-sub, body .tg-dropdown {
@@ -507,8 +510,8 @@ body .ctx-sep { height:1px; margin:4px -4px; background:var(--ui-line); }
 #ctx .ctx-usage-providers > .ctx-sub { top:auto; bottom:-4px; left:100%; }
 #ctx.sub-flip .ctx-usage-providers > .ctx-sub { right:100%; left:auto; }
 #ctx :is([data-usage-setting], .ctx-usage-providers [role="menuitemcheckbox"])[aria-checked="false"] > .ci-key { visibility:hidden; }
-body .ctx-item.danger:hover { background:color-mix(in srgb,#f07882 14%,transparent); color:#f07882; }
-body .ctx-item.danger:hover i.ph { color:#f07882; }
+body .ctx-item.danger:hover { background:color-mix(in srgb,var(--ui-error) 14%,transparent); color:var(--ui-error); }
+body .ctx-item.danger:hover i.ph { color:var(--ui-error); }
 body .ctx-item.checked, body .ctx-item.checked:hover { background:transparent; color:var(--muted-text); }
 
 /* Running processes in a workspace row: logo + name, quiet UI text. */
@@ -800,6 +803,7 @@ body .ts-footer kbd { min-width:20px; margin-right:6px; padding:1px 5px; text-al
 .custom-dropdown-menu[popover]:not(:popover-open) { display:none; }
 .custom-dropdown-menu[popover]::backdrop { background:transparent; pointer-events:none; }
 .custom-dropdown-option:focus { outline:none; background:var(--ui-hover); color:var(--fg); }
+.custom-dropdown-option:focus-visible { box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
 .custom-dropdown-option[aria-disabled="true"] { opacity:.4; cursor:default; }
 
 /* Plain UI headings, without tracked uppercase micro-labels. */
@@ -1510,7 +1514,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-turn > summary::-webkit-details-marker { display:none; }
 #sbr-thread .thr-turn > summary::after { content:''; flex:1; height:1px; background:var(--ui-line); order:3; }
 #sbr-thread .thr-turn > summary:hover { color:var(--fg); }
-#sbr-thread .thr-turn > summary:focus-visible { outline:none; color:var(--fg); }
+#sbr-thread .thr-turn > summary:focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #sbr-thread .thr-turn-caret { font-size:11px; transition:transform 140ms; }
 #sbr-thread .thr-turn[open] > summary .thr-turn-caret { transform:rotate(90deg); }
 #sbr-thread .thr-turn-steps { display:flex; flex-direction:column; gap:2px; padding:4px 0 6px; }
@@ -3453,3 +3457,12 @@ body .tv-model-picker .mp-status.mp-retry:focus-visible { outline:none; box-shad
   .toaster .toast, .toaster .toast-body { transition:none; }
   .toaster [data-type="loading"] .toast-icon { animation:none; }
 }
+
+/* ── Forms: disabled primary in the prompt dialog (required field blank), inline field errors in Providers ── */
+body #prompt-ok:disabled, body #prompt-ok:disabled:hover { background:var(--accent); opacity:.45; cursor:default; }
+#settings-modal #providers-panel .prov-err { grid-column:1 / -1; margin-top:-2px; color:var(--ui-error); }
+#settings-modal #providers-panel .prov-err[hidden] { display:none; }
+
+/* ── Chat: $skill / /command chips in sent messages (composer chips reuse .thr-at-ref) ── */
+#sbr-thread .thr-skill-ref { display:inline-flex; align-items:baseline; gap:4px; min-width:0; color:var(--accent); }
+#sbr-thread .thr-skill-ref > i { font-size:13px; align-self:center; }

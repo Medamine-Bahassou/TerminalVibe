@@ -2625,7 +2625,7 @@
     add.tabIndex = -1;
     add.innerHTML = '<div class="pp-avatar-ph"><i class="ph ph-plus"></i></div><div class="pp-name">New profile</div>';
     add.addEventListener('click', () => {
-      showPrompt('Profile name', '', { icon: '' }, async (name, _color, avatar) => {
+      showPrompt('Profile name', '', { icon: '', required: true }, async (name, _color, avatar) => {
         if (!name) return;
         const meta = await profilesApi().profilesCreate({ name, avatar });
         const created = meta.profiles[meta.profiles.length - 1];
@@ -5541,11 +5541,13 @@
       chevLeft.className = 'tg-chevron tg-chevron-left';
       chevLeft.title = 'Scroll tabs left';
       chevLeft.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+      makeKeyboardButton(chevLeft);
       chevLeft.addEventListener('click', () => tabsContainer.scrollBy({ left: -pageAmt(), behavior: 'smooth' }));
       const chevRight = document.createElement('div');
       chevRight.className = 'tg-chevron tg-chevron-right';
       chevRight.title = 'Scroll tabs right';
       chevRight.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+      makeKeyboardButton(chevRight);
       chevRight.addEventListener('click', () => tabsContainer.scrollBy({ left: pageAmt(), behavior: 'smooth' }));
       tabsWrap.appendChild(tabsContainer);
       tabsWrap.appendChild(chevLeft);
@@ -5721,6 +5723,7 @@
       addTabBtn.className = 'tg-btn';
       addTabBtn.title = withKey('New terminal in this group', 'newTerminal');
       addTabBtn.innerHTML = '<i class="ph ph-plus"></i>';
+      makeKeyboardButton(addTabBtn);
       addTabBtn.addEventListener('click', () => addTerminal(wsp.id, node.id));
       addTabBtn.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'tabbar', { wsId: wsp.id, groupId: node.id }); });
 
@@ -5728,18 +5731,21 @@
       splitH.className = 'tg-btn';
       splitH.title = withKey('Split horizontal', 'splitH');
       splitH.innerHTML = '<i class="ph ph-square-split-horizontal"></i>';
+      makeKeyboardButton(splitH);
       splitH.onclick = () => splitGroupDirectly(wsp.id, node.id, 'row');
 
       const splitV = document.createElement('div');
       splitV.className = 'tg-btn';
       splitV.title = withKey('Split vertical', 'splitV');
       splitV.innerHTML = '<i class="ph ph-square-split-vertical"></i>';
+      makeKeyboardButton(splitV);
       splitV.onclick = () => splitGroupDirectly(wsp.id, node.id, 'column');
 
       const addBrowserBtn = document.createElement('div');
       addBrowserBtn.className = 'tg-btn';
       addBrowserBtn.title = withKey('New browser tab', 'browserTab');
       addBrowserBtn.innerHTML = '<i class="ph ph-globe"></i>';
+      makeKeyboardButton(addBrowserBtn);
       addBrowserBtn.onclick = () => addBrowserTab(wsp.id, node.id);
 
       const isMax = wsp._maximizedGroupId === node.id;
@@ -5747,6 +5753,7 @@
       maxBtn.className = 'tg-btn';
       maxBtn.dataset.action = 'maximize';
       maxBtn.title = withKey(isMax ? 'Restore' : 'Maximize', 'maximizeTab');
+      makeKeyboardButton(maxBtn);
       maxBtn.innerHTML = isMax
         ? '<i class="ph ph-corners-in"></i>'
         : '<i class="ph ph-corners-out"></i>';
@@ -5786,6 +5793,7 @@
       const dropdownBtn = document.createElement('div');
       dropdownBtn.className = 'tg-btn tg-dropdown-trigger';
       dropdownBtn.title = 'More actions';
+      makeKeyboardButton(dropdownBtn);
       dropdownBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>';
 
       const dropdown = document.createElement('div');
@@ -5957,6 +5965,7 @@
         urlInput.spellcheck = false;
         urlInput.autocomplete = 'off';
         urlInput.placeholder = 'Search or enter URL…';
+        urlInput.setAttribute('aria-label', 'Address');
 
         const loadingBar = document.createElement('div');
         loadingBar.className = 'browser-loading-bar';
@@ -7444,6 +7453,8 @@
       pinLabel.className = 'ws-pin-label' + (pinnedCollapsed ? ' collapsed' : '');
       pinLabel.title = pinnedCollapsed ? 'Expand pinned' : 'Collapse pinned';
       pinLabel.innerHTML = `<i class="ph ph-caret-down ws-pin-caret"></i><span>Pinned</span><span class="ws-pin-count">${pinnedItems.length}</span>`;
+      makeKeyboardButton(pinLabel);
+      pinLabel.setAttribute('aria-expanded', String(!pinnedCollapsed));
       pinLabel.addEventListener('click', () => {
         pinnedCollapsed = !pinnedCollapsed;
         renderSidebar();
@@ -7900,12 +7911,20 @@
     });
     // Each “title” of a dropped thread shows as a link to it (its history file sits in the thread's folder).
     const markedRefs = refs.reduce((out, r, n) => out.split(`“${r.title}”`).join(`\u0000T${n}\u0000`), marked);
+    let slash = /^\/[a-z]/.test(markedRefs.trimStart());
     const html = mdLite(markedRefs).replace(/\u0000T(\d+)\u0000/g, (_, n) => {
       const r = refs[n], key = r.path.split(/[\\/]/).slice(-2, -1)[0] || '';
       return `<a href="#" class="thr-thread-mention" data-thread-key="${escHtml(key)}" title="Thread: ${escHtml(r.title)}"><i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(r.title)}</span></a>`;
     }).replace(/\u0000I(\d+)\u0000/g, (_, n) => {
       return `<span class="thr-inline-ref">${chatImageReferenceHtml({ path: attachments[n] })}</span>`;
-    }).replace(/\u0000C(\d+)\u0000/g, (_, n) => citeHtml(inlineCites[n])).trim();
+    }).replace(/\u0000C(\d+)\u0000/g, (_, n) => citeHtml(inlineCites[n])).trim()
+      // A leading /command and $skill words show as chips, like in the composer; tags and code are left alone.
+      // ponytail: any lowercase $word counts (catalogs load late); "$HOME"-style env vars stay text.
+      .split(/(<(?:pre|code)\b[\s\S]*?<\/(?:pre|code)>|<[^>]+>)/).map((part, n) => n % 2 ? part
+        : part.replace(/(^|\s)([/$])([a-z][\w:.-]*\w)(?=$|[\s,;!?)])/g, (all, pre, sigil, name) => {
+          if (sigil === '/') { if (!slash) return all; slash = false; } // only the message's first word
+          return `${pre}<span class="thr-inline-ref"><span class="thr-skill-ref"><i class="ph ${sigil === '$' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${sigil}${name}</span></span></span>`;
+        })).join('');
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
   }
   const _pendingMsgs = new Map(); // chat tab id -> { text, at }: sent, not in the transcript yet
@@ -9330,7 +9349,7 @@
       if (ev.error) noteChatError(t, `${name}: ${ev.error}`);
       syncTabAgentIcon(t);
       // Died mid-turn (a crash): the turn is over; redraw so its "Interrupted" line shows, and the next message restarts it.
-      if (ev.midTurn) { t.chat ||= {}; t.chat.interruptedAt = Date.now(); saveState(); _turns.delete(t.id); _pendingMsgs.delete(t.id); _flowSig = ''; if (curChat() === t) refreshThreadFlow(t); }
+      if (ev.midTurn) { markChatInterrupted(t, 'crash'); _turns.delete(t.id); _pendingMsgs.delete(t.id); _flowSig = ''; if (curChat() === t) refreshThreadFlow(t); }
     }
     if (curChat() === t) { syncWorking(t); syncThreadComposer(t); syncSendBtn(); }
     else syncTabAgentIcon(t);
@@ -10811,6 +10830,8 @@
       const file = references.get(part), lineStart = !at || input.value[at - 1] === '\n';
       at += part.length;
       if (!file) return md ? mdInputHtml(part, lineStart) : chatDraftTextHtml(part);
+      if (file.skill) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-skill-ref" tabindex="${tabIndex}"${file.desc ? ` title="${escHtml(file.desc)}"` : ''}>`
+        + `<i class="ph ${file.skill === 'skill' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
         + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
@@ -11356,6 +11377,10 @@
     if (c.kind !== 'at') {
       const next = thrInput.value[end];
       insert = (c.kind === 'skill' || it.skill ? '$' : '/') + it.name;
+      // A chip in the composer, like an @ mention (at: sent as typed). ponytail: matched by text, so "$x" also chips inside a later-typed "$xy".
+      if (!_chatFiles.some(f => f.mention === insert)) {
+        _chatFiles.push({ at: true, skill: insert[0] === '$' || it.custom || it.skill ? 'skill' : 'command', mention: insert, name: insert, desc: it.description || '' });
+      }
       if (next === ' ' || next === '\t') { insert += next; end++; }
       else if (!next || !/^[,;!?)}\]]$/.test(next)) insert += ' ';
     } else {
@@ -12030,11 +12055,15 @@
       .then(() => previous.remove()).catch(() => previous.remove());
     next.animate([{ opacity: 0, transform: 'scale(.8)' }, { opacity: 1, transform: 'scale(1)' }], options);
   }
-  function stopChatTurn(c) {
-    c.chat ||= { createdAt: Date.now() };
-    c.chat.interruptedAt = Date.now();
-    (c.chat.interruptions ||= []).push({ at: c.chat.interruptedAt });
+  // A turn ended early. why: 'user' (Stop), 'crash' (the agent died mid-turn) or 'error' (its error row says so; no line).
+  function markChatInterrupted(tab, why, at = Date.now()) {
+    tab.chat ||= { createdAt: Date.now() };
+    tab.chat.interruptedAt = at;
+    (tab.chat.interruptions ||= []).push({ at, why });
     saveState();
+  }
+  function stopChatTurn(c) {
+    markChatInterrupted(c, 'user');
     if (c.chat?.queuedMessages?.length) { c.chat.queuePaused = true; renderChatQueue(c); saveState(); }
     const pending = pendingMessages(c);
     for (const message of pending) message.cancelled = true;
@@ -12982,6 +13011,8 @@
     if (tag === 'BR') return '\n';
     if (tag === 'PRE') return block('```' + (el.matches('.thr-tool-detail') ? 'sh' : el.dataset.lang || '') + '\n' + el.textContent.replace(/\n$/, '') + '\n```');
     if (el.matches('.thr-image-ref[data-path]')) return shellQuote(el.dataset.path);
+    // A citation chip shows one shortened line: copy the full quote, as it was sent.
+    if (el.matches('.thr-cite[title]')) return block(el.title.split('\n').map(l => '> ' + l).join('\n'));
     if (tag === 'STRONG') return `**${kids(el)}**`;
     if (tag === 'EM') return `*${kids(el)}*`;
     if (tag === 'DEL') return `~~${kids(el)}~~`;
@@ -13276,12 +13307,14 @@
     if (!flow) return;
     flow.querySelector('.thr-continue')?.remove();
     // Keep locally stopped turns even after the active Continue state is cleared.
-    const interruptions = [...(tab.chat?.interruptions || [])];
-    if (tab.chat?.interruptedAt && !interruptions.some(item => item.at === tab.chat.interruptedAt)) interruptions.push({ at: tab.chat.interruptedAt });
+    const all = tab.chat?.interruptions || [];
+    // An error's own row already says how the turn ended: no "Interrupted" line under it.
+    const interruptions = all.filter(item => item.why !== 'error');
+    if (tab.chat?.interruptedAt && !all.some(item => item.at === tab.chat.interruptedAt)) interruptions.push({ at: tab.chat.interruptedAt });
     const prompts = interruptions.length ? [...flow.querySelectorAll(':is(.thr-msg.user, .thr-resumed, .thr-merge-status)[data-ts]')] : [];
     // Where each interruption row belongs, ignoring the rows already shown (placed by an earlier call).
     const want = [];
-    for (const { at, promptTs } of interruptions.sort((a, b) => a.at - b.at)) {
+    for (const { at, promptTs, why } of interruptions.sort((a, b) => a.at - b.at)) {
       const next = prompts.find(el => Number(el.dataset.ts) > Math.max(at, promptTs || 0));
       let anchor = next;
       // A model header introduces the next prompt. Keep the previous turn's
@@ -13295,7 +13328,7 @@
       // An error row between them (the stopped turn's) doesn't make the transcript's "Interrupted" line a different stop.
       while (previous?.matches('.thr-interruption-status, .thr-chat-error')) previous = previous.previousElementSibling;
       if (previous?.matches('.thr-status-line:not(.thr-resumed, .thr-merge-status)')) continue;
-      want.push({ at, anchor });
+      want.push({ at, anchor, why });
     }
     // Runs every poll tick: leave the rows alone when they are already in place, since
     // removing and re-adding them re-lays out the whole transcript.
@@ -13306,12 +13339,14 @@
       return;
     }
     shown.forEach(el => el.remove());
-    for (const { at, anchor } of want) {
+    for (const { at, anchor, why } of want) {
       const status = document.createElement('div');
       status.className = 'thr-status-line thr-interruption-status';
       status.setAttribute('role', 'status');
       status.dataset.interruptedAt = at;
-      status.innerHTML = '<i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span><span class="thr-status-detail">· Generation stopped</span>';
+      // Same wording as the transcript's own line, so it reads the same before and after the transcript catches up.
+      const detail = why === 'crash' ? 'The agent exited unexpectedly. Send a message to continue' : 'Stopped by you';
+      status.innerHTML = `<i class="ph ph-stop-circle" aria-hidden="true"></i><span class="thr-status-title">Interrupted</span><span class="thr-status-detail">· ${detail}</span>`;
       if (anchor) anchor.before(status); else flow.insertBefore(status, flow.querySelector(':scope > :is(.thr-working, .thr-queue)'));
     }
     if (surface === thrPage && curChat() === tab) syncSendBtn();
@@ -13343,7 +13378,7 @@
     if (!tab) return;
     tab.chat ||= { createdAt: Date.now() };
     const errors = tab.chat.errors ||= [], last = errors.at(-1), at = Date.now();
-    tab.chat.interruptedAt = at;
+    markChatInterrupted(tab, 'error', at);
     if (!last || last.message !== message || at - last.at > 2000) errors.push({ at, message: String(message) });
     _flowSig = '';
     const surface = curChat() === tab ? thrPage : tab.el?.querySelector('.thr-snapshot');
@@ -14934,6 +14969,8 @@
   const promptIconFile = document.getElementById('prompt-icon-file');
   const promptIconGlyph = document.getElementById('prompt-icon-glyph');
   const promptIconPlaceholder = document.getElementById('prompt-icon-placeholder');
+  makeKeyboardButton(promptIconBtn, 'Set workspace icon');
+  makeKeyboardButton(promptIconClear, 'Remove icon');
 
   // A Lucide icon ref: { lucide: name, cp: codepoint } (the codepoint renders it without loading the icon list).
   const isLucideIcon = v => !!v && typeof v === 'object' && typeof v.lucide === 'string' && Number.isInteger(v.cp);
@@ -14990,14 +15027,19 @@
     if (typeof opts === 'function') { callback = opts; opts = {}; }
     promptLabel.textContent = label;
     promptInput.value = value;
+    // opts.required: OK stays disabled while the field is blank, instead of closing and dropping the input.
+    const syncRequired = () => { promptOk.disabled = !!opts.required && !promptInput.value.trim(); };
+    promptInput.toggleAttribute('aria-required', !!opts.required);
+    promptInput.oninput = syncRequired;
+    syncRequired();
 
     // Color swatches (last one opens a Coloris picker for any color)
     let selectedColor = '';
     let colorisInput = null;
     const customSwatch = promptColors.querySelector('.prompt-swatch-custom');
     const setActiveSwatch = (el) => {
-      promptSwatches.forEach(x => x.classList.remove('active'));
-      if (el) el.classList.add('active');
+      promptSwatches.forEach(x => { x.classList.remove('active'); x.setAttribute('aria-pressed', 'false'); });
+      if (el) { el.classList.add('active'); el.setAttribute('aria-pressed', 'true'); }
     };
     if (opts.color !== undefined) {
       promptColors.style.display = 'block';
@@ -15006,6 +15048,7 @@
       promptSwatches.forEach(s => {
         if (s === customSwatch) return;
         s.classList.toggle('active', s.dataset.color === selectedColor);
+        s.setAttribute('aria-pressed', String(s.dataset.color === selectedColor));
         s.onclick = () => {
           selectedColor = s.dataset.color;
           setActiveSwatch(s);
@@ -15099,6 +15142,9 @@
       promptOk.onclick = null;
       promptCancel.onclick = null;
       promptInput.onkeydown = null;
+      promptInput.oninput = null;
+      promptOk.disabled = false;
+      promptOverlay.onkeydown = null;
       promptOverlay.onclick = null;
       promptSwatches.forEach(s => { s.onclick = null; });
       closeIconPicker();
@@ -15110,6 +15156,7 @@
     };
 
     const submit = () => {
+      if (promptOk.disabled) return;
       const val = promptInput.value;
       close();
       callback(val, selectedColor, selectedIcon);
@@ -15122,6 +15169,8 @@
       if (e.key === 'Enter') submit();
       if (e.key === 'Escape') close();
     };
+    // Escape also closes when focus is on a swatch or the icon button, not only the input.
+    promptOverlay.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
     promptOverlay.onclick = e => { if (e.target === promptOverlay) close(); };
   }
 
@@ -15907,9 +15956,9 @@
     }));
     items.push({
       label: 'New snippet…', meta: '', icon: 'ph-plus', pin: true,
-      run: () => showPrompt('Snippet name', '', {}, name => {
+      run: () => showPrompt('Snippet name', '', { required: true }, name => {
         if (!name.trim()) return;
-        showPrompt('Command to insert', '', {}, cmd => {
+        showPrompt('Command to insert', '', { required: true }, cmd => {
           if (!cmd) return;
           list.push({ name: name.trim(), cmd });
           saveSnippets(list);
@@ -15931,7 +15980,7 @@
       label: 'Choose folder…', icon: 'ph-folder-plus', always: true,
       run: async () => {
         if (!window.electronAPI?.selectDirectory) {
-          showPrompt('Project folder path', '', value => { if (value.trim()) start(value.trim()); });
+          showPrompt('Project folder path', '', { required: true }, value => { if (value.trim()) start(value.trim()); });
           return;
         }
         try {
@@ -16740,10 +16789,12 @@
       const key = document.createElement('span');
       key.className = 'shortcut-key' + (!sc.key ? ' empty' : '');
       key.textContent = combo;
+      makeKeyboardButton(key, `Change shortcut for ${label}`);
       key.addEventListener('click', () => startRecording(item, key, action));
       const resetBtn = document.createElement('span');
       resetBtn.className = 'shortcut-reset';
       resetBtn.title = 'Reset to default';
+      makeKeyboardButton(resetBtn);
       resetBtn.innerHTML = '<i class="ph ph-arrow-u-up-left"></i>';
       const defaultSc = DEFAULT_SHORTCUTS[action];
       resetBtn.addEventListener('click', () => {
@@ -17054,8 +17105,9 @@
     + `<button type="button" class="prov-icon-btn" data-act="arg-remove" aria-label="Remove argument ${i + 1}" title="Remove"><i class="ph ph-x" aria-hidden="true"></i></button></div>`;
   // One variable: a card with its name (and remove) above its value (and the sensitive toggle, which hides it).
   const provVarHtml = (i, k = '', v = '', secret = false) => `<div class="prov-item prov-var" role="listitem">`
-    + `<input type="text" class="prov-input" data-f="envk-${i}" value="${escHtml(k)}" placeholder="VARIABLE_NAME" spellcheck="false" autocomplete="off" aria-label="Variable name ${i + 1}"${k && !PROV_ENV_NAME.test(k) ? ' aria-invalid="true"' : ''}>`
+    + `<input type="text" class="prov-input" data-f="envk-${i}" value="${escHtml(k)}" placeholder="VARIABLE_NAME" spellcheck="false" autocomplete="off" aria-label="Variable name ${i + 1}" aria-describedby="prov-envk-err-${i}"${k && !PROV_ENV_NAME.test(k) ? ' aria-invalid="true"' : ''}>`
     + `<button type="button" class="prov-icon-btn" data-act="env-remove" aria-label="Remove variable ${escHtml(k) || i + 1}" title="Remove"><i class="ph ph-x" aria-hidden="true"></i></button>`
+    + `<p class="prov-desc prov-err" id="prov-envk-err-${i}"${k && !PROV_ENV_NAME.test(k) ? '' : ' hidden'}>Use letters, digits and _, not starting with a digit</p>`
     + `<input type="${secret ? 'password' : 'text'}" class="prov-input" data-f="envv-${i}" value="${escHtml(v)}" placeholder="value" spellcheck="false" autocomplete="off" aria-label="Variable value ${i + 1}">`
     + `<button type="button" class="prov-icon-btn prov-secret" data-act="env-secret" aria-pressed="${secret}" aria-label="Sensitive value" title="${secret ? 'Sensitive: hidden. Click to show' : 'Mark as sensitive'}"><i class="ph ${secret ? 'ph-lock-simple' : 'ph-lock-simple-open'}" aria-hidden="true"></i></button></div>`;
   function drawProviderForm(focus) {
@@ -17127,7 +17179,8 @@
       if (!e.target.dataset.f?.startsWith('envk-')) return;
       const name = e.target.value.trim(), bad = !!name && !PROV_ENV_NAME.test(name);
       if (bad) e.target.setAttribute('aria-invalid', 'true'); else e.target.removeAttribute('aria-invalid');
-      e.target.title = bad ? 'Use letters, digits and _, not starting with a digit' : '';
+      const err = document.getElementById(e.target.getAttribute('aria-describedby'));
+      if (err) err.hidden = !bad;
     });
     // Enter in an argument adds the next one.
     panel?.addEventListener('keydown', e => {

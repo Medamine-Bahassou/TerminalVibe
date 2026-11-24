@@ -258,30 +258,30 @@
 
   <!-- Prompt modal -->
   <div id="prompt-overlay">
-    <div id="prompt-modal">
+    <div id="prompt-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-label">
       <div id="prompt-label"></div>
       <div id="prompt-input-row">
         <div id="prompt-icon-btn" style="display:none" title="Set workspace icon">
-          <i class="ph ph-image" id="prompt-icon-placeholder"></i>
+          <i class="ph ph-image" id="prompt-icon-placeholder" aria-hidden="true"></i>
           <img id="prompt-icon-img" alt="" draggable="false" />
           <i class="ph" id="prompt-icon-glyph" aria-hidden="true"></i>
-          <span id="prompt-icon-clear" title="Remove icon"><i class="ph ph-x"></i></span>
+          <span id="prompt-icon-clear" title="Remove icon"><i class="ph ph-x" aria-hidden="true"></i></span>
         </div>
-        <input id="prompt-input" type="text" spellcheck="false" />
+        <input id="prompt-input" type="text" spellcheck="false" aria-labelledby="prompt-label" />
       </div>
       <input type="file" id="prompt-icon-file" accept="image/*" style="display:none" />
       <div id="prompt-colors" style="display:none">
         <div class="prompt-colors-label">Tab color</div>
         <div class="prompt-colors-row">
-          <div class="prompt-swatch active" data-color="" title="None"><span>✕</span></div>
-          <div class="prompt-swatch" data-color="#f38ba8" title="Red" style="background:#f38ba8"></div>
-          <div class="prompt-swatch" data-color="#fab387" title="Orange" style="background:#fab387"></div>
-          <div class="prompt-swatch" data-color="#f9e2af" title="Yellow" style="background:#f9e2af"></div>
-          <div class="prompt-swatch" data-color="#a6e3a1" title="Green" style="background:#a6e3a1"></div>
-          <div class="prompt-swatch" data-color="#89b4fa" title="Blue" style="background:#89b4fa"></div>
-          <div class="prompt-swatch" data-color="#cba6f7" title="Purple" style="background:#cba6f7"></div>
-          <div class="prompt-swatch" data-color="#f5c2e7" title="Pink" style="background:#f5c2e7"></div>
-          <div class="prompt-swatch prompt-swatch-custom" data-color="" title="Custom color…"><span>+</span></div>
+          <button type="button" class="prompt-swatch active" data-color="" title="None" aria-label="None"><span aria-hidden="true">✕</span></button>
+          <button type="button" class="prompt-swatch" data-color="#f38ba8" title="Red" aria-label="Red" style="background:#f38ba8"></button>
+          <button type="button" class="prompt-swatch" data-color="#fab387" title="Orange" aria-label="Orange" style="background:#fab387"></button>
+          <button type="button" class="prompt-swatch" data-color="#f9e2af" title="Yellow" aria-label="Yellow" style="background:#f9e2af"></button>
+          <button type="button" class="prompt-swatch" data-color="#a6e3a1" title="Green" aria-label="Green" style="background:#a6e3a1"></button>
+          <button type="button" class="prompt-swatch" data-color="#89b4fa" title="Blue" aria-label="Blue" style="background:#89b4fa"></button>
+          <button type="button" class="prompt-swatch" data-color="#cba6f7" title="Purple" aria-label="Purple" style="background:#cba6f7"></button>
+          <button type="button" class="prompt-swatch" data-color="#f5c2e7" title="Pink" aria-label="Pink" style="background:#f5c2e7"></button>
+          <button type="button" class="prompt-swatch prompt-swatch-custom" data-color="" title="Custom color…" aria-label="Custom color…"><span aria-hidden="true">+</span></button>
         </div>
       </div>
       <div class="prompt-actions">
