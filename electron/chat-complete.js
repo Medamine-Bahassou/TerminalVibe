@@ -39,10 +39,11 @@ async function listFiles(cwd) {
 // A command file's description: frontmatter `description:`, else its first non-empty line.
 function describe(file) {
   let text = '';
-  try { text = fs.readFileSync(file, 'utf8').slice(0, 4000); } catch { return ''; }
+  // CRLF files (written on Windows) too: normalize before matching the frontmatter.
+  try { text = fs.readFileSync(file, 'utf8').slice(0, 4000).replace(/\r\n?/g, '\n'); } catch { return ''; }
   const front = text.match(/^---\n([\s\S]*?)\n---/);
   const d = front?.[1].match(/^description:\s*["']?(.*?)["']?\s*$/m)?.[1];
-  return (d || text.replace(/^---\n[\s\S]*?\n---/, '').split('\n').find(l => l.trim()) || '').replace(/^#+\s*/, '').trim().slice(0, 120);
+  return (d || text.replace(/^---\n[\s\S]*?\n---/, '').split('\n').find(l => l.trim()) || '').replace(/^#+\s*/, '').trim().slice(0, 1024);
 }
 // *.md under a folder as "a:b" names (sub-folders become namespaces).
 function mdCommands(dir, prefix = '') {
@@ -310,7 +311,7 @@ if (require.main === module) {
   fs.writeFileSync(path.join(project, 'src', 'lib', 'a.js'), '');
   fs.writeFileSync(path.join(project, 'node_modules', 'x', 'b.js'), '');
   fs.mkdirSync(path.join(home, '.claude', 'commands', 'git'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.claude', 'commands', 'git', 'ship.md'), '---\ndescription: Ship it\n---\nDo the thing');
+  fs.writeFileSync(path.join(home, '.claude', 'commands', 'git', 'ship.md'), '---\r\ndescription: Ship it\r\n---\r\nDo the thing'); // CRLF must still read the frontmatter
   fs.mkdirSync(path.join(home, '.claude', 'skills', 'lint'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'skills', 'lint', 'SKILL.md'), '# Lint the code\n');
   const plug = (id, dir) => {

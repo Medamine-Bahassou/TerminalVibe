@@ -280,7 +280,7 @@ has "sendDataModel": true, {"version":"1.0","surfaces":{"<surfaceId>":<data mode
 function guideText() {
   const dir = skillDir();
   if (!dir) return null;
-  const body = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '');
+  const body = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8').replace(/\r\n?/g, '\n').replace(/^---\n[\s\S]*?\n---\n/, '');
   return `Skill directory: ${dir}\nRun its client as: node ${JSON.stringify(path.join(dir, 'scripts', 'tv.js'))} <command> `
     + `(paths like scripts/tv.js below are relative to the skill directory).\n\n${body}`;
 }

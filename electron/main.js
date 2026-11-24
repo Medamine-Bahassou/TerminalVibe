@@ -553,6 +553,12 @@ ipcMain.handle('shell:open-external', (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 // Reveal only (never open): a chat link's target could be an executable.
+// 'dir' | 'file' | null: whether a path typed in a chat message exists (metadata only, never the contents).
+ipcMain.handle('fs:path-kind', async (_e, file) => {
+  if (typeof file !== 'string' || !path.isAbsolute(file)) return null;
+  const st = await fs.promises.stat(path.normalize(file)).catch(() => null);
+  return st ? (st.isDirectory() ? 'dir' : 'file') : null;
+});
 ipcMain.handle('shell:show-in-folder', (_e, file) => {
   if (typeof file === 'string' && path.isAbsolute(file)) shell.showItemInFolder(path.normalize(file));
 });
