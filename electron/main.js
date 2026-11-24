@@ -13,12 +13,12 @@ const { listShells, findShell, resolveExecutable } = require('./shells');
 // A desktop-launched app doesn't get the PATH that ~/.zshrc etc. build, so agent CLIs (opencode, …) are not found.
 // Merge in the PATH of the user's interactive shell.
 if (process.platform !== 'win32') {
-  try {
-    const out = require('child_process').execFileSync(process.env.SHELL || '/bin/sh', ['-ilc', 'echo "__TV_PATH__$PATH"'],
-      { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] });
-    const shellPath = /__TV_PATH__(.*)/.exec(out)?.[1];
-    if (shellPath) process.env.PATH = [...new Set([...shellPath.split(':'), ...(process.env.PATH || '').split(':')])].filter(Boolean).join(':');
-  } catch {}
+  // Async: a slow ~/.zshrc (nvm, oh-my-zsh…) used to block the window from opening for up to 4s.
+  require('child_process').execFile(process.env.SHELL || '/bin/sh', ['-ilc', 'echo "__TV_PATH__$PATH"'],
+    { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] }, (_err, out) => {
+      const shellPath = /__TV_PATH__(.*)/.exec(out || '')?.[1];
+      if (shellPath) process.env.PATH = [...new Set([...shellPath.split(':'), ...(process.env.PATH || '').split(':')])].filter(Boolean).join(':');
+    });
 }
 let agentControl = null;
 const agentRequests = new Map();

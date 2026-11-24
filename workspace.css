@@ -2855,7 +2855,7 @@ body #pulls-modal .pr-label { padding:1px 6px; background:var(--ui-hover); borde
 /* An agent reply that is an error (Claude Code writes "API Error: …" into the transcript): red with the warning icon,
    shown once in place of the separate .thr-chat-error row. */
 #sbr-thread .thr-msg.assistant.thr-msg-error > .thr-msg-text { position:relative; padding-left:22px; color:var(--ui-error); }
-#sbr-thread .thr-msg.assistant.thr-msg-error > .thr-msg-text::before { content:"\e4e2"; position:absolute; left:0; top:0; font-family:"Phosphor"; font-size:14px; line-height:20.8px; }
+#sbr-thread .thr-msg.assistant.thr-msg-error > .thr-msg-text::before { content:"\e077"; /* ph-warning-circle in vendor/lucide/icons.css */ position:absolute; left:0; top:0; font-family:"lucide"; font-size:14px; line-height:20.8px; }
 
 /* ── Issue icon: Phosphor ships no circle-dot, so draw the dot inside ph-circle ── */
 .ph.issue-icon { position:relative; }

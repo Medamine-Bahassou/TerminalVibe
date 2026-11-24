@@ -63,6 +63,11 @@ function listShells(refresh = false) {
 
 // A saved shell may have been uninstalled: null makes the caller use the system default.
 function findShell(id) {
+  // A saved WSL distro doesn't need the slow `wsl -l` scan (it boots the WSL VM) before the first terminal opens.
+  if (!cached && process.platform === 'win32' && id?.startsWith('wsl:')) {
+    const wsl = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wsl.exe');
+    if (fs.existsSync(wsl)) return { id, label: id.slice(4), command: wsl, args: ['-d', id.slice(4)], homeArgs: ['--cd', '~'] };
+  }
   return id ? listShells().find(shell => shell.id === id) || null : null;
 }
 
