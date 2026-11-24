@@ -914,7 +914,7 @@ body #sidebar.expanded .ws-folder-row.drop-below .ws-folder-header { background:
 #skills-list .skill-info { min-width: 0; }
 #skills-list .skill-name { font-size: 13px; font-weight: 500; color: var(--fg); }
 #skills-list .skill-state { font-size: 11px; font-weight: 400; color: var(--muted-text); margin-left: 8px; }
-#skills-list .skill-path { overflow-wrap: anywhere; margin-top: 6px; color: var(--dim-text); font: 11px var(--mono-font); }
+#skills-list .skill-path { white-space: pre-line; overflow-wrap: anywhere; margin-top: 6px; color: var(--dim-text); font: 11px var(--mono-font); }
 #skills-list .skill-action { height: 32px; padding: 0 12px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px !important; color: var(--fg); background: transparent; font: 12px var(--ui-font); cursor: pointer; transition: background-color 150ms, border-color 150ms; }
 #skills-list .skill-action:hover { background: var(--ui-hover); }
 #skills-list .skill-action:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ui-surface), 0 0 0 4px var(--accent); }
