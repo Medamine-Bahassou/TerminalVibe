@@ -12,8 +12,8 @@ const { handleSkillRequest } = require('../electron/skill-http');
   let server;
   try {
     const manager = createSkillManager({ home, env: {} });
-    const get = id => manager.list().find(skill => skill.id === id);
-    assert(manager.list().every(skill => !skill.installed));
+    const get = id => manager.details().find(skill => skill.id === id);
+    assert(manager.details().every(skill => !skill.installed));
     assert.throws(() => manager.setEnabled('../escape', true), /Unknown/);
     assert.throws(() => manager.setEnabled('codex', 'false'), /boolean/);
     manager.setEnabled('claude', false);
@@ -50,7 +50,14 @@ const { handleSkillRequest } = require('../electron/skill-http');
     // A failed source copy never leaves a discoverable partial skill.
     const broken = createSkillManager({ home: path.join(home, 'broken'), env: {}, source: path.join(home, 'missing') });
     assert.throws(() => broken.setEnabled('codex', true));
-    assert(broken.list().every(skill => !skill.installed));
+    assert(broken.details().every(skill => !skill.installed));
+    // The unified row installs and removes the skill for every harness at once.
+    const both = createSkillManager({ home: path.join(home, 'both'), env: {} });
+    assert.equal(both.list().length, 1);
+    assert.equal(both.setEnabled('all', true)[0].enabled, true);
+    assert(both.details().every(skill => skill.enabled));
+    assert.equal(both.setEnabled('all', false)[0].enabled, false);
+    assert(both.details().every(skill => skill.installed && !skill.enabled));
 
     server = http.createServer((req, res) => handleSkillRequest(req, res, manager));
     server.listen(0, '127.0.0.1');

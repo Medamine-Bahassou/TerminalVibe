@@ -54,7 +54,7 @@ async function scanLinux(paneId, ids = []) {
 }
 
 function run(cmd, args) {
-  return new Promise((resolve, reject) => execFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 8000 }, (err, out) => err ? reject(err) : resolve(out)));
+  return new Promise((resolve, reject) => execFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 8000, windowsHide: true }, (err, out) => err ? reject(err) : resolve(out)));
 }
 async function scanMac(paneId) {
   // Two listings: one with environments (to match), one without (clean command lines).

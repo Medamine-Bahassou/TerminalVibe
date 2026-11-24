@@ -11,7 +11,7 @@ const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.next', '
 
 // Files of a folder, relative: git's list when it is a repo (respects .gitignore), else a bounded walk.
 function gitFiles(cwd) {
-  return new Promise(resolve => execFile('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd, timeout: 4000, maxBuffer: 32 << 20 },
+  return new Promise(resolve => execFile('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd, timeout: 4000, maxBuffer: 32 << 20, windowsHide: true },
     (err, out) => resolve(err ? null : out.split('\0').filter(Boolean).slice(0, MAX))));
 }
 async function walkFiles(cwd) {
