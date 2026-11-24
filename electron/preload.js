@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // External links
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   showInFolder: (file) => ipcRenderer.invoke('shell:show-in-folder', file),
+  pathKind: (file) => ipcRenderer.invoke('fs:path-kind', file),
   openInVSCode: (target) => ipcRenderer.invoke('shell:open-in-vscode', target),
   agentSettings: (id, harness) => ipcRenderer.invoke('terminal:agent-settings', id, harness),
   chatFiles: (cwd) => ipcRenderer.invoke('chat:files', cwd),

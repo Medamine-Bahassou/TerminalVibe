@@ -1810,7 +1810,7 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 @media (prefers-reduced-motion:reduce) { #sbr-thread .thr-ultrathink { animation:none; background-size:100% 100%; } }
 #sbr-thread .thr-inline-ref { display:inline-flex; align-items:baseline; vertical-align:baseline; gap:4px; max-width:100%; white-space:nowrap; color:var(--accent); }
 #sbr-thread .thr-inline-ref a { display:inline-flex; align-items:baseline; gap:4px; min-width:0; color:var(--accent); text-decoration:none; cursor:pointer; }
-#sbr-thread .thr-inline-ref a:hover { text-decoration:underline; text-underline-offset:3px; }
+#sbr-thread .thr-inline-ref a:hover > span { text-decoration:underline; text-underline-offset:3px; } /* the text only, not the icon */
 #sbr-thread .thr-cite-ref > span { max-width:min(320px, 44vw); overflow:hidden; text-overflow:ellipsis; vertical-align:bottom; }
 #sbr-thread .thr-cite-ref > i { font-size:13px; }
 #sbr-thread .thr-inline-image-icon { display:inline-flex; align-self:center; width:14px; height:14px; overflow:hidden; background:var(--bg); border-radius:3px !important; }
@@ -3464,5 +3464,33 @@ body #prompt-ok:disabled, body #prompt-ok:disabled:hover { background:var(--acce
 #settings-modal #providers-panel .prov-err[hidden] { display:none; }
 
 /* ── Chat: $skill / /command chips in sent messages (composer chips reuse .thr-at-ref) ── */
+#sbr-thread .thr-msg :is(a.thr-skill-ref, a.thr-at-ref) { text-decoration:none; cursor:pointer; }
 #sbr-thread .thr-skill-ref { display:inline-flex; align-items:baseline; gap:4px; min-width:0; color:var(--accent); }
 #sbr-thread .thr-skill-ref > i { font-size:13px; align-self:center; }
+
+/* ── Running servers: spinner while a (non-silent) load runs: the refresh icon and the first "Checking…" message ── */
+body #servers-dropdown:has(#servers-list[aria-busy="true"]) #servers-refresh i,
+body #servers-dropdown .servers-spin { display:inline-grid; place-items:center; width:1em; height:1em; animation:ts-spin 900ms linear infinite; }
+body #servers-dropdown .servers-message { display:flex; align-items:center; justify-content:center; gap:8px; }
+body #servers-dropdown .servers-spin { color:var(--muted-text); font-size:14px; }
+@media (prefers-reduced-motion: reduce) { body #servers-dropdown :is(#servers-refresh i, .servers-spin) { animation:none; } }
+
+/* ── Chat: skill/command info dialog (a sent chip's click); reuses dialog.gh-login, the description in full ── */
+dialog.skill-info h2 { font-family:var(--mono-font); }
+dialog.skill-info .skill-info-desc { max-height:50vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
+dialog.skill-info .prompt-actions { margin-top:20px; }
+
+/* ── JS-built dialogs (skill info, GitHub sign-in): same enter/leave as the other modals (fade + .96 → 1 scale, 180ms) ── */
+@media (prefers-reduced-motion: no-preference) {
+  body.ui-animations dialog.gh-login {
+    opacity:0; transform:scale(.96);
+    transition:opacity 180ms ease-out, transform 180ms cubic-bezier(.2,.8,.2,1), display 180ms allow-discrete, overlay 180ms allow-discrete;
+  }
+  body.ui-animations dialog.gh-login[open] { opacity:1; transform:scale(1); }
+  body.ui-animations dialog.gh-login::backdrop { opacity:0; transition:opacity 180ms ease-out, display 180ms allow-discrete, overlay 180ms allow-discrete; }
+  body.ui-animations dialog.gh-login[open]::backdrop { opacity:1; }
+  @starting-style {
+    body.ui-animations dialog.gh-login[open] { opacity:0; transform:scale(.96); }
+    body.ui-animations dialog.gh-login[open]::backdrop { opacity:0; }
+  }
+}

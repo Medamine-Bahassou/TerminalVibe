@@ -49,10 +49,10 @@ async function claudeUsage(bin, env) {
   const usage = parseClaudeUsage(res);
   return usage && { ...usage, email };
 }
+const cap = s => s[0].toUpperCase() + s.slice(1);
 function parseClaudeUsage(res) {
   if (!res?.rate_limits_available || !res.rate_limits) return null;
   // The session and weekly windows, then any per-model weekly one (seven_day_opus → "Weekly · Opus").
-  const cap = s => s[0].toUpperCase() + s.slice(1);
   const keys = ['five_hour', 'seven_day', ...Object.keys(res.rate_limits).filter(k => /^seven_day_(opus|sonnet|haiku|fable)$/.test(k))];
   const windows = keys.map(k => {
     const w = res.rate_limits[k];
@@ -101,8 +101,17 @@ function parseAgyUsage(res) {
   (function walk(o, name) {
     if (!o || typeof o !== 'object') return;
     if (Array.isArray(o)) { o.forEach(x => walk(x, name)); return; }
+    if (o.disabled === true) return;
     const own = pick(o, 'display_name', 'displayName', 'label', 'model_name', 'modelName', 'model', 'name');
     if (typeof own === 'string') name = own;
+    // Quota-summary buckets all share a displayName like "Weekly Limit Remaining": name them by bucketId and window,
+    // as t3code does (gemini-* → Gemini, 3p-* → Claude & GPT, one shared pool).
+    if (typeof o.bucketId === 'string') {
+      const id = o.bucketId;
+      const family = /^gemini-(argon|carbon)-/.test(id) ? `Gemini ${cap(id.split('-')[1])}` : id.startsWith('gemini-') ? 'Gemini' : id.startsWith('3p-') ? 'Claude & GPT' : null;
+      const span = o.window === 'weekly' ? 'Weekly' : o.window === '5h' ? 'Session' : own || 'Quota';
+      name = family ? `${family} · ${span}` : `${own || id}`;
+    }
     const frac = pick(o, 'remaining_fraction', 'remainingFraction'), left = pick(o, 'remaining_percentage', 'remainingPercentage');
     const reset = pick(o, 'reset_time', 'resetTime', 'resets_at', 'resetsAt'), secs = pick(o, 'reset_in_seconds', 'resetInSeconds');
     const fraction = number(frac), remaining = number(left);
@@ -113,7 +122,12 @@ function parseAgyUsage(res) {
       const seconds = number(secs);
       windows.set(name, { label: name, used, resetsAt: resetTime(reset) || (seconds != null && seconds >= 0 ? Date.now() + seconds * 1000 : null), mins: null });
     }
-    for (const v of Object.values(o)) walk(v, name);
+    // A models map is keyed by model id ({ models: { 'gpt-5': { quotaInfo, weeklyQuotaInfo } } }): the key names the
+    // child, and the weekly quota is its own window instead of a duplicate of the model's name.
+    for (const [k, v] of Object.entries(o)) {
+      const keyed = v && typeof v === 'object' && !Array.isArray(v) && ('quotaInfo' in v || 'weeklyQuotaInfo' in v) && !pick(v, 'display_name', 'displayName', 'label', 'name');
+      walk(v, keyed ? k : k === 'weeklyQuotaInfo' ? `${name} · Weekly` : name);
+    }
   })(res);
   return windows.size ? { plan: null, windows: [...windows.values()] } : null;
 }
@@ -173,6 +187,14 @@ if (require.main === module) {
   assert.strictEqual(u.windows[0].resetsAt, Date.parse('2030-01-01T00:00:00Z'));
   assert.strictEqual(parseAgyUsage([{ display_name: 'x', remaining_percentage: 40 }]).windows[0].used, 60);
   assert.strictEqual(parseAgyUsage({}), null);
+  const summary = parseAgyUsage({ groups: [{ displayName: 'Limits', buckets: [
+    { bucketId: 'gemini-weekly', window: 'weekly', displayName: 'Weekly Limit Remaining', remainingFraction: 1 },
+    { bucketId: '3p-weekly', window: 'weekly', displayName: 'Weekly Limit Remaining', remainingFraction: 0.4 },
+    { bucketId: '3p-5h', window: '5h', displayName: '5h Limit Remaining', remainingFraction: 0.9 },
+    { bucketId: 'gemini-off', disabled: true, remainingFraction: 0 }] }] });
+  assert.deepStrictEqual(summary.windows.map(w => [w.label, w.used]), [['Gemini · Weekly', 0], ['Claude & GPT · Weekly', 60], ['Claude & GPT · Session', 10]]);
+  const models = parseAgyUsage({ models: { 'gpt-5': { quotaInfo: { remainingFraction: 0.5 }, weeklyQuotaInfo: { remainingFraction: 0.2 } } } });
+  assert.deepStrictEqual(models.windows.map(w => [w.label, w.used]), [['gpt-5', 50], ['gpt-5 · Weekly', 80]]);
   assert.strictEqual(parseAgyUsage({ label: 'Unknown quota', quotaInfo: { resetTime: '2030-01-01T00:00:00Z' } }), null, 'a reset alone must not invent exhausted usage');
   for (const value of [null, '', 'invalid', NaN, Infinity, -1, 101]) {
     assert.strictEqual(parseClaudeUsage({ rate_limits_available: true, rate_limits: { seven_day: { utilization: value } } }), null, 'invalid Claude values must not become zero');

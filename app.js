@@ -7923,7 +7923,13 @@
       .split(/(<(?:pre|code)\b[\s\S]*?<\/(?:pre|code)>|<[^>]+>)/).map((part, n) => n % 2 ? part
         : part.replace(/(^|\s)([/$])([a-z][\w:.-]*\w)(?=$|[\s,;!?)])/g, (all, pre, sigil, name) => {
           if (sigil === '/') { if (!slash) return all; slash = false; } // only the message's first word
-          return `${pre}<span class="thr-inline-ref"><span class="thr-skill-ref"><i class="ph ${sigil === '$' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${sigil}${name}</span></span></span>`;
+          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-skill-ref" data-skill="${name}"><i class="ph ${sigil === '$' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${sigil}${name}</span></a></span>`;
+        })
+        // An @path mention (sent as typed from the composer's @ picker): the same file/folder chip as in the composer.
+        // shortcut: a name without an extension is shown as a folder; stat it if files like "Makefile" look wrong.
+        .replace(/(^|\s)@((?:\.{1,2}|~)?[\w.-]*[\\/][^\s<]*|[\w-]+\.[\w]+)(?=$|[\s,;!?)])/g, (all, pre, p) => {
+          const name = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p, dir = /[\\/]$/.test(p) || !/\.\w+$/.test(name);
+          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-at-ref" data-path="${p}" title="Show ${p} in folder"><i class="ph ${dir ? 'ph-folder' : linkFileIcon(name)}" aria-hidden="true"></i><span>${name}</span></a></span>`;
         })).join('');
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
   }
@@ -9438,6 +9444,15 @@
     }
     const cite = e.target.closest('.thr-cite');
     if (cite) { e.preventDefault(); jumpToCitation({ cite: cite.title }); return; }
+    // Sent-message chips: an @file/@folder reveals it in the file manager, a skill/command shows its description.
+    const atRef = e.target.closest('.thr-msg a.thr-at-ref[data-path]');
+    if (atRef) { e.preventDefault(); window.electronAPI?.showInFolder?.(chatLinkPath(atRef.dataset.path).path); return; }
+    const skillRef = e.target.closest('.thr-msg a.thr-skill-ref[data-skill]');
+    if (skillRef) {
+      e.preventDefault();
+      showSkillInfo(skillRef);
+      return;
+    }
     const lockBtn = e.target.closest('[data-lock-act]');
     if (lockBtn) {
       const ws = curChat(), t = ws && (liveThreadAgent(ws) || ws);
@@ -9461,6 +9476,61 @@
     if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(path)) openClaudeRefViewer(null, { kind: 'file', path, label: path.split(/[\\/]/).pop() }, '');
     else if (/\.(html?|svg)$/i.test(path)) addBrowserTab(wsOf(curChat())?.id, null, path);
     else window.electronAPI?.showInFolder?.(path);
+  });
+  // A sent @path chip is drawn as typed; once on screen, check it exists. A missing path goes back to plain text,
+  // and an existing one gets the right icon (a folder vs. an extensionless file like Makefile).
+  const _pathKinds = new Map(); // absolute path -> Promise<'dir' | 'file' | null>
+  new MutationObserver(() => {
+    if (!window.electronAPI?.pathKind) return;
+    for (const a of thrPage.querySelectorAll('.thr-msg a.thr-at-ref[data-path]:not([data-checked])')) {
+      a.dataset.checked = '1';
+      const abs = chatLinkPath(a.dataset.path).path;
+      if (!_pathKinds.has(abs)) _pathKinds.set(abs, window.electronAPI.pathKind(abs).catch(() => 'file')); // unknown: leave it a chip
+      _pathKinds.get(abs).then(kind => {
+        if (!a.isConnected) return;
+        if (!kind) { (a.closest('.thr-inline-ref') || a).replaceWith('@' + a.dataset.path); return; }
+        const name = a.lastElementChild?.textContent || '';
+        a.querySelector('i').className = `ph ${kind === 'dir' ? 'ph-folder' : linkFileIcon(name)}`;
+      });
+    }
+  }).observe(thrPage, { childList: true, subtree: true });
+  // From whichever skill/command catalog has loaded (they load late, so looked up on use, not at render).
+  const skillDescription = name => [...chatCatalogs.values()].flatMap(c => c.items || []).find(it => it.name === name)?.description || '';
+  // Loads this chat's skill and command lists (as the picker does) when they aren't loaded yet.
+  const loadSkillCatalogs = () => {
+    const ws = curChat(), cwd = ws && chatCwd(ws), harness = ws && chatCompleteHarness(ws);
+    return Promise.allSettled(ws ? ['skill', 'slash'].map(kind => chatCatalog(kind, harness, cwd, ws.id)?.pending).filter(Boolean) : []);
+  };
+  // Clicking a sent skill/command chip: its full description in a dialog (the GitHub sign-in dialog's look).
+  let _skillDialog = null;
+  async function showSkillInfo(ref) {
+    const name = ref.dataset.skill, label = ref.textContent.trim(), command = label.startsWith('/');
+    if (!skillDescription(name)) await loadSkillCatalogs();
+    const desc = skillDescription(name);
+    const d = _skillDialog ||= document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'gh-login skill-info' }));
+    d.setAttribute('aria-labelledby', 'skill-info-title');
+    d.innerHTML = `<div class="gh-login-icon"><i class="ph ${command ? 'ph-terminal' : 'ph-lightning'}" aria-hidden="true"></i></div>
+      <h2 id="skill-info-title">${escHtml(label)}</h2>
+      <p class="gh-login-text skill-info-desc">${escHtml(desc || `No description found for this ${command ? 'command' : 'skill'}.`)}</p>
+      <div class="prompt-actions"><button type="button" class="skill-info-close">Close</button></div>`;
+    d.querySelector('.skill-info-close').onclick = () => d.close();
+    d.onclick = e => { if (e.target === d) d.close(); }; // a click on the backdrop
+    d.showModal();
+    d.querySelector('.skill-info-close').focus();
+  }
+  // Hovering a sent skill chip shows its description: set here, before the app's tooltip handler on document reads data-tip.
+  onThreadPage('mouseover', e => {
+    const ref = e.target.closest?.('.thr-msg a.thr-skill-ref[data-skill]');
+    if (!ref || ref.dataset.tip) return;
+    const setTip = () => {
+      const desc = skillDescription(ref.dataset.skill);
+      if (desc) { ref.dataset.tip = desc; ref.setAttribute('data-tip-wrap', ''); }
+      return desc;
+    };
+    if (setTip()) return;
+    // Not loaded yet (no picker opened since launch): load this chat's skills and commands, as the picker does,
+    // then replay the hover so the tooltip opens without leaving and re-entering.
+    loadSkillCatalogs().then(() => { if (setTip() && ref.matches(':hover')) ref.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); });
   });
   // Right-click in the chat: a link, an image, or a message (its text).
   onThreadPage('contextmenu', e => {
@@ -13530,7 +13600,8 @@
     // A sent message is in the transcript: the user message at or after it was sent, starting with its text.
     const inTranscript = (text, at, afterTs = 0, beforeTs = Infinity) => {
       // (Hidden notes, e.g. a dropped thread's, never reach the transcript's text.)
-      const head = text.replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+      const head = text.replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 60)
+        .replace(/^[/$]/, ''); // a sent "/skill" can come back as "$skill" in the transcript
       for (const segment of hist) {
         const match = segment.items.find(m => m.role === 'user' && !m.stopped && (Date.parse(m.ts) || Infinity) >= at - 5000
           && (!afterTs || Date.parse(m.ts) > afterTs) && (beforeTs === Infinity || Date.parse(m.ts) < beforeTs)
@@ -17648,9 +17719,10 @@
     if (!button || !dropdown || !list || !refresh) return;
     const POLL_MS = 3000;
     let loading = false, hasResult = false, signature = null, poll = null;
-    const message = text => {
+    const message = (text, busy) => {
       const el = document.createElement('p');
       el.className = 'servers-message'; el.textContent = text;
+      if (busy) el.prepend(Object.assign(document.createElement('i'), { className: 'ph ph-circle-notch servers-spin' }));
       list.replaceChildren(el);
     };
     const position = () => {
@@ -17682,7 +17754,7 @@
       if (loading) return;
       loading = true;
       if (!silent) { refresh.disabled = true; refresh.title = 'Refresh servers'; list.setAttribute('aria-busy', 'true'); }
-      if (!hasResult) message('Checking listening ports…');
+      if (!hasResult) message('Checking listening ports…', true);
       try {
         let servers;
         if (window.electronAPI?.listRunningServers) servers = await window.electronAPI.listRunningServers();
