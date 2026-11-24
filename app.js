@@ -8158,6 +8158,12 @@
   function syncWorking(ws, surface = thrPage) {
     const flow = surface.querySelector('.thr-flow');
     const w = chatWorking(ws);
+    // A finished turn may have opened or merged a PR: refetch now instead of waiting out the 2-minute cache.
+    if (ws._prWasWorking && !w) {
+      const cwd = chatCwd(ws);
+      if (cwd && window.electronAPI?.gitPullRequests && !_chatPullRequests.get(cwd)?.pending) { _chatPullRequests.delete(cwd); void loadChatPullRequests(cwd); }
+    }
+    ws._prWasWorking = !!w;
     // The agent's question: a tray on the composer's top edge (like the side chats tray), one row per choice.
     const askEl = threadPart(surface, 'ask');
     if (askEl) {
