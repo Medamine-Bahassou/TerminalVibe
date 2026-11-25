@@ -11205,7 +11205,7 @@
       if (file.skill) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-skill-ref" tabindex="${tabIndex}">`
         + `<i class="ph ${file.skill === 'skill' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${escHtml(file.name.replace(/^\$/, ''))}</span></a></span>`;
       if (file.url) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-url-ref" tabindex="${tabIndex}" title="${escHtml(file.url)}">`
-        + `${linkIconHtml(file.url)}<span>${escHtml(file.url.replace(/^https?:\/\//i, ''))}</span></a></span>`;
+        + `${linkIconHtml(file.url)}<span>${escHtml(file.url)}</span></a></span>`;
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
         + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
@@ -14521,7 +14521,8 @@
         if (m.role === 'user' && (m.resume || resumed.has(m.ts))) return resumeStatusHtml(Date.parse(m.ts) || 0);
         const mergePr = m.role === 'user' && mergePrNumber(m.text);
         if (mergePr) return mergeStatusHtml(mergePr, Date.parse(m.ts) || 0, false, m.stopped);
-        const cls = `thr-msg ${m.role}`;
+        const quotaError = seg.harness === 'antigravity' && m.role === 'assistant' && /^\s*(?:⚠\uFE0F?\s*)?(?:(?:individual|weekly|session|daily)\s+)?quota reached\b/i.test(m.text || '');
+        const cls = `thr-msg ${m.role}${quotaError ? ' thr-msg-error' : ''}`;
         // A prompt's image paths render as images and its context notes as chips: copy only the typed text.
         texts.set(key, m.role !== 'user' ? m.text : String(m.text)
           .replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '')
@@ -14539,7 +14540,7 @@
         const imgs = threadImagesHtml(m.images?.length ? m.images : user?.paths || []);
         return m.role === 'user'
           ? `<div class="${cls}" data-key="${key}" data-ts="${Date.parse(m.ts) || 0}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : (m.steered || t?.steered?.includes(m.ts)) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
-          : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(m.text)}</div>${extra}${actions}</div>`;
+          : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(quotaError ? String(m.text).replace(/^\s*⚠\uFE0F?\s*/, '') : m.text)}</div>${extra}${actions}</div>`;
       };
       // The agent's thinking: "Thought" with a one-line peek, opening to the whole text.
       const thoughtHtml = (m, key) => `<details class="thr-thought" data-key="${key}"><summary><i class="ph ph-brain" aria-hidden="true"></i>`
