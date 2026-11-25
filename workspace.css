@@ -1750,13 +1750,13 @@ body.ui-animations.resizing #threads-sidebar { transition:none; }
 /* Hidden chat tabs keep their layout, so switching back re-lays out nothing: display:none would throw the
    transcript's layout away (100–300ms per switch). content-visibility skips their rendering while hidden.
    The live page stays shown too: it only becomes a snapshot mid-switch. Their absolute slot takes no pane space. */
-.term-slot.chat-tab:not(.chat-cli)[style*="display: none"] {
+.term-slot.chat-tab:not(.chat-cli, .chat-panel-on)[style*="display: none"] {
   display:block !important;
   visibility:hidden;
   pointer-events:none;
   content-visibility:hidden;
 }
-.term-slot.chat-tab[style*="display: none"] > :not(.sbr-page) {
+.term-slot.chat-tab:not(.chat-panel-on)[style*="display: none"] > :not(.sbr-page) {
   display:none !important;
 }
 
@@ -2492,7 +2492,7 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 
 /* A chat's auxiliary shell is a split within the pane, without a tab. */
 #pane-area .term-slot.chat-bottom-open:not(.chat-cli) > #sbr-thread,
-.term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { bottom:var(--chat-terminal-height, 35%); height:auto; }
+.term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { bottom:var(--chat-terminal-height, 35%); height:calc(100% - var(--chat-terminal-height, 35%) - var(--chat-strip-height, 0px)); }
 .chat-bottom-terminal { position:absolute; bottom:0; left:0; right:0; height:var(--chat-terminal-height, 35%); z-index:3; display:flex; flex-direction:column; border-top:1px solid var(--border); background:var(--bg); }
 .chat-bottom-terminal[hidden], .chat-cli > .chat-bottom-terminal { display:none; }
 .chat-bottom-sash { position:absolute; inset:-5px 0 auto; height:9px; cursor:row-resize; touch-action:none; z-index:1; }
@@ -3045,8 +3045,6 @@ img.ws-proc-icon { object-fit:contain; }
 .term-slot.chat-panel-host { right:var(--chat-panel-width, 40%); }
 .term-slot.chat-panel-guest { left:calc(100% - var(--chat-panel-width, 40%)); border-left:1px solid var(--ui-line); }
 .tg-tab.tg-in-panel { display:none !important; }
-/* The thread half stays visible while you type in the side chat (it's then the hidden "warm" slot of the rule above). */
-.term-slot.chat-panel-on.chat-tab:not(.chat-cli)[style*="display: none"] { visibility:visible; pointer-events:auto; content-visibility:visible; }
 /* Its left edge resizes it (a 6px grab area over the hairline; the hairline turns accent while dragged or focused). */
 .term-slot > .chat-panel-sash { display:none; }
 .term-slot.chat-panel-guest > .chat-panel-sash { display:block; position:absolute; top:0; bottom:0; left:0; width:6px; z-index:20; cursor:col-resize; touch-action:none; outline:none; }
@@ -3055,8 +3053,6 @@ img.ws-proc-icon { object-fit:contain; }
 body.chat-panel-resizing { cursor:col-resize; user-select:none; }
 body.chat-panel-resizing webview, body.chat-panel-resizing iframe { pointer-events:none; }
 @media (prefers-reduced-motion: reduce) { .term-slot.chat-panel-guest > .chat-panel-sash::after { transition:none; } }
-/* …and the side chat half keeps its resize sash when it's that warm slot (the rule above hides all but the snapshot). */
-.term-slot.chat-panel-guest.chat-tab[style*="display: none"] > .chat-panel-sash { display:block !important; }
 
 /* ── Chat at narrow widths (a side chat panel, a thin split) ── */
 /* The top bar: "Side chat of" and the "Use as context" label give way to their icons (tooltips keep the words),
@@ -3643,7 +3639,8 @@ body .chat-file-panel .cfp-empty-btn { height:32px; padding:0 12px; background:t
    top; its history and bars start below it. Reuses the file panel's tab styles (.chat-file-panel .cfp-tab). */
 body .term-slot > .chat-file-panel.cmb-strip { display:none; left:0; right:0; bottom:auto; width:auto; height:36px; z-index:6; border-left:0; }
 body .term-slot.cmb-on > .chat-file-panel.cmb-strip { display:flex; }
-#pane-area .term-slot.cmb-on > #sbr-thread, .term-slot.cmb-on > .thr-snapshot { top:36px; height:auto; } /* not 100%: that pushed the composer 36px past the bottom */
+.term-slot.cmb-on { --chat-strip-height:36px; }
+#pane-area .term-slot.cmb-on > #sbr-thread, .term-slot.cmb-on > .thr-snapshot { top:36px; height:calc(100% - 36px); }
 .chat-file-panel .cfp-tab.cmb-side + .cfp-tab:not(.cmb-side) { margin-left:5px; } /* side chats, then files */
 
 /* Right panel hide button (toggleChatRightPanel, Ctrl+Alt+B): at the tab strip's right end, like the Ctrl+J terminal's */
@@ -3656,5 +3653,3 @@ body .chat-file-panel .cfp-tab { flex:none; }
 /* Same hidden scrollbar as the terminal tab bar (beats the global thin scrollbar in style.css). */
 :is(.chat-file-panel .cfp-tabs, .chat-bottom-header .chat-bottom-tabs) { scrollbar-width:none !important; scrollbar-color:transparent transparent !important; }
 :is(.chat-file-panel .cfp-tabs, .chat-bottom-header .chat-bottom-tabs)::-webkit-scrollbar { display:none !important; width:0 !important; height:0 !important; }
-/* The thread half keeps its Ctrl+J terminal while the side chat has focus (it is then the hidden warm slot). */
-.term-slot.chat-panel-host.chat-tab[style*="display: none"] > .chat-bottom-terminal:not([hidden]) { display:flex !important; }

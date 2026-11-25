@@ -8253,12 +8253,17 @@
     if (!e.repeat) toggleChatBottomTerminal(owner);
   }, true);
   // Ctrl+Alt+B: hide or bring back the thread's right panel (toggleChatRightPanel).
+  let _rightPanelShortcutAt = -Infinity;
   document.addEventListener('keydown', e => {
     if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey || e.code !== 'KeyB') return;
     const t = activeTerminal();
     if (!chatRightPanelHost(t) || !t.el?.offsetParent) return;
     e.preventDefault(); e.stopImmediatePropagation();
-    if (!e.repeat) toggleChatRightPanel(t);
+    const now = performance.now();
+    // Let the surface switch and deferred focus settle before accepting another press.
+    if (e.repeat || now - _rightPanelShortcutAt < 180) return;
+    _rightPanelShortcutAt = now;
+    toggleChatRightPanel(t);
   }, true);
   // An agent finished its turn: update the chat now, not on the next poll.
   function chatAgentIdle(entry) {
@@ -8564,9 +8569,12 @@
     host._rightHidden = false;
     const group = findGroupContainingTerm(ws.layout, host.id);
     const guest = group?.terminals.find(g => g.id === host._hiddenGuest && chatPanelHost(g, group) === host);
-    if (guest) { showSideChatTab(host, guest.id); return; }
-    const side = !host._filePanel?.isConnected && group && chatPanelSides(host, group)[0];
-    if (side) showSideChatTab(host, side.id);
+    const side = guest || (!host._filePanel?.isConnected && group && chatPanelSides(host, group)[0]);
+    if (side) {
+      // Revealing the panel keeps the main transcript and composer mounted and focused.
+      host._panelGuest = side.id;
+      syncThreadPanel();
+    }
     else if (host._filePanel?.isConnected) syncChatPanels(ws);
     else zoomBadge('Nothing open in the right panel');
   }
@@ -9056,6 +9064,7 @@
         if (flow.inert) {
           flow.inert = false;
         }
+        if (!flow.dataset.seen) refreshThreadFlow(sibling, existing);
         continue;
       }
       const snap = createThreadSnapshot(sibling);
@@ -10107,7 +10116,7 @@
     const del = e.target.closest('.thr-side-del');
     if (del) { const t = findChatThread(del.dataset.delSide); if (t) confirmDeleteThread(t, undefined, 'side chat'); return; }
     const t = findChatThread(e.target.closest('.thr-side-chip')?.dataset.side);
-    if (!t) return;
+    if (!t || chat?._panelGuest === t.id) return;
     // Opening one folds the tray first (the thread half keeps just the bubble; its snapshot is taken from this state).
     try { localStorage.removeItem('tv-side-chats-expanded'); } catch {}
     if (chat) syncThreadComposer(chat);
@@ -14238,7 +14247,8 @@
     const segs = threadSegments(ws);
     const current = () => flow.parentElement === surface && ws.chat?.storeId === storeId
       && (surface === thrPage ? curChat() === ws : surface.isConnected && surface.parentElement === ws.el
-        && ws.el.style.display !== 'none' && ws.el.closest('.ws-pane-container')?.style.display !== 'none');
+        && (ws.el.style.display !== 'none' || ws.el.classList.contains('chat-panel-on'))
+        && ws.el.closest('.ws-pane-container')?.style.display !== 'none');
     let hist = [], note = '';
     if (segs.length && !api?.threadHistory) note = 'The history preview needs the desktop app.';
     else if (segs.length) {
