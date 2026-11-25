@@ -10889,9 +10889,16 @@
       // Claude Code / Codex chats run as structured sessions (not in the terminal); the terminal view runs the real CLI.
       const viaSdk = !launch.terminalOnly && sdkHarness(o.harness);
       if (viaSdk) {
-        const r = await window.electronAPI.chatSdkStart(entry.id, { harness: o.harness, bin: found[h.bin], cwd, access: o.access,
+        const sdkStart = bin => window.electronAPI.chatSdkStart(entry.id, { harness: o.harness, bin, cwd, access: o.access,
           argv: o.harness === 'claude' ? CHAT_AGENTS.claude.argv(o, sid, !!resumeSid, forkSid, threadsDir) : [],
           options: sdkTurnOptions(o), resume: o.harness !== 'claude' ? resumeSid : null, fork: o.harness === 'codex' ? forkSid : null });
+        let r = await sdkStart(found[h.bin]);
+        // The agent was reinstalled somewhere else since the PATH lookup was cached: look again, once.
+        if (!r?.ok && /\bENOENT\b/.test(r?.error)) {
+          reloadChatAgents();
+          const bin = (await loadChatAgents()).found?.[h.bin];
+          if (bin && bin !== found[h.bin] && !cancelled()) r = await sdkStart(bin);
+        }
         if (cancelled()) { if (r?.ok) await window.electronAPI.chatSdkStop(entry.id); return false; }
         if (!r?.ok) throw Error(r?.error || `Could not start ${h.name}`);
         if (findTermById(entry.id)?.term !== entry) { window.electronAPI.chatSdkStop(entry.id); return false; }
