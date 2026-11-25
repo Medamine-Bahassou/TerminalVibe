@@ -8155,6 +8155,7 @@
   // its shell starts, like an auto-run tab). Lines go as separate Enters, like a paste.
   function runInChatTerminal(owner, code) {
     const cmd = code.replace(/\r?\n$/, '').replace(/\r?\n/g, '\r') + '\r';
+    owner = chatRightPanelHost(owner) || owner;
     const entry = owner?._bottomTerminal;
     if (!entry) { toggleChatBottomTerminal(owner, cmd); return; }
     if (entry.el.hidden) toggleChatBottomTerminal(owner);
@@ -8162,6 +8163,7 @@
     entry.term.focus();
   }
   function toggleChatBottomTerminal(owner, runCmd) {
+    owner = chatRightPanelHost(owner) || owner; // a side chat in the panel: the thread it belongs to gets the terminal
     if (!owner?.threadHistory || owner._cliView || !wsReady) return;
     const entry = owner._bottomTerminal;
     if (!entry) { newChatBottomTerm(owner, runCmd); return; }
@@ -8235,8 +8237,10 @@
   }
   document.addEventListener('keydown', e => {
     if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.key.toLowerCase() !== 'j') return;
-    const owner = activeTerminal();
-    if (!owner?.threadHistory || owner._cliView || !owner.el?.offsetParent || owner.el.style.display === 'none') return;
+    const owner = chatRightPanelHost(activeTerminal());
+    // The thread beside its side chat panel is shown even while marked hidden (the warm slot).
+    const shown = owner?.el?.classList.contains('chat-panel-host') || (owner?.el?.offsetParent && owner.el.style.display !== 'none');
+    if (!owner?.threadHistory || owner._cliView || !shown) return;
     e.preventDefault(); e.stopImmediatePropagation();
     if (!e.repeat) toggleChatBottomTerminal(owner);
   }, true);
@@ -8569,7 +8573,15 @@
     // One surface at a time on the right.
     if (panel) { panel.hidden = !!guest || !!host._rightHidden; host.el?.classList.toggle('chat-file-open', !guest && !host._rightHidden); }
     const sides = chatPanelSides(host, group);
-    const sideTab = (g, i) => {
+    // Existing tabs are updated, not rebuilt: a press on one syncs the panel, and a fresh node would lose the drag.
+    const sideTab = (g, reuse) => {
+      const old = reuse && [...reuse.querySelectorAll(':scope > .cmb-side')].find(t => t.dataset.side === g.id);
+      if (old) {
+        old.setAttribute('aria-selected', String(g === guest)); old.tabIndex = g === guest ? 0 : -1;
+        old.title = g.chat?.title || g.label || 'Side chat';
+        old.querySelector('.cfp-tab-name').textContent = old.title;
+        return old;
+      }
       const t = document.createElement('div');
       t.className = 'cfp-tab cmb-side';
       t.setAttribute('role', 'tab');
@@ -8583,8 +8595,12 @@
     };
     if (panel) {
       const strip = panel.querySelector('.cfp-tabs');
-      strip.querySelectorAll('.cmb-side').forEach(t => t.remove());
-      strip.prepend(...sides.map(sideTab));
+      if (!strip.classList.contains('tab-reordering')) { // never redraw under a drag
+        const tabs = sides.map(g => sideTab(g, strip));
+        strip.querySelectorAll('.cmb-side').forEach(t => { if (!tabs.includes(t)) t.remove(); });
+        strip.prepend(...tabs);
+        orderStrip(host, strip);
+      }
     }
     if (!guest?.el) return;
     let wrap = guest.el.querySelector(':scope > .cmb-strip');
@@ -8604,7 +8620,10 @@
       t.setAttribute('aria-selected', 'false'); t.tabIndex = -1; t._page = p; t.classList.add('cmb-file');
       return t;
     }) : [];
-    wrap.firstElementChild.replaceChildren(...sides.map(sideTab), ...files);
+    if (!wrap.firstElementChild.classList.contains('tab-reordering')) {
+      wrap.firstElementChild.replaceChildren(...sides.map(g => sideTab(g)), ...files);
+      orderStrip(host, wrap.firstElementChild);
+    }
     guest.el.classList.add('cmb-on');
   }
   // Clicks, middle-clicks, keys, the menu and drag-reorder for a combined strip (the side chat's copy).
@@ -8653,9 +8672,19 @@
     host._panelGuest = id;
     activateTerminal(ws.id, id);
   }
-  // Reorder within a kind: side chats among side chats (remembered on the thread), files among files.
+  // One order for the strip's side chat and file tabs, remembered on the thread (host._tabOrder).
+  const stripKey = t => t.dataset.side ? 's:' + t.dataset.side : 'f:' + t._page?.dataset.key;
+  function orderStrip(host, strip) {
+    const o = host._tabOrder;
+    if (!o) return;
+    const rank = t => o.indexOf(stripKey(t)) + 1 || 1e9;
+    [...strip.children].sort((x, y) => rank(x) - rank(y)).forEach(t => strip.append(t));
+  }
   function moveCombinedTab(host, a, b, after) {
     if (!host) return;
+    const keys = [...a.parentElement.children].map(stripKey).filter(k => k !== stripKey(a));
+    keys.splice(keys.indexOf(stripKey(b)) + (after ? 1 : 0), 0, stripKey(a));
+    host._tabOrder = keys;
     if (a.dataset.side && b.dataset.side) {
       const group = findGroupContainingTerm(wsOf(host).layout, host.id);
       const ids = chatPanelSides(host, group).map(g => g.id).filter(id => id !== a.dataset.side);
@@ -8665,7 +8694,7 @@
       b._page[after ? 'after' : 'before'](a._page);
       b._page._tab[after ? 'after' : 'before'](a._page._tab);
     }
-    syncChatPanels(wsOf(host)); // a drop across kinds snaps back
+    syncChatPanels(wsOf(host));
   }
   function syncChatPanels(ws) {
     const on = new Set();
@@ -8687,6 +8716,7 @@
         if (pair) on.add(t);
       }
       if (guest) {
+        host._sideClosed?.delete(guest.id); // shown in the panel (from the tray, say): its tab is back in the strip
         tabEl(host)?.classList.add('active');
         if (guest.el && !guest.el.querySelector(':scope > .chat-panel-sash')) guest.el.append(chatPanelSash());
       }
