@@ -3649,3 +3649,12 @@ body .term-slot.cmb-on > .chat-file-panel.cmb-strip { display:flex; }
 /* Right panel hide button (toggleChatRightPanel, Ctrl+Alt+B): at the tab strip's right end, like the Ctrl+J terminal's */
 .chat-file-panel > .cfp-tabs { padding-right:40px; }
 body .chat-file-panel > .cfp-hide { position:absolute; top:4px; right:6px; z-index:2; }
+
+/* Chat file panel tabs: keep their width and scroll the strip when there are too many. */
+body .chat-file-panel .cfp-tab { flex:none; }
+.chat-file-panel .cfp-tabs { min-width:0; }
+/* Same hidden scrollbar as the terminal tab bar (beats the global thin scrollbar in style.css). */
+:is(.chat-file-panel .cfp-tabs, .chat-bottom-header .chat-bottom-tabs) { scrollbar-width:none !important; scrollbar-color:transparent transparent !important; }
+:is(.chat-file-panel .cfp-tabs, .chat-bottom-header .chat-bottom-tabs)::-webkit-scrollbar { display:none !important; width:0 !important; height:0 !important; }
+/* The thread half keeps its Ctrl+J terminal while the side chat has focus (it is then the hidden warm slot). */
+.term-slot.chat-panel-host.chat-tab[style*="display: none"] > .chat-bottom-terminal:not([hidden]) { display:flex !important; }
