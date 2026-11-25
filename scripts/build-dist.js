@@ -37,6 +37,9 @@ ensureVendorFile('split.min.js', path.join('node_modules', 'split.js', 'dist', '
 ensureVendorFile('coloris.min.js', path.join('node_modules', '@melloware', 'coloris', 'dist', 'umd', 'coloris.min.js'));
 ensureVendorFile('coloris.min.css', path.join('node_modules', '@melloware', 'coloris', 'dist', 'coloris.min.css'));
 ensureVendorFile('highlight.min.js', path.join('node_modules', '@highlightjs', 'cdn-assets', 'highlight.min.js'));
+// diff2html: the chat's diff panel (the UI build without its own highlight.js; it is given the one above).
+ensureVendorFile('diff2html-ui-base.min.js', path.join('node_modules', 'diff2html', 'bundles', 'js', 'diff2html-ui-base.min.js'));
+ensureVendorFile('diff2html.min.css', path.join('node_modules', 'diff2html', 'bundles', 'css', 'diff2html.min.css'));
 // Always regenerated: the icon alias map lives in scripts/build-icons.js.
 require('./build-icons.js');
 // Always regenerated: the class list changes with every frontend edit.

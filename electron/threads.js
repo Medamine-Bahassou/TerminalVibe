@@ -197,7 +197,12 @@ function parseClaude(list, side = false) {
         // A typed /command or /skill is saved as <command-name>/x</command-name><command-args>…</command-args>: show it as typed
         // (the "<" filter below dropped it, so the prompt vanished and its sent copy never matched the transcript).
         const cmd = row.type === 'user' && text.match(/^<command-message>[\s\S]*?<command-name>([^<]+)<\/command-name>/);
-        if (cmd) text = [cmd[1].trim(), text.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1].trim()].filter(Boolean).join(' ');
+        if (cmd) {
+          const name = cmd[1].trim(), args = text.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1].trim() || '';
+          // A typed $skill is sent as "/skill <whole message>" (chat-sdk expandSlashSkill): show what was typed.
+          const typed = name[0] === '/' && args.split(/[\s,;!?()[\]{}]+/).includes('$' + name.slice(1));
+          text = typed ? args : [name, args].filter(Boolean).join(' ');
+        }
         // Claude Code's own "[Request interrupted by user]" / "… for tool use]" markers are not prompts:
         // they flag the step the user stopped (the chat shows an "Interrupted" line after that turn).
         // Claude Code's own filler reply (model "<synthetic>", not the model's): never shown as an answer.
