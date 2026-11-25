@@ -9,7 +9,7 @@ const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceS
 const { listRunningServers, killServer } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
 const { prepareShellStartup } = require('./shell-startup');
-const { listShells, findShell, resolveExecutable } = require('./shells');
+const { listShellsFresh, findShell, resolveExecutable } = require('./shells');
 // The AppImage runtime exports ARGV0 (the .AppImage path). zsh uses an exported ARGV0 as argv[0] of every command
 // it runs, so tools that re-exec themselves via argv[0] (Python's sys.executable, …) launched new TerminalVibe windows.
 delete process.env.ARGV0;
@@ -1461,7 +1461,7 @@ ipcMain.handle('terminal:workspace-context', (event, id, context) => {
 });
 let defaultShellId = '';
 ipcMain.on('shell:set-default', (_e, id) => { defaultShellId = String(id || ''); });
-ipcMain.handle('shell:list', () => listShells(true).map(({ id, label }) => ({ id, label })));
+ipcMain.handle('shell:list', async () => (await listShellsFresh()).map(({ id, label }) => ({ id, label })));
 
 function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId, shell: shellId, restoreOnly, provider }) {
   if (restoreOnly === true && ptys.has(id)) return true;

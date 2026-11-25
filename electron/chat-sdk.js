@@ -26,7 +26,8 @@ function expandSlashSkill(text, references, skills) {
 function resolveLaunch(bin, args, platform = process.platform, readFile = f => fs.readFileSync(f, 'utf8')) {
   if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { file: bin, args };
   try {
-    const m = /"%dp0%\\([^"]+\.(js|cjs|mjs|exe))"/i.exec(readFile(bin));
+    // Skip the shim's own `IF EXIST "%dp0%\node.exe"` probe: that's the interpreter, not the target.
+    const m = /"%dp0%\\(?!node\.exe")([^"]+\.(js|cjs|mjs|exe))"/i.exec(readFile(bin));
     const target = m && path.win32.join(path.win32.dirname(bin), m[1]);
     // Newer packages (opencode-ai) ship a native binary behind the shim: run it directly.
     if (m) return m[2].toLowerCase() === 'exe' ? { file: target, args } : { file: 'node', args: [target, ...args] };
@@ -1125,7 +1126,7 @@ module.exports = { register, stopAll, stop, sessionPid, resolveLaunch, claudePer
 if (require.main === module) {
   const assert = require('assert');
   // npm shims run their script with node; native binaries and other platforms run as-is.
-  const shim = '@ECHO off\r\n"%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n';
+  const shim = '@ECHO off\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n)\r\n"%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n';
   assert.deepStrictEqual(resolveLaunch('C:\\npm\\codex.cmd', ['app-server'], 'win32', () => shim),
     { file: 'node', args: ['C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js', 'app-server'] });
   assert.deepStrictEqual(resolveLaunch('C:\\bin\\claude.exe', ['-p'], 'win32'), { file: 'C:\\bin\\claude.exe', args: ['-p'] });

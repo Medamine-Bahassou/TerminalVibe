@@ -1,7 +1,7 @@
 // Detects the shells offered by Settings > Terminal > Default shell.
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile } = require('child_process');
 
 const NOT_INTERACTIVE_SHELLS = new Set(['nologin', 'false', 'git-shell', 'tmux', 'screen', 'rbash', 'systemd-home-fallback-shell']); // the last: systemd-homed's placeholder for a locked home
 
@@ -11,15 +11,14 @@ function parseWslList(output) {
     .filter(name => name && !/^docker-desktop/i.test(name));
 }
 
-function listWslDistros(wsl) {
-  try {
-    return parseWslList(execFileSync(wsl, ['-l', '-q'], { timeout: 3000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }));
-  } catch {
-    return []; // WSL is not set up, or has no distro.
-  }
+// `wsl -l` boots the WSL VM (~3s cold), so it runs async: a sync call froze the main process at startup.
+let wslDistros = [];
+function loadWslDistros(wsl) {
+  return new Promise(resolve => execFile(wsl, ['-l', '-q'], { timeout: 15000, windowsHide: true, encoding: 'buffer' },
+    (err, out) => resolve(wslDistros = err ? [] : parseWslList(out)))); // error: WSL is not set up, or has no distro
 }
 
-function windowsShells(env = process.env, exists = fs.existsSync, listDistros = listWslDistros) {
+function windowsShells(env = process.env, exists = fs.existsSync, listDistros = () => wslDistros) {
   const join = path.win32.join;
   const root = env.SystemRoot || 'C:\\Windows';
   const under = (dir, ...rest) => dir ? join(dir, ...rest) : null;
@@ -61,10 +60,17 @@ function listShells(refresh = false) {
   return cached;
 }
 
+// Settings and the tab bar menu: the list including WSL distros, without blocking the main process.
+async function listShellsFresh() {
+  const wsl = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wsl.exe');
+  if (process.platform === 'win32' && fs.existsSync(wsl)) await loadWslDistros(wsl);
+  return listShells(true);
+}
+
 // A saved shell may have been uninstalled: null makes the caller use the system default.
 function findShell(id) {
   // A saved WSL distro doesn't need the slow `wsl -l` scan (it boots the WSL VM) before the first terminal opens.
-  if (!cached && process.platform === 'win32' && id?.startsWith('wsl:')) {
+  if (process.platform === 'win32' && id?.startsWith('wsl:')) {
     const wsl = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wsl.exe');
     if (fs.existsSync(wsl)) return { id, label: id.slice(4), command: wsl, args: ['-d', id.slice(4)], homeArgs: ['--cd', '~'] };
   }
@@ -85,4 +91,4 @@ function resolveExecutable(file, env = process.env, platform = process.platform)
   return file; // Not on PATH: node-pty reports it.
 }
 
-module.exports = { listShells, findShell, parseWslList, windowsShells, posixShells, resolveExecutable };
+module.exports = { listShells, listShellsFresh, findShell, parseWslList, windowsShells, posixShells, resolveExecutable };

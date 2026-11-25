@@ -17,13 +17,17 @@ app.whenReady().then(async () => {
     owner.el.style.cssText = 'position:relative;height:400px';
     document.body.append(owner.el);
     let focused, created = 0, disposed = 0, fits = 0, wsReady = true;
-    const controls = [], wsp = {}, uuid = () => 'shell', chatCwd = () => '/project/chat';
+    let ids = 0;
+    const controls = [], wsp = {}, uuid = () => ids++ ? 'shell' + ids : 'shell', chatCwd = () => '/project/chat';
     const activeTerminal = () => owner, focusSlot = () => {}, setupTerminalWheel = () => {};
     const findTermById = () => ({ ws: wsp });
+    // Defined outside the sliced helpers: the tab strip's names and drag-reorder.
+    const escHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    const bindTabDrag = () => {}, showCtxMenu = () => {};
     const sendControl = msg => controls.push(msg), fitTerm = () => { fits++; };
     const _termFitObserver = { observe() {}, unobserve() {} }, _disposeTermRenderers = () => {};
     const buffer = { viewportY: 0, baseY: 0, cursorY: 0 };
-    const _createTermEntry = () => { created++; return { id: 'shell', term: { cols: 80, rows: 24, buffer: { active: buffer }, open() {}, focus() { focused = 'shell'; }, dispose() { disposed++; } } }; };
+    const _createTermEntry = (_, id) => { created++; return { id, term: { cols: 80, rows: 24, buffer: { active: buffer }, open() {}, focus() { focused = 'shell'; }, dispose() { disposed++; } } }; };
     ${helpers}
     const press = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', ctrlKey: true, bubbles: true, cancelable: true }));
     press(); await new Promise(requestAnimationFrame);
@@ -69,11 +73,22 @@ app.whenReady().then(async () => {
     check(Math.abs(screenTop() + gridHeight - body.clientHeight) < 2, 'Shrinking clipped a cursor on the last row');
     pointer('pointerup', 180);
     owner._cliView = true; press(); check(!owner._bottomTerminal.el.hidden, 'Shortcut affected CLI view');
-    owner._cliView = false; owner._bottomTerminal.el.querySelector('button').click();
+    owner._cliView = false; owner._bottomTerminal.el.querySelector('[data-act="hide"]').click();
     check(owner._bottomTerminal.el.hidden, 'Close button did not hide shell');
+    // Tabs: + adds a second shell and shows it; both strips list both; closing the shown one shows its neighbor.
+    press(); await new Promise(requestAnimationFrame);
+    const first = owner._bottomTerminal;
+    first.el.querySelector('[data-act="new"]').click(); await new Promise(requestAnimationFrame);
+    const second = owner._bottomTerminal;
+    check(created === 2 && second !== first && first.el.hidden && !second.el.hidden, '+ did not add and show a second shell');
+    check(owner._bottomTerms.every(e => e.el.querySelectorAll('.chat-bottom-tab').length === 2), 'Tab strips do not list both shells');
+    check(second.el.querySelector('[aria-selected="true"] span').textContent === 'Terminal 2', 'Second shell is not named Terminal 2');
+    second.el.querySelector('[aria-selected="true"] .chat-bottom-tab-x').click();
+    check(disposed === 1 && owner._bottomTerminal === first && !first.el.hidden && owner._bottomTerms.length === 1, 'Closing a tab did not show its neighbor');
+    check(!first.el.querySelector('.chat-bottom-tab-x'), 'A lone tab offers a close button');
     disposeChatBottomTerminal(owner);
-    check(disposed === 1 && !owner._bottomTerminal && controls.at(-1).type === 'close', 'Shell cleanup failed');
-    return 'PASS: Ctrl+J open/hide/reopen, project cwd, focus, CLI isolation, close button and cleanup';
+    check(disposed === 2 && !owner._bottomTerminal && controls.at(-1).type === 'close', 'Shell cleanup failed');
+    return 'PASS: Ctrl+J open/hide/reopen, project cwd, focus, CLI isolation, close button, tabs and cleanup';
   })()`));
   clearTimeout(timeout); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });
