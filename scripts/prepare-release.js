@@ -5,15 +5,15 @@ const path = require('path');
 
 const repo = process.env.GITHUB_REPOSITORY || 'Medamine-Bahassou/TerminalVibe';
 const ref = process.env.GITHUB_REF || '';
-const refName = process.env.GITHUB_REF_NAME || '';
+const event = process.env.GITHUB_EVENT_NAME;
+const nightly = event === 'push';
+
+if (ref !== 'refs/heads/master' || (!nightly && event !== 'workflow_dispatch')) {
+  throw new Error('Releases must run from master via a push or manual dispatch');
+}
 
 // 1. Parse all semantic tags from git
-let allTags = [];
-try {
-  allTags = cp.execSync('git tag -l', { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
-} catch (e) {
-  console.warn('Could not list git tags:', e.message);
-}
+const allTags = cp.execFileSync('git', ['tag', '--list'], { encoding: 'utf8' }).trim().split('\n');
 
 // Also read current package.json version
 const pkgPath = path.join(__dirname, '..', 'package.json');
@@ -22,51 +22,52 @@ const pkgVersion = pkg.version || '0.1.0';
 
 function parseSemver(str) {
   if (!str) return null;
-  const cleaned = str.trim().replace(/^v/, '');
-  const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)/);
+  const cleaned = str.replace(/^v/, '');
+  const match = cleaned.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
   if (!match) return null;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  if (![major, minor, patch].every(Number.isSafeInteger)) return null;
   return {
-    raw: str.trim(),
-    hasV: str.trim().startsWith('v'),
-    major: parseInt(match[1], 10),
-    minor: parseInt(match[2], 10),
-    patch: parseInt(match[3], 10),
+    raw: str,
+    major,
+    minor,
+    patch,
   };
 }
 
 const parsedTags = allTags.map(parseSemver).filter(Boolean);
-const parsedPkg = parseSemver(pkgVersion);
-if (parsedPkg) parsedTags.push(parsedPkg);
-
-// Sort descending by semver
-parsedTags.sort((a, b) => {
-  if (a.major !== b.major) return b.major - a.major;
-  if (a.minor !== b.minor) return b.minor - a.minor;
-  return b.patch - a.patch;
-});
-
-const highest = parsedTags[0] || { raw: '0.1.0', hasV: false, major: 0, minor: 1, patch: 0 };
-
-let targetVersion = '';
-let targetTag = '';
-
-// If triggered directly by a tag push
-if (ref.startsWith('refs/tags/')) {
-  targetTag = refName;
-  targetVersion = refName.replace(/^v/, '');
-} else {
-  // Push to main/master: bump patch version by +0.0.1
-  const nextMajor = highest.major;
-  const nextMinor = highest.minor;
-  const nextPatch = highest.patch + 1;
-  targetVersion = `${nextMajor}.${nextMinor}.${nextPatch}`;
-  targetTag = highest.hasV ? `v${targetVersion}` : `v${targetVersion}`;
+function compareVersions(a, b) {
+  return a.major - b.major || a.minor - b.minor || a.patch - b.patch;
 }
 
-const releaseTitle = `TerminalVibe v${targetVersion}`;
+parsedTags.sort((a, b) => compareVersions(b, a));
+const stableInput = nightly ? '' : (process.env.STABLE_VERSION || '').trim();
+const requested = parseSemver(stableInput);
+const requestedTag = requested && `v${requested.raw.replace(/^v/, '')}`;
+const existingTag = parsedTags.find(tag => tag.raw === requestedTag);
+const previousTag = parsedTags.find(tag => tag !== existingTag);
+const highest = previousTag || parseSemver(pkgVersion);
+
+let targetVersion;
+if (nightly) {
+  const runNumber = process.env.GITHUB_RUN_NUMBER;
+  if (!/^[1-9]\d*$/.test(runNumber || '')) throw new Error('Missing workflow run number');
+  targetVersion = `${highest.major}.${highest.minor}.${highest.patch + 1}-nightly.${runNumber}`;
+} else {
+  if (!requested || compareVersions(requested, highest) <= 0) {
+    throw new Error(`Specify a stable version newer than ${highest.raw}`);
+  }
+  if (existingTag && cp.execFileSync('git', ['rev-parse', `${requestedTag}^{commit}`], { encoding: 'utf8' }).trim() !== process.env.GITHUB_SHA) {
+    throw new Error(`${requestedTag} already points to a different commit`);
+  }
+  targetVersion = requested.raw.replace(/^v/, '');
+}
+
+const targetTag = `v${targetVersion}`;
+const releaseTitle = `TerminalVibe ${targetTag}`;
 
 // 2. Collect commits since the previous release tag for the changelog
-const prevTag = parsedTags.find(t => t.raw !== targetTag)?.raw || null;
+const prevTag = previousTag?.raw;
 let commits = [];
 try {
   const range = prevTag ? `${prevTag}..HEAD` : 'HEAD~5..HEAD';
@@ -103,7 +104,7 @@ fs.writeFileSync(notesFile, releaseBody, 'utf8');
 
 console.log('--- Release Info ---');
 console.log('Highest existing version:', `${highest.major}.${highest.minor}.${highest.patch}`);
-console.log('Next Version (+0.0.1):', targetVersion);
+console.log('Release version:', targetVersion);
 console.log('Target Tag:', targetTag);
 console.log('Release Title:', releaseTitle);
 console.log('\n--- Release Notes ---');

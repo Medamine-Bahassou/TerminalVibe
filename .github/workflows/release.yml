@@ -3,11 +3,13 @@ name: Build and Release
 on:
   push:
     branches:
-      - main
       - master
-    tags:
-      - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Stable version to publish (for example, 0.9.71)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -31,6 +33,8 @@ jobs:
 
       - name: Calculate next version and release notes
         id: prep
+        env:
+          STABLE_VERSION: ${{ inputs.version }}
         run: node scripts/prepare-release.js
 
       - name: Upload release notes
@@ -128,6 +132,11 @@ jobs:
           echo "Generated SHA256 checksums:"
           cat SHA256SUMS.txt
 
+      - name: Tag the commit that was built
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: git push origin "HEAD:refs/tags/$RELEASE_TAG"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -141,7 +150,7 @@ jobs:
             artifacts/*.exe
             artifacts/SHA256SUMS.txt
           draft: false
-          prerelease: false
-          make_latest: true
+          prerelease: ${{ github.event_name == 'push' }}
+          make_latest: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
