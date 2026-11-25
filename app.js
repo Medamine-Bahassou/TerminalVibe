@@ -1566,7 +1566,7 @@
       const terms = getWorkspaceTerminals(ws);
       const t = terms.find(x => x.id === id);
       if (t) return { ws, term: t };
-      const child = terms.find(x => x._bottomTerminal?.id === id)?._bottomTerminal;
+      const child = terms.flatMap(x => x._bottomTerms || []).find(x => x.id === id);
       if (child) return { ws, term: child };
     }
     return null;
@@ -4215,8 +4215,7 @@
             tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
             tab.title = entry.label;
             applyTabColor(tab, entry.color);
-            tab.draggable = true;
-            tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
+                    tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
             tab.addEventListener('click', e => {
               if (e.target.classList.contains('tg-tab-close')) { removeTerminal(wsp.id, entry.id); return; }
               const now = Date.now();
@@ -4999,7 +4998,7 @@
     if (!result) return;
     const { ws, term: t } = result;
     t.dead = true;
-    if (t._chatOwner) { disposeChatBottomTerminal(t._chatOwner); return; }
+    if (t._chatOwner) { closeChatBottomTerm(t._chatOwner, t); return; }
     // Other agent panes returned to a shell when the agent ended, so this exit is the user's: close like any tab.
     if (t.agentManaged && t.keepOnExit) {
       t.term.write(`\r\n[Agent process exited: ${code}]\r\n`);
@@ -7885,7 +7884,7 @@
     // Threads dropped in as context: from the transcript (threads) or a pending message's own notes.
     const refs = [...threads, ...[...String(text).matchAll(/<terminalvibe_context thread="([^"]*)">“([^”]*)”/g)].map(m => ({ path: m[1], title: m[2] }))];
     text = String(text).replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '');
-    // Leading "> " blocks are citations (quoted from the chat): truncated chips above the prompt.
+    // Leading "> " blocks are citations (quoted from the chat): inline chips that start the prompt's first line.
     const lines = String(text).split('\n'), quotes = [];
     while (lines.length && lines[0].startsWith('>')) {
       const block = [];
@@ -7896,12 +7895,11 @@
     const citeHtml = q => `<a href="#" class="thr-cite" title="${escHtml(q)}"><i class="ph ph-quotes" aria-hidden="true"></i><span>${escHtml(q.replace(/\s+/g, ' '))}</span></a>`;
     // A citation placed mid-message is sent as "\n> …\n" at its spot: show it inline there, not as a blockquote.
     // shortcut: also catches "> " lines the user typed inside a code fence; skip fences if that ever matters.
-    const inlineCites = [];
-    text = lines.join('\n').replace(/(?:^|\n)((?:> .*(?:\n|$))+)/g, (_, block) => {
+    const inlineCites = [...quotes];
+    text = quotes.map((_, n) => `\u0000C${n}\u0000 `).join('') + lines.join('\n').replace(/(?:^|\n)((?:> .*(?:\n|$))+)/g, (_, block) => {
       inlineCites.push(block.trimEnd().split('\n').map(line => line.replace(/^> ?/, '')).join('\n'));
       return `\u0000C${inlineCites.length - 1}\u0000`;
     });
-    const cites = quotes.map(citeHtml).join('');
     const paths = [], attachments = [];
     const marked = String(text).replace(new RegExp(ATTACHMENT_PATH_RE.source, 'gi'), (m, q, quoted, bare) => {
       const path = quoted || bare;
@@ -7932,7 +7930,7 @@
           const name = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p, dir = /[\\/]$/.test(p) || !/\.\w+$/.test(name);
           return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-at-ref" data-path="${p}" title="${p}"><i class="ph ${dir ? 'ph-folder' : linkFileIcon(name)}" aria-hidden="true"></i><span>${name}</span></a></span>`;
         })).join('');
-    return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
+    return { html, paths };
   }
   const _pendingMsgs = new Map(); // chat tab id -> { text, at }: sent, not in the transcript yet
   const _chatSending = new Set();
@@ -8006,19 +8004,71 @@
     }
     else { if (curChat() === tab) { restoreThreadScroll(tab); refreshThreadFlow(tab); syncThreadComposer(tab); } thrInput.focus(); }
   }
+  // A chat's Ctrl+J terminals (tabs in the bottom panel); owner._bottomTerminal is the one shown. All go with the chat.
   function disposeChatBottomTerminal(owner) {
-    const entry = owner?._bottomTerminal;
-    if (!entry) return;
-    delete owner._bottomTerminal;
+    for (const entry of [...(owner?._bottomTerms || [])]) closeChatBottomTerm(owner, entry);
+  }
+  function closeChatBottomTerm(owner, entry) {
+    const list = owner?._bottomTerms, i = list?.indexOf(entry) ?? -1;
+    if (i < 0) return;
+    list.splice(i, 1);
     entry._finishBottomResize?.(false);
-    sendControl({ type: 'close', id: entry.id });
+    if (!entry.dead) sendControl({ type: 'close', id: entry.id });
     clearTimeout(entry._resizeTimeout);
     cancelAnimationFrame(entry._fitObserverRaf);
     _termFitObserver.unobserve(entry.el);
     _disposeTermRenderers(entry.term);
     entry.term.dispose();
+    const shown = !entry.el.hidden;
     entry.el.remove();
+    if (owner._bottomTerminal !== entry) { renderChatBottomTabs(owner); return; }
+    const next = list[i] || list[i - 1];
+    if (next) { showChatBottomTerm(owner, next, shown); return; }
+    delete owner._bottomTerminal; delete owner._bottomTerms;
     owner.el?.classList.remove('chat-bottom-open');
+    if (shown && owner.el?.offsetParent) owner.term?.focus?.();
+  }
+  // Shows one of the chat's terminals in the bottom panel (the others stay alive, hidden).
+  function showChatBottomTerm(owner, entry, focus = true) {
+    for (const e of owner._bottomTerms) { if (e !== entry) { e._finishBottomResize?.(false); e.el.hidden = true; } }
+    owner._bottomTerminal = entry;
+    entry.el.hidden = false;
+    owner.el.classList.add('chat-bottom-open');
+    renderChatBottomTabs(owner);
+    requestAnimationFrame(() => { fitTerm(entry, true); if (focus) entry.term.focus(); });
+  }
+  // Inline rename in the tab strip: Enter or blur keeps it, Escape cancels; empty restores the default name.
+  function renameChatBottomTerm(owner, entry) {
+    showChatBottomTerm(owner, entry, false);
+    const label = entry.el.querySelector('.chat-bottom-tab[aria-selected="true"] > span');
+    if (!label) return;
+    const input = Object.assign(document.createElement('input'), { className: 'chat-bottom-tab-input', value: entry._title || 'Terminal', spellcheck: false });
+    input.setAttribute('aria-label', 'Terminal name');
+    let done = false;
+    const finish = keep => {
+      if (done) return; done = true;
+      if (keep) entry._title = input.value.trim().slice(0, 40) || 'Terminal';
+      renderChatBottomTabs(owner);
+      entry.term.focus();
+    };
+    input.addEventListener('keydown', e => {
+      e.stopPropagation(); // not the tablist's arrows/Delete
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+    for (const ev of ['click', 'mousedown', 'auxclick']) input.addEventListener(ev, e => e.stopPropagation());
+    label.replaceWith(input);
+    input.focus(); input.select();
+  }
+  // Every terminal's header carries the same tab strip (only the shown one's is visible).
+  function renderChatBottomTabs(owner) {
+    const list = owner._bottomTerms || [];
+    for (const entry of list) {
+      const strip = entry.el.querySelector('.chat-bottom-tabs');
+      strip.innerHTML = list.map((e, i) => `<div class="chat-bottom-tab" role="tab" data-i="${i}" aria-selected="${e === owner._bottomTerminal}" tabindex="${e === owner._bottomTerminal ? 0 : -1}">`
+        + `<i class="ph ph-terminal" aria-hidden="true"></i><span>${escHtml(e._title || 'Terminal')}</span>`
+        + (list.length > 1 ? '<button type="button" class="chat-bottom-tab-x" tabindex="-1" aria-label="Close terminal"><i class="ph ph-x" aria-hidden="true"></i></button>' : '') + '</div>').join('');
+    }
   }
   function bindChatBottomResize(owner, entry) {
     const panel = entry.el;
@@ -8113,45 +8163,75 @@
   }
   function toggleChatBottomTerminal(owner, runCmd) {
     if (!owner?.threadHistory || owner._cliView || !wsReady) return;
-    let entry = owner._bottomTerminal;
-    if (!entry) {
-      const wsp = findTermById(owner.id)?.ws;
-      if (!wsp) return;
-      entry = _createTermEntry(wsp, uuid(), 'Terminal');
-      if (runCmd) entry.runCmd = runCmd.replace(/\r$/, ''); // sendControl types it (+ Enter) once the shell exists
-      entry._chatOwner = owner;
-      entry.cwd = chatCwd(owner) || null;
-      owner._bottomTerminal = entry;
-      const panel = document.createElement('section');
-      panel.className = 'chat-bottom-terminal';
-      panel.id = 'slot-' + entry.id;
-      panel.setAttribute('aria-label', 'Project terminal');
-      panel.innerHTML = '<div class="chat-bottom-sash" role="separator" tabindex="0" aria-label="Resize project terminal" aria-orientation="horizontal"></div>'
-        + '<div class="chat-bottom-header"><span>Terminal</span><button type="button" aria-label="Hide terminal (Ctrl+J)" title="Hide terminal (Ctrl+J)"><i class="ph ph-x" aria-hidden="true"></i></button></div><div class="chat-bottom-body"><div class="chat-bottom-screen"></div></div>';
-      owner.el.append(panel);
-      entry.el = panel;
-      bindChatBottomResize(owner, entry);
-      entry.term.open(panel.querySelector('.chat-bottom-screen'));
-      setupTerminalWheel(entry);
-      entry.opened = true;
-      // Keep the chat as the active tab when its shell receives focus.
-      panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); });
-      panel.querySelector('button').addEventListener('click', () => toggleChatBottomTerminal(owner));
-      panel.addEventListener('contextmenu', e => {
-        e.preventDefault(); e.stopPropagation(); // not the chat's or the tab's menu
-        showCtxMenu(e, 'chat-terminal', { entry, owner });
-      });
-      owner.el.classList.add('chat-bottom-open');
-      _termFitObserver.observe(panel);
-      fitTerm(entry, true);
-      sendControl({ type: 'create', id: entry.id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd });
-    } else {
-      entry.el.hidden = !entry.el.hidden;
-      if (entry.el.hidden) entry._finishBottomResize(false);
-      owner.el.classList.toggle('chat-bottom-open', !entry.el.hidden);
-    }
-    if (entry.el.hidden) { owner.term.focus(); return; }
-    requestAnimationFrame(() => { fitTerm(entry, true); entry.term.focus(); });
+    const entry = owner._bottomTerminal;
+    if (!entry) { newChatBottomTerm(owner, runCmd); return; }
+    if (!entry.el.hidden) { entry._finishBottomResize(false); entry.el.hidden = true; owner.el.classList.remove('chat-bottom-open'); owner.term.focus(); return; }
+    showChatBottomTerm(owner, entry);
+  }
+  // A new shell tab in the chat's bottom panel, in the chat's folder.
+  function newChatBottomTerm(owner, runCmd) {
+    if (!owner?.threadHistory || owner._cliView || !wsReady) return;
+    const wsp = findTermById(owner.id)?.ws;
+    if (!wsp) return;
+    const entry = _createTermEntry(wsp, uuid(), 'Terminal');
+    if (runCmd) entry.runCmd = runCmd.replace(/\r$/, ''); // sendControl types it (+ Enter) once the shell exists
+    entry._chatOwner = owner;
+    entry.cwd = chatCwd(owner) || null;
+    owner._bottomSeq = (owner._bottomTerms?.length ? owner._bottomSeq || 1 : 0) + 1;
+    entry._title = owner._bottomSeq > 1 ? `Terminal ${owner._bottomSeq}` : 'Terminal';
+    (owner._bottomTerms ||= []).push(entry);
+    const panel = document.createElement('section');
+    panel.className = 'chat-bottom-terminal';
+    panel.id = 'slot-' + entry.id;
+    panel.hidden = true;
+    panel.setAttribute('aria-label', 'Project terminal');
+    panel.innerHTML = '<div class="chat-bottom-sash" role="separator" tabindex="0" aria-label="Resize project terminal" aria-orientation="horizontal"></div>'
+      + '<div class="chat-bottom-header"><div class="chat-bottom-tabs" role="tablist" aria-label="Terminals"></div>'
+      + '<button type="button" data-act="new" aria-label="New terminal" data-tip="New terminal"><i class="ph ph-plus" aria-hidden="true"></i></button>'
+      + '<button type="button" data-act="hide" aria-label="Hide terminal (Ctrl+J)" data-tip="Hide terminal (Ctrl+J)"><i class="ph ph-x" aria-hidden="true"></i></button></div>'
+      + '<div class="chat-bottom-body"><div class="chat-bottom-screen"></div></div>';
+    owner.el.append(panel);
+    entry.el = panel;
+    bindChatBottomResize(owner, entry);
+    entry.term.open(panel.querySelector('.chat-bottom-screen'));
+    setupTerminalWheel(entry);
+    entry.opened = true;
+    // Keep the chat as the active tab when its shell receives focus.
+    panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); });
+    const header = panel.querySelector('.chat-bottom-header');
+    const tabAt = el => owner._bottomTerms?.[el?.closest('.chat-bottom-tab')?.dataset.i];
+    header.addEventListener('click', e => {
+      const act = e.target.closest('[data-act]')?.dataset.act, t = tabAt(e.target);
+      if (act === 'new') newChatBottomTerm(owner);
+      else if (act === 'hide') toggleChatBottomTerminal(owner);
+      else if (t && e.target.closest('.chat-bottom-tab-x')) closeChatBottomTerm(owner, t);
+      else if (t) showChatBottomTerm(owner, t);
+    });
+    bindTabDrag(panel.querySelector('.chat-bottom-tabs'), '.chat-bottom-tab', (a, b, after) => {
+      const list = owner._bottomTerms, moved = list[a.dataset.i], target = list[b.dataset.i];
+      list.splice(list.indexOf(moved), 1);
+      list.splice(list.indexOf(target) + (after ? 1 : 0), 0, moved);
+      renderChatBottomTabs(owner);
+    });
+    header.addEventListener('dblclick', e => { const t = tabAt(e.target); if (t && !e.target.closest('.chat-bottom-tab-x, input')) renameChatBottomTerm(owner, t); });
+    header.addEventListener('auxclick', e => { const t = e.button === 1 && tabAt(e.target); if (t) closeChatBottomTerm(owner, t); });
+    header.addEventListener('keydown', e => { // tablist arrows; Delete closes
+      const t = tabAt(e.target), list = owner._bottomTerms;
+      if (!t) return;
+      const i = list.indexOf(t), next = { ArrowLeft: list[i - 1], ArrowRight: list[i + 1], Home: list[0], End: list.at(-1) }[e.key];
+      if (next) { e.preventDefault(); showChatBottomTerm(owner, next, false); next.el.querySelector('.chat-bottom-tab[aria-selected="true"]')?.focus(); }
+      else if (e.key === 'Delete' && list.length > 1) { e.preventDefault(); closeChatBottomTerm(owner, t); }
+    });
+    panel.addEventListener('contextmenu', e => {
+      e.preventDefault(); e.stopPropagation(); // not the chat's or the tab's menu
+      const t = tabAt(e.target);
+      if (t) showCtxMenu(e, 'chat-terminal-tab', { entry: t, owner });
+      else showCtxMenu(e, 'chat-terminal', { entry, owner });
+    });
+    _termFitObserver.observe(panel);
+    showChatBottomTerm(owner, entry);
+    fitTerm(entry, true);
+    sendControl({ type: 'create', id: entry.id, cols: entry.term.cols, rows: entry.term.rows, cwd: entry.cwd });
   }
   document.addEventListener('keydown', e => {
     if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.key.toLowerCase() !== 'j') return;
@@ -8159,6 +8239,14 @@
     if (!owner?.threadHistory || owner._cliView || !owner.el?.offsetParent || owner.el.style.display === 'none') return;
     e.preventDefault(); e.stopImmediatePropagation();
     if (!e.repeat) toggleChatBottomTerminal(owner);
+  }, true);
+  // Ctrl+Alt+B: hide or bring back the thread's right panel (toggleChatRightPanel).
+  document.addEventListener('keydown', e => {
+    if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey || e.code !== 'KeyB') return;
+    const t = activeTerminal();
+    if (!chatRightPanelHost(t) || !t.el?.offsetParent) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (!e.repeat) toggleChatRightPanel(t);
   }, true);
   // An agent finished its turn: update the chat now, not on the next poll.
   function chatAgentIdle(entry) {
@@ -8441,6 +8529,144 @@
     });
     return sash;
   }
+  // ── The right panel as one tab strip: a thread's side chats (in this pane) and its file/diff tabs share it.
+  // A side chat tab shows the side chat slot (host._panelGuest) and hides the file panel; a file tab shows the
+  // file panel and hides the side chat. Both surfaces carry the same strip (the side chat's at its top). ──
+  // Hide or bring back a thread's whole right panel (side chat + files), like Ctrl+J for its terminal: the hide
+  // button at the strip's end, or Ctrl+Alt+B. Hidden, it remembers which side chat was shown.
+  function chatRightPanelHost(t) {
+    const ws = t && wsOf(t), group = ws && findGroupContainingTerm(ws.layout, t.id);
+    return (group && chatPanelHost(t, group)) || (t?.threadHistory ? t : null);
+  }
+  function toggleChatRightPanel(t) {
+    const host = chatRightPanelHost(t), ws = host && wsOf(host);
+    if (!ws) return;
+    const shown = !!host._panelGuest || (!!host._filePanel?.isConnected && !host._rightHidden);
+    if (shown) {
+      host._rightHidden = true;
+      host._hiddenGuest = host._panelGuest;
+      host._panelGuest = null;
+      activateTerminal(ws.id, host.id);
+      return;
+    }
+    host._rightHidden = false;
+    const group = findGroupContainingTerm(ws.layout, host.id);
+    const guest = group?.terminals.find(g => g.id === host._hiddenGuest && chatPanelHost(g, group) === host);
+    if (guest) { showSideChatTab(host, guest.id); return; }
+    const side = !host._filePanel?.isConnected && group && chatPanelSides(host, group)[0];
+    if (side) showSideChatTab(host, side.id);
+    else if (host._filePanel?.isConnected) syncChatPanels(ws);
+    else zoomBadge('Nothing open in the right panel');
+  }
+  const CHAT_PANEL_HIDE_BTN = '<button type="button" class="cfp-icon cfp-hide" data-act="hide" aria-label="Hide panel (Ctrl+Alt+B)" data-tip="Hide panel (Ctrl+Alt+B)"><i class="ph ph-x" aria-hidden="true"></i></button>';
+  function chatPanelSides(host, group) {
+    const sides = group.terminals.filter(g => g !== host && chatPanelHost(g, group) === host && !host._sideClosed?.has(g.id));
+    const order = host._sideOrder || [];
+    return sides.sort((a, b) => (order.indexOf(a.id) + 1 || 1e9) - (order.indexOf(b.id) + 1 || 1e9));
+  }
+  function syncCombinedPanel(host, guest, group, ws) {
+    const panel = host._filePanel?.isConnected ? host._filePanel : null;
+    // One surface at a time on the right.
+    if (panel) { panel.hidden = !!guest || !!host._rightHidden; host.el?.classList.toggle('chat-file-open', !guest && !host._rightHidden); }
+    const sides = chatPanelSides(host, group);
+    const sideTab = (g, i) => {
+      const t = document.createElement('div');
+      t.className = 'cfp-tab cmb-side';
+      t.setAttribute('role', 'tab');
+      t.dataset.side = g.id;
+      t.title = g.chat?.title || g.label || 'Side chat';
+      t.setAttribute('aria-selected', String(g === guest));
+      t.tabIndex = g === guest ? 0 : -1;
+      t.innerHTML = `<i class="ph ph-chat-circle-dots" aria-hidden="true"></i><span class="cfp-tab-name">${escHtml(t.title)}</span>`
+        + '<button type="button" class="cfp-tab-x" tabindex="-1" aria-label="Close tab"><i class="ph ph-x" aria-hidden="true"></i></button>';
+      return t;
+    };
+    if (panel) {
+      const strip = panel.querySelector('.cfp-tabs');
+      strip.querySelectorAll('.cmb-side').forEach(t => t.remove());
+      strip.prepend(...sides.map(sideTab));
+    }
+    if (!guest?.el) return;
+    let wrap = guest.el.querySelector(':scope > .cmb-strip');
+    if (!wrap) {
+      wrap = document.createElement('section');
+      wrap.className = 'chat-file-panel cmb-strip';
+      wrap.setAttribute('aria-label', 'Side chats and files');
+      wrap.innerHTML = '<div class="cfp-tabs" role="tablist" aria-label="Side chats and files"></div>' + CHAT_PANEL_HIDE_BTN;
+      wrap.lastElementChild.addEventListener('click', () => toggleChatRightPanel(wrap._host));
+      bindCombinedStrip(wrap.firstElementChild, () => wrap._host);
+      wrap.addEventListener('mousedown', e => e.stopPropagation()); // a tab click, not a click into the side chat
+      guest.el.append(wrap);
+    }
+    wrap._host = host;
+    const files = panel ? [...panel.querySelectorAll(':scope > .cfp-page')].map(p => {
+      const t = p._tab.cloneNode(true); // a stand-in for the file panel's tab
+      t.setAttribute('aria-selected', 'false'); t.tabIndex = -1; t._page = p; t.classList.add('cmb-file');
+      return t;
+    }) : [];
+    wrap.firstElementChild.replaceChildren(...sides.map(sideTab), ...files);
+    guest.el.classList.add('cmb-on');
+  }
+  // Clicks, middle-clicks, keys, the menu and drag-reorder for a combined strip (the side chat's copy).
+  function bindCombinedStrip(strip, hostOf) {
+    const showFile = page => {
+      const host = hostOf(), ws = wsOf(host);
+      if (!host || !ws) return;
+      host._panelGuest = null;
+      activateChatPanelTab(page);
+      activateTerminal(ws.id, host.id);
+    };
+    strip.addEventListener('click', e => {
+      const tab = e.target.closest('.cfp-tab');
+      if (!tab) return;
+      if (tab.dataset.side && e.target.closest('.cfp-tab-x')) closeSideChatTab(hostOf(), tab.dataset.side);
+      else if (tab.dataset.side) showSideChatTab(hostOf(), tab.dataset.side);
+      else if (e.target.closest('.cfp-tab-x')) { closeChatPanelTab(hostOf(), tab._page); }
+      else if (tab._page) showFile(tab._page);
+    });
+    strip.addEventListener('auxclick', e => {
+      const tab = e.button === 1 && e.target.closest('.cfp-tab');
+      if (tab?.dataset.side) closeSideChatTab(hostOf(), tab.dataset.side);
+      else if (tab) { closeChatPanelTab(hostOf(), tab._page); }
+    });
+    strip.addEventListener('contextmenu', e => {
+      const tab = e.target.closest('.cfp-tab');
+      if (!tab) return;
+      e.preventDefault(); e.stopPropagation();
+      if (tab.dataset.side) showCtxMenu(e, 'chat-side-tab', { host: hostOf(), id: tab.dataset.side });
+      else showCtxMenu(e, 'chat-file-tab', { owner: hostOf(), page: tab._page });
+    });
+    strip.addEventListener('wheel', e => { if (!e.deltaX && e.deltaY) { strip.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+    bindTabDrag(strip, '.cfp-tab', (a, b, after) => moveCombinedTab(hostOf(), a, b, after));
+  }
+  // Closing a side chat's tab takes it out of the strip (it stays in the side chats tray; opening it brings it back).
+  function closeSideChatTab(host, id) {
+    const ws = host && wsOf(host);
+    if (!ws) return;
+    (host._sideClosed ||= new Set()).add(id);
+    if (host._panelGuest === id) { host._panelGuest = null; activateTerminal(ws.id, host.id); }
+    else syncChatPanels(ws);
+  }
+  function showSideChatTab(host, id) {
+    const ws = host && wsOf(host);
+    if (!ws) return;
+    host._panelGuest = id;
+    activateTerminal(ws.id, id);
+  }
+  // Reorder within a kind: side chats among side chats (remembered on the thread), files among files.
+  function moveCombinedTab(host, a, b, after) {
+    if (!host) return;
+    if (a.dataset.side && b.dataset.side) {
+      const group = findGroupContainingTerm(wsOf(host).layout, host.id);
+      const ids = chatPanelSides(host, group).map(g => g.id).filter(id => id !== a.dataset.side);
+      ids.splice(ids.indexOf(b.dataset.side) + (after ? 1 : 0), 0, a.dataset.side);
+      host._sideOrder = ids;
+    } else if (a._page && b._page) {
+      b._page[after ? 'after' : 'before'](a._page);
+      b._page._tab[after ? 'after' : 'before'](a._page._tab);
+    }
+    syncChatPanels(wsOf(host)); // a drop across kinds snaps back
+  }
   function syncChatPanels(ws) {
     const on = new Set();
     const syncGroup = group => {
@@ -8448,7 +8674,7 @@
       const tabEl = t => groupEl?.querySelector(`.tg-tab[data-termid="${CSS.escape(t.id)}"]`);
       const active = group.terminals.find(t => t.id === group.activeTermId);
       const activeHost = chatPanelHost(active, group);
-      if (activeHost) activeHost._panelGuest = active.id;
+      if (activeHost) { activeHost._panelGuest = active.id; activeHost._rightHidden = false; activeHost._sideClosed?.delete(active.id); } // shown: back in the strip
       const host = activeHost || active;
       const guest = host?.threadHistory && group.terminals.find(g => g.id === host._panelGuest && chatPanelHost(g, group) === host);
       for (const t of group.terminals) {
@@ -8456,6 +8682,7 @@
         t.el?.classList.toggle('chat-panel-on', pair);
         t.el?.classList.toggle('chat-panel-host', pair && t === host);
         t.el?.classList.toggle('chat-panel-guest', pair && t === guest);
+        if (!(pair && t === guest)) t.el?.classList.remove('cmb-on'); // its combined strip shows only as the panel
         tabEl(t)?.classList.toggle('tg-in-panel', !!chatPanelHost(t, group));
         if (pair) on.add(t);
       }
@@ -8463,6 +8690,7 @@
         tabEl(host)?.classList.add('active');
         if (guest.el && !guest.el.querySelector(':scope > .chat-panel-sash')) guest.el.append(chatPanelSash());
       }
+      if (host?.threadHistory) syncCombinedPanel(host, guest, group, ws);
     };
     (function walk(n) { if (n?.type === 'group') syncGroup(n); else n?.children?.forEach(walk); })(ws?.layout);
     return on;
@@ -9511,9 +9739,16 @@
     }
   }).observe(thrPage, { childList: true, subtree: true });
   // A linked file: shown read-only beside the chat when it reads as text (at its #L line), else in the file manager.
-  async function openChatFileLink(owner, path, line) {
+  // attachment: a file that can't be shown as text gets a tab saying why (with Show in folder) instead.
+  async function openChatFileLink(owner, path, line, attachment = false) {
     const r = await window.electronAPI?.readAttachmentPreview?.(path).catch(() => null);
-    if (r?.text == null) { window.electronAPI?.showInFolder?.(path); return; }
+    if (r?.text == null && (!attachment || r?.error === 'Not a file')) { window.electronAPI?.showInFolder?.(path); return; }
+    if (r?.text == null) {
+      const reveal = window.electronAPI?.showInFolder ? '<button type="button" class="cfp-empty-btn" data-act="reveal">Show in folder</button>' : '';
+      openChatPanel(owner, { title: path.split(/[\\/]/).pop(), path, sub: path.split(/[\\/]/).slice(-2).join('/'),
+        rows: `<div class="cfp-empty"><i class="ph ph-warning-circle" aria-hidden="true"></i><span>${escHtml(r?.error || 'Couldn’t read this file')}</span>${reveal}</div>` });
+      return;
+    }
     openChatFilePanel(owner, path, path.split(/[\\/]/).pop(), r.text, Number(line) || 0);
   }
   // Right-click in the chat: a link, an image, or a message (its text).
@@ -9524,9 +9759,22 @@
     if (img?.dataset.path) { e.preventDefault(); showCtxMenu(e, 'chat-image', img); return; }
     const href = e.target.closest('button.thr-link')?.dataset.href;
     if (href) { e.preventDefault(); showCtxMenu(e, 'chat-link', href); return; }
+    // A chip in a sent or received message: the same menu as the composer's chips, without Remove.
+    const chip = sentChatReference(e.target);
+    if (chip) { e.preventDefault(); showCtxMenu(e, 'chat-ref', { ...chip, sent: true }); return; }
     const msg = e.target.closest('.thr-msg[data-key]');
     if (msg) { e.preventDefault(); showCtxMenu(e, 'chat-msg', msg); }
   });
+  // A message chip as a composer-style reference (chat-ref menu): { file, anchor } or null.
+  function sentChatReference(target) {
+    const el = target.closest('.thr-skill-ref[data-skill-ref], .thr-cite[title], .thr-thread-mention[data-thread-key], .thr-img-link[data-path], a.thr-at-ref[data-path]');
+    if (!el) return null;
+    if (el.dataset.skillRef) return { file: { skill: true, mention: el.dataset.skillRef }, anchor: el };
+    if (el.matches('.thr-cite')) return { file: { cite: el.title }, anchor: el };
+    if (el.dataset.threadKey) return { file: { thread: el.dataset.threadKey }, anchor: el };
+    const path = el.matches('.thr-img-link') ? el.dataset.path : chatLinkPath(el.dataset.path).path, name = path.split(/[\\/]/).pop();
+    return { file: { path, name, dir: !!el.querySelector('.ph-folder'), image: /\.(png|jpe?g|gif|webp|bmp)$/i.test(path) }, anchor: el };
+  }
   // An image in the chat to the clipboard (as PNG); the copy button and the right-click menu share it.
   async function copyChatImage(img) {
     const c = Object.assign(document.createElement('canvas'), { width: img.naturalWidth, height: img.naturalHeight });
@@ -9710,8 +9958,7 @@
         const top = parent ? `<button type="button" class="thr-parent-link" data-side="${escHtml(parent.id)}" title="Go to ${escHtml(name)}">`
           + `<i class="ph ${sub ? 'ph-robot' : 'ph-chat-circle-dots'}" aria-hidden="true"></i><span class="thr-parent-kind">${sub ? 'Subagent of' : 'Side chat of'}</span>`
           + `<span class="thr-parent-name">${escHtml(name)}</span><i class="ph ph-arrow-up-right thr-parent-go" aria-hidden="true"></i></button>${useAsContext}`
-          + (inSidePanel ? `<button type="button" class="thr-parent-icon" data-act="to-tab" aria-label="Open in tab" data-tip="Open in tab"><i class="ph ph-arrow-square-out" aria-hidden="true"></i></button>`
-            + `<button type="button" class="thr-parent-icon" data-act="close-panel" aria-label="Hide side chat" data-tip="Hide"><i class="ph ph-x" aria-hidden="true"></i></button>`
+          + (inSidePanel ? `<button type="button" class="thr-parent-icon" data-act="to-tab" aria-label="Open in tab" data-tip="Open in tab"><i class="ph ph-arrow-square-out" aria-hidden="true"></i></button>` // closing is on its tab in the panel's strip
           : asTab ? `<button type="button" class="thr-parent-icon" data-act="to-panel" aria-label="Show beside the thread" data-tip="Show beside the thread"><i class="ph ph-arrow-square-in" aria-hidden="true"></i></button>` : '') : '';
         parentEl.hidden = !top;
         if (parentEl._html !== top) { parentEl._html = top; parentEl.innerHTML = top; }
@@ -10708,6 +10955,11 @@
         insertChatMention(file, allocator, files);
       }
       return file.mention;
+    }).replace(/https?:\/\/[^\s<>"'`]+/gi, match => {
+      // A pasted web link: a chip (favicon + address) sent as typed, like an @ mention.
+      const url = match.replace(/[.,;:!?)\]]+$/, '');
+      if (!files.some(f => f.url && f.mention === url)) files.push({ at: true, url, mention: url, name: url });
+      return match;
     });
     return { text: value, files };
   }
@@ -10845,6 +11097,7 @@
       const gallery = imgs.map(f => ({ ref: { kind: 'file', path: f.path, label: f.name || f.path.split(/[\\/]/).pop() }, src: f.preview, opts: { onEdit: draftTab && window.electronAPI?.saveThreadAttachment ? onEditFor(f) : null } }));
       openClaudeRefViewer(null, { kind: 'file', path: file.path, label: file.name || file.path.split(/[\\/]/).pop() }, '', file.preview, { onEdit, gallery, index: Math.max(0, imgs.indexOf(file)) });
     }
+    else if (window.electronAPI?.readAttachmentPreview && (draftTab || curChat())?.el) void openChatFileLink(draftTab || curChat(), file.path, 0, true); // beside the chat, as a tab
     else openClaudeRefViewer(null, { kind: 'text-file', path: file.path, label: file.name || file.path }, '');
   }
   function hydrateChatAttachmentSizes(surface) {
@@ -10886,6 +11139,8 @@
       if (!file) return md ? mdInputHtml(part, lineStart) : chatDraftTextHtml(part);
       if (file.skill) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-skill-ref" tabindex="${tabIndex}">`
         + `<i class="ph ${file.skill === 'skill' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${escHtml(file.name.replace(/^\$/, ''))}</span></a></span>`;
+      if (file.url) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-url-ref" tabindex="${tabIndex}" title="${escHtml(file.url)}">`
+        + `${linkIconHtml(file.url)}<span>${escHtml(file.url.replace(/^https?:\/\//i, ''))}</span></a></span>`;
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
         + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
@@ -10899,7 +11154,12 @@
     }).join('');
     // Keep native spellcheck ranges when typing leaves the rendered markup unchanged.
     const rewrote = editor.innerHTML !== markup;
-    if (rewrote) editor.innerHTML = markup;
+    if (rewrote) {
+      editor.innerHTML = markup;
+      // Link chips' favicons (as in the chat: fetched once per host, the globe until then or when there is none).
+      editor.querySelectorAll('i[data-favicon]').forEach(i => loadFavicon(i.dataset.favicon, i.dataset.origin).then(f => { if (f && i.isConnected) i.outerHTML = faviconHtml(f); }));
+      editor.querySelectorAll('img.thr-favicon[data-host]').forEach(img => img.addEventListener('error', () => { _faviconMissing.add(img.dataset.host); img.outerHTML = '<i class="ph ph-globe" aria-hidden="true"></i>'; }, { once: true }));
+    }
     editor._draftValue = input.value; editor._draftReferences = signature; editor._draftMd = md;
     // An untouched editor keeps its selection; resetting it forces a layout of the whole page.
     if (rewrote && surface === thrPage && document.activeElement === editor) restoreChatEditorSelection(editor, input);
@@ -11006,6 +11266,20 @@
     }
     return null;
   }
+  function addChatFolderMention(tab, path) {
+    const mention = '@' + (/\s/.test(path) ? `"${path}"` : path);
+    const here = curChat() === tab, files = here ? _chatFiles : (tab._files ||= tab.chat?.draftFiles || []);
+    if (!files.some(f => f.mention === mention)) files.push({ at: true, dir: true, mention, name: path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path, path });
+    const input = here ? thrInput : Object.assign(document.createElement('textarea'), { value: tab._draft ?? tab.chat?.draft ?? '' });
+    if (here) threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
+    else input.setSelectionRange(input.value.length, input.value.length);
+    const start = input.selectionStart, before = input.value.slice(0, start), after = input.value.slice(input.selectionEnd);
+    input.setRangeText((before && !/\s$/.test(before) ? ' ' : '') + mention + (!after || !/^\s/.test(after) ? ' ' : ''), start, input.selectionEnd, 'end');
+    if (here) return;
+    tab._draft = input.value;
+    tab.chat ||= { createdAt: Date.now() };
+    if (!tab._editingQueued) { tab.chat.draft = input.value; tab.chat.draftFiles = files; }
+  }
   async function addChatFilesToTab(tab, files) {
     for (const file of files) {
       try {
@@ -11014,6 +11288,8 @@
         const persistImage = (image || file.tvPasted) && saveAttachment; // pasted text has no disk path: keep it with the thread
         const path = persistImage ? null : await localPathForFile(tab, file);
         if (!path && !persistImage) throw new Error('Could not read ' + file.name);
+        // A pasted or dropped folder: an @ mention (folder icon, sent as @path), like one picked from @, not a file chip.
+        if (path && await window.electronAPI?.pathKind?.(path).catch(() => null) === 'dir') { addChatFolderMention(tab, path); continue; }
         const preview = image ? await new Promise(resolve => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result);
@@ -11088,6 +11364,25 @@
     const files = [...(e.clipboardData?.files || [])];
     if (files.length) { e.preventDefault(); addChatFiles(files); }
   });
+  // Right-click on a composer chip (image, file, folder, link, citation, thread): its own actions, not the text menu.
+  threadPart(thrPage, 'input-links')?.addEventListener('contextmenu', e => {
+    const reference = e.target.closest('[data-mention]'), file = reference && _chatFiles.find(f => f.mention === reference.dataset.mention);
+    if (!file) return;
+    e.preventDefault(); e.stopPropagation();
+    showCtxMenu(e, 'chat-ref', { file, anchor: reference.querySelector('a') || reference });
+  });
+  // Takes a chip out of the draft: its entry and its text.
+  function removeChatReference(file) {
+    const i = _chatFiles.indexOf(file);
+    if (i < 0) return;
+    threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
+    _chatFiles.splice(i, 1);
+    if (file.mention) {
+      const caret = thrInput.value.slice(0, thrInput.selectionStart).split(file.mention).join('').length;
+      thrInput.value = thrInput.value.split(file.mention).join(''); thrInput.setSelectionRange(caret, caret);
+    }
+    renderChatFiles(); autosizeThreadInput(); saveState(); thrInput.focus({ preventScroll: true });
+  }
   threadPart(thrPage, 'input-links')?.addEventListener('click', e => {
     const reference = e.target.closest('[data-mention]');
     if (!reference) return;
@@ -11096,6 +11391,8 @@
     if (file?.cite) jumpToCitation(file);
     else if (file?.skill) void showChatSkillInfo(file.mention, reference.querySelector('a') || reference); // the card, like a sent chip's
     else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
+    else if (file?.url) openChatWebLink(file.url, e.shiftKey);
+    else if (file?.dir) window.electronAPI?.showInFolder?.(file.path); // a folder mention: reveal it, there's nothing to preview
     else if (file && !file.at) openChatAttachment(file, curChat());
   });
   {
@@ -11482,10 +11779,10 @@
   }
   // A turn's changed files as one read-only diff beside the chat, drawn by diff2html (vendor/diff2html-ui-base.min.js,
   // colored by the app's highlight.js): sticky file headers, old/new line numbers, word-level changes.
-  function openChatDiffPanel(owner, files, cwd) {
+  function openChatDiffPanel(owner, files, cwd, key) {
     const add = files.reduce((s, f) => s + f.add, 0), del = files.reduce((s, f) => s + f.del, 0);
     const { text, unnumbered, maxLn } = unifiedDiff(files, cwd);
-    const panel = openChatPanel(owner, { title: `${files.length} changed file${files.length > 1 ? 's' : ''}`, sub: `+${add} -${del}`, icon: 'ph-file-diff', rows: '', diff: true, maxLn });
+    const panel = openChatPanel(owner, { key, title: `${files.length} changed file${files.length > 1 ? 's' : ''}`, sub: `+${add} -${del}`, icon: 'ph-file-diff', rows: '', diff: true, maxLn });
     if (!panel || !window.Diff2HtmlUI) return;
     const ui = new Diff2HtmlUI(panel.querySelector('.cfp-code'), text, { drawFileList: false, outputFormat: 'line-by-line', matching: 'lines',
       fileContentToggle: false, stickyFileHeaders: false, highlight: true, synchronisedScroll: false }, window.hljs);
@@ -11501,6 +11798,16 @@
       w.classList.add('cfp-no-ln');
       for (const el of w.querySelectorAll('.d2h-info .d2h-code-line')) el.textContent = el.textContent.replace(/@@ -1,\d+ \+1,\d+ @@/, '@@');
     });
+    // Each file header folds its diff like a dropdown.
+    for (const h of panel.querySelectorAll('.d2h-file-header')) {
+      h.insertAdjacentHTML('afterbegin', '<i class="ph ph-caret-down cfp-fold" aria-hidden="true"></i>');
+      const name = h.querySelector('.d2h-file-name');
+      if (name) { name.title = name.textContent; const b = document.createElement('bdi'); b.textContent = name.textContent; name.replaceChildren(b); } // ltr path inside the rtl ellipsis
+      h.setAttribute('role', 'button'); h.tabIndex = 0; h.setAttribute('aria-expanded', 'false'); h.closest('.d2h-file-wrapper').classList.add('cfp-collapsed'); // collapsed by default
+      const toggle = () => h.setAttribute('aria-expanded', String(!h.closest('.d2h-file-wrapper').classList.toggle('cfp-collapsed')));
+      h.addEventListener('click', () => { if (!getSelection().toString()) toggle(); });
+      h.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    }
   }
   // The changes as a git-style unified diff for diff2html. Claude's hunks carry their @@ -a,b +c,d @@; a new file
   // (all + lines) starts at line 1; a hunk without numbers (Codex's apply_patch) gets placeholder ones, flagged.
@@ -11533,44 +11840,198 @@
   }
   // A changes card's files by its key, for its "Open diff". ponytail: never pruned; one entry per changes card seen.
   const _chatDiffs = new Map();
-  // The read-only panel on the right of a chat's tab (like a side chat panel: same width, same sash); one at a time.
-  function openChatPanel(owner, { title, path = '', sub = '', icon = 'ph-file-text', rows, line = 0, diff = false, maxLn = 0 }) { // → the panel
+  // The panel on the right of a chat's tab (like a side chat panel: same width, same sash). Files and diffs open as
+  // tabs in it; opening one already there refreshes it in place. → the tab's page (head + body).
+  const CFP_MAX_TABS = 12; // shortcut: the oldest inactive tab closes past this; make it a setting if anyone asks
+  function openChatPanel(owner, { key, title, path = '', sub = '', icon = 'ph-file-text', rows, line = 0, diff = false, maxLn = 0 }) {
+    // Files and diffs always open in the right panel of the thread that hosts it, also when its side chat asked:
+    // a panel inside the side chat would be a second strip the merged one can't close or hide.
+    owner = chatRightPanelHost(owner) || owner;
     if (!owner?.el) return;
-    owner._filePanel?.remove();
-    const panel = document.createElement('section');
-    panel.className = 'chat-file-panel' + (diff ? ' cfp-diff' : '');
-    panel.style.setProperty('--cfp-digits', Math.max(3, String(maxLn).length)); // gutters fit the longest number
-    panel.setAttribute('aria-label', title);
-    panel.innerHTML = `<div class="cfp-head"><i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-title">${escHtml(title)}</span>`
+    const panel = owner._filePanel?.isConnected ? owner._filePanel : createChatPanel(owner);
+    key ||= path || title;
+    const page = document.createElement('div');
+    page.className = 'cfp-page' + (diff ? ' cfp-diff' : '');
+    page.dataset.key = key;
+    page.dataset.path = path;
+    page.style.setProperty('--cfp-digits', Math.max(3, String(maxLn).length)); // gutters fit the longest number
+    page.setAttribute('role', 'tabpanel');
+    page.setAttribute('aria-label', title);
+    page.innerHTML = `<div class="cfp-head"><i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-title">${escHtml(title)}</span>`
       + `<span class="cfp-path"${path ? ` title="${escHtml(path)}"` : ''}>${escHtml(sub)}</span>`
       + (path && window.electronAPI?.showInFolder ? '<button type="button" class="cfp-icon" data-act="reveal" aria-label="Show in folder" data-tip="Show in folder"><i class="ph ph-folder-open" aria-hidden="true"></i></button>' : '')
-      + '<button type="button" class="cfp-icon" data-act="close" aria-label="Close panel" data-tip="Close"><i class="ph ph-x" aria-hidden="true"></i></button></div>'
+      + '</div>' // closing is on the tab (and Esc closes the panel)
       + `<div class="cfp-body" tabindex="0" aria-label="${escHtml(title)} (read-only)"><div class="cfp-code">${rows}</div></div>`;
-    const file = path;
-    const sash = chatPanelSash();
-    sash.setAttribute('aria-label', 'Resize panel');
-    panel.prepend(sash);
-    const close = () => { panel.remove(); owner.el?.classList.remove('chat-file-open'); if (owner._filePanel === panel) owner._filePanel = null; };
-    panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); }); // keep the chat the active tab
-    panel.addEventListener('contextmenu', e => e.stopPropagation()); // not the chat's or the tab's menu
-    panel.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
-    panel.querySelector('.cfp-head').addEventListener('click', e => {
-      const act = e.target.closest('.cfp-icon')?.dataset.act;
-      if (act === 'close') close();
-      else if (act === 'reveal') window.electronAPI.showInFolder(file);
-    });
-    owner.el.append(panel);
-    owner.el.classList.add('chat-file-open');
-    owner._filePanel = panel;
-    panel.querySelector('.cfp-body').focus({ preventScroll: true });
+    const tab = document.createElement('div');
+    tab.className = 'cfp-tab';
+    tab.setAttribute('role', 'tab');
+    tab.title = path || `${title} (${sub})`;
+    tab.innerHTML = `<i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-tab-name">${escHtml(path ? path.split(/[\\/]/).pop() : title)}</span>`
+      + '<button type="button" class="cfp-tab-x" tabindex="-1" aria-label="Close tab"><i class="ph ph-x" aria-hidden="true"></i></button>';
+    tab._page = page; page._tab = tab;
+    const old = [...panel.querySelectorAll(':scope > .cfp-page')].find(p => p.dataset.key === key);
+    if (old) { old._tab.replaceWith(tab); old.replaceWith(page); } // same file or diff: fresh content, same place
+    else { panel.querySelector('.cfp-tabs').append(tab); panel.append(page); }
+    const pages = [...panel.querySelectorAll(':scope > .cfp-page')];
+    if (pages.length > CFP_MAX_TABS) closeChatPanelTab(owner, pages.find(p => p !== page));
+    activateChatPanelTab(page);
+    // The right panel shows this file now, not a side chat; its side chats join the strip.
+    owner._rightHidden = false;
+    const wsp = wsOf(owner);
+    if (wsp && owner._panelGuest) { owner._panelGuest = null; activateTerminal(wsp.id, owner.id); }
+    else if (wsp) syncChatPanels(wsp);
+    page.querySelector('.cfp-body').focus({ preventScroll: true });
     // A link to a line (#L12, :12): that line, marked and centered.
-    const target = line > 0 && panel.querySelectorAll('.cfp-row')[line - 1];
+    const target = line > 0 && page.querySelectorAll('.cfp-row')[line - 1];
     if (target) {
       target.classList.add('cfp-target');
       const body = target.closest('.cfp-body'), tr = target.getBoundingClientRect(), br = body.getBoundingClientRect();
       body.scrollTop += tr.top - br.top - (body.clientHeight - tr.height) / 2; // only the panel scrolls, never the chat
     }
-    return panel;
+    return page;
+  }
+  function createChatPanel(owner) {
+    const panel = document.createElement('section');
+    panel.className = 'chat-file-panel';
+    panel._owner = owner;
+    panel.setAttribute('aria-label', 'Files and diffs');
+    panel.innerHTML = '<div class="cfp-tabs" role="tablist" aria-label="Open files and diffs"></div>' + CHAT_PANEL_HIDE_BTN;
+    const sash = chatPanelSash();
+    sash.setAttribute('aria-label', 'Resize panel');
+    panel.prepend(sash);
+    const close = () => closeChatFilePanel(owner);
+    panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); }); // keep the chat the active tab
+    panel.addEventListener('contextmenu', e => {
+      e.stopPropagation(); // not the chat's or the tab's menu
+      const tab = e.target.closest('.cfp-tab');
+      if (tab?.dataset.side) { e.preventDefault(); showCtxMenu(e, 'chat-side-tab', { host: owner, id: tab.dataset.side }); }
+      else if (tab) { e.preventDefault(); showCtxMenu(e, 'chat-file-tab', { owner, page: tab._page }); }
+    });
+    panel.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.stopPropagation(); close(); return; }
+      // While focus is in the panel: Ctrl+Tab / Ctrl+Shift+Tab cycle its tabs, Ctrl+W closes one.
+      const cur = panel.querySelector(':scope > .cfp-page:not([hidden])');
+      if (!cur || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const all = [...panel.querySelectorAll(':scope > .cfp-page')];
+      if (e.key === 'Tab') activateChatPanelTab(all[(all.indexOf(cur) + (e.shiftKey ? -1 : 1) + all.length) % all.length]);
+      else if (e.key.toLowerCase() === 'w' && !e.shiftKey) closeChatPanelTab(owner, cur);
+      else return;
+      e.preventDefault(); e.stopPropagation();
+      panel.querySelector(':scope > .cfp-page:not([hidden]) .cfp-body')?.focus({ preventScroll: true });
+    });
+    panel.addEventListener('click', e => {
+      const act = e.target.closest('.cfp-icon, .cfp-empty-btn')?.dataset.act, tab = e.target.closest('.cfp-tab');
+      if (act === 'hide') toggleChatRightPanel(owner);
+      else if (act === 'reveal') window.electronAPI.showInFolder(e.target.closest('.cfp-page').dataset.path);
+      else if (tab?.dataset.side && e.target.closest('.cfp-tab-x')) closeSideChatTab(owner, tab.dataset.side);
+      else if (tab?.dataset.side) showSideChatTab(owner, tab.dataset.side);
+      else if (tab && e.target.closest('.cfp-tab-x')) closeChatPanelTab(owner, tab._page);
+      else if (tab) { activateChatPanelTab(tab._page); tab.focus(); }
+    });
+    panel.addEventListener('auxclick', e => { const tab = e.button === 1 && e.target.closest('.cfp-tab'); if (tab?.dataset.side) closeSideChatTab(owner, tab.dataset.side); else if (tab?._page) closeChatPanelTab(owner, tab._page); });
+    const strip = panel.querySelector('.cfp-tabs');
+    bindTabDrag(strip, '.cfp-tab', (a, b, after) => moveCombinedTab(owner, a, b, after));
+    strip.addEventListener('wheel', e => { if (!e.deltaX && e.deltaY) { strip.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+    strip.addEventListener('keydown', e => { // tablist arrows (roving focus)
+      const tab = e.target.closest('.cfp-tab'), all = [...strip.children], i = all.indexOf(tab);
+      if (!tab) return;
+      const next = { ArrowLeft: all[i - 1], ArrowRight: all[i + 1], Home: all[0], End: all.at(-1) }[e.key];
+      if (next?.dataset.side) { e.preventDefault(); showSideChatTab(owner, next.dataset.side); }
+      else if (next) { e.preventDefault(); activateChatPanelTab(next._page); next.focus(); }
+      else if (e.key === 'Delete' && tab._page) { e.preventDefault(); closeChatPanelTab(owner, tab._page); strip.querySelector('[aria-selected="true"]')?.focus(); }
+    });
+    owner.el.append(panel);
+    owner.el.classList.add('chat-file-open');
+    return owner._filePanel = panel;
+  }
+  // Drag a tab along its strip to reorder it, browser style: it follows the pointer, the tabs it passes slide aside,
+  // and on release it settles into its slot before the order is committed with move(from, to, after).
+  function bindTabDrag(strip, sel, move) {
+    strip.addEventListener('pointerdown', e => {
+      const tab = e.target.closest(sel);
+      if (!tab || e.button !== 0 || e.target.closest('button, input')) return;
+      const tabs = [...strip.querySelectorAll(sel)], from = tabs.indexOf(tab);
+      if (tabs.length < 2) return;
+      const rects = tabs.map(t => t.getBoundingClientRect());
+      const gap = rects[1].left - rects[0].right, step = rects[from].width + gap; // how far a passed tab slides
+      const x0 = e.clientX;
+      let dragging = false, to = from;
+      const onMove = ev => {
+        const dx = ev.clientX - x0;
+        if (!dragging) {
+          if (Math.abs(dx) < 5) return; // a click, not a drag
+          dragging = true;
+          tab.setPointerCapture(e.pointerId);
+          strip.classList.add('tab-reordering'); tab.classList.add('tab-dragging');
+        }
+        const d = Math.max(rects[0].left - rects[from].left, Math.min(rects.at(-1).right - rects[from].right, dx));
+        tab.style.transform = `translateX(${d}px)`;
+        // A tab is passed once the dragged tab's leading edge crosses its middle (so the strip's ends are reachable
+        // even when the dragged tab is wider than the end tab).
+        const left = rects[from].left + d, right = rects[from].right + d;
+        to = from;
+        rects.forEach((r, i) => {
+          const mid = r.left + r.width / 2;
+          if (i > from && right > mid) to = i;
+          else if (i < from && left < mid && to === from) to = i;
+        });
+        tabs.forEach((t, i) => {
+          if (i === from) return;
+          const shift = i > from && i <= to ? -step : i < from && i >= to ? step : 0;
+          t.style.transform = shift ? `translateX(${shift}px)` : '';
+        });
+      };
+      const onUp = () => {
+        removeEventListener('pointermove', onMove); removeEventListener('pointerup', onUp); removeEventListener('pointercancel', onUp);
+        if (!dragging) return;
+        // The release's click would select the tab now: on the terminal strip that redraws it in the old order
+        // mid-settle, and the names visibly swap back and forth. Swallow it; a drag isn't a click.
+        const eat = ev => { ev.stopPropagation(); ev.preventDefault(); };
+        strip.addEventListener('click', eat, { capture: true, once: true });
+        setTimeout(() => strip.removeEventListener('click', eat, { capture: true }), 0);
+        // Settle into the slot, then commit the order with every transform cleared (no jump: same positions).
+        tab.classList.remove('tab-dragging');
+        tab.style.transform = `translateX(${to > from ? rects[to].right - rects[from].right : to < from ? rects[to].left - rects[from].left : 0}px)`;
+        const motion = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+        setTimeout(() => {
+          tabs.forEach(t => { t.style.transform = ''; });
+          strip.classList.remove('tab-reordering');
+          if (to !== from) move(tab, tabs[to], to > from);
+        }, motion ? 160 : 0);
+      };
+      addEventListener('pointermove', onMove); addEventListener('pointerup', onUp); addEventListener('pointercancel', onUp);
+    });
+  }
+  function activateChatPanelTab(page) {
+    for (const p of page.parentElement.querySelectorAll(':scope > .cfp-page')) {
+      p.hidden = p !== page;
+      p._tab.setAttribute('aria-selected', String(p === page));
+      p._tab.tabIndex = p === page ? 0 : -1;
+    }
+    page._tab.scrollIntoView({ block: 'nearest', inline: 'nearest', container: 'nearest' });
+  }
+  // A page always closes against the panel it is in (panel._owner), whichever strip copy the click came from.
+  function closeChatPanelTab(owner, page) {
+    const panel = page?.parentElement;
+    if (!panel) return;
+    owner = panel._owner || owner;
+    const all = [...panel.querySelectorAll(':scope > .cfp-page')];
+    if (all.length < 2) { closeChatFilePanel(owner); return; }
+    const i = all.indexOf(page);
+    page._tab.remove(); page.remove();
+    if (!page.hidden) activateChatPanelTab(all[i + 1] || all[i - 1]);
+    refreshChatPanelStrips(owner);
+  }
+  function closeChatFilePanel(owner) {
+    owner._filePanel?.remove();
+    owner._filePanel = null;
+    owner.el?.classList.remove('chat-file-open');
+    refreshChatPanelStrips(owner);
+  }
+  // The side chat's copy of the strip lists the file tabs too: redraw it after one closes.
+  function refreshChatPanelStrips(owner) {
+    const ws = wsOf(owner);
+    if (ws) syncChatPanels(ws);
   }
   function openChatSkills() {
     closeChatComplete();
@@ -11711,6 +12172,22 @@
     return parts;
   }
   function findCitationRange(citation, flow) {
+    return findCitationRangeIn(citation, flow) || (mountCitedDetails(citation, flow) ? findCitationRange(citation, flow) : null);
+  }
+  // A collapsed work group keeps its messages in a <template> (fillLazyDetails), out of the DOM the search walks:
+  // mount the groups holding the cited message or text. → whether any was mounted.
+  function mountCitedDetails(citation, flow) {
+    const source = citation.source || {}, fold = t => t.replace(/\s/g, ''), needle = fold(source.text || citation.cite || '');
+    let mounted = false;
+    for (const details of flow.querySelectorAll('details[data-key]')) {
+      const content = details.querySelector(':scope > template')?.content;
+      if (!content || !((source.key && content.querySelector(`[data-key="${CSS.escape(source.key)}"]`)) || (needle && fold(content.textContent).includes(needle)))) continue;
+      fillLazyDetails(details);
+      mounted = true;
+    }
+    return mounted;
+  }
+  function findCitationRangeIn(citation, flow) {
     const source = citation.source || {}, needle = source.text || citation.cite;
     if (!needle) return null;
     const original = source.key && [...flow.querySelectorAll('.thr-msg.assistant[data-key]')].find(el => el.dataset.key === source.key)?.querySelector(':scope > .thr-msg-text');
@@ -14021,7 +14498,7 @@
           + `<i class="ph ph-caret-right thr-sub-caret" aria-hidden="true"></i></summary><div class="thr-subs-list">${subs.map(({ m, key }) => subHtml(m, key, done)).join('')}</div></details>`;
       };
       // A turn's steps in order: thoughts, interim replies, runs of tool calls, subagents.
-      const stepsHtml = (list, base, completed = false, changedFiles, pre = i + ':') => {
+      const stepsHtml = (list, base, completed = false, changedFiles, pre = i + ':', subsDone = completed) => {
         let out = '', run = [], subs = [];
         const totalTools = list.filter(({ m }) => m.role === 'tool' && !m.qa && !m.agent).length;
         // A run the agent has moved on from is done (summarized) even mid-turn; only the trailing run stays live.
@@ -14030,7 +14507,7 @@
           if (run.length) out += toolsHtml(run.map(x => x.m), base + ':tools:' + run[0].j, done,
             run.length === totalTools ? changedFiles : undefined);
           run = [];
-          if (subs.length) out += subsHtml(subs, completed);
+          if (subs.length) out += subsHtml(subs, subsDone);
           subs = [];
         };
         for (const { m, j } of list) {
@@ -14104,7 +14581,8 @@
         else if (steps.length) {
           const tk = 'turn:' + i + ':' + prompt.j;
           html += `<details class="thr-turn" data-key="${tk}"><summary><span>${took || 'Steps'}</span><i class="ph ph-caret-right thr-turn-caret" aria-hidden="true"></i></summary>`
-            + `<div class="thr-turn-steps">${stepsHtml(steps, i + ':' + prompt.j, !running, changedFiles)}</div></details>`;
+            // A chunk a steered prompt followed is over: its tools stop shimmering (a subagent it started may still run).
+            + `<div class="thr-turn-steps">${stepsHtml(steps, i + ':' + prompt.j, !running || e < list.length, changedFiles, undefined, !running)}</div></details>`;
         } else if (took) html += `<div class="thr-worked">${took}</div>`;
         const changes = changesHtml(changedFiles, 'chg:' + i + ':' + prompt.j);
         html += fin >= 0 ? msgHtml(rest[fin].m, i + ':' + rest[fin].j, true, changes) : changes;        // A turn the user stopped ends with a status line (Claude Code's "[Request interrupted by user]").
@@ -14186,7 +14664,7 @@
     content.querySelectorAll('.thr-sub[data-sub-call]').forEach(b => b.addEventListener('click', () => openSubagentThread(ws, b.dataset)));
     content.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
       const d = _chatDiffs.get(b.closest('.thr-changes').dataset.diffKey);
-      if (d) openChatDiffPanel(ws, d.files, d.cwd);
+      if (d) openChatDiffPanel(ws, d.files, d.cwd, b.closest('.thr-changes').dataset.diffKey);
     }));
     flow.append(content);
     refreshAgentProcCards();
@@ -14993,6 +15471,71 @@
       item('<i class="ph ph-copy"></i>', 'Copy thread ID', '', () => copy(threadKey(tab)));
       sep();
       item('<i class="ph ph-trash"></i>', 'Delete thread', '', () => confirmDeleteThread(tab, w), true);
+    } else if (type === 'chat-terminal-tab') {
+      const { entry, owner } = data, list = owner._bottomTerms || [], i = list.indexOf(entry);
+      item('<i class="ph ph-plus"></i>', 'New terminal', '', () => newChatBottomTerm(owner));
+      item('<i class="ph ph-pencil-simple"></i>', 'Rename', '', () => renameChatBottomTerm(owner, entry));
+      item('<i class="ph ph-eraser"></i>', 'Clear', '', () => entry.term.clear());
+      sep();
+      const close = item('<i class="ph ph-x"></i>', 'Close terminal', 'Del', () => closeChatBottomTerm(owner, entry));
+      const others = item('<i class="ph ph-x-circle"></i>', 'Close other terminals', '', () => list.filter(x => x !== entry).forEach(x => closeChatBottomTerm(owner, x)));
+      const right = item('<i class="ph ph-arrow-line-right"></i>', 'Close terminals to the right', '', () => list.slice(i + 1).forEach(x => closeChatBottomTerm(owner, x)));
+      if (list.length < 2) { close.classList.add('disabled'); others.classList.add('disabled'); }
+      if (i === list.length - 1) right.classList.add('disabled');
+      sep();
+      item('<i class="ph ph-caret-down"></i>', 'Hide panel', 'Ctrl+J', () => toggleChatBottomTerminal(owner));
+    } else if (type === 'chat-ref') {
+      const { file, anchor, sent } = data, path = file.path, copy = text => { void (window.electronAPI?.clipboardWrite ? window.electronAPI.clipboardWrite(text) : navigator.clipboard.writeText(text)); };
+      const reveal = path && window.electronAPI?.showInFolder ? () => window.electronAPI.showInFolder(path) : null;
+      const inTab = terminalLinkTarget !== 'external';
+      if (file.url) {
+        item('<i class="ph ph-globe"></i>', inTab ? 'Open in browser tab' : 'Open in default browser', '', () => openChatWebLink(file.url));
+        item('<i class="ph ph-arrow-square-out"></i>', inTab ? 'Open in default browser' : 'Open in browser tab', 'Shift+Click', () => openChatWebLink(file.url, true));
+        sep();
+        item('<i class="ph ph-copy"></i>', 'Copy link', '', () => copy(file.url));
+      } else if (file.cite) {
+        item('<i class="ph ph-quotes"></i>', 'Go to passage', '', () => jumpToCitation(file));
+        sep();
+        item('<i class="ph ph-copy"></i>', 'Copy text', '', () => copy(file.cite));
+      } else if (file.thread) {
+        item('<i class="ph ph-chats-circle"></i>', 'Open thread', '', () => { const t = findThreadByKey(file.thread); if (t) openChatTab(t); });
+      } else if (file.skill) {
+        item('<i class="ph ph-info"></i>', 'Show details', '', () => void showChatSkillInfo(file.mention, anchor));
+      } else if (path) {
+        if (file.dir) { if (reveal) item('<i class="ph ph-folder-open"></i>', 'Open folder', '', reveal); }
+        else {
+          item(`<i class="ph ${file.image ? 'ph-image' : 'ph-eye'}"></i>`, file.image ? 'Open image' : 'Preview', '', () => openChatAttachment(file, sent ? null : curChat()));
+          if (reveal) item('<i class="ph ph-folder-open"></i>', 'Show in folder', '', reveal);
+        }
+        sep();
+        item('<i class="ph ph-copy"></i>', 'Copy path', '', () => copy(path));
+        item('<i class="ph ph-file-text"></i>', 'Copy name', '', () => copy(file.name || path.split(/[\\/]/).pop()));
+      }
+      if (!sent) { // a sent message's chip can't be taken out
+        sep();
+        item('<i class="ph ph-x"></i>', file.cite ? 'Remove citation' : file.url ? 'Remove link' : 'Remove', '', () => removeChatReference(file), true);
+      }
+    } else if (type === 'chat-side-tab') {
+      const { host, id } = data, t = findChatThread(id), shown = host?._panelGuest === id;
+      if (!t) return;
+      if (!shown) item('<i class="ph ph-chat-circle-dots"></i>', 'Show side chat', '', () => showSideChatTab(host, id));
+      item('<i class="ph ph-arrow-square-out"></i>', 'Open in tab', '', () => chatPanelToTab(t));
+      item('<i class="ph ph-x"></i>', 'Close tab', '', () => closeSideChatTab(host, id));
+      sep();
+      item('<i class="ph ph-trash"></i>', 'Delete side chat', '', () => confirmDeleteThread(t, undefined, 'side chat'), true);
+    } else if (type === 'chat-file-tab') {
+      const { owner, page } = data, pages = [...page.parentElement.querySelectorAll(':scope > .cfp-page')], i = pages.indexOf(page), path = page.dataset.path;
+      item('<i class="ph ph-x"></i>', 'Close tab', 'Ctrl+W', () => closeChatPanelTab(owner, page));
+      const others = item('<i class="ph ph-x-circle"></i>', 'Close other tabs', '', () => pages.filter(p => p !== page).forEach(p => closeChatPanelTab(owner, p)));
+      const right = item('<i class="ph ph-arrow-line-right"></i>', 'Close tabs to the right', '', () => pages.slice(i + 1).forEach(p => closeChatPanelTab(owner, p)));
+      if (pages.length < 2) others.classList.add('disabled');
+      if (i === pages.length - 1) right.classList.add('disabled');
+      item('<i class="ph ph-x-square"></i>', 'Close all tabs', 'Esc', () => closeChatFilePanel(owner));
+      if (path) {
+        sep();
+        item('<i class="ph ph-copy"></i>', 'Copy path', '', () => { void (window.electronAPI?.clipboardWrite ? window.electronAPI.clipboardWrite(path) : navigator.clipboard.writeText(path)); });
+        if (window.electronAPI?.showInFolder) item('<i class="ph ph-folder-open"></i>', 'Show in folder', '', () => window.electronAPI.showInFolder(path));
+      }
     } else if (type === 'chat-terminal') {
       const { entry, owner } = data, term = entry.term;
       const copy = item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+Shift+C', () => { void copyPrivateTerminal(term).catch(() => {}); });
@@ -15001,6 +15544,8 @@
       item('<i class="ph ph-selection-all"></i>', 'Select all', '', () => term.selectAll());
       item('<i class="ph ph-eraser"></i>', 'Clear', '', () => term.clear());
       sep();
+      item('<i class="ph ph-plus"></i>', 'New terminal', '', () => newChatBottomTerm(owner));
+      if (owner._bottomTerms?.length > 1) item('<i class="ph ph-trash"></i>', 'Close terminal', '', () => closeChatBottomTerm(owner, entry));
       item('<i class="ph ph-x"></i>', 'Hide terminal', 'Ctrl+J', () => toggleChatBottomTerminal(owner));
     } else if (type === 'browser-more') {
       const { entry, history } = data;

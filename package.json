@@ -18,7 +18,7 @@
     "test:sessions": "node scripts/test-history-terminal.js && node scripts/test-claude-sessions.js && node scripts/test-session-context.js && node scripts/test-file-drop.js && node scripts/test-workspace-context.js",
     "test:boot": "node scripts/build-dist.js && node scripts/test-boot.js",
     "test:browser": "node scripts/test-browser-resizing.js && node scripts/test-browser-snapshot.js",
-    "test:chat": "node scripts/test-chat-title.js && node scripts/test-closed-threads.js && node scripts/test-chat-terminal.js && node scripts/test-chat-bottom-terminal.js && node scripts/test-chat-views.js && node scripts/test-chat-queue.js && node scripts/test-chat-citations.js && node scripts/test-chat-message-images.js",
+    "test:chat": "node scripts/test-chat-title.js && node scripts/test-closed-threads.js && node scripts/test-chat-terminal.js && node scripts/test-chat-bottom-terminal.js && node scripts/test-chat-right-panel.js && node scripts/test-chat-views.js && node scripts/test-chat-queue.js && node scripts/test-chat-citations.js && node scripts/test-chat-message-images.js",
     "test:files": "node scripts/test-file-drop.js",
     "test:servers": "node scripts/test-servers.js && node scripts/test-finish-notify.js && node scripts/test-servers-dropdown.js",
     "test:history": "node scripts/test-session-context-menu.js",

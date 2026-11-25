@@ -134,6 +134,11 @@ See [docs/chat.md](docs/chat.md) for details.
 
 <p align="center"><img src="screenshots/inline-images.png" alt="A chart rendered inline in the terminal with SIXEL" width="720"></p>
 
+<p align="center">
+  <img src="screenshots/settings.png" alt="General settings: link behavior, notifications and search engine" width="454">
+  <img src="screenshots/terminal-settings.png" alt="Terminal settings: cursor, default shell, scrollback and email blur" width="454">
+</p>
+
 ### Command palette, tab search and snippets
 
 - **Command palette** (`Ctrl+Shift+K`) lists every action and workspace, with their shortcuts.
