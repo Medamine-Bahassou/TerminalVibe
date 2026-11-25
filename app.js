@@ -9463,7 +9463,7 @@
   for (const h of THREAD_HARNESSES) CHAT_AGENTS[h.id] ||= { models: [], efforts: ['default'], access: [['default', 'Default', 'ph-shield']], argv: () => [] };
   // An agent with no known models still gets one row: its own default.
   // OpenCode's catalog comes from a local server + provider probe: keep it like Codex's and Antigravity's,
-  // so opening the picker doesn't launch a server every time. One map per project folder, persisted across restarts.
+  // so the picker shows the saved list at once and refreshes it when stale. One map per project folder, persisted across restarts.
   const OPENCODE_MODELS_KEY = 'tv-opencode-models';
   let openCodeCatalogs;
   try { openCodeCatalogs = new Map(Object.entries(JSON.parse(localStorage.getItem(OPENCODE_MODELS_KEY)) || {})); }
@@ -9472,6 +9472,8 @@
   const openCodeCatalog = cwd => openCodeCatalogs.get(cwd) || [...openCodeCatalogs.values()].pop() || null;
   const saveOpenCodeCatalogs = () => { try { localStorage.setItem(OPENCODE_MODELS_KEY, JSON.stringify(Object.fromEntries(openCodeCatalogs))); } catch {} };
   const openCodeModelRequests = new Map(); // cwd -> one in-flight probe, shared by the picker and the background load
+  const openCodeFetchedAt = new Map(); // cwd -> last good probe this run; a restored catalog starts stale
+  const OPENCODE_FRESH_MS = 60000;
   const openCodeModelErrors = new Map(); // cwd -> last probe error message
   // A probe boots a throwaway `opencode serve`; under load it can miss its deadline once. Retry before telling
   // the user models are unavailable, since no other path re-probes a folder whose load failed.
@@ -9493,7 +9495,7 @@
     if (!bin) return Promise.resolve(null);
     cwd = cwd || '';
     const cached = openCodeCatalogs.get(cwd);
-    if (cached) return Promise.resolve(cached);
+    if (cached && Date.now() - openCodeFetchedAt.get(cwd) < OPENCODE_FRESH_MS) return Promise.resolve(cached);
     if (!openCodeModelRequests.has(cwd)) openCodeModelRequests.set(cwd,
       probeOpenCode(bin, cwd).then(models => {
         openCodeModelRequests.delete(cwd);
@@ -9501,6 +9503,7 @@
         if (Array.isArray(models) && models.length) {
           openCodeCatalogs.delete(cwd); // re-insert as newest; keep the 5 newest folders
           openCodeCatalogs.set(cwd, models);
+          openCodeFetchedAt.set(cwd, Date.now());
           for (const old of [...openCodeCatalogs.keys()].slice(0, -5)) openCodeCatalogs.delete(old);
           saveOpenCodeCatalogs();
           const chat = curChat();
@@ -9549,7 +9552,7 @@
   // Settings > Providers changed (enabled, binary path): look the agents up again.
   function reloadChatAgents() {
     _chatAgents = null;
-    openCodeCatalogs.clear(); saveOpenCodeCatalogs(); openCodeModelRequests.clear();
+    openCodeCatalogs.clear(); saveOpenCodeCatalogs(); openCodeModelRequests.clear(); openCodeFetchedAt.clear();
     if (!SETTINGS_ONLY) loadChatAgents().then(() => syncThreadComposer(curChat()));
   }
   let agyModelsRequest;

@@ -1046,8 +1046,8 @@ function register(ipcMain, { send, env: makeEnv, args: launchArgs = () => [], ve
       const directory = typeof cwd === 'string' && path.isAbsolute(cwd) && fs.existsSync(cwd) ? cwd : home;
       const key = JSON.stringify([bin, directory]);
       if (!modelCache.has(key)) modelCache.set(key, openCodeModels(bin, makeEnv('models-probe', harness), directory)
-        .then(models => { if (Array.isArray(models) && models.length) modelCache.set(key, Promise.resolve(models)); return models; })
-        .catch(() => { modelCache.delete(key); return null; })); // only failures re-probe; a good catalog is kept
+        .catch(() => null)
+        .finally(() => modelCache.delete(key))); // only coalesces: app.js decides when its saved list is stale
       return modelCache.get(key);
     }
     if (harness !== 'antigravity' || typeof bin !== 'string') return [];
