@@ -623,12 +623,12 @@ async function startOpenCodeServer(bin, env, cwd) {
   const timer = setTimeout(() => startup.abort(Error('OpenCode server did not start in time')), OPENCODE_START_MS);
   const child = spawn(launch.file, launch.args, {
     cwd,
-    env: { ...env, OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_SERVER_PASSWORD: password },
+    env: { ...env, OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_SERVER_PASSWORD: password, OPENCODE_PASSWORD: password },
     stdio: ['ignore', 'pipe', 'ignore'],
     windowsHide: true,
   });
   try {
-    const baseUrl = await new Promise((resolve, reject) => {
+    const { url: baseUrl, v2 } = await new Promise((resolve, reject) => {
       const abort = () => reject(startup.signal.reason);
       startup.signal.addEventListener('abort', abort, { once: true });
       child.once('error', reject);
@@ -636,14 +636,14 @@ async function startOpenCodeServer(bin, env, cwd) {
       let output = '';
       child.stdout.setEncoding('utf8').on('data', chunk => {
         output = (output + chunk).slice(-8192);
-        const address = /^opencode server listening on (http:\/\/127\.0\.0\.1:\d+)\s*$/m.exec(output);
-        if (address) {
-          startup.signal.removeEventListener('abort', abort);
-          resolve(address[1]);
-        }
+        const address = /^(opencode )?server listening on (http:\/\/127\.0\.0\.1:\d+)\s*$/m.exec(output);
+        if (!address) return;
+        startup.signal.removeEventListener('abort', abort);
+        // 2.x drops the "opencode " prefix (and replaces the whole HTTP API: opencode-v2.js).
+        resolve({ url: address[2], v2: !address[1] });
       });
     });
-    const client = createOpencodeClient({
+    const client = (v2 ? require('./opencode-v2').createClient : createOpencodeClient)({
       baseUrl, throwOnError: true,
       headers: { Authorization: 'Basic ' + Buffer.from('opencode:' + password).toString('base64') },
     });
