@@ -73,7 +73,11 @@ app.whenReady().then(async () => {
     const windowsDocument = windowsPath.replace('image.png', 'report final.pdf');
     const pastedDocument = prepareChatPastedText("'" + windowsDocument + "'");
     check(pastedDocument.files[3].path === windowsDocument && pastedDocument.text === '[File 4]', 'Windows document paths with spaces must preserve their source');
-    return 'PASS: copy/paste roundtrip restores inline image references, supports Windows paths and avoids duplicate attachments';
+    _chatFiles = []; thrInput.value = '';
+    const url = 'http://localhost:20128/v1';
+    const linked = prepareChatPastedText('Use ' + url + ' please');
+    check(linked.text === 'Use ' + url + ' please' && linked.files.length === 1 && linked.files[0].url === url && linked.files[0].mention === url, 'Pasted web links must become inline chips sent as typed');
+    return 'PASS: copy/paste roundtrip restores inline image references, supports Windows paths, avoids duplicate attachments and keeps pasted links as inline chips';
   })()`));
   clearTimeout(timer); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });

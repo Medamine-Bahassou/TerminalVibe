@@ -3653,3 +3653,7 @@ body .chat-file-panel .cfp-tab { flex:none; }
 /* Same hidden scrollbar as the terminal tab bar (beats the global thin scrollbar in style.css). */
 :is(.chat-file-panel .cfp-tabs, .chat-bottom-header .chat-bottom-tabs) { scrollbar-width:none !important; scrollbar-color:transparent transparent !important; }
 :is(.chat-file-panel .cfp-tabs, .chat-bottom-header .chat-bottom-tabs)::-webkit-scrollbar { display:none !important; width:0 !important; height:0 !important; }
+
+/* ── Chat composer: a pasted web link is an inline chip (favicon + address), like a sent link. ── */
+#sbr-thread .thr-input-links .thr-url-ref > .thr-favicon { display:inline-block; flex:none; align-self:center; width:14px; height:14px; margin:0; object-fit:contain; border-radius:4px !important; user-select:none; -webkit-user-select:none; }
+#sbr-thread .thr-input-links .thr-url-ref > .thr-favicon.mono { background-color:currentColor; -webkit-mask:var(--icon) center / contain no-repeat; mask:var(--icon) center / contain no-repeat; }
