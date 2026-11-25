@@ -1784,8 +1784,9 @@ body.ui-animations.resizing #threads-sidebar { transition:none; }
 #sbr-thread .thr-input-wrap textarea { display:block; color:transparent; caret-color:var(--fg); }
 #sbr-thread .thr-input-links { position:absolute; inset:0; box-sizing:border-box; overflow:hidden; padding:0 6px; color:var(--fg); font:400 14px/1.55 var(--ui-font); white-space:pre-wrap; overflow-wrap:break-word; pointer-events:none; }
 #sbr-thread .thr-input-wrap textarea { overflow-wrap:break-word; }
-#sbr-thread .thr-image-ref { color:var(--accent); text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent); text-underline-offset:3px; pointer-events:auto; cursor:pointer; }
-#sbr-thread .thr-image-ref:hover { text-decoration-color:var(--accent); }
+#sbr-thread .thr-image-ref { color:var(--accent); text-decoration:none; pointer-events:auto; cursor:pointer; }
+#sbr-thread :not(.thr-inline-ref) > .thr-image-ref > span:not(.thr-inline-image-icon) { text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent); text-underline-offset:3px; }
+#sbr-thread :not(.thr-inline-ref) > .thr-image-ref:hover > span:not(.thr-inline-image-icon) { text-decoration-color:var(--accent); }
 #sbr-thread .thr-image-ref:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 #sbr-thread .thr-input-wrap textarea:disabled ~ .thr-input-links { opacity:.6; }
 
@@ -1810,7 +1811,8 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 @media (prefers-reduced-motion:reduce) { #sbr-thread .thr-ultrathink { animation:none; background-size:100% 100%; } }
 #sbr-thread .thr-inline-ref { display:inline-flex; align-items:baseline; vertical-align:baseline; gap:4px; max-width:100%; white-space:nowrap; color:var(--accent); }
 #sbr-thread .thr-inline-ref a { display:inline-flex; align-items:baseline; gap:4px; min-width:0; color:var(--accent); text-decoration:none; cursor:pointer; }
-#sbr-thread .thr-inline-ref a:hover > span { text-decoration:underline; text-underline-offset:3px; } /* the text only, not the icon */
+/* Underline the name only: set on the link, it would run under its icon too (decorations reach every child). */
+#sbr-thread .thr-inline-ref a:hover > span:not(.thr-inline-image-icon) { text-decoration:underline; text-underline-offset:3px; }
 #sbr-thread .thr-cite-ref > span { max-width:min(320px, 44vw); overflow:hidden; text-overflow:ellipsis; vertical-align:bottom; }
 #sbr-thread .thr-cite-ref > i { font-size:13px; }
 #sbr-thread .thr-inline-image-icon { display:inline-flex; align-self:center; width:14px; height:14px; overflow:hidden; background:var(--bg); border-radius:3px !important; }
@@ -1972,7 +1974,7 @@ body.ui-animations #sbr-thread .thr-sides.anim.collapsed .thr-sides-bubble { tra
 #sbr-thread .thr-thread-mention { display:inline-flex; align-items:baseline; gap:4px; max-width:100%; color:var(--accent); text-decoration:none; cursor:pointer; white-space:nowrap; }
 #sbr-thread .thr-thread-mention > i { font-size:13px; align-self:center; }
 #sbr-thread .thr-thread-mention > span { overflow:hidden; text-overflow:ellipsis; }
-#sbr-thread .thr-thread-mention:hover { text-decoration:underline; text-underline-offset:3px; }
+#sbr-thread .thr-thread-mention:hover > span { text-decoration:underline; text-underline-offset:3px; } /* the name, not the icon */
 
 /* Threads sidebar: the drag preview of a thread (rendered off-screen for the snapshot). The transparent
    padding puts the chip up and to the right of the pointer. */
@@ -3156,25 +3158,27 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 #sbr-thread .thr-code-wrap { position:relative; white-space:normal; }
 #sbr-thread .thr-msg-text .thr-code-wrap { margin:8px 0; }
 #sbr-thread .thr-code-wrap > .thr-code { margin:0; padding-right:40px; white-space:pre; }
-#sbr-thread .thr-code-copy { position:absolute; top:6px; right:6px; display:grid; place-items:center; width:24px; height:24px; padding:0;
+#sbr-thread :is(.thr-code-copy, .thr-code-run) { position:absolute; top:6px; right:6px; display:grid; place-items:center; width:24px; height:24px; padding:0;
   background:color-mix(in srgb,var(--fg) 5%,var(--bg)); border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer;
   user-select:none; -webkit-user-select:none; opacity:0; transition:opacity 140ms, background-color 140ms, color 140ms; }
-#sbr-thread .thr-code-copy:hover { background:var(--ui-hover); color:var(--fg); }
-#sbr-thread .thr-code-wrap:hover .thr-code-copy, #sbr-thread .thr-code-copy:focus-visible { opacity:1; }
-#sbr-thread .thr-code-copy:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
-#sbr-thread .thr-code-copy i { font-size:13px; }
-@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-code-copy { transition:none; } }
-#sbr-thread .thr-code :is(.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-meta .hljs-keyword) { color:var(--ansi-cyan, #7dcfff); }
-#sbr-thread .thr-code :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_, .hljs-template-tag) { color:var(--ansi-green, #9ece6a); }
-#sbr-thread .thr-code :is(.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-attr, .hljs-attribute) { color:var(--ansi-yellow, #e0af68); }
-#sbr-thread .thr-code :is(.hljs-literal, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-subst, .hljs-selector-attr, .hljs-selector-pseudo) { color:var(--ansi-magenta, #bb9af7); }
-#sbr-thread .thr-code :is(.hljs-title, .hljs-name, .hljs-section, .hljs-selector-id, .hljs-selector-class, .hljs-link) { color:var(--ansi-blue, #7aa2f7); }
-#sbr-thread .thr-code :is(.hljs-built_in, .hljs-type, .hljs-title.class_, .hljs-tag) { color:var(--ansi-yellow, #e0af68); }
-#sbr-thread .thr-code :is(.hljs-deletion, .hljs-operator) { color:var(--ansi-red, #f7768e); }
-#sbr-thread .thr-code :is(.hljs-meta, .hljs-params, .hljs-punctuation) { color:var(--muted-text); }
-#sbr-thread .thr-code .hljs-comment { color:var(--dim-text); font-style:italic; }
-#sbr-thread .thr-code .hljs-emphasis { font-style:italic; }
-#sbr-thread .thr-code .hljs-strong { font-weight:600; }
+#sbr-thread .thr-code-run { right:34px; } /* a shell block's Run, left of Copy */
+#sbr-thread .thr-code-wrap:has(> .thr-code-run) > .thr-code { padding-right:68px; }
+#sbr-thread :is(.thr-code-copy, .thr-code-run):hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-code-wrap:hover :is(.thr-code-copy, .thr-code-run), #sbr-thread :is(.thr-code-copy, .thr-code-run):focus-visible { opacity:1; }
+#sbr-thread :is(.thr-code-copy, .thr-code-run):focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread :is(.thr-code-copy, .thr-code-run) i { font-size:13px; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread :is(.thr-code-copy, .thr-code-run) { transition:none; } }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) :is(.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-meta .hljs-keyword) { color:var(--ansi-cyan, #7dcfff); }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_, .hljs-template-tag) { color:var(--ansi-green, #9ece6a); }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) :is(.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-attr, .hljs-attribute) { color:var(--ansi-yellow, #e0af68); }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) :is(.hljs-literal, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-subst, .hljs-selector-attr, .hljs-selector-pseudo) { color:var(--ansi-magenta, #bb9af7); }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) :is(.hljs-title, .hljs-name, .hljs-section, .hljs-selector-id, .hljs-selector-class, .hljs-link) { color:var(--ansi-blue, #7aa2f7); }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) :is(.hljs-built_in, .hljs-type, .hljs-title.class_, .hljs-tag) { color:var(--ansi-yellow, #e0af68); }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) :is(.hljs-deletion, .hljs-operator) { color:var(--ansi-red, #f7768e); }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) :is(.hljs-meta, .hljs-params, .hljs-punctuation) { color:var(--muted-text); }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) .hljs-comment { color:var(--dim-text); font-style:italic; }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) .hljs-emphasis { font-style:italic; }
+:is(#sbr-thread .thr-code, .chat-file-panel .cfp-code) .hljs-strong { font-weight:600; }
 
 /* Markdown images and rendered SVG blocks in chat. They have no file path, so they skip the .thr-img pipeline. */
 #sbr-thread .thr-rimg-wrap { display:inline-block; max-width:100%; vertical-align:top; }
@@ -3475,12 +3479,7 @@ body #servers-dropdown .servers-message { display:flex; align-items:center; just
 body #servers-dropdown .servers-spin { color:var(--muted-text); font-size:14px; }
 @media (prefers-reduced-motion: reduce) { body #servers-dropdown :is(#servers-refresh i, .servers-spin) { animation:none; } }
 
-/* ── Chat: skill/command info dialog (a sent chip's click); reuses dialog.gh-login, the description in full ── */
-dialog.skill-info h2 { font-family:var(--mono-font); }
-dialog.skill-info .skill-info-desc { max-height:50vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
-dialog.skill-info .prompt-actions { margin-top:20px; }
-
-/* ── JS-built dialogs (skill info, GitHub sign-in): same enter/leave as the other modals (fade + .96 → 1 scale, 180ms) ── */
+/* ── JS-built dialogs (GitHub sign-in): same enter/leave as the other modals (fade + .96 → 1 scale, 180ms) ── */
 @media (prefers-reduced-motion: no-preference) {
   body.ui-animations dialog.gh-login {
     opacity:0; transform:scale(.96);
@@ -3494,3 +3493,80 @@ dialog.skill-info .prompt-actions { margin-top:20px; }
     body.ui-animations dialog.gh-login[open]::backdrop { opacity:0; }
   }
 }
+
+/* ── Chat: popover over a sent $skill / /command chip (name, description, View instructions) ── */
+/* A raised card (--ui-surface over the chat's --bg), like a hover card: roomy padding, readable body text. */
+body .skill-pop { position:fixed; z-index:1000; box-sizing:border-box; width:min(380px, calc(100vw - 16px)); padding:16px; background:var(--ui-surface); color:var(--fg); border:1px solid var(--border); border-radius:10px !important; box-shadow:0 12px 32px #0006, 0 2px 8px #0003; font:400 13px/20px var(--ui-font); }
+.skill-pop:focus { outline:none; }
+/* Fades in on open and out on close (JS removes it after the fade); a fading-out card takes no clicks. */
+.skill-pop { opacity:0; pointer-events:none; transition:opacity 150ms ease; }
+.skill-pop.open { opacity:1; pointer-events:auto; }
+.skill-pop .skill-pop-title { font:600 14px/20px var(--ui-font); overflow-wrap:anywhere; }
+.skill-pop .skill-pop-desc { margin:8px 0 0; color:color-mix(in srgb,var(--fg) 86%,var(--bg)); max-height:40vh; overflow:auto; overflow-wrap:anywhere; }
+body .skill-pop .skill-pop-view { display:inline-flex; align-items:center; margin-top:16px; height:32px; padding:0 12px; background:transparent; color:var(--fg); border:1px solid var(--border); border-radius:6px !important; font:500 13px/1 var(--ui-font); cursor:pointer; transition:background-color 150ms, border-color 150ms, box-shadow 150ms; }
+.skill-pop .skill-pop-view:hover { background:var(--ui-hover); border-color:var(--muted-text); }
+.skill-pop .skill-pop-view:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { .skill-pop, .skill-pop .skill-pop-view { transition:none; } }
+
+/* ── Chat: a file shown read-only on the right of the chat's tab (openChatFilePanel). Same split as a
+   side chat panel (--chat-panel-width, its sash); the chat, its snapshot and its Ctrl+J terminal make room. ── */
+#pane-area .term-slot.chat-file-open > #sbr-thread,
+.term-slot.chat-file-open > :is(.thr-snapshot, .chat-bottom-terminal) { right:var(--chat-panel-width, 40%); width:auto; }
+.chat-file-panel { position:absolute; top:0; bottom:0; right:0; width:var(--chat-panel-width, 40%); z-index:4; display:flex; flex-direction:column; min-width:0; background:var(--bg); border-left:1px solid var(--ui-line); }
+.chat-cli > .chat-file-panel { display:none; }
+.chat-file-panel > .chat-panel-sash { position:absolute; top:0; bottom:0; left:-3px; width:6px; z-index:10; /* above the diff's pinned headers */ cursor:col-resize; touch-action:none; outline:none; }
+.chat-file-panel > .chat-panel-sash::after { content:''; position:absolute; top:0; bottom:0; left:3px; width:1px; background:transparent; transition:background-color 140ms; }
+.chat-file-panel > .chat-panel-sash:is(:hover, .dragging, :focus-visible)::after { background:var(--accent); }
+.chat-file-panel .cfp-head { display:flex; align-items:center; gap:8px; flex:none; height:40px; padding:0 8px 0 12px; border-bottom:1px solid var(--ui-line); font:400 13px/20px var(--ui-font); color:var(--fg); }
+.chat-file-panel .cfp-head > i { font-size:15px; color:var(--muted-text); flex:none; }
+.chat-file-panel .cfp-title { font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:none; max-width:50%; }
+.chat-file-panel .cfp-path { flex:1; min-width:0; color:var(--dim-text); font:400 11.5px/16px var(--mono-font); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+body .chat-file-panel .cfp-icon { display:grid; place-items:center; flex:none; width:28px; height:28px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+.chat-file-panel .cfp-icon > i { font-size:15px; }
+.chat-file-panel .cfp-icon:hover { background:var(--ui-hover); color:var(--fg); }
+.chat-file-panel .cfp-icon:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+/* The file: a read-only editor view, line numbers in a gutter, long lines wrapped under their own number. */
+.chat-file-panel .cfp-body { flex:1; min-height:0; overflow:auto; padding:8px 0 24px; outline:none; user-select:text; -webkit-user-select:text; cursor:text; }
+.chat-file-panel .cfp-code { font:400 12.5px/20px var(--mono-font); color:var(--fg); }
+.chat-file-panel .cfp-row { display:flex; }
+/* Gutters as wide as the longest line number (--cfp-digits, set by openChatPanel; 1ch = one mono digit). */
+.chat-file-panel .cfp-ln { flex:none; width:calc(var(--cfp-digits, 3) * 1ch + 20px); padding-right:12px; box-sizing:border-box; text-align:right; color:var(--dim-text); font-variant-numeric:tabular-nums; user-select:none; -webkit-user-select:none; }
+.chat-file-panel .cfp-text { flex:1; min-width:0; padding-right:16px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.chat-file-panel .cfp-row:hover .cfp-ln { color:var(--muted-text); }
+.chat-file-panel .cfp-row.cfp-target { background:color-mix(in srgb,var(--accent) 12%,transparent); }
+.chat-file-panel .cfp-row.cfp-target .cfp-ln { color:var(--fg); }
+/* A turn's diff (openChatDiffPanel), drawn by diff2html: its palette variables mapped to the app's tokens (so it follows
+   every theme), its fonts to Geist, its frame flattened into the panel (files separated by hairlines, square corners). */
+.chat-file-panel.cfp-diff {
+  --d2h-bg-color:var(--bg); --d2h-border-color:var(--ui-line); --d2h-dim-color:var(--dim-text); --d2h-line-border-color:var(--ui-line);
+  --d2h-file-header-bg-color:var(--ui-sidebar); --d2h-file-header-border-color:var(--ui-line);
+  --d2h-empty-placeholder-bg-color:var(--ui-sidebar); --d2h-empty-placeholder-border-color:var(--ui-line);
+  --d2h-selected-color:color-mix(in srgb,var(--accent) 18%,transparent);
+  --d2h-ins-bg-color:color-mix(in srgb,var(--ui-success) 14%,transparent); --d2h-ins-border-color:color-mix(in srgb,var(--ui-success) 35%,transparent);
+  --d2h-ins-highlight-bg-color:color-mix(in srgb,var(--ui-success) 36%,transparent); --d2h-ins-label-color:var(--ui-success);
+  --d2h-del-bg-color:color-mix(in srgb,var(--ui-error) 14%,transparent); --d2h-del-border-color:color-mix(in srgb,var(--ui-error) 35%,transparent);
+  --d2h-del-highlight-bg-color:color-mix(in srgb,var(--ui-error) 36%,transparent); --d2h-del-label-color:var(--ui-error);
+  --d2h-change-del-color:color-mix(in srgb,var(--ui-error) 10%,transparent); --d2h-change-ins-color:color-mix(in srgb,var(--ui-success) 10%,transparent);
+  --d2h-info-bg-color:var(--ui-sidebar); --d2h-info-border-color:var(--ui-line);
+  --d2h-change-label-color:var(--muted-text); --d2h-moved-label-color:var(--accent);
+}
+.chat-file-panel.cfp-diff .cfp-body { padding:0; }
+/* diff2html's line numbers are position:absolute and it sets no positioned ancestor: without this they resolve
+   against the panel, outside the scrolling body, and stay put while the code scrolls under them. Here they scroll
+   with the lines, and stay pinned left while a long line scrolls sideways (.d2h-file-diff's own scroller). */
+.chat-file-panel.cfp-diff .cfp-code { position:relative; }
+.chat-file-panel .d2h-wrapper { color:var(--fg); }
+.chat-file-panel .d2h-file-wrapper { margin:0; border:0; border-bottom:1px solid var(--ui-line); }
+.chat-file-panel .d2h-file-header { position:sticky; top:0; z-index:2; height:32px; padding:0 12px; align-items:center; font:500 12px/16px var(--mono-font); color:var(--fg); }
+.chat-file-panel .d2h-file-name-wrapper { font:inherit; }
+.chat-file-panel .d2h-icon { fill:var(--muted-text); }
+body .chat-file-panel .d2h-tag { border-radius:4px !important; font:500 10.5px/16px var(--ui-font); padding:0 6px; }
+.chat-file-panel :is(.d2h-code-line, .d2h-code-side-line, .d2h-code-linenumber) { font:400 12.5px/20px var(--mono-font); }
+.chat-file-panel .d2h-code-linenumber { font-variant-numeric:tabular-nums; cursor:default; }
+/* Its gutter: one number (openChatDiffPanel merges diff2html's old/new pair), as wide as the longest (--cfp-digits). */
+.chat-file-panel.cfp-diff { --cfp-num:calc(var(--cfp-digits, 3) * 1ch + 1.5em); }
+.chat-file-panel .d2h-code-linenumber { width:calc(var(--cfp-num) + 2px); padding-right:.75em; text-overflow:clip; } /* + its 1px side borders */
+.chat-file-panel .d2h-code-line { padding:0 1em 0 calc(var(--cfp-num) + .5em); width:calc(100% - var(--cfp-num) - 1.5em); }
+.chat-file-panel .d2h-info { color:var(--dim-text); }
+.chat-file-panel .cfp-no-ln .d2h-code-linenumber { color:transparent; } /* positions unknown */
+@media (prefers-reduced-motion: reduce) { .chat-file-panel .cfp-icon, .chat-file-panel > .chat-panel-sash::after { transition:none; } }

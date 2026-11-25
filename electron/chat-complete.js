@@ -42,7 +42,10 @@ function describe(file) {
   // CRLF files (written on Windows) too: normalize before matching the frontmatter.
   try { text = fs.readFileSync(file, 'utf8').slice(0, 4000).replace(/\r\n?/g, '\n'); } catch { return ''; }
   const front = text.match(/^---\n([\s\S]*?)\n---/);
-  const d = front?.[1].match(/^description:\s*["']?(.*?)["']?\s*$/m)?.[1];
+  let d = front?.[1].match(/^description:\s*["']?(.*?)["']?\s*$/m)?.[1];
+  // A YAML block (`>-`, `|`): the indented lines under it, folded (>) into one line or kept (|).
+  const block = /^[>|][+-]?$/.test(d || '') && front[1].match(/^description:.*\n((?:[ \t]+.*(?:\n|$)|\n)+)/m)?.[1];
+  if (block) d = block.split('\n').map(l => l.trim()).join(d[0] === '>' ? ' ' : '\n').replace(/\s+$/, '');
   return (d || text.replace(/^---\n[\s\S]*?\n---/, '').split('\n').find(l => l.trim()) || '').replace(/^#+\s*/, '').trim().slice(0, 1024);
 }
 // *.md under a folder as "a:b" names (sub-folders become namespaces).
@@ -53,7 +56,7 @@ function mdCommands(dir, prefix = '') {
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (e.isDirectory() || (e.isSymbolicLink() && fs.statSync(full, { throwIfNoEntry: false })?.isDirectory())) out.push(...mdCommands(full, `${prefix}${e.name}:`));
-    else if (e.name.endsWith('.md')) out.push({ name: prefix + e.name.slice(0, -3), description: describe(full) });
+    else if (e.name.endsWith('.md')) out.push({ name: prefix + e.name.slice(0, -3), description: describe(full), path: full });
   }
   return out;
 }
@@ -61,7 +64,7 @@ function skills(dir) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   return entries.filter(e => fs.existsSync(path.join(dir, e.name, 'SKILL.md'))) // follows symlinked skill folders
-    .map(e => ({ name: e.name, description: describe(path.join(dir, e.name, 'SKILL.md')) }));
+    .map(e => ({ name: e.name, description: describe(path.join(dir, e.name, 'SKILL.md')), path: path.join(dir, e.name, 'SKILL.md') }));
 }
 
 // Every built-in, as the TUI's own "/" menu lists it (Claude Code 2.1.325, Codex 0.169). The chat types
@@ -314,6 +317,8 @@ if (require.main === module) {
   fs.writeFileSync(path.join(home, '.claude', 'commands', 'git', 'ship.md'), '---\r\ndescription: Ship it\r\n---\r\nDo the thing'); // CRLF must still read the frontmatter
   fs.mkdirSync(path.join(home, '.claude', 'skills', 'lint'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'skills', 'lint', 'SKILL.md'), '# Lint the code\n');
+  fs.mkdirSync(path.join(home, '.claude', 'skills', 'fold'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'skills', 'fold', 'SKILL.md'), '---\nname: fold\ndescription: >-\n  Make focused\n  changes.\nlicense: MIT\n---\n');
   const plug = (id, dir) => {
     fs.mkdirSync(path.join(home, dir, 'skills', 'go'), { recursive: true });
     fs.writeFileSync(path.join(home, dir, 'skills', 'go', 'SKILL.md'), '---\ndescription: Go now\n---\n');
@@ -333,8 +338,9 @@ if (require.main === module) {
     assert.deepEqual(files, ['src/lib/a.js'], 'Walk skips node_modules');
     assert.deepEqual(dirs.sort(), ['src', 'src/lib']);
     const claude = listCommands('claude', project, home, {});
-    assert.deepEqual(claude.find(c => c.name === 'git:ship'), { name: 'git:ship', description: 'Ship it', source: 'personal', custom: true });
+    assert.deepEqual(claude.find(c => c.name === 'git:ship'), { name: 'git:ship', description: 'Ship it', path: path.join(home, '.claude', 'commands', 'git', 'ship.md'), source: 'personal', custom: true });
     assert.equal(claude.find(c => c.name === 'lint').description, 'Lint the code');
+    assert.equal(claude.find(c => c.name === 'fold').description, 'Make focused changes.', 'YAML folded description');
     assert(claude.some(c => c.name === 'compact' && !c.custom));
     assert(['resume', 'permissions', 'help', 'rewind'].every(n => claude.some(c => c.name === n)), 'TUI-only built-ins listed');
     assert(!claude.some(c => c.name === 'model' || c.name === 'effort'), 'Model picker commands hidden');
@@ -345,7 +351,7 @@ if (require.main === module) {
     const picker = listClaudeSkills(project, home, {});
     assert(['lint', 'git:ship', 'pl:go', 'pdf', 'debug'].every(name => picker.some(c => c.name === name)));
     assert.deepEqual(Object.fromEntries(picker.map(c => [c.name, c.source])), {
-      'git:ship': 'personal', lint: 'personal', 'pl:go': 'app', pdf: 'account',
+      'git:ship': 'personal', lint: 'personal', fold: 'personal', 'pl:go': 'app', pdf: 'account',
       ...Object.fromEntries(picker.filter(c => ['batch', 'claude-api', 'code-review', 'debug', 'loop', 'run', 'simplify', 'verify'].includes(c.name)).map(c => [c.name, 'system'])),
     });
     assert(!picker.some(c => c.name === 'off:x' || c.name === 'compact'));

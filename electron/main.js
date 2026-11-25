@@ -10,6 +10,9 @@ const { listRunningServers, killServer } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
 const { prepareShellStartup } = require('./shell-startup');
 const { listShells, findShell, resolveExecutable } = require('./shells');
+// The AppImage runtime exports ARGV0 (the .AppImage path). zsh uses an exported ARGV0 as argv[0] of every command
+// it runs, so tools that re-exec themselves via argv[0] (Python's sys.executable, …) launched new TerminalVibe windows.
+delete process.env.ARGV0;
 // A desktop-launched app doesn't get the PATH that ~/.zshrc etc. build, so agent CLIs (opencode, …) are not found.
 // Merge in the PATH of the user's interactive shell.
 if (process.platform !== 'win32') {
@@ -560,6 +563,7 @@ ipcMain.handle('fs:path-kind', async (_e, file) => {
   return st ? (st.isDirectory() ? 'dir' : 'file') : null;
 });
 ipcMain.handle('shell:show-in-folder', (_e, file) => {
+  if (typeof file === 'string') file = expandHome(file);
   if (typeof file === 'string' && path.isAbsolute(file)) shell.showItemInFolder(path.normalize(file));
 });
 // "path" or "path:line"; false when the `code` CLI isn't installed.
@@ -631,7 +635,7 @@ const IMAGE_SNIFF = [
   ['image/webp', b => b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP'],
   ['image/bmp', b => b.toString('latin1', 0, 2) === 'BM'],
 ];
-ipcMain.handle('fs:attachment-preview', (_e, file) => require('./attachment-preview').readAttachmentPreview(file));
+ipcMain.handle('fs:attachment-preview', (_e, file) => require('./attachment-preview').readAttachmentPreview(typeof file === 'string' ? expandHome(file) : file)); // ~/ links too
 ipcMain.handle('fs:attachment-info', async (_e, p) => {
   if (typeof p !== 'string' || p.length > 4096) return null;
   const fp = expandHome(p);

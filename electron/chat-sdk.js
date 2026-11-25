@@ -17,9 +17,8 @@ const skillReferences = text => text.matchAll(/(?:^|[\s([{])\$([\w:.-]+?)(?=$|[\
 function expandSlashSkill(text, references, skills) {
   const first = references.find(match => skills.some(skill => skill.name === match[1]));
   if (!first) return text;
-  const [, name] = first;
-  const rest = first.index === 0 && first[0] === '$' + name ? text.slice(first[0].length).trimStart() : text;
-  return '/' + name + (rest ? ' ' + rest : '');
+  // The whole message as args, $skill included: the transcript then still holds what was typed (threads.js shows it once).
+  return '/' + first[1] + ' ' + text;
 }
 
 // A Windows npm shim (.cmd) can't be spawned directly. It wraps `node <script>`: run that instead, so
@@ -1235,7 +1234,8 @@ if (require.main === module) {
     claude.send('$lint src');
     claude.send('Use $lint on src');
     claude.send('$unknown and $5');
-    assert.deepStrictEqual(sent, ['/lint src', '/lint Use $lint on src', '$unknown and $5']);
+    // The whole message rides as args, $lint included, so the transcript shows it as typed (threads.js).
+    assert.deepStrictEqual(sent, ['/lint $lint src', '/lint Use $lint on src', '$unknown and $5']);
   } finally {
     fs.rmSync(claudeConfig, { recursive: true, force: true });
   }
@@ -1352,7 +1352,7 @@ if (require.main === module) {
     };
     await agy.send('$project-skill src');
     await agy.queue;
-    assert.deepStrictEqual(agyCall, { method: 'session/prompt', prompt: [{ type: 'text', text: '/project-skill src' }] });
+    assert.deepStrictEqual(agyCall, { method: 'session/prompt', prompt: [{ type: 'text', text: '/project-skill $project-skill src' }] });
 
     // delegate_task MCP wiring: settings ride in the agent's env (never the command line), ELECTRON_RUN_AS_NODE only
     // in the server's own config, a user's OpenCode config is kept, a Windows .cmd that isn't a shim is left out.

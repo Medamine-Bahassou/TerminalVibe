@@ -7923,13 +7923,14 @@
       .split(/(<(?:pre|code)\b[\s\S]*?<\/(?:pre|code)>|<[^>]+>)/).map((part, n) => n % 2 ? part
         : part.replace(/(^|\s)([/$])([a-z][\w:.-]*\w)(?=$|[\s,;!?)])/g, (all, pre, sigil, name) => {
           if (sigil === '/') { if (!slash) return all; slash = false; } // only the message's first word
-          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-skill-ref" data-skill="${name}"><i class="ph ${sigil === '$' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${sigil}${name}</span></a></span>`;
+          // Same link as the composer's chip (hover, focus); a click shows the skill's details (showChatSkillInfo).
+          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-at-ref thr-skill-ref" data-skill-ref="${sigil}${name}"><i class="ph ${sigil === '$' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${sigil === '$' ? '' : sigil}${name}</span></a></span>`;
         })
         // An @path mention (sent as typed from the composer's @ picker): the same file/folder chip as in the composer.
         // shortcut: a name without an extension is shown as a folder; stat it if files like "Makefile" look wrong.
         .replace(/(^|\s)@((?:\.{1,2}|~)?[\w.-]*[\\/][^\s<]*|[\w-]+\.[\w]+)(?=$|[\s,;!?)])/g, (all, pre, p) => {
           const name = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p, dir = /[\\/]$/.test(p) || !/\.\w+$/.test(name);
-          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-at-ref" data-path="${p}" title="Show ${p} in folder"><i class="ph ${dir ? 'ph-folder' : linkFileIcon(name)}" aria-hidden="true"></i><span>${name}</span></a></span>`;
+          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-at-ref" data-path="${p}" title="${p}"><i class="ph ${dir ? 'ph-folder' : linkFileIcon(name)}" aria-hidden="true"></i><span>${name}</span></a></span>`;
         })).join('');
     return { html: (cites ? `<div class="thr-cites">${cites}</div>` : '') + html, paths };
   }
@@ -8098,13 +8099,26 @@
       setHeight(next);
     });
   }
-  function toggleChatBottomTerminal(owner) {
+  // A shell code block's language: it gets a Run button (runInChatTerminal).
+  const SHELL_FENCE = /^(bash|sh|shell|zsh|fish|ksh|powershell|pwsh|ps1|ps|cmd|bat|batch)$/i;
+  // Run a reply's shell block in the tab's Ctrl+J terminal: opened if hidden, created if new (then typed once
+  // its shell starts, like an auto-run tab). Lines go as separate Enters, like a paste.
+  function runInChatTerminal(owner, code) {
+    const cmd = code.replace(/\r?\n$/, '').replace(/\r?\n/g, '\r') + '\r';
+    const entry = owner?._bottomTerminal;
+    if (!entry) { toggleChatBottomTerminal(owner, cmd); return; }
+    if (entry.el.hidden) toggleChatBottomTerminal(owner);
+    _sendStdinRaw(entry.id, new TextEncoder().encode(cmd));
+    entry.term.focus();
+  }
+  function toggleChatBottomTerminal(owner, runCmd) {
     if (!owner?.threadHistory || owner._cliView || !wsReady) return;
     let entry = owner._bottomTerminal;
     if (!entry) {
       const wsp = findTermById(owner.id)?.ws;
       if (!wsp) return;
       entry = _createTermEntry(wsp, uuid(), 'Terminal');
+      if (runCmd) entry.runCmd = runCmd.replace(/\r$/, ''); // sendControl types it (+ Enter) once the shell exists
       entry._chatOwner = owner;
       entry.cwd = chatCwd(owner) || null;
       owner._bottomTerminal = entry;
@@ -9448,17 +9462,13 @@
       if (t) openChatTab(t); else zoomBadge('That thread was deleted');
       return;
     }
+    const skillRef = e.target.closest('.thr-skill-ref[data-skill-ref]');
+    if (skillRef) { e.preventDefault(); void showChatSkillInfo(skillRef.dataset.skillRef, skillRef); return; }
     const cite = e.target.closest('.thr-cite');
     if (cite) { e.preventDefault(); jumpToCitation({ cite: cite.title }); return; }
-    // Sent-message chips: an @file/@folder reveals it in the file manager, a skill/command shows its description.
+    // A sent @file chip opens the file beside the chat (openChatFileLink); a folder, or an unreadable file, in the file manager.
     const atRef = e.target.closest('.thr-msg a.thr-at-ref[data-path]');
-    if (atRef) { e.preventDefault(); window.electronAPI?.showInFolder?.(chatLinkPath(atRef.dataset.path).path); return; }
-    const skillRef = e.target.closest('.thr-msg a.thr-skill-ref[data-skill]');
-    if (skillRef) {
-      e.preventDefault();
-      showSkillInfo(skillRef);
-      return;
-    }
+    if (atRef) { e.preventDefault(); void openChatFileLink(curChat(), chatLinkPath(atRef.dataset.path).path); return; }
     const lockBtn = e.target.closest('[data-lock-act]');
     if (lockBtn) {
       const ws = curChat(), t = ws && (liveThreadAgent(ws) || ws);
@@ -9478,10 +9488,10 @@
     const href = e.target.closest('button.thr-link')?.dataset.href;
     if (!href) return;
     if (/^https?:/i.test(href)) { openChatWebLink(href, e.shiftKey); return; }
-    const { path } = chatLinkPath(href);
+    const { path, line } = chatLinkPath(href);
     if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(path)) openClaudeRefViewer(null, { kind: 'file', path, label: path.split(/[\\/]/).pop() }, '');
     else if (/\.(html?|svg)$/i.test(path)) addBrowserTab(wsOf(curChat())?.id, null, path);
-    else window.electronAPI?.showInFolder?.(path);
+    else void openChatFileLink(curChat(), path, line);
   });
   // A sent @path chip is drawn as typed; once on screen, check it exists. A missing path goes back to plain text,
   // and an existing one gets the right icon (a folder vs. an extensionless file like Makefile).
@@ -9500,44 +9510,12 @@
       });
     }
   }).observe(thrPage, { childList: true, subtree: true });
-  // From whichever skill/command catalog has loaded (they load late, so looked up on use, not at render).
-  const skillDescription = name => [...chatCatalogs.values()].flatMap(c => c.items || []).find(it => it.name === name)?.description || '';
-  // Loads this chat's skill and command lists (as the picker does) when they aren't loaded yet.
-  const loadSkillCatalogs = () => {
-    const ws = curChat(), cwd = ws && chatCwd(ws), harness = ws && chatCompleteHarness(ws);
-    return Promise.allSettled(ws ? ['skill', 'slash'].map(kind => chatCatalog(kind, harness, cwd, ws.id)?.pending).filter(Boolean) : []);
-  };
-  // Clicking a sent skill/command chip: its full description in a dialog (the GitHub sign-in dialog's look).
-  let _skillDialog = null;
-  async function showSkillInfo(ref) {
-    const name = ref.dataset.skill, label = ref.textContent.trim(), command = label.startsWith('/');
-    if (!skillDescription(name)) await loadSkillCatalogs();
-    const desc = skillDescription(name);
-    const d = _skillDialog ||= document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'gh-login skill-info' }));
-    d.setAttribute('aria-labelledby', 'skill-info-title');
-    d.innerHTML = `<div class="gh-login-icon"><i class="ph ${command ? 'ph-terminal' : 'ph-lightning'}" aria-hidden="true"></i></div>
-      <h2 id="skill-info-title">${escHtml(label)}</h2>
-      <p class="gh-login-text skill-info-desc">${escHtml(desc || `No description found for this ${command ? 'command' : 'skill'}.`)}</p>
-      <div class="prompt-actions"><button type="button" class="skill-info-close">Close</button></div>`;
-    d.querySelector('.skill-info-close').onclick = () => d.close();
-    d.onclick = e => { if (e.target === d) d.close(); }; // a click on the backdrop
-    d.showModal();
-    d.querySelector('.skill-info-close').focus();
+  // A linked file: shown read-only beside the chat when it reads as text (at its #L line), else in the file manager.
+  async function openChatFileLink(owner, path, line) {
+    const r = await window.electronAPI?.readAttachmentPreview?.(path).catch(() => null);
+    if (r?.text == null) { window.electronAPI?.showInFolder?.(path); return; }
+    openChatFilePanel(owner, path, path.split(/[\\/]/).pop(), r.text, Number(line) || 0);
   }
-  // Hovering a sent skill chip shows its description: set here, before the app's tooltip handler on document reads data-tip.
-  onThreadPage('mouseover', e => {
-    const ref = e.target.closest?.('.thr-msg a.thr-skill-ref[data-skill]');
-    if (!ref || ref.dataset.tip) return;
-    const setTip = () => {
-      const desc = skillDescription(ref.dataset.skill);
-      if (desc) { ref.dataset.tip = desc; ref.setAttribute('data-tip-wrap', ''); }
-      return desc;
-    };
-    if (setTip()) return;
-    // Not loaded yet (no picker opened since launch): load this chat's skills and commands, as the picker does,
-    // then replay the hover so the tooltip opens without leaving and re-entering.
-    loadSkillCatalogs().then(() => { if (setTip() && ref.matches(':hover')) ref.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); });
-  });
   // Right-click in the chat: a link, an image, or a message (its text).
   onThreadPage('contextmenu', e => {
     if (!e.target.closest('#sbr-thread-flow')) return;
@@ -9564,7 +9542,7 @@
     // Tool transcripts may encode Windows paths with a URI-style leading slash.
     path = path.replace(/^\/(?=[A-Za-z]:[\\/]|\\\\)/, '');
     const cwd = chatCwd(curChat()).replace(/[\\/]$/, '');
-    if (!/^([\\/]|[A-Za-z]:)/.test(path)) path = `${cwd}/${path.replace(/^\.\//, '')}`;
+    if (!/^([\\/]|[A-Za-z]:|~(?=$|[\\/]))/.test(path)) path = `${cwd}/${path.replace(/^\.\//, '')}`; // ~/… : the main process expands it
     const rel = cwd && path.startsWith(cwd + '/') ? path.slice(cwd.length + 1) : path;
     return { path, rel, line };
   }
@@ -10906,8 +10884,8 @@
       const file = references.get(part), lineStart = !at || input.value[at - 1] === '\n';
       at += part.length;
       if (!file) return md ? mdInputHtml(part, lineStart) : chatDraftTextHtml(part);
-      if (file.skill) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-skill-ref" tabindex="${tabIndex}"${file.desc ? ` title="${escHtml(file.desc)}"` : ''}>`
-        + `<i class="ph ${file.skill === 'skill' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
+      if (file.skill) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-skill-ref" tabindex="${tabIndex}">`
+        + `<i class="ph ${file.skill === 'skill' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${escHtml(file.name.replace(/^\$/, ''))}</span></a></span>`;
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
         + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
@@ -11116,6 +11094,7 @@
     e.preventDefault();
     const file = _chatFiles.find(f => f.mention === reference.dataset.mention);
     if (file?.cite) jumpToCitation(file);
+    else if (file?.skill) void showChatSkillInfo(file.mention, reference.querySelector('a') || reference); // the card, like a sent chip's
     else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
     else if (file && !file.at) openChatAttachment(file, curChat());
   });
@@ -11273,6 +11252,10 @@
   let _complete = null; // { kind, start, end, query, items, index }
   const chatCompleteHarness = ws => chatWorking(ws) && liveThreadAgent(ws) ? _tabAgent.get(ws.id) : chatOpts(ws).harness;
   const chatHasSkills = harness => ['codex', 'claude', 'opencode', 'antigravity'].includes(harness);
+  const SKILL_SOURCES = {
+    personal: ['ph-user', 'Personal'], app: ['ph-squares-four', 'App'], system: ['ph-gear', 'System'],
+    project: ['ph-folder', 'Project'], account: ['ph-cloud', 'Account'],
+  };
   const showSkillsInSlash = harness => harness === 'opencode' || harness === 'antigravity';
   const chatCatalogs = new Map();
   function chatCatalog(kind, harness, cwd, tabId) {
@@ -11405,10 +11388,7 @@
       const name = c.kind === 'at' ? it.rel.slice(it.rel.lastIndexOf('/') + 1) : (c.kind === 'skill' ? '$' : '/') + it.name;
       const meta = c.kind === 'at' ? it.rel.slice(0, Math.max(0, it.rel.lastIndexOf('/'))) : it.description || '';
       const isSkill = c.kind === 'skill' || it.skill;
-      const [sourceIcon, sourceLabel] = ({
-        personal: ['ph-user', 'Personal'], app: ['ph-squares-four', 'App'], system: ['ph-gear', 'System'],
-        project: ['ph-folder', 'Project'], account: ['ph-cloud', 'Account'],
-      })[it.source] || (isSkill ? ['ph-lightning', harnessOf(c.harness)?.name] : []);
+      const [sourceIcon, sourceLabel] = SKILL_SOURCES[it.source] || (isSkill ? ['ph-lightning', harnessOf(c.harness)?.name] : []);
       const tip = meta && isSkill ? ` data-tip="${escHtml(meta)}" data-tip-wrap` : '';
       return `<div class="thr-complete-item"${tip} role="option" id="thr-complete-${i}" data-i="${i}" aria-selected="${i === c.index}">`
         + `<i class="ph ${icon}" aria-hidden="true"></i><span class="thr-complete-name">${escHtml(name)}</span>`
@@ -11430,6 +11410,167 @@
     if (!thrComplete || thrComplete.hidden) return;
     thrComplete.hidden = true; thrComplete.replaceChildren();
     threadPart(thrPage, 'input-links')?.removeAttribute('aria-activedescendant');
+  }
+  // A sent $skill or /command chip, clicked: a popover above it with its name and description;
+  // "View instructions" opens its file read-only in a panel on the right of the chat's tab.
+  let _skillPop = null;
+  async function showChatSkillInfo(ref, anchor) {
+    const ws = curChat();
+    if (!ws) return;
+    // Clicking the chip whose card is open closes it (a toggle); any other chip swaps cards.
+    const again = _skillPop?.anchor === anchor;
+    _skillPop?.close();
+    if (again && anchor) return;
+    const sigil = ref[0], name = ref.slice(1), harness = chatCompleteHarness(ws), cwd = chatCwd(ws);
+    const find = async kind => {
+      const c = chatCatalog(kind, harness, cwd, ws.id);
+      if (c && c.items === undefined) await c.pending;
+      return c?.items?.find(it => it.name === name);
+    };
+    const kinds = sigil === '$' ? ['skill', 'slash'] : ['slash', 'skill'];
+    const it = await find(kinds[0]) || await find(kinds[1]);
+    const skill = sigil === '$' || /(^|[\\/])SKILL\.md$/i.test(it?.path || '');
+    const desc = it ? escHtml(it.description || 'No description.') : `Not found in ${escHtml(harnessOf(harness)?.name || 'this agent')}'s ${skill ? 'skills' : 'commands'} for this folder.`;
+    if (!anchor?.isConnected) return;
+    const pop = document.createElement('div');
+    pop.className = 'skill-pop';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', name);
+    pop.tabIndex = -1;
+    pop.innerHTML = `<div class="skill-pop-title">${escHtml(name)}</div><p class="skill-pop-desc">${desc}</p>`
+      + (it?.path ? '<button type="button" class="skill-pop-view">View instructions</button>' : '');
+    const outside = e => { if (!pop.contains(e.target) && !anchor.contains(e.target)) _skillPop?.close(); };
+    const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); _skillPop?.close(); anchor.focus(); } };
+    const onScroll = e => { if (!pop.contains(e.target)) _skillPop?.close(); }; // the chat moved away from it
+    _skillPop = { anchor, close: () => { document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true);
+      removeEventListener('scroll', onScroll, true); _skillPop = null;
+      pop.classList.remove('open'); setTimeout(() => pop.remove(), 160); } }; // fades out (CSS), then goes
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', onKey, true);
+    addEventListener('scroll', onScroll, true);
+    pop.querySelector('.skill-pop-view')?.addEventListener('click', async () => {
+      _skillPop?.close();
+      const r = await window.electronAPI?.readAttachmentPreview?.(it.path).catch(() => null);
+      if (r?.text == null) { zoomBadge(r?.error || 'Couldn’t read this file'); return; }
+      openChatFilePanel(ws, it.path, name, r.text);
+    });
+    document.body.append(pop);
+    // Centered above the chip (kept inside the window); below it when there's no room. Reading its size
+    // commits the hidden state, so adding .open fades it in.
+    const r = anchor.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    pop.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
+    pop.style.top = (r.top - 8 - h < 8 ? r.bottom + 8 : r.top - 8 - h) + 'px';
+    pop.classList.add('open');
+    (pop.querySelector('.skill-pop-view') || pop).focus();
+  }
+  // A file shown read-only beside the chat, inside its tab (openChatPanel): line numbers, wrapped lines,
+  // highlighted by its type (a Markdown file's YAML front matter as YAML).
+  function openChatFilePanel(owner, file, title, text, line = 0) {
+    // ponytail: no colors past 300 KB (highlighting a big file blocks the window); plain text there.
+    const hl = (code, lang) => text.length < 300000 && window.hljs?.getLanguage(lang) ? hljs.highlight(code, { language: lang, ignoreIllegals: true }).value : escHtml(code);
+    const ext = (file.match(/\.(\w+)$/)?.[1] || '').toLowerCase(), lang = ext === 'md' ? 'markdown' : ext;
+    const front = lang === 'markdown' ? text.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/)?.[0] || '' : '';
+    const html = (front ? hl(front, 'yaml') : '') + hl(text.slice(front.length), lang);
+    // One row per line: a token spanning lines is closed at each line's end and reopened on the next.
+    let open = [];
+    const rows = html.split('\n').map((line, i) => {
+      const pre = open.join('');
+      for (const [tag] of line.matchAll(/<span[^>]*>|<\/span>/g)) tag[1] === '/' ? open.pop() : open.push(tag);
+      return `<div class="cfp-row"><span class="cfp-ln">${i + 1}</span><span class="cfp-text">${pre}${line}${'</span>'.repeat(open.length)}</span></div>`;
+    }).join('');
+    openChatPanel(owner, { title, path: file, sub: file.split(/[\\/]/).slice(-2).join('/'), rows, line, maxLn: html.split('\n').length });
+  }
+  // A turn's changed files as one read-only diff beside the chat, drawn by diff2html (vendor/diff2html-ui-base.min.js,
+  // colored by the app's highlight.js): sticky file headers, old/new line numbers, word-level changes.
+  function openChatDiffPanel(owner, files, cwd) {
+    const add = files.reduce((s, f) => s + f.add, 0), del = files.reduce((s, f) => s + f.del, 0);
+    const { text, unnumbered, maxLn } = unifiedDiff(files, cwd);
+    const panel = openChatPanel(owner, { title: `${files.length} changed file${files.length > 1 ? 's' : ''}`, sub: `+${add} -${del}`, icon: 'ph-file-diff', rows: '', diff: true, maxLn });
+    if (!panel || !window.Diff2HtmlUI) return;
+    const ui = new Diff2HtmlUI(panel.querySelector('.cfp-code'), text, { drawFileList: false, outputFormat: 'line-by-line', matching: 'lines',
+      fileContentToggle: false, stickyFileHeaders: false, highlight: true, synchronisedScroll: false }, window.hljs);
+    ui.draw();
+    ui.highlightCode();
+    // One line-number column: the line's number in the new file, or in the old one for a removed line.
+    for (const g of panel.querySelectorAll('.d2h-code-linenumber')) {
+      g.textContent = g.querySelector('.line-num2')?.textContent.trim() || g.querySelector('.line-num1')?.textContent.trim() || '';
+    }
+    // Hunks whose place in the file is unknown (Codex's bare @@): no line numbers rather than made-up ones.
+    panel.querySelectorAll('.d2h-file-wrapper').forEach((w, i) => {
+      if (!unnumbered[i]) return;
+      w.classList.add('cfp-no-ln');
+      for (const el of w.querySelectorAll('.d2h-info .d2h-code-line')) el.textContent = el.textContent.replace(/@@ -1,\d+ \+1,\d+ @@/, '@@');
+    });
+  }
+  // The changes as a git-style unified diff for diff2html. Claude's hunks carry their @@ -a,b +c,d @@; a new file
+  // (all + lines) starts at line 1; a hunk without numbers (Codex's apply_patch) gets placeholder ones, flagged.
+  function unifiedDiff(files, cwd) {
+    const base = (cwd || '').replace(/[\\/]$/, '');
+    const unnumbered = [];
+    let maxLn = 0; // the gutter's width
+    const text = files.map(f => {
+      const p = base && f.path.startsWith(base + '/') ? f.path.slice(base.length + 1) : f.path;
+      const hunks = [];
+      for (const l of f.patches.join('\n').split('\n')) {
+        if (l.startsWith('@@')) hunks.push({ head: l, lines: [] });
+        else (hunks.at(-1) || hunks[hunks.push({ head: '', lines: [] }) - 1]).lines.push(/^[ +\-\\]/.test(l) ? l : ' ' + l); // "… N more lines" reads as context
+      }
+      for (const h of hunks) while (h.lines.length && h.lines.at(-1) === ' ') h.lines.pop();
+      const created = hunks.every(h => !/^@@ -\d/.test(h.head) && h.lines.every(l => l[0] === '+'));
+      let guessed = false;
+      const body = hunks.filter(h => h.lines.length).map(h => {
+        const o = h.lines.filter(l => l[0] !== '+').length, n = h.lines.filter(l => l[0] !== '-').length;
+        const m = h.head.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        if (m) { maxLn = Math.max(maxLn, Number(m[1]) + o, Number(m[2]) + n); return [h.head, ...h.lines].join('\n'); }
+        maxLn = Math.max(maxLn, o, n);
+        if (!created) guessed = true;
+        return [created ? `@@ -0,0 +1,${n} @@` : `@@ -1,${o} +1,${n} @@${h.head.slice(2)}`, ...h.lines].join('\n');
+      }).join('\n');
+      unnumbered.push(guessed);
+      return `diff --git a/${p} b/${p}\n${created ? 'new file mode 100644\n--- /dev/null' : `--- a/${p}`}\n+++ b/${p}\n${body}`;
+    }).join('\n');
+    return { text, unnumbered, maxLn };
+  }
+  // A changes card's files by its key, for its "Open diff". ponytail: never pruned; one entry per changes card seen.
+  const _chatDiffs = new Map();
+  // The read-only panel on the right of a chat's tab (like a side chat panel: same width, same sash); one at a time.
+  function openChatPanel(owner, { title, path = '', sub = '', icon = 'ph-file-text', rows, line = 0, diff = false, maxLn = 0 }) { // → the panel
+    if (!owner?.el) return;
+    owner._filePanel?.remove();
+    const panel = document.createElement('section');
+    panel.className = 'chat-file-panel' + (diff ? ' cfp-diff' : '');
+    panel.style.setProperty('--cfp-digits', Math.max(3, String(maxLn).length)); // gutters fit the longest number
+    panel.setAttribute('aria-label', title);
+    panel.innerHTML = `<div class="cfp-head"><i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-title">${escHtml(title)}</span>`
+      + `<span class="cfp-path"${path ? ` title="${escHtml(path)}"` : ''}>${escHtml(sub)}</span>`
+      + (path && window.electronAPI?.showInFolder ? '<button type="button" class="cfp-icon" data-act="reveal" aria-label="Show in folder" data-tip="Show in folder"><i class="ph ph-folder-open" aria-hidden="true"></i></button>' : '')
+      + '<button type="button" class="cfp-icon" data-act="close" aria-label="Close panel" data-tip="Close"><i class="ph ph-x" aria-hidden="true"></i></button></div>'
+      + `<div class="cfp-body" tabindex="0" aria-label="${escHtml(title)} (read-only)"><div class="cfp-code">${rows}</div></div>`;
+    const file = path;
+    const sash = chatPanelSash();
+    sash.setAttribute('aria-label', 'Resize panel');
+    panel.prepend(sash);
+    const close = () => { panel.remove(); owner.el?.classList.remove('chat-file-open'); if (owner._filePanel === panel) owner._filePanel = null; };
+    panel.addEventListener('mousedown', e => { e.stopPropagation(); focusSlot(owner); }); // keep the chat the active tab
+    panel.addEventListener('contextmenu', e => e.stopPropagation()); // not the chat's or the tab's menu
+    panel.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
+    panel.querySelector('.cfp-head').addEventListener('click', e => {
+      const act = e.target.closest('.cfp-icon')?.dataset.act;
+      if (act === 'close') close();
+      else if (act === 'reveal') window.electronAPI.showInFolder(file);
+    });
+    owner.el.append(panel);
+    owner.el.classList.add('chat-file-open');
+    owner._filePanel = panel;
+    panel.querySelector('.cfp-body').focus({ preventScroll: true });
+    // A link to a line (#L12, :12): that line, marked and centered.
+    const target = line > 0 && panel.querySelectorAll('.cfp-row')[line - 1];
+    if (target) {
+      target.classList.add('cfp-target');
+      const body = target.closest('.cfp-body'), tr = target.getBoundingClientRect(), br = body.getBoundingClientRect();
+      body.scrollTop += tr.top - br.top - (body.clientHeight - tr.height) / 2; // only the panel scrolls, never the chat
+    }
+    return panel;
   }
   function openChatSkills() {
     closeChatComplete();
@@ -13091,11 +13232,12 @@
     if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) return kids(node);
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const el = node, tag = el.nodeName;
-    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-code-copy, .thr-svg-toggle, .thr-svg-preview, .thr-pending-kind, .thr-seg, .thr-worked, .thr-tools > summary, .thr-tool > summary, .thr-turn > summary, button[data-act]')) return ''; // icons, chrome
+    if (tag === 'I' || tag === 'IMG' || el.matches('.thr-actions, .thr-table-copy, .thr-code-copy, .thr-code-run, .thr-svg-toggle, .thr-svg-preview, .thr-pending-kind, .thr-seg, .thr-worked, .thr-tools > summary, .thr-tool > summary, .thr-turn > summary, button[data-act]')) return ''; // icons, chrome
     if (el.matches('.thr-msg-text, .thr-queued-text') || tag === 'P') return block(kids(el).trim());
     if (tag === 'BR') return '\n';
     if (tag === 'PRE') return block('```' + (el.matches('.thr-tool-detail') ? 'sh' : el.dataset.lang || '') + '\n' + el.textContent.replace(/\n$/, '') + '\n```');
     if (el.matches('.thr-image-ref[data-path]')) return shellQuote(el.dataset.path);
+    if (el.matches('.thr-skill-ref[data-skill-ref]')) return el.dataset.skillRef; // the chip hides its "$": copy it as typed
     // A citation chip shows one shortened line: copy the full quote, as it was sent.
     if (el.matches('.thr-cite[title]')) return block(el.title.split('\n').map(l => '> ' + l).join('\n'));
     if (tag === 'STRONG') return `**${kids(el)}**`;
@@ -13260,6 +13402,7 @@
       const svg = svgPreviewHtml(m[1].trim(), m[2]);
       out += inline(text.slice(last, m.index)) + `<div class="thr-code-wrap${svg ? ' thr-svg-wrap' : ''}"${svg ? ' data-view="preview"' : ''}>${svg}<pre class="thr-code" data-lang="${escHtml(m[1].trim())}" data-label="${escHtml(m[1].trim().split(/[\s{]/)[0].toLowerCase())}"><code class="hljs">${hlFence(m[2].replace(/\n$/, ''), m[1].trim())}</code></pre>`
         + '<button type="button" class="thr-code-copy" title="Copy code" aria-label="Copy code"><i class="ph ph-copy" aria-hidden="true"></i></button>'
+        + (SHELL_FENCE.test(m[1].trim().split(/[\s{]/)[0]) && m[2].trim() ? '<button type="button" class="thr-code-run" title="Run in terminal" aria-label="Run in terminal"><i class="ph ph-play" aria-hidden="true"></i></button>' : '')
         + (svg ? '<button type="button" class="thr-svg-toggle" title="Show code" aria-label="Show code"><i class="ph ph-code" aria-hidden="true"></i></button>' : '') + '</div>';
       last = m.index + m[0].length;
     }
@@ -13917,7 +14060,8 @@
         const all = [...files.values()];
         const rel = p => seg.cwd && p.startsWith(seg.cwd.replace(/[\\/]$/, '') + '/') ? p.slice(seg.cwd.replace(/[\\/]$/, '').length + 1) : p;
         const sum = k => all.reduce((s, f) => s + f[k], 0);
-        return `<div class="thr-changes"><details class="thr-changes-list" data-key="${key}"><summary class="thr-changes-head">`
+        _chatDiffs.set(ws.id + '|' + key, { files: all, cwd: seg.cwd }); // "Open diff" reads them (markup may be cached)
+        return `<div class="thr-changes" data-diff-key="${escHtml(ws.id + '|' + key)}"><details class="thr-changes-list" data-key="${key}"><summary class="thr-changes-head">`
           + `<i class="ph ph-caret-right thr-changes-caret" aria-hidden="true"></i><span class="thr-changes-count">${all.length} changed file${all.length > 1 ? 's' : ''}</span>`
           + `<span class="thr-add">+${sum('add')}</span><span class="thr-del">-${sum('del')}</span></summary>`
           + all.map((f, n) => `<details class="thr-change" data-key="${key}:${n}"><summary><i class="ph ${linkFileIcon(f.path)}" aria-hidden="true"></i>`
@@ -14028,6 +14172,9 @@
       b.title = label; b.setAttribute('aria-label', label);
       b.innerHTML = `<i class="ph ${code ? 'ph-play' : 'ph-code'}" aria-hidden="true"></i>`;
     }));
+    content.querySelectorAll('.thr-code-run').forEach(b => b.addEventListener('click', () => {
+      runInChatTerminal(ws, b.parentElement.querySelector(':scope > .thr-code').textContent);
+    }));
     content.querySelectorAll('.thr-code-copy').forEach(b => b.addEventListener('click', () => {
       void copyPrivateText(b.previousElementSibling.textContent).catch(() => {});
       b.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
@@ -14038,11 +14185,8 @@
     content.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     content.querySelectorAll('.thr-sub[data-sub-call]').forEach(b => b.addEventListener('click', () => openSubagentThread(ws, b.dataset)));
     content.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
-      const list = b.closest('.thr-changes').querySelector('.thr-changes-list');
-      const files = [...list.querySelectorAll('details.thr-change')];
-      const openAll = !list.open || files.some(d => !d.open);
-      list.open = true;
-      files.forEach(d => { d.open = openAll; });
+      const d = _chatDiffs.get(b.closest('.thr-changes').dataset.diffKey);
+      if (d) openChatDiffPanel(ws, d.files, d.cwd);
     }));
     flow.append(content);
     refreshAgentProcCards();
