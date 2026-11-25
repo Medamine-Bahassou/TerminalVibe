@@ -22,6 +22,8 @@ app.whenReady().then(async () => {
     + slice(source, '  function chatLinkPath(', '  const thrInput =')
     + slice(source, '  function openChatFilePanel(', "  // A turn's changed files")
     + slice(source, "  // The panel on the right of a chat's tab", '  function openChatSkills() {');
+  const trayClick = slice(source, "  thrChip('sides')?.addEventListener('click'", '  // Mode chip:');
+  const shortcut = slice(source, '  // Ctrl+Alt+B:', '  // An agent finished its turn:');
   const click = slice(source.slice(source.indexOf('  async function answerAgentQuestion(')), "  onThreadPage('click'", '  // A sent @path chip');
   const menu = slice(source, "    } else if (type === 'chat-link') {", "    } else if (type === 'chat-thread') {");
   const wslCwd = '\\\\wsl.localhost\\Ubuntu\\home\\user\\project';
@@ -34,6 +36,7 @@ app.whenReady().then(async () => {
     const ws = { id: 'ws', layout: group };
     const wsOf = () => ws, findGroupContainingTerm = () => group, threadKey = t => t.key;
     const activateTerminal = (_, id) => { group.activeTermId = id; syncChatPanels(ws); };
+    const syncThreadPanel = () => syncChatPanels(ws);
     const chatPanelSash = () => document.createElement('div'), focusSlot = () => {}, showCtxMenu = () => {};
     let badge = ''; const zoomBadge = m => { badge = m; };
     const escHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -73,13 +76,43 @@ app.whenReady().then(async () => {
     toggleChatRightPanel(side);
     check(!host._panelGuest && group.activeTermId === 'host' && !side.el.classList.contains('cmb-on'), 'hide left the side chat shown');
     toggleChatRightPanel(host);
-    check(host._panelGuest === 'side' && group.activeTermId === 'side', 'show did not bring the side chat back');
+    check(host._panelGuest === 'side' && group.activeTermId === 'host', 'Reopening the panel moved focus away from the main thread');
 
+    {
+      const tray = document.createElement('div');
+      tray.innerHTML = '<button class="thr-side-chip" data-side="side"><span>Side chat</span></button>';
+      host.el.append(tray);
+      const thrChip = () => tray, curChat = () => host, findChatThread = id => id === side.id && side;
+      const syncThreadComposer = () => {}, openChatTab = tab => activateTerminal(ws.id, tab.id);
+      ${trayClick}
+      for (let i = 0; i < 3; i++) tray.querySelector('span').click();
+      check(group.activeTermId === host.id && host._panelGuest === side.id, 'Reclicking the visible side chat replaced the active main chat');
+      toggleChatRightPanel(host);
+      tray.querySelector('span').click();
+      check(group.activeTermId === side.id && host._panelGuest === side.id, 'Clicking a hidden side chat failed to open it');
+    }
     // 6. Closing a side chat tab takes it out of the strip; showing it again brings it back.
     closeSideChatTab(host, 'side');
     check(!host._panelGuest && host._sideClosed.has('side'), 'side tab did not close');
     showSideChatTab(host, 'side');
     check(!host._sideClosed.has('side') && host._panelGuest === 'side', 'side tab did not come back');
+    // A burst of shortcut presses toggles once; the next deliberate press still works.
+    const activeTerminal = () => group.terminals.find(t => t.id === group.activeTermId);
+    ${shortcut}
+    const pressPanel = (repeat = false) => document.dispatchEvent(new KeyboardEvent('keydown', {
+      code: 'KeyB', key: 'b', ctrlKey: true, altKey: true, repeat, bubbles: true, cancelable: true
+    }));
+    pressPanel(true);
+    check(host._panelGuest === 'side', 'Key repeat toggled the panel');
+    pressPanel();
+    check(!host._panelGuest && group.activeTermId === 'host', 'Shortcut did not hide the panel');
+    for (let i = 0; i < 100; i++) pressPanel();
+    check(!host._panelGuest && group.activeTermId === 'host', 'Shortcut burst reopened the panel before focus settled');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    pressPanel();
+    check(host._panelGuest === 'side' && group.activeTermId === 'host', 'Shortcut failed to restore the side chat alongside the active thread');
+    for (let i = 0; i < 100; i++) pressPanel();
+    check(host._panelGuest === 'side' && side.el.classList.contains('cmb-on'), 'Shortcut burst hid the reopened side chat');
     // 7. A WSL file link clicked in a side chat opens at its line in the merged strip.
     const chatCwd = () => ${JSON.stringify(wslCwd)}, curChat = () => side;
     const flow = document.createElement('div'); flow.id = 'sbr-thread-flow'; side.el.append(flow);

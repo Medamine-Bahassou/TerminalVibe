@@ -19,7 +19,7 @@ app.whenReady().then(async () => {
     let focused, created = 0, disposed = 0, fits = 0, wsReady = true;
     let ids = 0;
     const controls = [], wsp = {}, uuid = () => ids++ ? 'shell' + ids : 'shell', chatCwd = () => '/project/chat';
-    const activeTerminal = () => owner, focusSlot = () => {}, setupTerminalWheel = () => {};
+    const activeTerminal = () => owner, chatRightPanelHost = t => t, focusSlot = () => {}, setupTerminalWheel = () => {};
     const findTermById = () => ({ ws: wsp });
     // Defined outside the sliced helpers: the tab strip's names and drag-reorder.
     const escHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
