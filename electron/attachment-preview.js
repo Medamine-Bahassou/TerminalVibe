@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 async function readAttachmentPreview(file) {
   if (typeof file !== 'string' || file.length > 4096 || !path.isAbsolute(file)) return { error: 'Invalid path' };
   let handle;
@@ -7,10 +8,10 @@ async function readAttachmentPreview(file) {
     handle = await fs.open(file, 'r');
     const stat = await handle.stat();
     if (!stat.isFile()) return { error: 'Not a file' };
-    if (stat.size > 1024 * 1024) return { error: 'File is too large to preview (1 MB limit)' };
-    const buffer = Buffer.alloc(1024 * 1024 + 1);
+    if (stat.size > MAX_PREVIEW_BYTES) return { error: 'File is too large to preview (2 MB limit)' };
+    const buffer = Buffer.alloc(MAX_PREVIEW_BYTES + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > 1024 * 1024) return { error: 'File is too large to preview' };
+    if (bytesRead > MAX_PREVIEW_BYTES) return { error: 'File is too large to preview (2 MB limit)' };
     const data = buffer.subarray(0, bytesRead);
     if (data.includes(0)) return { error: 'Binary files cannot be previewed' };
     return { text: new TextDecoder('utf-8', { fatal: true }).decode(data) };
