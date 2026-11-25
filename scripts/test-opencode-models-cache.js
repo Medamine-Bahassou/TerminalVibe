@@ -1,4 +1,4 @@
-// OpenCode's model catalog is cached per folder, restored on startup and fetched only once.
+// OpenCode's model catalog is cached per folder, restored on startup and refreshed when stale.
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('fs'), path = require('path'), vm = require('vm');
@@ -35,7 +35,9 @@ function context(store = {}) {
   const restored = context(fresh.store);
   assert.equal(vm.runInContext(`chatModels('opencode', { cwd: ${JSON.stringify(cwd)} }).length`, restored.ctx), 2, 'a restart must restore the cached models');
   await vm.runInContext(`loadOpenCodeModels('/bin/opencode', ${JSON.stringify(cwd)})`, restored.ctx);
-  assert.deepEqual(restored.calls, [], 'a cached folder must never re-probe');
+  assert.deepEqual(restored.calls, [cwd], 'a restored catalog is refreshed');
+  await vm.runInContext(`loadOpenCodeModels('/bin/opencode', ${JSON.stringify(cwd)})`, restored.ctx);
+  assert.deepEqual(restored.calls, [cwd], 'a fresh catalog is not re-probed');
   const other = context();
   let attempts = 0;
   other.ctx.window.electronAPI.chatSdkModels = async () => { attempts++; throw Error('offline'); };
@@ -46,5 +48,5 @@ function context(store = {}) {
   const noFolder = context();
   assert.ok(await vm.runInContext(`loadOpenCodeModels('/bin/opencode', '')`, noFolder.ctx), 'a chat without a cwd must still load models');
   assert.deepEqual(noFolder.calls, [''], 'the probe is sent even when the cwd is empty');
-  console.log('PASS: OpenCode models are cached per folder, restored on startup, probed once, retried on failure and loaded without a cwd.');
+  console.log('PASS: OpenCode models are cached per folder, restored on startup, refreshed when stale, retried on failure and loaded without a cwd.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
