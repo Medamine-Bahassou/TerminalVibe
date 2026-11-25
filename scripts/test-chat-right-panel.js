@@ -12,13 +12,19 @@ const slice = (src, from, to) => {
   return src.slice(a, b);
 };
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ show: false });
+  const win = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
   await win.loadURL('about:blank');
   await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname, '..', 'workspace.css'), 'utf8'));
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   const helpers = slice(source, '  function chatPanelHost(t, group) {', '  // While a thread or its shown side chat')
     + slice(source, "  // Hide or bring back a thread's whole right panel", "  // The panel's top-bar buttons: hide it")
+    + slice(source, '  async function openChatFileLink(', '  // Right-click in the chat')
+    + slice(source, '  function chatLinkPath(', '  const thrInput =')
+    + slice(source, '  function openChatFilePanel(', "  // A turn's changed files")
     + slice(source, "  // The panel on the right of a chat's tab", '  function openChatSkills() {');
+  const click = slice(source.slice(source.indexOf('  async function answerAgentQuestion(')), "  onThreadPage('click'", '  // A sent @path chip');
+  const menu = slice(source, "    } else if (type === 'chat-link') {", "    } else if (type === 'chat-thread') {");
+  const wslCwd = '\\\\wsl.localhost\\Ubuntu\\home\\user\\project';
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, msg) => { if (!ok) throw Error(msg); };
     const slot = id => { const el = document.createElement('div'); el.className = 'term-slot'; el.id = 'slot-' + id; el.style.cssText = 'position:absolute;inset:0'; document.body.append(el); return el; };
@@ -74,7 +80,49 @@ app.whenReady().then(async () => {
     check(!host._panelGuest && host._sideClosed.has('side'), 'side tab did not close');
     showSideChatTab(host, 'side');
     check(!host._sideClosed.has('side') && host._panelGuest === 'side', 'side tab did not come back');
-    return 'PASS: right panel owner, last-tab close, hide/show (diff and side chat), side strip close, side tab close/reopen';
+    // 7. A WSL file link clicked in a side chat opens at its line in the merged strip.
+    const chatCwd = () => ${JSON.stringify(wslCwd)}, curChat = () => side;
+    const flow = document.createElement('div'); flow.id = 'sbr-thread-flow'; side.el.append(flow);
+    const onThreadPage = (type, handler) => flow.addEventListener(type, handler);
+    let loaded, revealed, vscode, copied;
+    window.electronAPI = { platform: 'win32', readAttachmentPreview: async path => {
+      loaded = path;
+      return { text: 'first\\nsecond' };
+    }, showInFolder: async path => { revealed = path; }, openInVSCode: async target => { vscode = target; return true; },
+      clipboardWrite: async text => { copied = text; } };
+    ${click}
+    flow.innerHTML = '<button type="button" class="thr-link" data-href="/home/user/project/app.js:2">app.js</button>';
+    flow.firstChild.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    check(loaded === ${JSON.stringify(wslCwd + '\\app.js')}, 'The editor received the wrong WSL path');
+    check(visible() && !side._filePanel && host._filePanel.querySelector('.cfp-target')?.textContent === '2second', 'The linked line did not open in the merged editor tab');
+    check(host._filePanel.querySelector('.cfp-tab:not(.cmb-side)').title === 'app.js', 'Editor tab tooltip exposed the full path');
+    const actions = new Map(), item = (_, label, _key, action) => actions.set(label, action), sep = () => {};
+    const type = 'chat-link', data = '/home/user/project/app.js:2:3';
+    if (false) {
+    ${menu}
+    }
+    await actions.get('Open in VS Code')();
+    await actions.get('Reveal in Files')();
+    check(vscode === loaded + ':2:3' && revealed === loaded, 'External actions used a different path or lost the source location');
+    actions.get('Copy relative path')();
+    check(copied === 'app.js', 'Copy relative path included the project directory');
+    actions.get('Copy full path')();
+    check(copied === loaded, 'Copy full path used a different path from the editor');
+
+    const count = 18000, targetLine = 13038;
+    const largeFile = Array.from({ length: count }, (_, i) => ('line ' + (i + 1) + ' ').repeat(i % 4 + 1)).join('\\n');
+    openChatFilePanel(host, '/tmp/large.js', 'large.js', largeFile, targetLine);
+    const large = host._filePanel.querySelector('.cfp-page:not([hidden])');
+    const body = large.querySelector('.cfp-body'), code = large.querySelector('.cfp-code');
+    const target = code.querySelector('.cfp-target');
+    check(code.children.length === 200 && target.firstChild.textContent === String(targetLine), 'Large file must open at the requested line with only nearby rows mounted');
+    const targetOffset = () => target.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    const initialOffset = targetOffset();
+    for (let i = 0; i < 200 && code.children.length < count; i++) await new Promise(resolve => setTimeout(resolve, 25));
+    check(code.children.length === count && code.firstChild.firstChild.textContent === '1' && code.lastChild.firstChild.textContent === String(count), 'Deferred rows must fill the entire file in order, mounted ' + code.children.length);
+    check(Math.abs(targetOffset() - initialOffset) <= 2, 'Filling earlier lines moved the visible linked line');
+    return 'PASS: merged right panel, WSL file links and context actions, and fast opening of a large file';
   })()`));
   clearTimeout(timeout); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });

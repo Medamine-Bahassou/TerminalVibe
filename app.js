@@ -48,7 +48,15 @@
       const rows = target.dataset.tipRows ? JSON.parse(target.dataset.tipRows) : null;
       tip.classList.toggle('ws-process-tooltip', !!(processes || rows));
       tip.classList.toggle('ui-tooltip-wrap', target.hasAttribute('data-tip-wrap'));
-      tip.textContent = target.dataset.tip;
+      const attachmentPath = target.matches('.thr-image-ref[data-path]') ? target.dataset.path : '';
+      const home = attachmentPath.match(/(?:^|[\\/])(?:Users|home)[\\/]+([^\\/]+)(?=[\\/])/i);
+      if (home) {
+        const end = home.index + home[0].length;
+        const username = document.createElement('span');
+        username.className = 'thr-work-username';
+        username.textContent = 'hidden-user';
+        tip.replaceChildren(attachmentPath.slice(0, end - home[1].length), username, attachmentPath.slice(end));
+      } else tip.textContent = attachmentPath || target.dataset.tip;
       // Heading, then the rows, then the running processes (a workspace has both: its tabs and what runs in them).
       if (processes || rows) {
         const heading = document.createElement('div');
@@ -7865,7 +7873,7 @@
   const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
   function chatImageLinkHtml(file, attrs = '', extraClass = '') {
     const icon = file.image ? 'ph-image' : typeof linkFileIcon === 'function' ? linkFileIcon(file.name || file.path || '') : 'ph-file';
-    return `<a href="#" class="thr-image-ref ${extraClass}" data-path="${escHtml(file.path || '')}" ${attrs} title="${escHtml(file.path || file.name)}"><span class="thr-inline-image-icon">${file.image && file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : `<i class="ph ${icon}" aria-hidden="true"></i>`}</span><span>${escHtml(file.name)}</span><small class="thr-img-size" data-size-path="${escHtml(file.path || '')}">${file.size ? escHtml(fmtBytes(file.size).replace(' ', '')) : ''}</small></a>`;
+    return `<a href="#" class="thr-image-ref ${extraClass}" data-path="${escHtml(file.path || '')}" ${attrs} data-tip="${escHtml(file.name)}" data-tip-wrap><span class="thr-inline-image-icon">${file.image && file.preview ? `<img src="${escHtml(file.preview)}" alt="">` : `<i class="ph ${icon}" aria-hidden="true"></i>`}</span><span>${escHtml(file.name)}</span><small class="thr-img-size" data-size-path="${escHtml(file.path || '')}">${file.size ? escHtml(fmtBytes(file.size).replace(' ', '')) : ''}</small></a>`;
   }
   function queuedMessageTextHtml(message) {
     let text = message.typed || '';
@@ -9745,11 +9753,11 @@
     }
     const href = e.target.closest('button.thr-link')?.dataset.href;
     if (!href) return;
+    e.preventDefault();
     if (/^https?:/i.test(href)) { openChatWebLink(href, e.shiftKey); return; }
     const { path, line } = chatLinkPath(href);
     if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(path)) openClaudeRefViewer(null, { kind: 'file', path, label: path.split(/[\\/]/).pop() }, '');
-    else if (/\.(html?|svg)$/i.test(path)) addBrowserTab(wsOf(curChat())?.id, null, path);
-    else void openChatFileLink(curChat(), path, line);
+    else void openChatFileLink(curChat(), path, line, true);
   });
   // A sent @path chip is drawn as typed; once on screen, check it exists. A missing path goes back to plain text,
   // and an existing one gets the right icon (a folder vs. an extensionless file like Makefile).
@@ -9814,15 +9822,26 @@
   }
   // A chat link's file: absolute path (relative ones are from the chat's folder), its folder-relative
   // path and the line it points at (#L12 or :12:3).
-  function chatLinkPath(href) {
-    const line = (href.match(/#L(\d+)|:(\d+)(?::\d+)?$/) || []).slice(1).find(Boolean) || '';
+  function chatLinkPath(href, owner = curChat()) {
+    const location = href.match(/#L(\d+)|:(\d+)(?::(\d+))?$/);
+    const line = location?.[1] || location?.[2] || '';
+    const column = location?.[3] || '';
     let path = href.replace(/#.*$/, '').replace(/:\d+(:\d+)?$/, '');
     // Tool transcripts may encode Windows paths with a URI-style leading slash.
     path = path.replace(/^\/(?=[A-Za-z]:[\\/]|\\\\)/, '');
-    const cwd = chatCwd(curChat()).replace(/[\\/]$/, '');
-    if (!/^([\\/]|[A-Za-z]:|~(?=$|[\\/]))/.test(path)) path = `${cwd}/${path.replace(/^\.\//, '')}`; // ~/… : the main process expands it
-    const rel = cwd && path.startsWith(cwd + '/') ? path.slice(cwd.length + 1) : path;
-    return { path, rel, line };
+    const base = chatCwd(owner), cwd = base.replace(/[\\/]+$/, '');
+    const windows = (window.electronAPI?.platform || terminalBackendPlatform) === 'win32';
+    const wsl = windows && /^[\\/]{2}wsl(?:\.localhost|\$)[\\/]([^\\/]+)/i.exec(cwd);
+    const relative = !/^([\\/]|[A-Za-z]:|~(?=$|[\\/]))/.test(path);
+    const relInput = path.replace(/^\.[\\/]/, '');
+    if (relative && base) path = cwd + '/' + relInput;
+    else if (wsl && /^\/(?!\/)/.test(path)) path = '\\\\wsl.localhost\\' + wsl[1] + path;
+    if (wsl && /^[\\/]{2}/.test(path)) path = path.replace(/\//g, '\\');
+    const slashPath = value => windows ? value.replace(/\\/g, '/').replace(/^\/\/wsl(?:\.localhost|\$)\//i, '//wsl.localhost/') : value;
+    const full = slashPath(path), root = slashPath(cwd) + '/';
+    const within = windows && !wsl ? full.toLowerCase().startsWith(root.toLowerCase()) : full.startsWith(root);
+    const rel = relative ? relInput : base && within ? full.slice(root.length) : path;
+    return { path, rel, line, column };
   }
   const thrInput = thrPage.querySelector('#sbr-thread-input');
   const thrSend = thrPage.querySelector('#sbr-thread-send');
@@ -11106,7 +11125,7 @@
     if (file.size) _thrImgSize.set(path, file.size);
     const preview = file.preview || _thrImgCache.get(path), size = file.size || _thrImgSize.get(path);
     const icon = image ? 'ph-image' : linkFileIcon(path);
-    return `<a href="#" class="thr-image-ref thr-img-link" tabindex="${tabIndex}" data-path="${escHtml(path)}" title="${escHtml(path)}"><span class="thr-inline-image-icon">${image && preview ? `<img src="${escHtml(preview)}" alt="">` : `<i class="ph ${icon}" aria-hidden="true"></i>`}</span><span class="thr-img-link-name">${escHtml(name)}</span><small class="thr-img-size" data-size-path="${escHtml(path)}">${size ? escHtml(fmtBytes(size).replace(' ', '')) : ''}</small></a>`;
+    return `<a href="#" class="thr-image-ref thr-img-link" tabindex="${tabIndex}" data-path="${escHtml(path)}" data-tip="${escHtml(name)}" data-tip-wrap><span class="thr-inline-image-icon">${image && preview ? `<img src="${escHtml(preview)}" alt="">` : `<i class="ph ${icon}" aria-hidden="true"></i>`}</span><span class="thr-img-link-name">${escHtml(name)}</span><small class="thr-img-size" data-size-path="${escHtml(path)}">${size ? escHtml(fmtBytes(size).replace(' ', '')) : ''}</small></a>`;
   }
   // draftTab: the chat whose composer holds this not-yet-sent file; only then can an image be annotated.
   function openChatAttachment(file, draftTab = null) {
@@ -11797,15 +11816,37 @@
     const hl = (code, lang) => text.length < 300000 && window.hljs?.getLanguage(lang) ? hljs.highlight(code, { language: lang, ignoreIllegals: true }).value : escHtml(code);
     const ext = (file.match(/\.(\w+)$/)?.[1] || '').toLowerCase(), lang = ext === 'md' ? 'markdown' : ext;
     const front = lang === 'markdown' ? text.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/)?.[0] || '' : '';
-    const html = (front ? hl(front, 'yaml') : '') + hl(text.slice(front.length), lang);
+    const row = (index, html) => `<div class="cfp-row"><span class="cfp-ln">${index + 1}</span><span class="cfp-text">${html}</span></div>`;
+    const plain = text.length >= 300000;
+    const lines = (plain ? text : (front ? hl(front, 'yaml') : '') + hl(text.slice(front.length), lang)).split('\n');
     // One row per line: a token spanning lines is closed at each line's end and reopened on the next.
     let open = [];
-    const rows = html.split('\n').map((line, i) => {
+    const rows = plain ? null : lines.map((line, i) => {
       const pre = open.join('');
       for (const [tag] of line.matchAll(/<span[^>]*>|<\/span>/g)) tag[1] === '/' ? open.pop() : open.push(tag);
-      return `<div class="cfp-row"><span class="cfp-ln">${i + 1}</span><span class="cfp-text">${pre}${line}${'</span>'.repeat(open.length)}</span></div>`;
-    }).join('');
-    openChatPanel(owner, { title, path: file, sub: file.split(/[\\/]/).slice(-2).join('/'), rows, line, maxLn: html.split('\n').length });
+      return row(i, pre + line + '</span>'.repeat(open.length));
+    });
+    const renderRows = (from, to) => (rows ? rows.slice(from, to)
+      : lines.slice(from, to).map((line, i) => row(from + i, escHtml(line)))).join('');
+    const maxLn = lines.length;
+    const linked = line > 0 && line <= maxLn;
+    // Mount only the linked region before opening the split. Scroll anchoring keeps it in place as earlier rows arrive.
+    const initialRows = 200, batchSize = 600;
+    let first = maxLn > 1000 && linked ? Math.max(0, line - 1 - initialRows / 2) : 0;
+    let last = maxLn > 1000 ? Math.min(maxLn, first + initialRows) : maxLn;
+    const page = openChatPanel(owner, { title, path: file, sub: file.split(/[\\/]/).slice(-2).join('/'),
+      rows: renderRows(first, last), line: linked ? line - first : 0, maxLn });
+    if (!page || (first === 0 && last === maxLn)) return;
+    const code = page.querySelector('.cfp-code');
+    const fill = () => {
+      if (!page.isConnected) return; // closed or replaced while loading
+      const before = Math.max(0, first - batchSize), after = Math.min(maxLn, last + batchSize);
+      if (before < first) code.insertAdjacentHTML('afterbegin', renderRows(before, first));
+      if (last < after) code.insertAdjacentHTML('beforeend', renderRows(last, after));
+      first = before; last = after;
+      if (first > 0 || last < maxLn) requestIdleCallback(fill, { timeout: 50 });
+    };
+    requestAnimationFrame(() => requestIdleCallback(fill, { timeout: 50 }));
   }
   // A turn's changed files as one read-only diff beside the chat, drawn by diff2html (vendor/diff2html-ui-base.min.js,
   // colored by the app's highlight.js): sticky file headers, old/new line numbers, word-level changes.
@@ -11888,14 +11929,14 @@
     page.setAttribute('role', 'tabpanel');
     page.setAttribute('aria-label', title);
     page.innerHTML = `<div class="cfp-head"><i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-title">${escHtml(title)}</span>`
-      + `<span class="cfp-path"${path ? ` title="${escHtml(path)}"` : ''}>${escHtml(sub)}</span>`
+      + `<span class="cfp-path"${path ? ` title="${escHtml(title)}"` : ''}>${escHtml(sub)}</span>`
       + (path && window.electronAPI?.showInFolder ? '<button type="button" class="cfp-icon" data-act="reveal" aria-label="Show in folder" data-tip="Show in folder"><i class="ph ph-folder-open" aria-hidden="true"></i></button>' : '')
       + '</div>' // closing is on the tab (and Esc closes the panel)
       + `<div class="cfp-body" tabindex="0" aria-label="${escHtml(title)} (read-only)"><div class="cfp-code">${rows}</div></div>`;
     const tab = document.createElement('div');
     tab.className = 'cfp-tab';
     tab.setAttribute('role', 'tab');
-    tab.title = path || `${title} (${sub})`;
+    tab.title = path ? title : `${title} (${sub})`;
     tab.innerHTML = `<i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-tab-name">${escHtml(path ? path.split(/[\\/]/).pop() : title)}</span>`
       + '<button type="button" class="cfp-tab-x" tabindex="-1" aria-label="Close tab"><i class="ph ph-x" aria-hidden="true"></i></button>';
     tab._page = page; page._tab = tab;
@@ -13034,8 +13075,8 @@
         flow.insertAdjacentHTML('beforeend', pendingHtml(ws, [...flow.querySelectorAll(':scope > .thr-seg')].at(-1)?.dataset.head || ''));
         flow.querySelectorAll('.thr-pending img.thr-img').forEach(bindThreadImage);
         flow.querySelectorAll('.thr-pending .thr-a2ui-answer').forEach(el => fillA2uiAnswer(ws, el));
+        syncThreadComposer(ws);
         if (atBottom) flow.scrollTop = flow.scrollHeight;
-        syncWorking(ws);
       }
       _flowSig = '';
       if (newTurn) await snapshotTurn(ws); // before the agent sees the message, so all of its changes count
@@ -13814,13 +13855,14 @@
         .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1<em>$2</em>')
         .replace(/(^|\W)_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1<em>$2</em>')
         .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
-        // [label](target): web links open in the browser, images in the viewer, other paths in the file manager.
+        // [label](target): web links open in the browser, images in the viewer, and text files beside the chat.
         // A bare http(s) URL is a link too (labelled with itself); one pass, so a [label](url)'s URL isn't linked twice.
         // A link to a local image (or ![alt](path)) also shows a clickable image preview below.
         .replace(/(!?)\[([^\]\n]*)\]\((?:\u0000L(\d+)\u0000|([^()\s\u0000]+))\)|(?<![="'\w/])(https?:\/\/[^\s<>"'`)\]\u0000]*[^\s<>"'`)\].,;:!?\u0000])/g, (_, bang, label, destination, href, bare) => {
           if (destination !== undefined) href = destinations[Number(destination)];
           if (bare) { href = label = bare; }
-          const link = label ? `<button type="button" class="thr-link" data-href="${href}" title="${href}">${linkIconHtml(href)}${label}</button>` : '';
+          const tip = /^https?:/i.test(href) ? href : href.split(/[\\/]/).filter(Boolean).at(-1) || href;
+          const link = label ? `<button type="button" class="thr-link" data-href="${href}" title="${tip}">${linkIconHtml(href)}${label}</button>` : '';
           const raw = href.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
           // ![alt](https://…) and ![alt](data:image/…) are shown inline, never fetched until the markdown says so; a failed load falls back to the alt text.
           if (bang && !bare && (/^https?:\/\//i.test(raw) || /^data:image\/(png|jpe?g|gif|webp);base64,/i.test(raw)))
@@ -13916,7 +13958,7 @@
     return out + inline(text.slice(last));
   }
   const toolIcon = n => /view_?image|image_?view|screenshot/i.test(n) ? 'ph-eye' : /bash|shell|exec|command|terminal/i.test(n) ? 'ph-terminal' : /read|view|cat/i.test(n) ? 'ph-file-text'
-    : /edit|write|patch|update|create/i.test(n) ? 'ph-pencil-simple' : /grep|glob|search|find|list/i.test(n) ? 'ph-magnifying-glass'
+    : /\bapply_patch$/i.test(n) ? 'ph-note-pencil' : /edit|write|patch|update|create/i.test(n) ? 'ph-pencil-simple' : /grep|glob|search|find|list/i.test(n) ? 'ph-magnifying-glass'
     : /web|fetch|url|browser/i.test(n) ? 'ph-globe' : /task|agent/i.test(n) ? 'ph-robot' : 'ph-wrench';
   // A tool that looks at an image (Codex view_image, Claude's Read of a .png…): its expanded row shows the image
   // with a viewer and copy action alongside the path.
@@ -15463,12 +15505,21 @@
         item(`<i class="ph ${terminalLinkTarget === 'external' ? 'ph-browser' : 'ph-globe'}"></i>`, terminalLinkTarget === 'external' ? 'Open in a browser tab' : 'Open in system browser', '', () => openChatWebLink(data, true));
         item('<i class="ph ph-copy"></i>', 'Copy link', '', () => copy(data));
       } else {
-        const { path, rel, line } = chatLinkPath(data);
-        item('<i class="ph ph-code"></i>', 'Open in VS Code', '', () => window.electronAPI?.openInVSCode?.(path + (line ? ':' + line : '')).then(ok => { if (!ok) zoomBadge('VS Code (code) not found'); }));
+        const owner = curChat(), { path, rel, line, column } = chatLinkPath(data, owner);
+        const copyPath = text => {
+          const write = window.electronAPI?.clipboardWrite ? window.electronAPI.clipboardWrite(text) : navigator.clipboard.writeText(text);
+          void write.catch(() => zoomBadge('Could not copy the path'));
+        };
+        item('<i class="ph ph-file-text"></i>', 'Open in Editor', '', () => openChatFileLink(owner, path, line, true));
+        item('<i class="ph ph-code"></i>', 'Open in VS Code', '', async () => {
+          const target = path + (line ? ':' + line + (column ? ':' + column : '') : '');
+          const ok = await window.electronAPI?.openInVSCode?.(target).catch(() => false);
+          if (!ok) zoomBadge('Could not open VS Code');
+        });
         item('<i class="ph ph-folder-open"></i>', 'Reveal in Files', '', () => window.electronAPI?.showInFolder?.(path));
         sep();
-        item('<i class="ph ph-copy"></i>', 'Copy relative path', '', () => copy(rel));
-        item('<i class="ph ph-copy"></i>', 'Copy full path', '', () => copy(path));
+        item('<i class="ph ph-copy"></i>', 'Copy relative path', '', () => copyPath(rel));
+        item('<i class="ph ph-copy"></i>', 'Copy full path', '', () => copyPath(path));
       }
     } else if (type === 'chat-thread') {
       // A card can outlive its Chat tab.

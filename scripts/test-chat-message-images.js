@@ -18,6 +18,8 @@ app.whenReady().then(async () => {
   const pending = source.slice(source.indexOf('  const pendingMessages ='), source.indexOf('  const _thrImgCache ='));
   const hydrate = source.slice(source.indexOf('  async function hydrateThreadImage('), source.indexOf('  function bindThreadCopy('));
   const markdown = source.slice(source.indexOf('  function mdLite('), source.indexOf('  const toolIcon ='));
+  const tooltips = source.slice(source.indexOf('  function setupAppTooltips('), source.indexOf("  window.addEventListener('error'"));
+  const windowsAttachment = 'C:\\Users\\Example User\\.terminalvibe\\attachments\\image.png';
   const imageRegex = source.split('\n').filter(line => /^  const (IMAGE|ATTACHMENT)_PATH_RE =/.test(line)).join('\n');
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, msg) => { if (!ok) throw Error(msg); };
@@ -41,6 +43,7 @@ app.whenReady().then(async () => {
     markdownLink.innerHTML = mdLite('Built [Windows x64](<' + example + '>) and [report](</tmp/a _draft_ (2).txt>).');
     const [buildLink, reportLink] = markdownLink.querySelectorAll('.thr-link');
     check(buildLink?.textContent === 'Windows x64' && buildLink.dataset.href === example, 'A WSL artifact link with spaces must render as a clickable label');
+    check(buildLink?.title === 'TerminalVibe 0.9.0.exe', 'File link tooltip must omit the home directory');
     check(reportLink?.dataset.href === '/tmp/a _draft_ (2).txt', 'Link destinations must preserve spaces, parentheses and underscores');
     const scope = document.createElement('div');
     const render = text => { const result = userTextHtml(text); scope.innerHTML = result.html; return result; };
@@ -160,6 +163,18 @@ app.whenReady().then(async () => {
     observeThreadImages(flow);
     for (let i = 0; i < 40 && !restored.querySelector('img'); i++) await new Promise(resolve => setTimeout(resolve, 25));
     check(restoredReads === 1 && restored.querySelector('img')?.getAttribute('src') === preview, 'A restored inline link must load its own thumbnail');
+    ${tooltips}
+    setupAppTooltips();
+    const windowsPath = ${JSON.stringify(windowsAttachment)};
+    flow.innerHTML = chatImageReferenceHtml({ path: windowsPath });
+    const attachment = flow.querySelector('.thr-img-link');
+    attachment.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    for (let i = 0; i < 40 && !document.querySelector('.ui-tooltip.show'); i++) await new Promise(resolve => setTimeout(resolve, 25));
+    const tooltip = document.querySelector('.ui-tooltip.show');
+    const username = tooltip?.querySelector('.thr-work-username');
+    check(username && getComputedStyle(username).filter === 'blur(4px)', 'Attachment tooltip must blur the username placeholder');
+    check(tooltip.textContent === windowsPath.replace('Example User', 'hidden-user'), 'Tooltip must keep the rest of the path and omit the real username');
+    check(attachment.dataset.path === windowsPath && !attachment.hasAttribute('title'), 'Attachment must keep its file target without a native path tooltip');
     return 'PASS: restored inline thumbnails, deferred history thumbnails, sent image links, shared composer/message thumbnail, filename, size, original paths, inline code, spaces, citations and previews before the transcript arrives';
   })()`));
   clearTimeout(timeout); app.exit(0);

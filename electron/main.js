@@ -566,14 +566,29 @@ ipcMain.handle('shell:show-in-folder', (_e, file) => {
   if (typeof file === 'string') file = expandHome(file);
   if (typeof file === 'string' && path.isAbsolute(file)) shell.showItemInFolder(path.normalize(file));
 });
-// "path" or "path:line"; false when the `code` CLI isn't installed.
-ipcMain.handle('shell:open-in-vscode', (_e, target) => new Promise(resolve => {
-  if (typeof target !== 'string' || !path.isAbsolute(target)) return resolve(false);
-  // ponytail: no shell (the path comes from agent text), so Windows' code.cmd isn't found; a vscode:// URL if Windows matters.
-  const child = require('child_process').spawn('code', ['-g', target], { detached: true, stdio: 'ignore', windowsHide: true });
-  child.once('error', () => resolve(false));
-  child.once('spawn', () => { child.unref(); resolve(true); });
-}));
+// "path" or "path:line:column"; false when VS Code could not be launched.
+ipcMain.handle('shell:open-in-vscode', async (_e, target) => {
+  if (typeof target !== 'string' || !path.isAbsolute(target)) return false;
+  if (process.platform === 'win32') {
+    const location = target.match(/:(\d+)(?::(\d+))?$/);
+    const local = path.normalize(location ? target.slice(0, location.index) : target);
+    const file = local.replace(/\\/g, '/');
+    const wsl = /^\/\/wsl(?:\.localhost|\$)\/([^/]+)(\/.*)$/i.exec(file);
+    const urlPath = (wsl ? wsl[2] : file).split('/').map(encodeURIComponent).join('/').replace(/^([a-z])%3A\//i, '$1:/');
+    // Windows installs a code.cmd shim, which cannot be launched directly without a shell.
+    const url = wsl ? 'vscode://vscode-remote/wsl+' + encodeURIComponent(wsl[1]) + urlPath
+      : 'vscode://file/' + urlPath;
+    // VS Code interprets remote links without a line suffix as folders.
+    const remoteFile = wsl && !location && (await fs.promises.stat(local).catch(() => null))?.isFile();
+    const suffix = location ? ':' + location[1] + ':' + (location[2] || '1') : remoteFile ? ':1:1' : '';
+    return shell.openExternal(url + suffix).then(() => true, () => false);
+  }
+  return new Promise(resolve => {
+    const child = require('child_process').spawn('code', ['-g', target], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.once('error', () => resolve(false));
+    child.once('spawn', () => { child.unref(); resolve(true); });
+  });
+});
 
 // ── IPC: clipboard (terminal text; navigator.clipboard also works) ──
 ipcMain.handle('servers:list', () => listRunningServers(process.pid));
