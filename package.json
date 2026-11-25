@@ -35,6 +35,7 @@
     "build:win": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --win --publish never -c.npmRebuild=false",
     "build:win:dir": "node scripts/build-dist.js && electron-builder --win --dir --publish never -c.npmRebuild=false",
     "build:win:fast": "node scripts/build-dist.js && electron-builder --win portable --publish never -c.npmRebuild=false -c.compression=store",
+    "release:stable": "node scripts/release-stable.js",
     "dist": "node scripts/build-vendor.js && node scripts/build-dist.js && electron-builder --linux dir --publish never",
     "electron:install": "node node_modules/electron/install.js"
   },
