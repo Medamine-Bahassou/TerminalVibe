@@ -173,7 +173,7 @@
       // Also sanitize synchronously on entry if another event handler just set a title.
       for (let node = el instanceof Element ? el : null; node; node = node.parentElement) convertTitle(node);
       // Icon-only buttons with just an aria-label get that label as their tooltip.
-      const labelled = el.closest?.('button[aria-label]');
+      const labelled = el.closest?.('button[aria-label]:not(#sbr-thread-prompts)'); // its preview card replaces a tooltip
       if (labelled && !labelled.textContent.trim() && (!labelled.dataset.tip || labelled.dataset.tipAria)) {
         labelled.dataset.tip = labelled.getAttribute('aria-label'); labelled.dataset.tipAria = '1';
       }
@@ -1448,6 +1448,22 @@
   // 2026: Codex, and Claude in terminals it knows) or right after a PTY resize is held and
   // written as one chunk, which xterm parses and paints at once.
   const SYNC_MAX_MS = 150, REDRAW_QUIET_MS = 24;
+  // "Hide usernames" setting: same-length mask so prompt columns don't shift. Names are learned from
+  // /home/X, /Users/X and C:\Users\X paths, and from "X@host" once X is known.
+  // shortcut: a name is masked only after a path shows it; a split chunk can leak once.
+  const _termUsers = new Set();
+  // Matches the runs of stars standing in for a learned username.
+  const userStars = () => threadSettings.usernames === 'blur' && _termUsers.size
+    ? new RegExp([...new Set([..._termUsers].map(u => u.length))].map(n => `(?<![*])[*]{${n}}(?![*])`).join('|'), 'g') : null;
+  function maskTerminalUsernames(data) {
+    if (threadSettings.usernames !== 'blur') return data;
+    for (const m of data.matchAll(/(?:[A-Za-z]:[\\/]+Users[\\/]+|[\\/](?:home|Users)[\\/]+)([^\\/\s"'<>\x1b]{2,})/gi)) _termUsers.add(m[1]);
+    for (const u of _termUsers) {
+      const esc = u.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      data = data.replace(new RegExp('(?<![\\w.-])' + esc + '(?![\\w.-])', 'g'), '*'.repeat(u.length));
+    }
+    return data;
+  }
   function writePtyData(result, id, data, flush) {
     const entry = result?.term;
     if (entry) entry._lastOut = Date.now(); // lets a thread wait for an agent to settle
@@ -1468,7 +1484,9 @@
       }
       if (!data) return;
     }
-    const ack = () => window.electronAPI.terminalAck?.(id, data.length);
+    const rawLen = data.length; // ack the bytes main sent, not the masked copy
+    if (xterm) data = maskTerminalUsernames(data);
+    const ack = () => window.electronAPI.terminalAck?.(id, rawLen);
     if (xterm && !document.hidden) xterm.write(data, ack);
     else { xterm?.write(data); ack(); }
   }
@@ -4124,9 +4142,11 @@
       const drop = d => { d.marker.dispose(); decos.splice(decos.indexOf(d), 1); };
       for (let y = top; y < bottom; y++) {
         const line = buf.getLine(y);
-        if (!line || !line.translateToString(true).includes('@')) continue;
+        const text = line?.translateToString(true) || '';
+        const userRe = userStars();
+        if (!text.includes('@') && !(userRe && text.includes('*'))) continue;
         const row = termRow(line, y);
-        for (const m of row.text.matchAll(EMAIL_RE)) {
+        for (const m of [...row.text.matchAll(EMAIL_RE), ...(userRe ? row.text.matchAll(userRe) : [])]) {
           const x = row.pos[m.index].x - 1, w = row.pos[m.index + m[0].length - 1].x - x;
           const at = decos.find(d => d.marker.line === y && d.x === x);
           if (at?.text === m[0]) { at.stale = false; continue; }
@@ -4144,6 +4164,8 @@
             if (el._emailBlur) return;
             el._emailBlur = true;
             el.classList.add('term-email-blur');
+            if (/^\*+$/.test(d.text)) el.classList.add('term-user-blur'); // a masked username: blurred even when emails are shown
+            if (el.classList.contains('term-user-blur')) return; // a masked username can't be revealed
             el.title = d.shown ? 'Click to hide' : 'Click to show';
             el.addEventListener('mousedown', e => {
               e.preventDefault(); e.stopPropagation();
@@ -4220,7 +4242,8 @@
             const tab = document.createElement('div');
             tab.className = 'tg-tab active';
             tab.dataset.termid = entry.id;
-            tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
+            tab.draggable = true;
+            tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="${withKey('Close', 'closeTerminal')}">✕</span>`;
             tab.title = entry.label;
             applyTabColor(tab, entry.color);
                     tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
@@ -4381,7 +4404,7 @@
             const tab = document.createElement('div');
             tab.className = 'tg-tab active';
             tab.dataset.termid = entry.id;
-            tab.innerHTML = `<span class="tg-tab-dot tg-tab-icon"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="Close">✕</span>`;
+            tab.innerHTML = `<span class="tg-tab-dot tg-tab-icon"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="${withKey('Close', 'closeTerminal')}">✕</span>`;
             syncBrowserTabIcon(entry, tab);
             tab.title = entry.label;
             applyTabColor(tab, entry.color);
@@ -5591,7 +5614,7 @@
         tab.innerHTML = `
         <span class="tg-tab-dot${t.type === 'browser' ? ' tg-tab-icon' : ''}">${t.type === 'browser' ? '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg>' : ''}</span>
         ${t.locked ? '<i class="ph ph-lock-simple tg-tab-lock"></i>' : ''}<span class="tg-tab-name">${escHtml(t.label)}</span>
-        <span class="tg-tab-close" title="Close">✕</span>
+        <span class="tg-tab-close" title="${withKey('Close', 'closeTerminal')}">✕</span>
         `;
         tab.title = (t.threadHistory && t.chat?.title) || t.label;
         if (t.threadHistory) tab.dataset.tipWrap = '';

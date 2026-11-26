@@ -1350,7 +1350,7 @@ body #sidebar.expanded:not(.hover-overlay) { flex-shrink:0; }
   border-radius:4px !important;
 }
 /* Settings → Hide email addresses off (xterm sets display inline, hence !important). */
-body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !important; }
+body.show-emails .xterm .xterm-decoration.term-email-blur:not(.term-user-blur) { display:none !important; }
 /* Keep revealed addresses clickable so the next click restores their blur. */
 .xterm .xterm-decoration.term-email-blur.shown { -webkit-backdrop-filter:none; backdrop-filter:none; background:transparent; pointer-events:auto; cursor:pointer; }
 
@@ -3679,3 +3679,7 @@ html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):hover:not(:disa
    and its footer row (project, branch) never extend over the terminal's tab bar. */
 #pane-area .term-slot.chat-bottom-open:not(.chat-cli) > #sbr-thread,
 .term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { height:auto; bottom:var(--chat-terminal-height, 35%); overflow:hidden; }
+
+/* Terminal: a masked username stays blurred and can't be clicked open. */
+.xterm .xterm-decoration.term-user-blur { pointer-events:none !important; cursor:default; }
+.xterm .xterm-decoration.term-user-blur.shown { -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); background:color-mix(in srgb,var(--fg) 6%,transparent); }
