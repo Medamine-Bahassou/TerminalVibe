@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, dialog, Menu, webContents } = require('electron');
+const { app, BaseWindow, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, screen, dialog, Menu, webContents } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
@@ -1724,39 +1724,89 @@ ipcMain.on('browser:shortcuts', (_e, list) => { browserShortcuts = Array.isArray
 // A browser tab's DevTools render in a native view laid over the tab's drawer
 // placeholder. Not a second <webview>: a webview-hosted DevTools frontend loads
 // but never attaches to the page (empty Elements, dead Console).
-const devtoolsViews = new Map(); // page webContents id -> WebContentsView
+const devtoolsViews = new Map(); // page webContents id -> DevTools view and its current host
 function closeDevToolsView(pageId) {
-  const view = devtoolsViews.get(pageId);
-  if (!view) return;
+  const state = devtoolsViews.get(pageId);
+  if (!state) return;
   devtoolsViews.delete(pageId);
-  try { mainWindow.contentView.removeChildView(view); } catch {}
-  try { view.webContents.close(); } catch {}
+  const { page, view, host, external, cleanup } = state;
+  page.removeListener('destroyed', cleanup);
+  page.removeListener('devtools-closed', cleanup);
+  if (!host.isDestroyed()) host.contentView.removeChildView(view);
+  if (external && !external.isDestroyed()) external.destroy();
+  if (!view.webContents.isDestroyed()) view.webContents.close();
 }
-ipcMain.handle('browser:devtools', (event, pageId, open) => {
+ipcMain.handle('browser:devtools', (event, pageId, open, dock = 'bottom') => {
   const wc = Number.isInteger(pageId) && webContents.fromId(pageId);
   const page = wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.hostWebContents?.id === event.sender.id ? wc : null;
   if (!page) throw new Error('Unknown browser tab');
-  if (!open) { closeDevToolsView(pageId); if (page.isDevToolsOpened()) page.closeDevTools(); return false; }
-  if (devtoolsViews.has(pageId)) return true;
-  const view = new WebContentsView();
-  devtoolsViews.set(pageId, view);
-  view.setVisible(false); // Shown once the renderer reports the drawer's bounds.
-  mainWindow.contentView.addChildView(view);
-  // F12 / Ctrl+Shift+I inside DevTools toggles the drawer, as it does in the page.
-  view.webContents.on('before-input-event', (e, input) => {
-    if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) {
-      e.preventDefault();
-      if (!event.sender.isDestroyed()) event.sender.send('browser:devtools-toggle', pageId);
+  if (!open) { page.closeDevTools(); closeDevToolsView(pageId); return false; }
+  if (!['right', 'left', 'bottom', 'external'].includes(dock)) throw new Error('Unknown DevTools dock');
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window) throw new Error('Browser window is unavailable');
+  let state = devtoolsViews.get(pageId);
+  const opening = !state;
+  if (opening) {
+    const view = new WebContentsView();
+    const cleanup = () => closeDevToolsView(pageId);
+    state = { page, view, host: window, external: null, cleanup };
+    devtoolsViews.set(pageId, state);
+    page.once('destroyed', cleanup);
+    page.once('devtools-closed', cleanup);
+    view.webContents.on('before-input-event', (e, input) => {
+      if (input.type === 'keyDown' && (input.key === 'F12' || ((input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i'))) {
+        e.preventDefault();
+        if (!event.sender.isDestroyed()) event.sender.send('browser:devtools-toggle', pageId);
+      }
+    });
+  }
+  const { view } = state;
+  if (dock === 'external') {
+    if (state.external) { state.external.focus(); return true; }
+    const external = new BaseWindow({ title: 'Developer Tools', width: 1000, height: 700, show: false });
+    state.host.contentView.removeChildView(view);
+    state.host = state.external = external;
+    external.contentView.addChildView(view);
+    const resize = () => {
+      const { width, height } = external.getContentBounds();
+      view.setBounds({ x: 0, y: 0, width, height });
+    };
+    external.on('resize', resize);
+    external.on('closed', () => {
+      if (state.external !== external || devtoolsViews.get(pageId) !== state) return;
+      page.closeDevTools();
+      closeDevToolsView(pageId);
+    });
+    resize();
+    view.setVisible(true);
+    external.show();
+  } else {
+    view.setVisible(false);
+    if (state.external) {
+      const external = state.external;
+      state.external = null;
+      external.contentView.removeChildView(view);
+      external.destroy();
     }
-  });
-  page.once('destroyed', () => closeDevToolsView(pageId));
-  page.setDevToolsWebContents(view.webContents);
-  page.openDevTools();
+    state.host = window;
+    window.contentView.addChildView(view);
+  }
+  if (opening) {
+    page.setDevToolsWebContents(view.webContents);
+    page.openDevTools();
+  }
   return true;
 });
-ipcMain.on('browser:devtools-bounds', (_e, pageId, rect) => {
-  const view = devtoolsViews.get(pageId);
-  if (!view) return;
+ipcMain.handle('browser:devtools-preview', async (event, pageId) => {
+  const state = devtoolsViews.get(pageId);
+  if (!state || state.external || state.page.hostWebContents?.id !== event.sender.id) return null;
+  const image = await state.view.webContents.capturePage();
+  return image.isEmpty() ? null : image.toDataURL();
+});
+ipcMain.on('browser:devtools-bounds', (event, pageId, rect) => {
+  const state = devtoolsViews.get(pageId);
+  if (!state || state.external || state.page.hostWebContents?.id !== event.sender.id) return;
+  const { view } = state;
   if (rect && rect.width > 0 && rect.height > 0) {
     view.setBounds({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) });
     view.setVisible(true);

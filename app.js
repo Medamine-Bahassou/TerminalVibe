@@ -1051,7 +1051,16 @@
     e.preventDefault(); e.stopPropagation();
     openBrowserFind(t);
   }, true);
-  let browserDevToolsHeight = 0; // Last dragged DevTools drawer height, shared by tabs; 0 = 40% of the tab
+  const browserDevToolsDocks = { right: 'Dock right', left: 'Dock left', bottom: 'Dock bottom', external: 'Separate window' };
+  const browserDevToolsSizes = {};
+  let browserDevToolsDock = 'bottom';
+  let browserMoreOpen = false;
+  const browserMorePreviews = new Set();
+  let browserModalOpen = false;
+  try {
+    const saved = localStorage.getItem('terminalvibe.browserDevToolsDock');
+    if (Object.hasOwn(browserDevToolsDocks, saved)) browserDevToolsDock = saved;
+  } catch {}
   if (isDesktop() && window.electronAPI) {
     window.electronAPI.onBrowserEvent(d => browserEventHooks.get(d && d.id)?.(d));
     window.electronAPI.onBrowserKey?.(d => document.dispatchEvent(new KeyboardEvent('keydown', { ...d, bubbles: true, cancelable: true })));
@@ -1201,10 +1210,66 @@
     for (const ws of workspaces) {
       for (const t of getWorkspaceTerminals(ws)) {
         const dt = t._devtools;
-        if (!dt) continue;
-        const r = show && ws.id === activeWsId && t.browserContainer?.style.visibility !== 'hidden' ? dt.el.getBoundingClientRect() : null;
+        if (!dt || dt.dock === 'external') continue;
+        const r = show && !browserMoreOpen && !browserModalOpen && ws.id === activeWsId && t.browserContainer?.style.visibility !== 'hidden' ? dt.el.getBoundingClientRect() : null;
         window.electronAPI.browserDevToolsBounds?.(dt.pageId, r && r.width && r.height ? { x: r.left, y: r.top, width: r.width, height: r.height } : null);
       }
+    }
+  }
+
+  function watchBrowserModalLayers() {
+    const layers = 'dialog, #prompt-overlay, #settings-overlay, #tab-search, #usage-overlay, #pulls-overlay, #profile-picker, .claude-image-viewer';
+    let previewRequest = null;
+    const images = new Set();
+    const update = () => {
+      const open = [...document.querySelectorAll(layers)].some(layer =>
+        (layer.matches('dialog') ? layer.open
+          : layer.matches('#prompt-overlay, #settings-overlay') ? layer.classList.contains('open')
+          : layer.style.display !== 'none' && layer.getClientRects().length > 0) &&
+        getComputedStyle(layer).visibility !== 'hidden');
+      if (open === browserModalOpen) return;
+      browserModalOpen = open;
+      if (!open) {
+        previewRequest = null;
+        syncBrowserSlots();
+        for (const image of images) image.remove();
+        images.clear();
+        return;
+      }
+      const request = previewRequest = captureBrowserDevToolsPreviews();
+      syncBrowserSlots();
+      request.then(previews => {
+        if (previewRequest === request) showBrowserDevToolsPreviews(previews, images);
+      });
+    };
+    new MutationObserver(records => {
+      if (records.some(record => record.target.matches?.(layers) ||
+        [...record.addedNodes, ...record.removedNodes].some(node => node.matches?.(layers) || node.querySelector?.(layers)))) update();
+    }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open', 'class', 'style', 'hidden'] });
+    update();
+  }
+
+  function captureBrowserDevToolsPreviews() {
+    return Promise.all(getWorkspaceTerminals(activeWs()).map(async tab => {
+      const dt = tab._devtools;
+      if (!dt?.el.getClientRects().length || tab.browserContainer?.style.visibility === 'hidden') return null;
+      const src = await window.electronAPI.browserDevToolsPreview?.(dt.pageId).catch(() => null);
+      if (!src || tab._devtools !== dt) return null;
+      const image = new Image();
+      image.src = src;
+      await image.decode().catch(() => {});
+      return { dt, image };
+    }));
+  }
+
+  function showBrowserDevToolsPreviews(previews, images) {
+    for (const preview of previews) {
+      if (!preview?.dt.el.isConnected || !preview.image.naturalWidth) continue;
+      const { dt, image } = preview;
+      image.className = 'browser-devtools-preview';
+      image.alt = '';
+      dt.el.append(image);
+      images.add(image);
     }
   }
 
@@ -1448,21 +1513,54 @@
   // 2026: Codex, and Claude in terminals it knows) or right after a PTY resize is held and
   // written as one chunk, which xterm parses and paints at once.
   const SYNC_MAX_MS = 150, REDRAW_QUIET_MS = 24;
-  // "Hide usernames" setting: same-length mask so prompt columns don't shift. Names are learned from
-  // /home/X, /Users/X and C:\Users\X paths, and from "X@host" once X is known.
-  // shortcut: a name is masked only after a path shows it; a split chunk can leak once.
+  // Learn usernames from home directories and match them against the visible terminal cells.
   const _termUsers = new Set();
-  // Matches the runs of stars standing in for a learned username.
-  const userStars = () => threadSettings.usernames === 'blur' && _termUsers.size
-    ? new RegExp([...new Set([..._termUsers].map(u => u.length))].map(n => `(?<![*])[*]{${n}}(?![*])`).join('|'), 'g') : null;
-  function maskTerminalUsernames(data) {
-    if (threadSettings.usernames !== 'blur') return data;
-    for (const m of data.matchAll(/(?:[A-Za-z]:[\\/]+Users[\\/]+|[\\/](?:home|Users)[\\/]+)([^\\/\s"'<>\x1b]{2,})/gi)) _termUsers.add(m[1]);
-    for (const u of _termUsers) {
-      const esc = u.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      data = data.replace(new RegExp('(?<![\\w.-])' + esc + '(?![\\w.-])', 'g'), '*'.repeat(u.length));
+  function learnTerminalUsernames(text) {
+    for (const match of (text || '').matchAll(/(?:[A-Za-z]:[\\/]+Users[\\/]+|[\\/](?:home|Users)[\\/]+)([^\\/\s"'<>\x1b]{2,})/gi)) {
+      if (!match[1].includes('*')) _termUsers.add(match[1]);
     }
-    return data;
+  }
+  function terminalUsernamePattern() {
+    if (!_termUsers.size) return;
+    const names = [..._termUsers].map(user => user.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return new RegExp('(?<![\\w.-])(?:' + names.join('|') + ')(?![\\w.-])', 'gi');
+  }
+  function maskLearnedTerminalUsernames(text) {
+    const pattern = terminalUsernamePattern();
+    return pattern ? text.replace(pattern, user => '*'.repeat(user.length)) : text;
+  }
+  function terminalTabLabel(entry, label = entry.label || '') {
+    if (threadSettings.usernames !== 'blur' || entry.type === 'browser' || entry.threadHistory) return label;
+    learnTerminalUsernames(entry.cwd);
+    learnTerminalUsernames(label);
+    return maskLearnedTerminalUsernames(label);
+  }
+  function styleTerminalTabLabel(name, entry, label) {
+    if (!name) return;
+    const redacted = label !== entry.label && /^\*+$/.test(label);
+    name.classList.toggle('username-redacted', redacted);
+    if (redacted) name.textContent = entry.label;
+  }
+  function refreshTerminalTabLabels() {
+    for (const tab of document.querySelectorAll('.tg-tab[data-termid]')) {
+      const entry = findTermById(tab.dataset.termid)?.term;
+      if (!entry || entry.type === 'browser' || entry.threadHistory) continue;
+      const label = terminalTabLabel(entry);
+      const name = tab.querySelector('.tg-tab-name');
+      if (name) name.textContent = label;
+      styleTerminalTabLabel(name, entry, label);
+      tab.title = label;
+      entry.term?._refreshPrivacy?.();
+    }
+  }
+  function learnTerminalOutputUsernames(data) {
+    if (threadSettings.usernames !== 'blur') return;
+    const visible = data.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[ -/]*[0-~])/g, '');
+    const learned = _termUsers.size;
+    const cwd = data.includes('\x1b]7;') && _extractOSC7CwdStr(data);
+    learnTerminalUsernames(visible);
+    if (cwd) learnTerminalUsernames(cwd);
+    if (_termUsers.size !== learned) refreshTerminalTabLabels();
   }
   function writePtyData(result, id, data, flush) {
     const entry = result?.term;
@@ -1485,7 +1583,7 @@
       if (!data) return;
     }
     const rawLen = data.length; // ack the bytes main sent, not the masked copy
-    if (xterm) data = maskTerminalUsernames(data);
+    if (xterm) learnTerminalOutputUsernames(data);
     const ack = () => window.electronAPI.terminalAck?.(id, rawLen);
     if (xterm && !document.hidden) xterm.write(data, ack);
     else { xterm?.write(data); ack(); }
@@ -3364,10 +3462,13 @@
     if (!label) return;
     const changed = entry.label !== label;
     entry.label = label;
+    if (threadSettings.usernames === 'blur') learnTerminalUsernames(title);
+    const displayLabel = terminalTabLabel(entry);
     const tab = document.querySelector(`.tg-tab[data-termid="${entry.id}"]`);
     const text = tab?.querySelector('.tg-tab-name');
-    if (text) text.textContent = label;
-    if (tab) tab.title = label;
+    if (text) text.textContent = displayLabel;
+    styleTerminalTabLabel(text, entry, displayLabel);
+    if (tab) tab.title = displayLabel;
     if (changed) renderSidebar();
   }
 
@@ -4041,6 +4142,10 @@
     text = String(text ?? '');
     const replacements = [];
     if (threadSettings.usernames === 'blur') {
+      const usernames = terminal && terminalUsernamePattern();
+      if (usernames) for (const match of text.matchAll(usernames)) {
+        replacements.push({ at: match.index, length: match[0].length, value: match[0], type: 'user' });
+      }
       for (const m of text.matchAll(/(?:[A-Za-z]:[\\/]+Users[\\/]+|[\\/](?:home|Users)[\\/]+)([^\\/\s"'<>]+)/gi)) {
         replacements.push({ at: m.index + m[0].length - m[1].length, length: m[1].length, value: m[1], type: 'user' });
       }
@@ -4103,15 +4208,17 @@
     bindPrivateCopy(); term.onRender(bindPrivateCopy); // This terminal may not be opened yet.
     let decos = [], timer = false;
     term._privateSelectionText = text => {
-      if (hideEmails) {
-        const position = term.getSelectionPosition?.();
-        if (position && decos.some(d => {
+      const position = term.getSelectionPosition?.();
+      if (position) {
+        const clipped = decos.find(d => {
           const y = d.marker.line;
-          return y >= position.start.y && y <= position.end.y
+          return !d.stale && (d.username ? threadSettings.usernames === 'blur' : hideEmails)
+            && y >= position.start.y && y <= position.end.y
             && (y !== position.start.y || position.start.x < d.x + d.w)
             && (y !== position.end.y || position.end.x > d.x)
             && !text.includes(d.text);
-        })) return privateCopyToken(text, 'email');
+        });
+        if (clipped) return privateCopyToken(text, clipped.username ? 'user' : 'email');
       }
       return text;
     };
@@ -4128,6 +4235,13 @@
       timer = false;
       if (!term.element) return;
       const buf = term.buffer.active, top = buf.viewportY, bottom = top + term.rows;
+      if (threadSettings.usernames === 'blur') {
+        const learned = _termUsers.size;
+        for (let y = top; y < bottom; y++) learnTerminalUsernames(buf.getLine(y)?.translateToString(true));
+        if (_termUsers.size !== learned) refreshTerminalTabLabels();
+      }
+      const usernames = threadSettings.usernames === 'blur' && terminalUsernamePattern();
+      const privateCells = usernames ? new RegExp(`${EMAIL_RE.source}|${usernames.source}`, 'gi') : EMAIL_RE;
       // Drop blurs that were trimmed, or whose cells now hold other text (redraws, reflow).
       // A revealed one is kept while stale: TUIs erase and rewrite lines, so the same address
       // usually comes back at the same cells, or a row or two away.
@@ -4143,13 +4257,13 @@
       for (let y = top; y < bottom; y++) {
         const line = buf.getLine(y);
         const text = line?.translateToString(true) || '';
-        const userRe = userStars();
-        if (!text.includes('@') && !(userRe && text.includes('*'))) continue;
+        if (!text.includes('@') && !usernames) continue;
         const row = termRow(line, y);
-        for (const m of [...row.text.matchAll(EMAIL_RE), ...(userRe ? row.text.matchAll(userRe) : [])]) {
+        for (const m of row.text.matchAll(privateCells)) {
           const x = row.pos[m.index].x - 1, w = row.pos[m.index + m[0].length - 1].x - x;
+          const username = !!(usernames && m[0].match(usernames));
           const at = decos.find(d => d.marker.line === y && d.x === x);
-          if (at?.text === m[0]) { at.stale = false; continue; }
+          if (at?.text === m[0] && at.username === username) { at.stale = false; continue; }
           if (at) drop(at);
           // Redrawn on another row: a revealed copy that lost its cells hands over its state.
           const moved = decos.find(d => d.shown && d.stale && d.text === m[0]);
@@ -4158,14 +4272,16 @@
           if (!marker) continue;
           const deco = term.registerDecoration({ marker, x, width: w, layer: 'top' });
           if (!deco) { marker.dispose(); continue; }
-          const d = { marker, x, w, text: m[0], shown: !!moved, stale: false };
+          const d = { marker, x, w, text: m[0], username, shown: !username && !!moved, stale: false };
           deco.onRender(el => {
             el.classList.toggle('shown', d.shown);
             if (el._emailBlur) return;
             el._emailBlur = true;
+            if (d.username) {
+              el.classList.add('term-user-blur');
+              return;
+            }
             el.classList.add('term-email-blur');
-            if (/^\*+$/.test(d.text)) el.classList.add('term-user-blur'); // a masked username: blurred even when emails are shown
-            if (el.classList.contains('term-user-blur')) return; // a masked username can't be revealed
             el.title = d.shown ? 'Click to hide' : 'Click to show';
             el.addEventListener('mousedown', e => {
               e.preventDefault(); e.stopPropagation();
@@ -4180,6 +4296,7 @@
     // A microtask, not a timeout: it runs after the write is parsed and before xterm's next
     // animation-frame render, so an address is never painted unblurred.
     const soon = () => { if (!timer) { timer = true; queueMicrotask(scan); } };
+    term._refreshPrivacy = soon;
     term.onWriteParsed(soon);
     term.onScroll(soon);
     term.onResize(soon);
@@ -4243,8 +4360,10 @@
             tab.className = 'tg-tab active';
             tab.dataset.termid = entry.id;
             tab.draggable = true;
-            tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(entry.label)}</span><span class="tg-tab-close" title="${withKey('Close', 'closeTerminal')}">✕</span>`;
-            tab.title = entry.label;
+            const displayLabel = terminalTabLabel(entry);
+            tab.innerHTML = `<span class="tg-tab-dot"></span><span class="tg-tab-name">${escHtml(displayLabel)}</span><span class="tg-tab-close" title="${withKey('Close', 'closeTerminal')}">✕</span>`;
+            tab.title = displayLabel;
+            styleTerminalTabLabel(tab.querySelector('.tg-tab-name'), entry, displayLabel);
             applyTabColor(tab, entry.color);
                     tab.addEventListener('mousedown', e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); removeTerminal(wsp.id, entry.id); } });
             tab.addEventListener('click', e => {
@@ -4724,9 +4843,10 @@
           return;
         }
         const closesWorkspace = getWorkspaceTerminals(wsp).length <= 1;
+        const site = URL.parse(entry.url)?.hostname;
+        const page = site ? `the page on <span class="cc-label">${escHtml(site)}</span>` : 'the current page';
         showDangerConfirm('Close browser tab?',
-          `<span class="cc-label">${escHtml(entry.label || 'Browser')}</span> is showing content (${escHtml(entry.url)}).` +
-          (closesWorkspace ? ' Closing it will close the tab and remove the workspace.' : ' Closing it will close the tab and lose its page.'),
+          `This will close ${page}${closesWorkspace ? ' and remove this workspace' : ''}.`,
           'Close Tab',
           () => removeTerminal(wsId, termId, skipRender, skipPtyClose, true, true),
           () => { },
@@ -5005,10 +5125,12 @@
       t.label = value.trim() || t.label;
       t.color = color || undefined;
       const tabEl = document.querySelector(`.tg-tab[data-termid="${termId}"] .tg-tab-name`);
-      if (tabEl) tabEl.textContent = t.label;
+      const displayLabel = terminalTabLabel(t);
+      if (tabEl) tabEl.textContent = displayLabel;
+      styleTerminalTabLabel(tabEl, t, displayLabel);
       const tabWrap = document.querySelector(`.tg-tab[data-termid="${termId}"]`);
       if (tabWrap) {
-        tabWrap.title = t.label;
+        tabWrap.title = displayLabel;
         applyTabColor(tabWrap, t.color);
         // Sync group color if this is the active tab
         if (tabWrap.classList.contains('active')) {
@@ -5610,13 +5732,15 @@
         tab.className = 'tg-tab' + (isActive ? ' active' : '') + (t.dead ? ' dead' : '') + (t._closePending ? ' tab-close-pending' : '');
         tab.dataset.termid = t.id;
         tab.draggable = true;
+        const displayLabel = terminalTabLabel(t);
 
         tab.innerHTML = `
         <span class="tg-tab-dot${t.type === 'browser' ? ' tg-tab-icon' : ''}">${t.type === 'browser' ? '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="3" ry="6.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg>' : ''}</span>
-        ${t.locked ? '<i class="ph ph-lock-simple tg-tab-lock"></i>' : ''}<span class="tg-tab-name">${escHtml(t.label)}</span>
+        ${t.locked ? '<i class="ph ph-lock-simple tg-tab-lock"></i>' : ''}<span class="tg-tab-name">${escHtml(displayLabel)}</span>
         <span class="tg-tab-close" title="${withKey('Close', 'closeTerminal')}">✕</span>
         `;
-        tab.title = (t.threadHistory && t.chat?.title) || t.label;
+        tab.title = (t.threadHistory && t.chat?.title) || displayLabel;
+        styleTerminalTabLabel(tab.querySelector('.tg-tab-name'), t, displayLabel);
         if (t.threadHistory) tab.dataset.tipWrap = '';
         if (t.type === 'browser') syncBrowserTabIcon(t, tab);
         syncTabAgentIcon(t, tab);
@@ -6006,7 +6130,7 @@
         toolbar.appendChild(btnReload);
         toolbar.appendChild(urlInput);
         toolbar.appendChild(btnOpenExt);
-        // DevTools dock in a drawer under the page, as in Chrome. Desktop only: browser mode's iframe has none,
+        // DevTools are desktop only: browser mode's iframe has none,
         // so there History stays a plain button instead of the ⋮ menu.
         if (!(isDesktop() && window.electronAPI?.browserDevTools)) {
           toolbar.insertBefore(btnHistory, btnOpenExt);
@@ -6017,13 +6141,20 @@
           btnMore.setAttribute('aria-label', 'More');
           btnMore.setAttribute('aria-haspopup', 'menu');
           btnMore.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>';
-          btnMore.addEventListener('click', e => {
+          let openingMore = false;
+          btnMore.addEventListener('click', async e => {
             e.stopPropagation(); // The document click handler would close the menu right away.
             if (ctxEl.classList.contains('open') && ctxEl._owner === btnMore) return hideCtxMenu();
+            if (openingMore) return;
+            openingMore = true;
+            const previews = await captureBrowserDevToolsPreviews();
+            openingMore = false;
+            if (!btnMore.isConnected || !btnMore.getClientRects().length || getComputedStyle(btnMore).visibility === 'hidden') return;
+            showBrowserDevToolsPreviews(previews, browserMorePreviews);
             const r = btnMore.getBoundingClientRect();
             showCtxMenu({ pageX: r.right, pageY: r.bottom + 6, alignRight: true }, 'browser-more',
               { entry, history: () => toggleBrowserHistoryDrawer(entry, contentWrap) });
-            ctxEl._owner = btnMore;
+            if (ctxEl.classList.contains('open')) ctxEl._owner = btnMore;
           });
           const page = () => {
             const surface = contentWrap.querySelector('webview.browser-surface');
@@ -6033,42 +6164,63 @@
             const dt = entry._devtools;
             if (!dt) return;
             entry._devtools = null;
+            dt.stopResize?.();
             window.electronAPI.browserDevTools(dt.pageId, false).catch(() => {});
             dt.sash.remove(); dt.el.remove();
+            delete browserBody.dataset.devtoolsDock;
             settleBrowserSurfaces();
           };
-          entry._toggleDevTools = () => {
-            if (entry._devtools) return entry._closeDevTools();
+          entry._dockDevTools = dock => {
             const surface = page();
             if (!surface) return;
-            const sash = document.createElement('div');
+            browserDevToolsDock = dock;
+            try { localStorage.setItem('terminalvibe.browserDevToolsDock', dock); } catch {}
+            const previous = entry._devtools;
+            previous?.stopResize?.();
+            previous?.sash.remove(); previous?.el.remove();
+            const sash = document.createElement('div'), el = document.createElement('div');
             sash.className = 'browser-devtools-sash';
-            sash.setAttribute('role', 'separator');
-            // Placeholder only: main lays a native DevTools view over it (see syncDevToolsViews).
-            const el = document.createElement('div');
             el.className = 'browser-devtools';
-            sash.setAttribute('aria-orientation', 'horizontal');
-            const clamp = h => Math.max(80, Math.min(bc.clientHeight - 120, h));
-            el.style.height = `${clamp(browserDevToolsHeight || Math.round(bc.clientHeight * 0.4))}px`;
-            bc.append(sash, el);
-            const dt = entry._devtools = { sash, el, pageId: surface.getWebContentsId() };
-
-            window.electronAPI.browserDevTools(dt.pageId, true)
+            const dt = entry._devtools = { sash, el, dock, pageId: surface.getWebContentsId() };
+            browserBody.dataset.devtoolsDock = dock;
+            const bottom = dock === 'bottom';
+            const dimension = bottom ? 'height' : 'width';
+            const available = () => bottom ? browserBody.clientHeight : browserBody.clientWidth;
+            const clamp = size => Math.max(0, Math.min(Math.max(80, size), available() - 120));
+            if (dock !== 'external') {
+              sash.setAttribute('role', 'separator');
+              sash.setAttribute('aria-orientation', bottom ? 'horizontal' : 'vertical');
+              el.style[dimension] = `${clamp(browserDevToolsSizes[dock] || available() * 0.4)}px`;
+              if (dock === 'left') browserBody.prepend(el, sash);
+              else browserBody.append(sash, el);
+            }
+            sash.addEventListener('pointerdown', e => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              sash.setPointerCapture(e.pointerId);
+              startResizing();
+              const move = ev => {
+                const rect = browserBody.getBoundingClientRect();
+                const size = bottom ? rect.bottom - ev.clientY : dock === 'left' ? ev.clientX - rect.left : rect.right - ev.clientX;
+                browserDevToolsSizes[dock] = clamp(size);
+                el.style[dimension] = `${browserDevToolsSizes[dock]}px`;
+                syncBrowserSlots();
+              };
+              sash.addEventListener('pointermove', move);
+              const end = dt.stopResize = () => {
+                sash.removeEventListener('pointermove', move);
+                sash.removeEventListener('lostpointercapture', end);
+                dt.stopResize = null;
+                stopResizing();
+              };
+              sash.addEventListener('lostpointercapture', end);
+            });
+            window.electronAPI.browserDevTools(dt.pageId, true, dock)
               .then(() => { if (entry._devtools === dt) syncBrowserSlots(); })
               .catch(() => { if (entry._devtools === dt) entry._closeDevTools(); });
-            sash.addEventListener('pointerdown', e => {
-              e.preventDefault();
-              sash.setPointerCapture(e.pointerId); // Keep the drag when the pointer crosses the native view.
-              startResizing();
-              const bottom = bc.getBoundingClientRect().bottom;
-              const move = ev => { browserDevToolsHeight = clamp(Math.round(bottom - ev.clientY)); el.style.height = `${browserDevToolsHeight}px`; syncBrowserSlots(); };
-              const up = () => { sash.removeEventListener('pointermove', move); sash.removeEventListener('pointerup', up); sash.removeEventListener('pointercancel', up); stopResizing(); };
-              sash.addEventListener('pointermove', move);
-              sash.addEventListener('pointerup', up);
-              sash.addEventListener('pointercancel', up);
-            });
             settleBrowserSurfaces();
           };
+          entry._toggleDevTools = () => entry._devtools ? entry._closeDevTools() : entry._dockDevTools(browserDevToolsDock);
           toolbar.appendChild(btnMore);
         }
 
@@ -6083,7 +6235,10 @@
         contentWrap.appendChild(pageView);
 
         bc.appendChild(toolbar);
-        bc.appendChild(contentWrap);
+        const browserBody = document.createElement('div');
+        browserBody.className = 'browser-body';
+        browserBody.append(contentWrap);
+        bc.appendChild(browserBody);
 
         document.getElementById('pane-area').appendChild(bc);
         entry.browserContainer = bc;
@@ -14996,6 +15151,7 @@
     details.insertAdjacentHTML('beforeend', html());
     decorateWorkUsernames(details);
     details.querySelectorAll('img.thr-img').forEach(bindThreadImage);
+    return details;
   }
   document.addEventListener('toggle', e => {
     if (e.target.open && e.target.matches?.('details[data-key]')) fillLazyDetails(e.target);
@@ -15110,10 +15266,20 @@
       if (cur) CSS.highlights.set('thr-find-current', new Highlight(cur)); else CSS.highlights.delete('thr-find-current');
     }
     if (!scroll || !cur) return;
-    // Reveal a match hidden in a folded tool group, then center it.
-    for (let d = cur.startContainer.parentElement?.closest('details:not([open])'); d; d = d.parentElement?.closest('details:not([open])')) d.open = true;
-    const flow = thrPage.querySelector('#sbr-thread-flow'), fr = flow.getBoundingClientRect(), rr = cur.getBoundingClientRect();
-    flow.scrollTop += rr.top - fr.top - fr.height / 2;
+    const flow = thrPage.querySelector('#sbr-thread-flow');
+    const target = cur.startContainer.parentElement;
+    // Open every enclosing section before measuring the match.
+    for (let d = target?.closest('details:not([open])'); d; d = d.parentElement?.closest('details:not([open])')) d.open = true;
+    // Tool output and diffs can scroll independently of the transcript.
+    for (let el = target; el && el !== flow; el = el.parentElement) {
+      const { overflowX, overflowY } = getComputedStyle(el);
+      if (!/auto|scroll/.test(overflowX + ' ' + overflowY)) continue;
+      const box = el.getBoundingClientRect(), match = cur.getBoundingClientRect();
+      if (/auto|scroll/.test(overflowY) && (match.top < box.top || match.bottom > box.bottom)) el.scrollTop += match.top - box.top - el.clientHeight / 2;
+      if (/auto|scroll/.test(overflowX) && (match.left < box.left || match.right > box.right)) el.scrollLeft += match.left - box.left - el.clientWidth / 2;
+    }
+    const box = flow.getBoundingClientRect(), match = cur.getBoundingClientRect();
+    flow.scrollTop += match.top - box.top - flow.clientHeight / 2;
   }
   function thrFindStep(d) {
     if (!thrFind.ranges.length) return;
@@ -15134,7 +15300,13 @@
   }
   // Plain Ctrl+F in the history panel (the app-wide Ctrl+Shift+F leaves Ctrl+F to terminal programs).
   onThreadPage('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); e.stopPropagation(); openThreadFind(); }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      if (thrFindEl('').hidden) openThreadFind();
+      else closeThreadFind();
+    }
   });
   thrFindEl('-input')?.addEventListener('input', e => { thrFind.q = e.target.value; thrFindRun(false); });
   thrFindEl('-input')?.addEventListener('keydown', e => {
@@ -15581,14 +15753,17 @@
     } else if (type === 'chat-msg') {
       // A message's text: the selection (copied as markdown by the flow's copy handler, or cited), the whole
       // message as markdown, and a reply's fork point.
-      const msg = data, sel = window.getSelection(), raw = msg.closest('.thr-flow')?._texts?.get(msg.dataset.key) || '';
-      const selected = sel && !sel.isCollapsed && msg.closest('.thr-flow')?.contains(sel.anchorNode) && sel.toString().trim();
+      const msg = data, sel = window.getSelection(), flow = msg.closest('.thr-flow');
+      const raw = flow?._texts?.get(msg.dataset.key) || '';
+      const selected = sel && !sel.isCollapsed && flow?.contains(sel.anchorNode) && sel.toString().trim();
       const copyText = text => { void copyPrivateText(text).catch(() => {}); };
       if (selected) {
         // Clicking the menu can drop the selection: put the one it opened on back before acting.
         const range = sel.getRangeAt(0).cloneRange(), restore = () => { const s2 = window.getSelection(); s2.removeAllRanges(); s2.addRange(range); };
         item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+C', () => { restore(); document.execCommand('copy'); });
-        item('<i class="ph ph-quotes"></i>', 'Cite selection', '', () => { restore(); citeBtn.click(); });
+        if (msg.classList.contains('assistant') && selectedResponseCitations(sel, flow).length) {
+          item('<i class="ph ph-quotes"></i>', 'Cite selection', '', () => { restore(); citeBtn.click(); });
+        }
       } else {
         item('<i class="ph ph-text-aa"></i>', 'Copy message', '', () => copyText(raw));
         const fork = msg.querySelector('.thr-fork');
@@ -15727,7 +15902,26 @@
     } else if (type === 'browser-more') {
       const { entry, history } = data;
       item('<i class="ph ph-clock-counter-clockwise"></i>', 'History', '', history);
-      item('<i class="ph ph-code"></i>', entry._devtools ? 'Close developer tools' : 'Developer tools', 'F12', () => entry._toggleDevTools?.());
+      const available = browserHasContent(entry);
+      const trigger = item('<i class="ph ph-code"></i>', 'Developer tools', '<span class="ci-sub-caret"><i class="ph ph-caret-right"></i></span>',
+        () => { if (available) trigger.focus(); }, false, ctxEl, true);
+      if (available) {
+        const selected = entry._devtools?.dock || browserDevToolsDock;
+        const toggleLabel = entry._devtools ? 'Close developer tools' : 'Open developer tools';
+        trigger.classList.add('has-sub', 'ctx-browser-devtools');
+        trigger.setAttribute('aria-haspopup', 'menu');
+        const sub = document.createElement('div');
+        sub.className = 'ctx-sub';
+        sub.setAttribute('role', 'menu');
+        trigger.appendChild(sub);
+        item('', toggleLabel, 'F12', entry._toggleDevTools, false, sub);
+        for (const [dock, label] of Object.entries(browserDevToolsDocks)) {
+          item(dock === selected ? '<i class="ph ph-check"></i>' : '', label, '', () => entry._dockDevTools(dock), false, sub);
+        }
+      } else {
+        trigger.classList.add('disabled');
+        trigger.setAttribute('aria-disabled', 'true');
+      }
     } else if (type === 'folder') {
       const folderId = data;
       const folderPinned = folders.find(f => f.id === folderId)?.pinned;
@@ -15853,6 +16047,13 @@
       el.tabIndex = -1;
     });
     ctxEl.classList.add('open');
+    // Native docked views paint above the renderer, so suspend them while this menu is open.
+    const browserMore = type === 'browser-more';
+    if (browserMoreOpen !== browserMore) {
+      browserMoreOpen = browserMore;
+      syncBrowserSlots();
+      if (!browserMore) clearBrowserMorePreviews();
+    }
     const menuW = ctxEl.offsetWidth;
     const menuH = ctxEl.offsetHeight;
     let x = e.alignRight ? e.pageX - menuW : e.pageX; // alignRight: pageX is the menu's right edge
@@ -15873,7 +16074,16 @@
     ctxEl.classList.remove('open');
     ctxEl.inert = true;
     ctxEl._owner = null;
+    if (browserMoreOpen) {
+      browserMoreOpen = false;
+      syncBrowserSlots();
+      clearBrowserMorePreviews();
+    }
     if (restoreFocus && ctxPreviousFocus?.isConnected) ctxPreviousFocus.focus({ preventScroll: true });
+  }
+  function clearBrowserMorePreviews() {
+    for (const image of browserMorePreviews) image.remove();
+    browserMorePreviews.clear();
   }
   document.addEventListener('contextmenu', e => { if (!ctxEl.contains(e.target)) hideCtxMenu(); }, true);
   // Terminal mouse handling can consume the gesture before a click bubbles.
@@ -15893,7 +16103,7 @@
     const inSearch = e.target.matches?.('.ctx-search input');
     if (inSearch && !['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)) return; // typing in a menu's search field
     e.preventDefault(); e.stopPropagation();
-    const items = [...ctxEl.querySelectorAll('.ctx-item')].filter(el => el.getClientRects().length);
+    const items = [...ctxEl.querySelectorAll('.ctx-item:not([aria-disabled="true"])')].filter(el => el.getClientRects().length);
     if (inSearch && e.key === 'Enter') { items[0]?.click(); return; } // Enter picks the first match
     const index = items.indexOf(document.activeElement);
     if (e.key === 'ArrowRight') { document.activeElement?.querySelector('.ctx-sub > .ctx-item')?.focus(); return; }
@@ -16788,8 +16998,8 @@
   // Per-tab history drawer on the right of the page. It lives inside .browser-content,
   // so a right-docked DevTools (a native view over its own column) never covers it.
   function toggleBrowserHistoryDrawer(entry, contentWrap) {
-    const open = contentWrap.querySelector('.browser-history-drawer:not(.is-closing)');
-    if (open) { open._close(); return; }
+    const existing = contentWrap.querySelector('.browser-history-drawer');
+    if (existing) { existing._toggle(); return; }
     const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
     const drawer = el('section', 'browser-history-drawer');
     drawer.setAttribute('role', 'dialog');
@@ -16843,16 +17053,22 @@
         list.append(row);
       }
     };
-    // Slide out, then remove (workspace.css). The timer covers reduced motion / a missed animationend.
+    let slide;
+    const remove = () => { stopOutside(); drawer.remove(); };
     const finish = () => {
-      if (drawer.classList.contains('is-closing')) return;
-      drawer.classList.add('is-closing');
-      stopOutside();
-      const done = () => drawer.remove();
-      drawer.addEventListener('animationend', done, { once: true });
-      setTimeout(done, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 250);
+      if (drawer.inert) return;
+      if (!slide || matchMedia('(prefers-reduced-motion: reduce)').matches) { remove(); return; }
+      drawer.inert = true;
+      slide.onfinish = remove;
+      slide.reverse();
     };
-    drawer._close = finish;
+    drawer._toggle = () => {
+      if (!drawer.inert) { finish(); return; }
+      drawer.inert = false;
+      slide.onfinish = null;
+      slide.reverse();
+      search.focus({ preventScroll: true });
+    };
     close.addEventListener('click', finish);
     clear.addEventListener('click', () => { saveBrowserHistory([]); render(); });
     search.addEventListener('input', render);
@@ -16868,7 +17084,13 @@
     const stopOutside = () => { document.removeEventListener('pointerdown', outside, true); page?.removeEventListener('focus', finish); };
     render();
     contentWrap.append(drawer);
-    search.focus();
+    search.focus({ preventScroll: true });
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      slide = drawer.animate([
+        { transform: 'translateX(100%)', opacity: .6 },
+        { transform: 'translateX(0)', opacity: 1 },
+      ], { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'both' });
+    }
   }
 
   // ── Snippets (saved commands). Enter = insert, Ctrl+Enter = insert and run.
@@ -19221,6 +19443,7 @@
       if (key === 'usernames') {
         document.body.classList.toggle('blur-work-usernames', threadSettings.usernames === 'blur');
         applyWorkUsernamePrivacy(document);
+        refreshTerminalTabLabels();
       }
       if (key === 'usageDisplay') renderUsageModal();
       if (key === 'markdown') syncChatInputLinks();
@@ -19974,6 +20197,7 @@
       }, 50);
     });
 
+    if (!SETTINGS_ONLY && window.electronAPI?.browserDevToolsBounds) watchBrowserModalLayers();
     if (!SETTINGS_ONLY && window.electronAPI?.onAgentRequest) {
       window.electronAPI.onAgentRequest(handleAgentRequest);
     } else if (!isDesktop() && !SETTINGS_ONLY) {
