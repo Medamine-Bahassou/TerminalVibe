@@ -915,7 +915,8 @@ class OpenCodeSession extends Session {
         // OpenCode is still working. The async endpoint returns at once; the SSE stream carries the result and
         // the turn's idle event, so a turn can run for hours.
         const r = await this.client.session.promptAsync({ sessionID: this.sessionId, directory: this.cwd,
-          ...(model ? { model } : {}), ...(this.options.access === 'plan' ? { agent: 'plan' } : {}), parts });
+          ...(model ? { model } : {}), ...(model && this.options.effort && this.options.effort !== 'default' ? { variant: this.options.effort } : {}),
+          ...(this.options.access === 'plan' ? { agent: 'plan' } : {}), parts });
         const error = openCodeError(r?.data?.info?.error) || this.lastError;
         if (error) this.endTurn(this.aborted ? null : error);
         else if (this.pendingIdle) { this.pendingIdle = false; this.endTurn(this.aborted ? null : this.lastError || null); }
@@ -960,7 +961,8 @@ function openCodeModels(bin, env, cwd) {
       return data.all.filter(provider => connected.has(provider.id)).flatMap(provider =>
         Object.values(provider.models).map(model => ({
           id: `${provider.id}/${model.id}`, name: `${model.name} · ${provider.name}`,
-          efforts: ['default'], defaultEffort: 'default',
+          // The model's own reasoning variants (low/high/max…); "default" sends none.
+          efforts: ['default', ...Object.keys(model.variants || {})], defaultEffort: 'default',
         }))).sort((a, b) => a.name.localeCompare(b.name));
     } catch (err) {
       console.error('[chat-sdk] OpenCode models probe failed:', err?.message || err);
