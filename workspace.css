@@ -2308,6 +2308,7 @@ body #settings-modal .custom-dropdown-menu {
 #sbr-thread .thr-scroll-end:hover { background:color-mix(in srgb,var(--fg) 10%,var(--bg)); border-color:var(--muted-text); }
 #sbr-thread .thr-scroll-end:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #sbr-thread .thr-scroll-end i { font-size:11px; color:var(--muted-text); }
+#sbr-thread .thr-scroll-end-queued { color:var(--muted-text); }
 #sbr-thread.thr-new .thr-scroll-end { display:none; }
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-scroll-end { transition:none; } }
 
@@ -3687,3 +3688,22 @@ html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):hover:not(:disa
    and its footer row (project, branch) never extend over the terminal's tab bar. */
 #pane-area .term-slot.chat-bottom-open:not(.chat-cli) > #sbr-thread,
 .term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { height:auto; bottom:var(--chat-terminal-height, 35%); overflow:hidden; }
+
+/* Claude sign-in recovery in the chat history. */
+#sbr-thread .thr-chat-error:has(> .thr-claude-sign-in) { display:grid; grid-template-columns:auto minmax(0,1fr); }
+#sbr-thread .thr-chat-error > .thr-claude-sign-in { grid-column:2; }
+#sbr-thread .thr-msg > .thr-claude-sign-in { margin-left:22px; }
+#sbr-thread .thr-claude-sign-in {
+  justify-self:start; align-self:flex-start; display:inline-flex; align-items:center; gap:6px;
+  min-height:32px; padding:0 8px; border:1px solid var(--border); border-radius:var(--ui-radius) !important;
+  background:transparent; color:var(--fg); font:400 12px var(--ui-font); white-space:normal; cursor:pointer;
+  transition:background-color 150ms;
+}
+#sbr-thread .thr-claude-sign-in > i { font-size:14px; color:var(--muted-text); }
+#sbr-thread .thr-claude-sign-in:hover { background:var(--ui-hover); }
+#sbr-thread .thr-claude-sign-in:focus-visible {
+  outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  #sbr-thread .thr-claude-sign-in { transition:none; }
+}
