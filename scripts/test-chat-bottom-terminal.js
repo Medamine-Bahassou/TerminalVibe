@@ -85,8 +85,9 @@ app.whenReady().then(async () => {
     check(second.el.querySelector('[aria-selected="true"] span').textContent === 'Terminal 2', 'Second shell is not named Terminal 2');
     second.el.querySelector('[aria-selected="true"] .chat-bottom-tab-x').click();
     check(disposed === 1 && owner._bottomTerminal === first && !first.el.hidden && owner._bottomTerms.length === 1, 'Closing a tab did not show its neighbor');
-    check(!first.el.querySelector('.chat-bottom-tab-x'), 'A lone tab offers a close button');
-    disposeChatBottomTerminal(owner);
+    const lastClose = first.el.querySelector('.chat-bottom-tab-x');
+    check(lastClose && getComputedStyle(lastClose).opacity === '1', 'A lone tab must show its close button');
+    lastClose.click();
     check(disposed === 2 && !owner._bottomTerminal && controls.at(-1).type === 'close', 'Shell cleanup failed');
     return 'PASS: Ctrl+J open/hide/reopen, project cwd, focus, CLI isolation, close button, tabs and cleanup';
   })()`));
