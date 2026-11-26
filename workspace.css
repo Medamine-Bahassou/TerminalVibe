@@ -997,6 +997,8 @@ body #sidebar.expanded .ws-folder-row.drop-below .ws-folder-header { background:
 #ctx:not(.open), #servers-dropdown[hidden] { pointer-events:none; }
 .ctx-item:focus-visible { outline:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); background:var(--ui-hover); }
 .ctx-item.has-sub:focus-within > .ctx-sub { display:block; }
+#ctx .ctx-browser-devtools > .ctx-sub { left:100%; }
+#ctx.sub-flip .ctx-browser-devtools > .ctx-sub { left:auto; right:100%; }
 /* The old settings opacity utility must also obey the toggle and reduced motion. */
 #settings-overlay { transition:none; }
 
@@ -1051,7 +1053,15 @@ body .tg-btn:focus-visible, body .titlebar-btn:focus-visible { outline:none; box
 
 /* ── Browser tab DevTools drawer: docked under the page, as in Chrome. The
    page area shrinks through .browser-slot's flex column; the sash resizes. ── */
-body .browser-devtools { position:relative; flex:0 0 auto; min-height:80px; background:var(--bg); }
+body .browser-body { flex:1; min-height:0; min-width:0; display:flex; flex-direction:column; }
+body .browser-body[data-devtools-dock="left"], body .browser-body[data-devtools-dock="right"] { flex-direction:row; }
+body .browser-body > .browser-content { min-width:0; }
+body .browser-devtools { position:relative; flex:0 0 auto; max-width:max(0px, calc(100% - 125px)); max-height:max(0px, calc(100% - 125px)); background:var(--bg); }
+body .browser-devtools-preview { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+body .browser-body[data-devtools-dock="bottom"] > .browser-devtools { max-width:none; }
+body .browser-devtools-sash[aria-orientation="vertical"] { height:auto; width:5px; cursor:col-resize; border-top:0; border-left:1px solid var(--ui-line); }
+body .browser-body[data-devtools-dock="left"] > .browser-devtools,
+body .browser-body[data-devtools-dock="right"] > .browser-devtools { max-height:none; }
 body .browser-devtools-sash { flex:0 0 auto; height:5px; position:relative; z-index:3; cursor:row-resize; border-top:1px solid var(--ui-line); transition:background-color 150ms, border-color 150ms; }
 body .browser-devtools-sash:hover, body.resizing .browser-devtools-sash:active { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 25%, transparent); }
 body.resizing .browser-devtools { pointer-events:none; }
@@ -1143,14 +1153,8 @@ body .browser-history-drawer .bh-foot { padding:10px 12px; border-top:1px solid 
 body .browser-history-drawer .bh-clear { height:32px; padding:0 12px; background:transparent; border:1px solid var(--border); color:var(--ui-error); border-radius:6px !important; font:500 12px var(--ui-font); cursor:pointer; transition:background-color 140ms, border-color 140ms; }
 body .browser-history-drawer .bh-clear:hover:not(:disabled) { background:color-mix(in srgb,var(--ui-error) 12%,transparent); border-color:color-mix(in srgb,var(--ui-error) 40%,transparent); }
 body .browser-history-drawer .bh-clear:disabled { opacity:.4; cursor:default; }
-/* Slides in from the right edge; .is-closing slides it back out before app.js removes it. */
-body .browser-history-drawer { animation:bh-in 180ms cubic-bezier(.2,.8,.2,1); }
-body .browser-history-drawer.is-closing { animation:bh-out 140ms ease-in forwards; pointer-events:none; }
-@keyframes bh-in { from { transform:translateX(100%); opacity:.6; } }
-@keyframes bh-out { to { transform:translateX(100%); opacity:.6; } }
 @media (prefers-reduced-motion: reduce) {
   body .browser-history-drawer * { transition:none !important; }
-  body .browser-history-drawer, body .browser-history-drawer.is-closing { animation:none; }
 }
 
 /* ── Terminal links: pointer cursor only while Ctrl/Cmd is held (they open on Ctrl/Cmd+click;
@@ -1343,14 +1347,18 @@ body .ctx-item:hover .ctx-shell-icon { fill:var(--fg); }
 body #sidebar.expanded:not(.hover-overlay) { flex-shrink:0; }
 
 /* ── Terminal: email addresses blurred until clicked (decoration from blurTermEmails) ── */
-.xterm .xterm-decoration.term-email-blur {
-  pointer-events:auto; cursor:pointer;
+.xterm .xterm-decoration:is(.term-email-blur, .term-user-blur), .tg-tab .tg-tab-name.username-redacted::after {
   -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
   background:color-mix(in srgb,var(--fg) 6%,transparent);
   border-radius:4px !important;
 }
+.xterm .xterm-decoration.term-email-blur { pointer-events:auto; cursor:pointer; }
+.xterm .xterm-decoration.term-user-blur { pointer-events:none; }
+body:not(.blur-work-usernames) .xterm .xterm-decoration.term-user-blur { display:none !important; }
+.tg-tab .tg-tab-name.username-redacted { position:relative; user-select:none; }
+.tg-tab .tg-tab-name.username-redacted::after { content:''; position:absolute; inset:0; pointer-events:none; }
 /* Settings → Hide email addresses off (xterm sets display inline, hence !important). */
-body.show-emails .xterm .xterm-decoration.term-email-blur:not(.term-user-blur) { display:none !important; }
+body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !important; }
 /* Keep revealed addresses clickable so the next click restores their blur. */
 .xterm .xterm-decoration.term-email-blur.shown { -webkit-backdrop-filter:none; backdrop-filter:none; background:transparent; pointer-events:auto; cursor:pointer; }
 
@@ -3679,7 +3687,3 @@ html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):hover:not(:disa
    and its footer row (project, branch) never extend over the terminal's tab bar. */
 #pane-area .term-slot.chat-bottom-open:not(.chat-cli) > #sbr-thread,
 .term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { height:auto; bottom:var(--chat-terminal-height, 35%); overflow:hidden; }
-
-/* Terminal: a masked username stays blurred and can't be clicked open. */
-.xterm .xterm-decoration.term-user-blur { pointer-events:none !important; cursor:default; }
-.xterm .xterm-decoration.term-user-blur.shown { -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); background:color-mix(in srgb,var(--fg) 6%,transparent); }

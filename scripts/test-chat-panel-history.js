@@ -77,5 +77,26 @@ app.whenReady().then(async () => {
     check(!shell.getClientRects().length, 'Inactive shell tab remained visible');
     return 'PASS: chat and composer dimensions, pending history survives merged-panel focus changes; hidden tabs and workspaces stay untouched';
   })()`));
+  const lazyDetails = source.slice(source.indexOf('  function expandThreadDetails('), source.indexOf("  document.addEventListener('toggle',", source.indexOf('  function expandThreadDetails(')));
+  const find = source.slice(source.indexOf('  const thrFind ='), source.indexOf('  // Plain Ctrl+F'));
+  console.log(await win.webContents.executeJavaScript(`(() => {
+    document.body.innerHTML = '<div id="search-fixture"><span id="sbr-thread-find-count"></span><div class="thr-flow" id="sbr-thread-flow"><details data-key="outer"><summary>Tools</summary></details></div></div>';
+    const thrPage = document.getElementById('search-fixture');
+    const flow = document.getElementById('sbr-thread-flow');
+    const decorateWorkUsernames = () => {}, bindThreadImage = () => {};
+    flow._lazy = new Map([
+      ['outer', () => '<details data-key="inner"><summary>Output</summary></details>'],
+      ['inner', () => '<div style="height:60px;overflow:auto">' + '<p>line</p>'.repeat(20) + '<p>hidden match</p></div>'],
+    ]);
+    ${lazyDetails}
+    ${find}
+    thrFind.q = 'hidden match';
+    thrFindRun(false);
+    if (thrFind.ranges.length !== 1 || flow.querySelectorAll('details[open]').length !== 2 ||
+        !flow.querySelector('[data-key="inner"] > div').scrollTop) {
+      throw new Error('Find did not open nested lazy sections and scroll the match into view');
+    }
+    return 'PASS: history search reveals matches inside nested lazy tool output';
+  })()`));
   clearTimeout(timeout); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });
