@@ -3662,3 +3662,6 @@ body .chat-file-panel .cfp-tab { flex:none; }
 /* ── Threads sidebar: offscreen cards skip layout and paint until scrolled near (opening stays fast with many threads) ── */
 #threads-sidebar .ts-card { content-visibility:auto; contain-intrinsic-block-size:auto 74px; }
 #threads-sidebar .ts-card.slim { contain-intrinsic-block-size:auto 34px; }
+
+/* ── Chat changed files: keyboard focus uses the app's ring, not the browser's white outline. ── */
+#sbr-thread :is(.thr-changes-head, .thr-change > summary):focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
