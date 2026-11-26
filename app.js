@@ -9819,6 +9819,13 @@
     else if (ev.type === 'idle') {
       s.busy = false; s.idleAt = t._idleAt = Date.now(); t._agentWorking = false;
       if (ev.error) noteChatError(t, `${name}: ${ev.error}`);
+      if (s.harness === 'claude' && claudeSignInRequired(ev.error)) {
+        // The next turn must start a fresh Claude process so it reads the new login.
+        s.alive = false; s.ask = null;
+        _tabAgent.set(t.id, null);
+        void window.electronAPI.chatSdkStop(t.id).catch(() => {});
+        refreshWorkspaceProcsSoon();
+      }
       onTerminalFinished({ id: t.id, kind: 'agent', name: s.harness, completed: !ev.error && _turns.has(t.id) });
       chatAgentIdle(t);
     } else if (ev.type === 'ask') {
@@ -12745,6 +12752,11 @@
   promptNav.addEventListener('focus', syncCheckpointVisibility);
   function syncScrollEnd() {
     if (!scrollEndBtn) return;
+    const queued = scrollEndBtn.querySelector('.thr-scroll-end-queued');
+    const count = curChat()?.chat?.queuedMessages?.length || 0;
+    const label = count ? `• ${count} queued` : '';
+    if (queued.textContent !== label) queued.textContent = label;
+    queued.hidden = !count;
     const flowEl = thrPage.querySelector('.thr-flow');
     if (flowEl.scrollHeight - flowEl.scrollTop - flowEl.clientHeight <= 1) {
       scrollEndBtn.hidden = true;
@@ -14375,8 +14387,20 @@
 
   // The start of an error without its "Agent: " prefix or a trailing "…", to find the same text in a reply.
   const chatErrorNeedle = message => String(message).replace(/^[^:]*?: /, '').replace(/…$/, '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const claudeSignInRequired = message => /^\s*(?:API Error:\s*)?(?:Failed to authenticate:\s*OAuth session expired\b|Not logged in\b)/i.test(message || '');
+  function addClaudeSignIn(container) {
+    if (container.querySelector(':scope > .thr-claude-sign-in')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'thr-claude-sign-in';
+    button.innerHTML = '<i class="ph ph-sign-in" aria-hidden="true"></i>Sign in to Claude';
+    button.title = 'Opens Claude sign-in in a terminal tab';
+    button.addEventListener('click', () => startProviderLogin(harnessOf('claude')));
+    container.append(button);
+  }
   function renderChatErrors(tab, flow) {
     flow.querySelectorAll('.thr-chat-error').forEach(el => el.remove());
+    flow.querySelectorAll('.thr-msg[data-claude-sign-in]').forEach(addClaudeSignIn);
     const boundaries = [...flow.querySelectorAll(':is(.thr-msg.user, .thr-resumed, .thr-merge-status)[data-ts], .thr-interruption-status')];
     // Claude Code's "[ede_diagnostic] …" closes a turn the user stopped; saved as an error before chat-sdk.js dropped it.
     for (const error of (tab.chat?.errors || []).filter(e => !/\[ede_diagnostic\]/.test(e.message))) {
@@ -14387,11 +14411,18 @@
       while (next?.previousElementSibling?.matches('.thr-seg, .thr-note')) next = next.previousElementSibling;
       // Claude Code also writes an API error into the transcript as a reply: show that reply in red, not the error twice.
       const reply = [...flow.querySelectorAll('.thr-msg.assistant')].filter(el => !next || el.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1);
-      const needle = chatErrorNeedle(error.message);
-      if (needle && reply?.querySelector(':scope > .thr-msg-text')?.textContent.replace(/\s+/g, ' ').includes(needle)) { reply.classList.add('thr-msg-error'); continue; }
+      const signIn = /^Claude Code: /i.test(error.message) && claudeSignInRequired(error.message.replace(/^Claude Code: /i, ''));
+      let needle = chatErrorNeedle(error.message);
+      if (signIn) needle = needle.replace(/^API Error:\s*/i, '');
+      if (needle && reply?.querySelector(':scope > .thr-msg-text')?.textContent.replace(/\s+/g, ' ').includes(needle)) {
+        reply.classList.add('thr-msg-error');
+        if (signIn) addClaudeSignIn(reply);
+        continue;
+      }
       const row = document.createElement('div'); row.className = 'thr-chat-error'; row.setAttribute('role', 'alert');
       row.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i><span></span>';
       row.querySelector('span').textContent = error.message;
+      if (signIn) addClaudeSignIn(row);
       flow.insertBefore(row, next || flow.querySelector('.thr-working, .thr-queue'));
     }
   }
@@ -14748,8 +14779,12 @@
         if (m.role === 'user' && (m.resume || resumed.has(m.ts))) return resumeStatusHtml(Date.parse(m.ts) || 0);
         const mergePr = m.role === 'user' && mergePrNumber(m.text);
         if (mergePr) return mergeStatusHtml(mergePr, Date.parse(m.ts) || 0, false, m.stopped);
-        const quotaError = seg.harness === 'antigravity' && m.role === 'assistant' && /^\s*(?:⚠\uFE0F?\s*)?(?:(?:individual|weekly|session|daily)\s+)?quota reached\b/i.test(m.text || '');
-        const cls = `thr-msg ${m.role}${quotaError ? ' thr-msg-error' : ''}`;
+        const quotaError = m.role === 'assistant' && (
+          (seg.harness === 'antigravity' && /^\s*(?:⚠\uFE0F?\s*)?(?:(?:individual|weekly|session|daily)\s+)?quota reached\b/i.test(m.text || '')) ||
+          (seg.harness === 'claude' && /^\s*You['’]ve hit your (?:(?:weekly|session|daily) )?limit\s*·\s*resets\b/i.test(m.text || ''))
+        );
+        const signIn = seg.harness === 'claude' && m.role === 'assistant' && claudeSignInRequired(m.text);
+        const cls = `thr-msg ${m.role}${quotaError || signIn ? ' thr-msg-error' : ''}`;
         // A prompt's image paths render as images and its context notes as chips: copy only the typed text.
         texts.set(key, m.role !== 'user' ? m.text : String(m.text)
           .replace(/\s*<terminalvibe_context\b[\s\S]*?<\/terminalvibe_context>\s*$/, '')
@@ -14767,7 +14802,7 @@
         const imgs = threadImagesHtml(m.images?.length ? m.images : user?.paths || []);
         return m.role === 'user'
           ? `<div class="${cls}" data-key="${key}" data-ts="${Date.parse(m.ts) || 0}">${m.stopped ? '<span class="thr-pending-kind">Stopped</span>' : (m.steered || t?.steered?.includes(m.ts)) ? '<span class="thr-pending-kind">Steered</span>' : ''}${imgs}${user.html ? `<div class="thr-bubble"><div class="thr-msg-text">${user.html}</div></div>` : ''}${actions}</div>`
-          : `<div class="${cls}" data-key="${key}"><div class="thr-msg-text">${mdLite(quotaError ? String(m.text).replace(/^\s*⚠\uFE0F?\s*/, '') : m.text)}</div>${extra}${actions}</div>`;
+          : `<div class="${cls}" data-key="${key}"${signIn ? ' data-claude-sign-in' : ''}><div class="thr-msg-text">${mdLite(quotaError ? String(m.text).replace(/^\s*⚠\uFE0F?\s*/, '') : m.text)}</div>${extra}${actions}</div>`;
       };
       // The agent's thinking: "Thought" with a one-line peek, opening to the whole text.
       const thoughtHtml = (m, key) => `<details class="thr-thought" data-key="${key}"><summary><i class="ph ph-brain" aria-hidden="true"></i>`
@@ -18262,12 +18297,13 @@
         : a.path && provOn(h) && PROV_LOGIN[h.id] ? `<button type="button" class="prov-add" data-act="login" title="Opens the CLI's own sign-in in a new terminal tab"><i class="ph ph-sign-in" aria-hidden="true"></i>Sign in</button>` : '');
   }
   // Each CLI's own sign-in, run in a terminal tab (they're interactive: a browser link, a pasted code).
-  const PROV_LOGIN = { claude: ['/login'], codex: ['login'], antigravity: [], opencode: ['auth', 'login'], 'cursor-agent': ['login'] };
+  const PROV_LOGIN = { claude: ['auth', 'login'], codex: ['login'], antigravity: [], opencode: ['auth', 'login'], 'cursor-agent': ['login'] };
   function startProviderLogin(h) {
-    const bin = _prov.agents[h.bin]?.path || h.bin;
-    // shortcut: typed into the default shell; `& "…"` is PowerShell's call syntax (the Windows default shell).
-    const exe = /\s/.test(bin) ? (window.electronAPI?.platform === 'win32' ? `& "${bin}"` : `"${bin}"`) : bin;
-    closeSettings();
+    const bin = _prov?.agents[h.bin]?.path || _chatAgentsFound?.[h.bin] || h.bin;
+    const quoted = shellQuote(bin);
+    // PowerShell uses the call operator to run a quoted executable path.
+    const exe = quoted !== bin && (window.electronAPI?.platform || terminalBackendPlatform) === 'win32' ? `& ${quoted}` : quoted;
+    if (settingsOverlay.classList.contains('open')) closeSettings();
     addTerminal(activeWsId, null, { label: `${h.name} sign-in`, cmd: [exe, ...PROV_LOGIN[h.id]].join(' ') });
   }
   const PROV_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
