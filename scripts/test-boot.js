@@ -15,6 +15,26 @@ if (!process.versions.electron) {
   process.exit(r.status ?? 1);
 }
 const { app, BrowserWindow, ipcMain } = require('electron');
+const providers = require('../electron/providers');
+const updatedAgents = [];
+providers.checkUpdates = async () => {
+  await new Promise(resolve => setTimeout(resolve, 100));
+  return Object.entries({ claude: 'Claude Code', opencode: 'OpenCode', codex: 'Codex' }).map(([id, name]) => ({
+    id, name, installed: '1.0.0', latest: '1.1.0',
+    status: updatedAgents.includes(id) ? 'current' : 'available',
+    ...(id === 'opencode' && { managed: 'pacman', command: 'sudo pacman -Sy --needed opencode' }),
+  }));
+};
+providers.updateAgent = async (id, _env, onProgress) => {
+  if (id === 'claude') {
+    onProgress({ stage: 'downloading', percent: null, bytes: 134217728, speed: 1363149 });
+    await new Promise(resolve => setTimeout(resolve, 350));
+    onProgress({ stage: 'installing', percent: null });
+    await new Promise(resolve => setTimeout(resolve, 350));
+  }
+  updatedAgents.push(id);
+  return {};
+};
 const errors = [];
 app.on('web-contents-created', (_e, wc) => {
   // Electron 35+ passes one event object; older versions (event, level, message).
@@ -55,5 +75,54 @@ setTimeout(async () => {
   if (!s.ran || !/hide|gone/.test(s.splash)) return finish(false, `splash still up (app.js ran: ${s.ran}, splash: "${s.splash}")`);
   if (!s.terminals) return finish(false, 'no workspace terminal was created');
   if (startupRequests.length) return finish(false, `optional commands ran at startup (${startupRequests.join(', ')})`);
-  finish(true, 'the app boots past its splash with no renderer errors');
+  const updates = await win.webContents.executeJavaScript(`(async () => {
+    const button = document.getElementById('btn-agent-updates');
+    if (!button?.getClientRects().length) return 'update button is missing';
+    if (button.querySelector('.agent-update-count')) return 'the update button still has a badge';
+    button.click();
+    if (!document.getElementById('agent-updates').open) return 'update dialog did not open';
+    if (!button.querySelector('.ph-arrows-clockwise')) return 'checking icon was not shown';
+    const spinner = document.querySelector('#agent-updates .ph-circle-notch');
+    if (!spinner || getComputedStyle(spinner).transform !== 'none'
+      || getComputedStyle(spinner, '::before').content !== '""') return 'the spinner does not use a fixed ring';
+    const settle = async () => {
+      for (let i = 0; i < 100 && document.querySelector('[data-update-agent]:disabled'); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    };
+    await settle();
+    document.getElementById('btn-update-all-agents').click();
+    const state = () => document.querySelector('.agent-update-state')?.textContent || '';
+    const waitFor = async condition => {
+      for (let i = 0; i < 100; i++) {
+        if (condition()) return true;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      return false;
+    };
+    if (!await waitFor(() => /^Downloading · 128 MB · 1[.]3 MB[/]s · [0-9]+:[0-9][0-9]$/.test(state()))) {
+      return 'download size and speed did not reach the row';
+    }
+    if (!await waitFor(() => /^Installing · [0-9]+:[0-9][0-9]$/.test(state()))) return 'install stage did not reach the row';
+    await settle();
+    if (state()) return 'progress stayed visible after the update';
+    if (!button.querySelector('.ph-arrow-circle-up')) return 'idle icon was not restored';
+    if (document.querySelector('[data-update-agent]') || !document.getElementById('btn-update-all-agents').hidden
+      || !document.querySelector('[data-terminal-update="opencode"]')) {
+      return 'Update all did not update only the unmanaged agents';
+    }
+    return '';
+  })()`).catch(e => e.message);
+  if (updates || updatedAgents.join() !== 'claude,codex') {
+    return finish(false, updates || 'the wrong agents were updated');
+  }
+  win.focus();
+  for (const type of ['mouseDown', 'mouseUp']) {
+    win.webContents.sendInputEvent({ type, x: 8, y: 80, button: 'left', clickCount: 1 });
+  }
+  for (let i = 0; i < 20; i++) {
+    if (await win.webContents.executeJavaScript("!document.getElementById('agent-updates').open")) {
+      return finish(true, 'agent updates flow and backdrop dismissal');
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  finish(false, 'clicking outside did not close the update dialog');
 }, 12000);

@@ -94,7 +94,220 @@ async function status(names, env) {
   return { config: load(), agents: Object.fromEntries(entries) };
 }
 
-module.exports = { load, save, envFor, argsFor, detect, status, sanitize, CONFIG_ENV };
+const UPDATE_NAMES = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity', opencode: 'OpenCode' };
+const npmLatest = name => `https://registry.npmjs.org/${encodeURIComponent(name)}/latest`;
+const versionParts = version => /^(\d+)\.(\d+)\.(\d+)(-[\w.-]+)?(?:\+[\w.-]+)?$/.exec(version);
+
+function hasUpdate(installed, latest) {
+  const current = versionParts(installed), release = versionParts(latest);
+  if (!current || !release || release[4]) return null;
+  for (let i = 1; i <= 3; i++) {
+    if (Number(release[i]) !== Number(current[i])) return Number(release[i]) > Number(current[i]);
+  }
+  return Boolean(current[4]);
+}
+
+function updateUrl(name, installed) {
+  if (name === 'agy') {
+    const platform = { win32: 'windows', darwin: 'darwin', linux: 'linux' }[process.platform];
+    const arch = { x64: 'amd64', arm64: 'arm64' }[process.arch];
+    return platform && arch && `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${platform}_${arch}.json`;
+  }
+  return npmLatest({
+    claude: '@anthropic-ai/claude-code', codex: '@openai/codex',
+    opencode: installed.startsWith('1.') ? 'opencode-ai' : '@opencode/cli',
+  }[name]);
+}
+
+const isSystemBin = bin => process.platform === 'linux' && /^\/(?:usr\/)?(?:s?bin)\//.test(bin);
+// Commands that update one package only. They are typed into a terminal for the user to review and run.
+const PACKAGE_COMMANDS = {
+  // Arch calls this a partial upgrade: if the new build needs newer libraries, `pacman -Syu` fixes it.
+  pacman: pkg => `sudo pacman -Sy --needed ${pkg}`,
+  paru: pkg => `paru -S --needed ${pkg}`,
+  yay: pkg => `yay -S --needed ${pkg}`,
+  apt: pkg => `sudo apt-get update && sudo apt-get install --only-upgrade ${pkg}`,
+  dnf: pkg => `sudo dnf upgrade --refresh ${pkg}`,
+  zypper: pkg => `sudo zypper update ${pkg}`,
+  apk: pkg => `sudo apk add --update --upgrade ${pkg}`,
+  npm: pkg => `sudo npm install -g ${pkg}@latest`,
+  winget: pkg => `winget upgrade --id ${pkg} --exact`,
+  scoop: pkg => `scoop update ${pkg}`,
+  'scoop (global)': pkg => `scoop update --global ${pkg}`,
+  choco: pkg => `choco upgrade ${pkg}`, // needs an administrator terminal
+};
+// Chocolatey's shims are binaries that don't name their package.
+const CHOCO_PACKAGES = { claude: 'claude-code', codex: 'codex', opencode: 'opencode' };
+// Windows has no owner database to ask: the install path says who manages it.
+// npm and native installs return {}, because the CLI's own updater handles those.
+function windowsManagerOf(id, bin, real, readShim) {
+  const paths = [bin, real].map(file => file.replace(/\//g, '\\'));
+  for (const file of paths) {
+    const winget = /\\WinGet\\Packages\\([^\\_]+)_/i.exec(file)?.[1];
+    if (winget) return managedBy('winget', winget);
+  }
+  if (paths.some(file => /\\WinGet\\Links\\/i.test(file))) return { managed: 'winget' };
+  if (paths.some(file => /\\chocolatey\\/i.test(file))) return managedBy('choco', CHOCO_PACKAGES[id]);
+  if (paths.some(file => /\\scoop\\/i.test(file))) {
+    // A shim names its target in a sibling .shim file or in its own text.
+    const target = [...paths, readShim(bin).replace(/\//g, '\\')].join('\n');
+    if (/\\(node_modules|persist\\nodejs[^\\]*|apps\\nodejs[^\\]*)\\/i.test(target)) return {};
+    const pkg = /\\scoop\\apps\\([^\\\r\n]+)\\/i.exec(target)?.[1];
+    return managedBy(/\\ProgramData\\scoop\\/i.test(target) ? 'scoop (global)' : 'scoop', pkg);
+  }
+  return {};
+}
+function readShim(bin) {
+  for (const file of [bin.replace(/\.[^.\\/]+$/, '.shim'), /\.(cmd|bat|ps1)$/i.test(bin) && bin]) {
+    try { if (file) return fs.readFileSync(file, 'utf8'); } catch {}
+  }
+  return '';
+}
+function managedBy(manager, pkg) {
+  const safe = /^(?:@[a-z0-9][\w.-]*\/)?[a-zA-Z0-9][\w.+-]*$/.test(pkg || '');
+  return { managed: manager, command: safe && Object.hasOwn(PACKAGE_COMMANDS, manager) ? PACKAGE_COMMANDS[manager](pkg) : undefined };
+}
+// How a package-managed install gets updated. The CLI's own updater must not touch these.
+async function managerOf(id, bin, env) {
+  const windows = process.platform === 'win32';
+  if (!windows && !isSystemBin(bin)) return {};
+  const run = (file, args) => new Promise(resolve => {
+    execFile(file, args, { env: { ...env, LC_ALL: 'C' }, timeout: 4000 }, (err, out) => resolve(err ? null : String(out).trim()));
+  });
+  const has = name => ['/usr/bin', '/bin', '/usr/sbin'].some(dir => fs.existsSync(path.join(dir, name)));
+  let real = bin;
+  try { real = fs.realpathSync(bin); } catch {}
+  if (windows) return windowsManagerOf(id, bin, real, readShim);
+  for (const file of new Set([bin, real])) {
+    let pkg = await run('pacman', ['-Qoq', file]);
+    if (pkg) {
+      // Foreign packages (AUR) aren't in the repos, so pacman -S can't update them.
+      if (await run('pacman', ['-Qmq', pkg]) === null) return managedBy('pacman', pkg);
+      const helper = ['paru', 'yay'].find(has);
+      return helper ? managedBy(helper, pkg) : { managed: 'AUR' };
+    }
+    pkg = /^([^:,\s]+)(?::[\w-]+)?: /.exec(await run('dpkg', ['-S', file]) || '')?.[1];
+    if (pkg) return managedBy('apt', pkg);
+    pkg = await run('rpm', ['-qf', '--qf', '%{NAME}', file]);
+    if (pkg) return managedBy(has('dnf') ? 'dnf' : has('zypper') ? 'zypper' : 'rpm', pkg);
+    pkg = await run('apk', ['info', '-q', '--who-owns', file]);
+    if (pkg) return managedBy('apk', pkg);
+  }
+  const npm = /\/node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(real)?.[1];
+  return npm ? managedBy('npm', npm) : { managed: 'system' };
+}
+
+async function checkUpdates(env) {
+  const { agents } = await status(Object.keys(UPDATE_NAMES), env);
+  return Promise.all(Object.entries(UPDATE_NAMES).map(async ([id, name]) => {
+    const agent = agents[id];
+    if (!agent?.path) return { id, name, status: 'missing' };
+    const row = { id, name, installed: agent.version, ...await managerOf(id, agent.path, env) };
+    const installed = agent.version;
+    if (!versionParts(installed)) return { ...row, status: 'unavailable' };
+    const url = updateUrl(id, installed);
+    try {
+      if (url) {
+        const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        if (response.ok) {
+          const { version: latest } = await response.json();
+          const available = hasUpdate(installed, latest);
+          if (available !== null) return { ...row, latest, status: available ? 'available' : 'current' };
+        }
+      }
+    } catch {}
+    return { ...row, status: 'unavailable' };
+  }));
+}
+
+const UPDATE_TIMEOUT_MS = 30 * 60 * 1000;
+let updating = false;
+function updateProgress(line, previous) {
+  const text = line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').trim();
+  const phase = /^(?:[✓✔⠋→*=> ]*)(downloading|verifying|extracting|installing)\b/i.exec(text)?.[1]?.toLowerCase();
+  const stage = phase || (previous?.stage === 'downloading' ? previous.stage : null);
+  if (!stage) return null;
+  const value = /(?:^|\s)(\d{1,3}(?:\.\d+)?)\s*%/.exec(text)?.[1];
+  const percent = value != null && Number(value) <= 100 ? Number(value) : null;
+  if (!phase && percent === null) return null;
+  return { stage, percent };
+}
+// Both CLIs download silently when piped, so the growing file is the only sign of progress.
+function largestFile(dir) {
+  let size = 0;
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      try { size = Math.max(size, entry.isDirectory() ? largestFile(full) : fs.statSync(full).size); } catch {}
+    }
+  } catch {}
+  return size;
+}
+// Claude stages in <cache>/claude/staging/<version>.<its pid>.*
+function claudeDownloadSize(env, pid) {
+  const staging = path.join(env.XDG_CACHE_HOME || path.join(env.HOME || os.homedir(), '.cache'), 'claude', 'staging');
+  try {
+    const own = fs.readdirSync(staging).find(name => name.includes(`.${pid}.`));
+    return own ? largestFile(path.join(staging, own)) : 0;
+  } catch { return 0; }
+}
+
+async function updateAgent(id, env, onProgress = () => {}) {
+  if (typeof id !== 'string' || !Object.hasOwn(UPDATE_NAMES, id)) return { error: 'Unknown agent harness.' };
+  const bin = detect([id], env, { includeDisabled: true })[id];
+  if (!bin) return { error: 'The installed executable could not be found.' };
+  if ((await managerOf(id, bin, env)).managed) {
+    return { error: 'This installation must be updated through its package manager.' };
+  }
+  if (updating) return { error: 'Another agent update is already running.' };
+  const launch = require('./chat-sdk').resolveLaunch(bin, [id === 'opencode' ? 'upgrade' : 'update']);
+  if (!launch) return { error: 'The updater could not be started.' };
+  updating = true;
+  let tmp, watch;
+  try {
+    // Codex's installer downloads into `mktemp -d`; a private TMPDIR makes that measurable.
+    if (id === 'codex') tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-update-'));
+    await new Promise((resolve, reject) => {
+      // Agent binaries are hundreds of MB and a killed download restarts from zero, so allow slow connections.
+      const proc = execFile(launch.file, launch.args, { env: tmp ? { ...env, TMPDIR: tmp, TMP: tmp, TEMP: tmp } : env, timeout: UPDATE_TIMEOUT_MS, windowsHide: true, maxBuffer: 1 << 20 },
+        err => err ? reject(err) : resolve());
+      let last, bytes = 0, at = Date.now();
+      if (tmp || id === 'claude') watch = setInterval(() => {
+        if (last && last.stage !== 'downloading') return;
+        const size = tmp ? largestFile(tmp) : claudeDownloadSize(env, proc.pid);
+        const now = Date.now();
+        if (!size && bytes) onProgress(last = { stage: 'installing', percent: null }); // the staged file was moved into place
+        else if (size) onProgress({ stage: 'downloading', percent: last?.percent ?? null, bytes: size, speed: Math.max(0, size - bytes) * 1000 / (now - at || 1) });
+        bytes = size;
+        at = now;
+      }, 1000);
+      for (const stream of [proc.stdout, proc.stderr]) {
+        let remainder = '';
+        stream?.setEncoding('utf8').on('data', chunk => {
+          const lines = (remainder + chunk).split(/[\r\n]/);
+          remainder = lines.pop();
+          for (const line of lines) {
+            const next = updateProgress(line, last);
+            if (!next || (next.stage === last?.stage && next.percent === last.percent)) continue;
+            last = next;
+            onProgress(next);
+          }
+        });
+      }
+      proc.stdin?.end();
+    });
+    return {};
+  } catch (err) {
+    if (err.killed) return { error: 'The update timed out. Run the updater in a terminal.' };
+    return { error: 'The updater failed. Check the installation method for this agent.' };
+  } finally {
+    clearInterval(watch);
+    if (tmp) try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} // Windows may still hold a file
+    updating = false;
+  }
+}
+
+module.exports = { load, save, envFor, argsFor, detect, status, checkUpdates, updateAgent, sanitize, CONFIG_ENV };
 
 if (require.main === module) {
   const assert = require('assert');
@@ -103,5 +316,31 @@ if (require.main === module) {
     opencode: { configDir: '/x' }, '../evil': { bin: 'x' }, amp: {},
   }), { codex: { enabled: true }, claude: { enabled: false, configDir: '~/.claude_work', args: ['--chrome'], env: { ANTHROPIC_API_KEY: 'k' }, secret: ['ANTHROPIC_API_KEY'] } });
   assert.deepStrictEqual(sanitize(null), {});
+  const win = (bin, shim = '', real = bin) => windowsManagerOf('opencode', bin, real, () => shim).command;
+  const home = 'C:\\Users\\me';
+  assert.equal(win(`${home}\\AppData\\Local\\Microsoft\\WinGet\\Links\\opencode.exe`, '',
+    `${home}\\AppData\\Local\\Microsoft\\WinGet\\Packages\\SST.opencode_Microsoft.Winget.Source_8wekyb3d8bbwe\\opencode.exe`), 'winget upgrade --id SST.opencode --exact');
+  assert.equal(win(`${home}\\scoop\\shims\\opencode.exe`, `path = "${home}\\scoop\\apps\\opencode\\current\\opencode.exe"`), 'scoop update opencode');
+  assert.equal(win('C:\\ProgramData\\scoop\\shims\\opencode.exe', 'path = "C:\\ProgramData\\scoop\\apps\\opencode\\current\\opencode.exe"'), 'scoop update --global opencode');
+  assert.equal(win(`${home}\\scoop\\apps\\nodejs\\current\\bin\\opencode.cmd`), undefined);
+  assert.equal(win('C:\\ProgramData\\chocolatey\\bin\\opencode.exe'), 'choco upgrade opencode');
+  assert.deepStrictEqual(windowsManagerOf('opencode', `${home}\\AppData\\Roaming\\npm\\opencode.cmd`, '', () => ''), {});
+  assert.equal(managedBy('pacman', 'opencode').command, 'sudo pacman -Sy --needed opencode');
+  assert.equal(managedBy('npm', '@opencode/cli').command, 'sudo npm install -g @opencode/cli@latest');
+  assert.equal(managedBy('apt', 'x; rm -rf ~').command, undefined);
+  assert.equal(managedBy('pacman', '-Rns').command, undefined);
+  assert.equal(managedBy('AUR', 'opencode-bin').command, undefined);
+  assert.equal(hasUpdate('2.9.0', '2.10.0'), true);
+  assert.equal(hasUpdate('2.10.0-beta.1', '2.10.0'), true);
+  assert.equal(hasUpdate('2.10.0', '2.10.0'), false);
+  assert.equal(hasUpdate('2.10.1', '2.10.0'), false);
+  assert.equal(hasUpdate('2.10.0', undefined), null);
+  const download = { stage: 'downloading', percent: 42 };
+  assert.deepStrictEqual(updateProgress('Downloading update 42%', null), download);
+  assert.deepStrictEqual(updateProgress(' 75% ', download), { stage: 'downloading', percent: 75 });
+  assert.deepStrictEqual(updateProgress('Installing update', download), { stage: 'installing', percent: null });
+  assert.equal(updateProgress('Checking for updates', download), null);
+  assert.equal(updateUrl('opencode', '1.19.6'), npmLatest('opencode-ai'));
+  assert.equal(updateUrl('opencode', '2.0.31'), npmLatest('@opencode/cli'));
   console.log('providers ok');
 }

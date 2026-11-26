@@ -31,7 +31,7 @@ function context(store = {}) {
   ]);
   assert.deepEqual(fresh.calls, [cwd], 'concurrent loads must share one probe');
   assert.equal(vm.runInContext(`chatModels('opencode', { cwd: ${JSON.stringify(cwd)} }).length`, fresh.ctx), 2);
-  assert.ok(fresh.store['tv-opencode-models'], 'the catalog must be persisted');
+  assert.ok(fresh.store['tv-opencode-models-v2'], 'the catalog must be persisted');
   const restored = context(fresh.store);
   assert.equal(vm.runInContext(`chatModels('opencode', { cwd: ${JSON.stringify(cwd)} }).length`, restored.ctx), 2, 'a restart must restore the cached models');
   await vm.runInContext(`loadOpenCodeModels('/bin/opencode', ${JSON.stringify(cwd)})`, restored.ctx);

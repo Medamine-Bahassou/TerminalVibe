@@ -90,8 +90,10 @@ function createClient({ baseUrl, headers }) {
       fork: ({ sessionID }) => api('POST', at(sessionID) + '/fork', { body: {} }),
       abort: ({ sessionID }) => api('POST', at(sessionID) + '/interrupt'),
       // In 2.x the model and agent belong to the session, not the prompt.
-      async promptAsync({ sessionID, model, agent = 'build', parts }) {
-        if (model) await api('POST', at(sessionID) + '/model', { body: { model: { providerID: model.providerID, id: model.modelID } } });
+      async promptAsync({ sessionID, model, variant, agent = 'build', parts }) {
+        if (model) await api('POST', at(sessionID) + '/model', { body: { model: {
+          providerID: model.providerID, id: model.modelID, ...(variant ? { variant } : {}),
+        } } });
         if (agent !== (agents.get(sessionID) || 'build') || !agents.has(sessionID)) {
           await api('POST', at(sessionID) + '/agent', { body: { agent } });
           agents.set(sessionID, agent);
