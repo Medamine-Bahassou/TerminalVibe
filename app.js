@@ -12596,6 +12596,8 @@
   }
   observeThreadPage = observeLiveFlow;
   observeLiveFlow();
+  // A mouse click must not leave a changed-files row focused (it stayed lit, with a white outline after the next key). Keyboard clicks (detail 0) keep focus.
+  onThreadPage('click', e => { if (e.detail) e.target.closest?.('.thr-changes-head, .thr-change > summary, .thr-diff-btn')?.blur(); });
   for (const event of ['load', 'toggle']) onThreadPage(event, e => {
     if (e.target.closest?.('#sbr-thread-flow')) scheduleScrollEnd();
   }, true);
