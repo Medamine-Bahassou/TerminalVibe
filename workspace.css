@@ -3665,3 +3665,17 @@ body .chat-file-panel .cfp-tab { flex:none; }
 
 /* ── Chat changed files: keyboard focus uses the app's ring, not the browser's white outline. ── */
 #sbr-thread :is(.thr-changes-head, .thr-change > summary):focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
+
+/* Question tray: taller cap so a typical question shows whole; it only scrolls when it truly would not fit. */
+#sbr-thread .thr-ask { max-height:min(70vh, 560px); }
+
+/* Send button: neutral, not accent. White with a black icon in dark mode, black with a white icon in light mode. */
+#sbr-thread .thr-send:not(.stop):not(:disabled) { background:#fff; color:#000; }
+#sbr-thread .thr-send:not(.stop):hover:not(:disabled) { background:color-mix(in srgb,#fff 85%,#000); }
+html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):not(:disabled) { background:#000; color:#fff; }
+html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):hover:not(:disabled) { background:color-mix(in srgb,#000 85%,#fff); }
+
+/* Chat + Ctrl+J terminal: pin the chat's bottom edge to the terminal's top instead of subtracting heights, so the composer
+   and its footer row (project, branch) never extend over the terminal's tab bar. */
+#pane-area .term-slot.chat-bottom-open:not(.chat-cli) > #sbr-thread,
+.term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { height:auto; bottom:var(--chat-terminal-height, 35%); overflow:hidden; }

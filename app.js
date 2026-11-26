@@ -5626,8 +5626,9 @@
           window.draggedTermId = t.id;
           window.dragSourceGroupId = node.id;
           tab.classList.add('dragging');
-          setTimeout(() => { if (window.draggedTermId) startResizing(true); }, 0); // deferred: DOM changes inside dragstart can cancel the drag
-
+          // Deferred to the first `drag` event: the drag is only really underway then, and body/layout changes any
+          // earlier (even a 0ms timeout) can cancel it right after launch.
+          tab.addEventListener('drag', () => { if (window.draggedTermId) startResizing(true); }, { once: true });
         });
         tab.addEventListener('dragend', e => {
           tab.classList.remove('dragging');
@@ -10055,7 +10056,7 @@
     const branchHtml = newWorktree ? '<i class="ph ph-git-fork" aria-hidden="true"></i><span>New worktree</span>'
       : `<i class="ph ${branchMismatch ? 'ph-warning' : ws.chat?.worktree ? 'ph-git-fork' : 'ph-git-branch'}" aria-hidden="true"></i><span>${escHtml(shownBranch)}</span>`;
     if (shownBranch && branch._html !== branchHtml) { branch._html = branchHtml; branch.innerHTML = branchHtml; }
-    thrInput.placeholder = ws._elsewhere ? 'This thread is working in another app. Wait for it to finish to send from here.' : 'Ask anything. @ files, $ skills, / commands';
+    thrInput.placeholder = ws._elsewhere ? 'This thread is working in another app. Wait for it to finish to send from here.' : chatWorking(ws)?.ask?.options.some(o => o.input) ? 'Type your answer to the question above…' : 'Ask anything. @ files, $ skills, / commands';
     const editor = threadPart(surface, 'input-links');
     if (editor) editor.dataset.placeholder = thrInput.placeholder;
     syncUsageRing(ws, surface);
@@ -10774,7 +10775,8 @@
         // The terminal view resumes the session in the real CLI: the structured session hands it over first
         // (one process per session). A turn in progress is never cut off for it.
         if (tab._sdk?.alive) {
-          if (tab._sdk.busy || tab._sdk.ask) throw Error(`${harnessOf(tab._sdk.harness)?.name || 'The agent'} is working: stop it or wait for it to finish first.`);
+          // A pending question doesn't block the switch (viewSwitchBlocked allows it): the CLI resumes the session.
+          if (tab._sdk.busy && !tab._sdk.ask) throw Error(`${harnessOf(tab._sdk.harness)?.name || 'The agent'} is working: stop it or wait for it to finish first.`);
           tab._sdk.alive = false; _tabAgent.set(tab.id, null);
           await window.electronAPI.chatSdkStop(tab.id);
         }
@@ -11576,7 +11578,7 @@
             return;
           }
         }
-        if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+        if (!(e.key === 'Enter' && !e.shiftKey) && !((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey) || e.isComposing) return;
         const forwarded = new KeyboardEvent('keydown', { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, cancelable: true });
         thrInput.dispatchEvent(forwarded);
         if (forwarded.defaultPrevented) { e.preventDefault(); e.stopPropagation(); }
@@ -12813,8 +12815,10 @@
     const c = curChat(), typed = !!(thrInput.value.trim() || _chatFiles.length);
     const editing = !!c?._editingQueued;
     syncQueuedEditUI(c);
-    const working = !!c && (!!chatWorking(c) || _chatStarting.has(c.id));
-    const scheduling = !editing && typed && (_chatAlt || scheduleDialog?.open);
+    // A pending question with a free-text choice: typed text answers it (like a send), it doesn't steer a running turn.
+    const answering = typed && !!chatWorking(c)?.ask?.options.some(o => o.input);
+    const working = !!c && !answering && (!!chatWorking(c) || _chatStarting.has(c.id));
+    const scheduling = !editing && typed && !answering && (_chatAlt || scheduleDialog?.open);
     const queue = !scheduling && !editing && working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = !editing && working && !typed && !queue;
     thrSend.classList.toggle('stop', stop);
     const resume = !editing && !working && !typed && !!c?.chat?.interruptedAt && !c._resuming && !_chatSending.has(c.id);
@@ -12827,8 +12831,10 @@
       thrSend.dataset.mode = label;
       setSendIcon(queue ? queueIcon : `<i class="ph ${scheduling || scheduled ? 'ph-clock' : editing ? 'ph-check' : stop ? 'ph-stop' : working ? 'ph-arrow-elbow-up-right' : resume ? 'ph-play' : 'ph-arrow-up'}" aria-hidden="true"></i>`, sameTab);
       thrSend.setAttribute('aria-label', label);
-      thrSend.dataset.tip = scheduling ? 'Schedule message (Alt+Enter)' : scheduled ? 'Message scheduled' : editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter) · Schedule (Alt+Enter)' : resume ? 'Continue (Enter)' : 'Send (Enter) · Schedule (Alt+Enter)';
+      thrSend.dataset.tip = scheduling ? 'Schedule message (Alt+Enter)' : scheduled ? 'Message scheduled' : editing ? 'Save queued message (Enter)' : queue ? 'Queue for next turn (Ctrl+Enter)' : stop ? 'Stop (Esc in the agent)' : working ? 'Steer (Enter) · Queue (Ctrl+Enter) · Schedule (Alt+Enter)' : resume ? 'Continue (Enter)' : answering ? 'Send (Enter)' : 'Send (Enter) · Schedule (Alt+Enter)';
     }
+    // Same label (Send) before and after a question appears: the tip still has to follow.
+    if (label === 'Send' && thrSend.dataset.tip !== (answering ? 'Send (Enter)' : 'Send (Enter) · Schedule (Alt+Enter)')) thrSend.dataset.tip = answering ? 'Send (Enter)' : 'Send (Enter) · Schedule (Alt+Enter)';
   }
   function setSendIcon(html, animateChange = true) {
     const next = document.createElement('span'); next.className = 'thr-send-icon'; next.setAttribute('aria-hidden', 'true'); next.innerHTML = html;
@@ -12892,10 +12898,37 @@
     // The sidebar rebuilds every thread card (reading agents' terminal screens): only once typing pauses.
     clearTimeout(_draftSave); _draftSave = setTimeout(() => { saveState(); renderThreadsSidebar(); }, 400);
   });
+  // Up/Down at the edge of the input walk back through this chat's earlier prompts (like a shell's history).
+  let _histI = -1, _histDraft = '', _histText = '', _histChat = null;
+  thrInput?.addEventListener('keydown', e => {
+    if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
+    const v = thrInput.value, c = curChat(), s0 = thrInput.selectionStart, s1 = thrInput.selectionEnd;
+    // Browsing ends when the chat changes, the box is emptied or a new prompt was sent (it's no longer the recalled text's turn).
+    if (_histI >= 0 && (_histChat !== c || !v)) _histI = -1;
+    const collapsed = s0 === s1, up = e.key === 'ArrowUp';
+    // Start: Up on an empty box or with the caret at the very start (a typed draft is kept and comes back with Down).
+    // Browsing: Up/Down leave the recalled prompt from its first/last line, so no Home/End needed; lines inside a
+    // multi-line prompt still move the caret first.
+    const go = _histI < 0 ? up && collapsed && (!v || !s0)
+      : collapsed && (up ? !v.slice(0, s0).includes('\n') : !v.slice(s1).includes('\n'));
+    if (!go) return;
+    const past = [...thrPage.querySelectorAll('.thr-flow > .thr-msg.user .thr-msg-text')].map(n => n.textContent.trim())
+      .filter((t, i, all) => t && t !== all[i - 1]); // empty and back-to-back duplicate prompts are skipped
+    const next = _histI < 0 ? past.length - 1 : _histI + (up ? -1 : 1);
+    if (!past.length || next < -1 || next >= past.length || (_histI < 0 && !up)) return;
+    e.preventDefault();
+    if (_histI < 0) { _histDraft = v; _histChat = c; }
+    _histI = next;
+    thrInput.value = _histText = next < 0 ? _histDraft : past[next];
+    // Shell feel: Up lands at the start of the prompt (so Up again keeps going), Down at its end.
+    const at = up && next >= 0 ? 0 : thrInput.value.length;
+    thrInput.setSelectionRange(at, at);
+    thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+  });
   thrInput?.addEventListener('keydown', e => {
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
     e.preventDefault(); e.stopPropagation();
-    if (e.altKey) { openChatSchedule(curChat()); return; }
+    if (e.altKey) { if (!chatWorking(curChat())?.ask?.options.some(o => o.input)) openChatSchedule(curChat()); return; } // a question's answer isn't scheduled
     _chatCtrl = e.ctrlKey; syncSendBtn(); thrInput.form.requestSubmit();
   });
   thrPage.querySelector('#sbr-thread-composer')?.addEventListener('submit', async e => {
