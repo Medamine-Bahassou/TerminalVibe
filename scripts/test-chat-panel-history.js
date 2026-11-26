@@ -12,6 +12,7 @@ app.whenReady().then(async () => {
   for (const file of ['style.css', 'workspace.css']) await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'));
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   const loaders = source.slice(source.indexOf('  async function refreshThreadFlow('), source.indexOf('  function renderThreadFlow('));
+  const find = source.slice(source.indexOf('  const thrFind ='), source.indexOf('  // Plain Ctrl+F in the history panel'));
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     document.body.innerHTML = '<div class="ws-pane-container"><div id="host"><div class="thr-flow"></div></div><div id="side"><div class="thr-flow"></div></div></div>';
@@ -75,28 +76,32 @@ app.whenReady().then(async () => {
     check(shell.getClientRects().length > 0 && getComputedStyle(shell).visibility === 'visible', 'Focusing the side chat hid the host shell');
     slot.classList.remove('chat-panel-on');
     check(!shell.getClientRects().length, 'Inactive shell tab remained visible');
-    return 'PASS: chat and composer dimensions, pending history survives merged-panel focus changes; hidden tabs and workspaces stay untouched';
-  })()`));
-  const lazyDetails = source.slice(source.indexOf('  function expandThreadDetails('), source.indexOf("  document.addEventListener('toggle',", source.indexOf('  function expandThreadDetails(')));
-  const find = source.slice(source.indexOf('  const thrFind ='), source.indexOf('  // Plain Ctrl+F'));
-  console.log(await win.webContents.executeJavaScript(`(() => {
-    document.body.innerHTML = '<div id="search-fixture"><span id="sbr-thread-find-count"></span><div class="thr-flow" id="sbr-thread-flow"><details data-key="outer"><summary>Tools</summary></details></div></div>';
-    const thrPage = document.getElementById('search-fixture');
-    const flow = document.getElementById('sbr-thread-flow');
-    const decorateWorkUsernames = () => {}, bindThreadImage = () => {};
-    flow._lazy = new Map([
-      ['outer', () => '<details data-key="inner"><summary>Output</summary></details>'],
-      ['inner', () => '<div style="height:60px;overflow:auto">' + '<p>line</p>'.repeat(20) + '<p>hidden match</p></div>'],
-    ]);
-    ${lazyDetails}
+    thrPage = page;
+    page.innerHTML = '<span id="sbr-thread-find-count"></span><div id="sbr-thread-flow">'
+      + '<div class="thr-msg user"><div class="thr-bubble"><div class="thr-msg-text">Match prompt</div></div></div>'
+      + '<details open><summary>Match steps</summary><div class="thr-msg assistant"><div class="thr-msg-text">Match step</div></div></details>'
+      + '<details><summary>Match tools</summary><template>Match lazy tool output</template></details>'
+      + '<div class="thr-msg assistant"><div class="thr-msg-text"><strong>Match</strong> reply</div><div class="thr-actions">Match time</div></div>'
+      + '<div class="thr-queued-text">Match queued draft</div></div>';
     ${find}
-    thrFind.q = 'hidden match';
+    thrFind.q = 'match';
+    thrFindRun(true);
+    check(thrFindEl('-count').textContent === '1/2', 'Find counted text outside sent prompts and assistant replies');
+    check(thrFind.ranges.map(r => r.startContainer.parentElement.textContent).join('|') === 'Match prompt|Match', 'Find matched the wrong text');
+    check(page.querySelector('details:not([open]) > template'), 'Find expanded lazy tool output');
+    return 'PASS: chat layout, merged-panel history, and find scope';
+  })()`));
+  console.log(await win.webContents.executeJavaScript(`(() => {
+    document.body.innerHTML = '<div id="search-fixture"><span id="sbr-thread-find-count"></span><div class="thr-flow" id="sbr-thread-flow"><div class="thr-msg assistant"><div class="thr-msg-text" style="height:60px;overflow:auto">'
+      + '<p>line</p>'.repeat(20) + '<p>reply match</p></div></div></div></div>';
+    const thrPage = document.getElementById('search-fixture');
+    ${find}
+    thrFind.q = 'reply match';
     thrFindRun(false);
-    if (thrFind.ranges.length !== 1 || flow.querySelectorAll('details[open]').length !== 2 ||
-        !flow.querySelector('[data-key="inner"] > div').scrollTop) {
-      throw new Error('Find did not open nested lazy sections and scroll the match into view');
+    if (thrFind.ranges.length !== 1 || !thrPage.querySelector('.thr-msg-text').scrollTop) {
+      throw new Error('Find did not scroll the reply match into view');
     }
-    return 'PASS: history search reveals matches inside nested lazy tool output';
+    return 'PASS: history search scrolls to matches inside overflowing replies';
   })()`));
   clearTimeout(timeout); app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });
