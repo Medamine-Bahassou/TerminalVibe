@@ -15,9 +15,53 @@ app.whenReady().then(async () => {
   const settingsStart = source.indexOf('  const loadThreadSettings =');
   const settings = source.slice(settingsStart, source.indexOf('\n  };', settingsStart) + 5);
   const privacy = source.slice(source.indexOf('  const EMAIL_RE ='), source.indexOf('  function blurTermEmails('));
+  const terminalMask = source.slice(source.indexOf('  const _termUsers ='), source.indexOf('  function writePtyData('));
+  const terminalDecorations = source.slice(source.indexOf('  function blurTermEmails('), source.indexOf('  // opts: { cwd, cmd, label }'));
+  const termRow = source.slice(source.indexOf('  function termRow('), source.indexOf('  // Join terminal rows'));
+  await win.webContents.executeJavaScript(fs.readFileSync(path.join(root, 'vendor/xterm/xterm.js'), 'utf8'));
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     let threadSettings = { usernames: 'show' };
+    document.body.innerHTML = '<div class="tg-tab" data-termid="one"><span class="tg-tab-name">SampleUser</span></div>';
+    const entry = { label: 'SampleUser' };
+    const findTermById = () => ({ term: entry });
+    ${terminalMask}
+    const esc = String.fromCharCode(27);
+    const prompt = esc + '[36m/mnt/c/Users/' + esc + '[1mSample' + esc + '[22mUser' + esc + '[0m ❯';
+    threadSettings.usernames = 'blur';
+    document.body.classList.add('blur-work-usernames');
+    learnTerminalOutputUsernames(prompt);
+    const hideEmails = false;
+    ${source.match(/^  const EMAIL_RE = .*$/m)[0]}
+    ${termRow}
+    ${terminalDecorations}
+    const terminal = new Terminal({ allowProposedApi: true });
+    const host = document.body.appendChild(document.createElement('div'));
+    terminal.open(host);
+    blurTermEmails(terminal);
+    await new Promise(resolve => terminal.write(prompt + String.fromCharCode(13, 10) + '/home/**** **********', resolve));
+    for (let attempt = 0; attempt < 20 && !host.querySelector('.term-user-blur'); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    check(host.querySelectorAll('.term-user-blur').length === 1, 'Only the redacted username should have a blur decoration');
+    const blur = host.querySelector('.term-user-blur');
+    check(getComputedStyle(blur).backdropFilter === 'blur(4px)' && getComputedStyle(blur).display !== 'none',
+      'Username redaction must use the email blur even with email hiding turned off');
+    check(terminal.buffer.active.getLine(0).translateToString(true).includes('SampleUser'),
+      'Username blur must leave the terminal cells and their colors intact');
+    terminal.dispose();
+    const tab = document.querySelector('.tg-tab');
+    check(tab.textContent === entry.label && tab.title === '**********', 'The username tab must blur the original title and mask its tooltip');
+    check(tab.querySelector('.tg-tab-name').classList.contains('username-redacted'), 'The username tab must display the blur treatment');
+    threadSettings.usernames = 'show';
+    refreshTerminalTabLabels();
+    check(tab.textContent === entry.label && tab.title === entry.label, 'Turning privacy off must restore the original title');
+    return 'PASS: terminal username masking preserves ANSI colors and updates tab titles and tooltips';
+  })()`));
+  console.log(await win.webContents.executeJavaScript(`(async () => {
+    const check = (ok, message) => { if (!ok) throw Error(message); };
+    let threadSettings = { usernames: 'show' };
+    ${terminalMask}
     const _workUsernameRecords = new Map(), _workUsernameMarkup = new WeakMap();
     const hideEmails = false, copied = [];
     window.electronAPI = { clipboardWrite: text => copied.push(text) };
