@@ -110,12 +110,20 @@ app.whenReady().then(async () => {
     return 'PASS: OS reduced-motion preference';
   })()`));
   const contextMenu = source.slice(source.indexOf("  const ctxEl = document.getElementById('ctx');"), source.indexOf("  const promptOverlay = document.getElementById('prompt-overlay');"));
+  const browserContentCheck = source.slice(source.indexOf('  function browserHasContent('), source.indexOf('  // Ask the backend whether a real process'));
   console.log(await win.webContents.executeJavaScript(`(() => {
     const check = (ok, msg) => { if (!ok) throw new Error(msg); };
     let picked = 0;
     const menu = { options: [['a', ['', 'First']], ['b', ['', 'Second']]], current: null, pick: v => { picked += v === 'a' ? 1 : 10; } };
     const escHtml = s => s;
+    const browserDevToolsDocks = { right: 'Dock right', left: 'Dock left', bottom: 'Dock bottom', external: 'Separate window' };
+    const browserDevToolsDock = 'bottom';
+    let browserMoreOpen = false;
+    const browserMorePreviews = new Set();
+    const devToolsVisibility = [];
+    const syncBrowserSlots = () => devToolsVisibility.push(!browserMoreOpen);
     window.electronAPI = { popupContextMenu: () => { throw new Error('Native menu bypasses motion settings'); } };
+    ${browserContentCheck}
     ${contextMenu}
     const key = value => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:value,bubbles:true,cancelable:true}));
     const trigger = document.createElement('button'); document.body.append(trigger); trigger.focus();
@@ -127,7 +135,28 @@ app.whenReady().then(async () => {
     check(!ctxEl.inert, 'Reopened menu must accept input');
     key('ArrowUp'); check(document.activeElement.textContent === 'Second', 'ArrowUp must focus last menu action');
     key('Escape'); check(!ctxEl.classList.contains('open') && document.activeElement === trigger, 'Escape must dismiss and restore focus');
-    return 'PASS: desktop DOM menus, keyboard selection, Escape, focus restoration and reopen';
+    let dock;
+    showCtxMenu({pageX:20,pageY:20}, 'browser-more', {
+      entry: { type: 'browser', url: 'https://example.test', _dockDevTools: value => { dock = value; }, _toggleDevTools: () => {} },
+      history: () => {},
+    });
+    check(devToolsVisibility.join() === 'false', 'Browser menu must suspend docked DevTools');
+    key('ArrowUp');
+    key('ArrowRight');
+    check(document.activeElement.textContent.includes('Open developer tools'), 'Keyboard must enter the DevTools submenu');
+    key('ArrowDown');
+    key('Enter');
+    check(dock === 'right' && !browserMoreOpen && devToolsVisibility.join() === 'false,true',
+      'Dock selection must close the menu and restore DevTools');
+    showCtxMenu({pageX:20,pageY:20}, 'browser-more', {
+      entry: { type: 'browser', url: 'about:blank' }, history: () => {},
+    });
+    const disabled = ctxEl.querySelector('[aria-disabled="true"]');
+    check(disabled?.textContent === 'Developer tools' && !disabled.querySelector('.ctx-sub'),
+      'Blank browser tabs must show DevTools as disabled');
+    key('ArrowUp');
+    check(document.activeElement.textContent === 'History', 'Keyboard navigation must skip disabled DevTools');
+    return 'PASS: desktop DOM menus, keyboard selection, focus restoration and browser DevTools submenu';
   })()`));
   clearTimeout(timer); app.exit(0);
 }).catch(error => { console.error(error); clearTimeout(timer); app.exit(1); });
