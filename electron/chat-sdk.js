@@ -897,6 +897,8 @@ class OpenCodeSession extends Session {
   }
   send(text, { options, images = [] } = {}) {
     if (options) this.options = options;
+    const model = openCodeModel(this.options.model);
+    const variant = this.options.effort === 'default' ? undefined : this.options.effort;
     this.waiting++;
     this.setBusy(true);
     // One turn at a time: a message sent mid-turn runs right after it.
@@ -908,14 +910,13 @@ class OpenCodeSession extends Session {
       try {
         const parts = [{ type: 'text', text }];
         for (const image of images) parts.push({ type: 'file', mime: image.mediaType, url: `data:${image.mediaType};base64,${image.data}` });
-        const model = openCodeModel(this.options.model);
         this.inPrompt = true;
         // A synchronous `session.prompt` holds its HTTP response open for the whole turn. Node's fetch gives up
         // after 5 minutes of waiting for response headers, so a long turn dies with a bare "fetch failed" while
         // OpenCode is still working. The async endpoint returns at once; the SSE stream carries the result and
         // the turn's idle event, so a turn can run for hours.
         const r = await this.client.session.promptAsync({ sessionID: this.sessionId, directory: this.cwd,
-          ...(model ? { model } : {}), ...(this.options.access === 'plan' ? { agent: 'plan' } : {}), parts });
+          ...(model ? { model, ...(variant ? { variant } : {}) } : {}), ...(this.options.access === 'plan' ? { agent: 'plan' } : {}), parts });
         const error = openCodeError(r?.data?.info?.error) || this.lastError;
         if (error) this.endTurn(this.aborted ? null : error);
         else if (this.pendingIdle) { this.pendingIdle = false; this.endTurn(this.aborted ? null : this.lastError || null); }
@@ -952,6 +953,10 @@ class OpenCodeSession extends Session {
     try { this.server?.kill(); } catch {}
   }
 }
+function openCodeEfforts(variants) {
+  const ids = Array.isArray(variants) ? variants.map(variant => variant?.id) : Object.keys(variants || {});
+  return ['default', ...new Set(ids.filter(id => typeof id === 'string' && id && id !== 'default'))];
+}
 function openCodeModels(bin, env, cwd) {
   return withOpenCodeServer(bin, env, cwd, async (client, signal) => {
     try {
@@ -960,7 +965,7 @@ function openCodeModels(bin, env, cwd) {
       return data.all.filter(provider => connected.has(provider.id)).flatMap(provider =>
         Object.values(provider.models).map(model => ({
           id: `${provider.id}/${model.id}`, name: `${model.name} · ${provider.name}`,
-          efforts: ['default'], defaultEffort: 'default',
+          efforts: openCodeEfforts(model.variants), defaultEffort: 'default',
         }))).sort((a, b) => a.name.localeCompare(b.name));
     } catch (err) {
       console.error('[chat-sdk] OpenCode models probe failed:', err?.message || err);
@@ -1168,6 +1173,9 @@ if (require.main === module) {
   // OpenCode: a model id keeps the model's own slashes; permissions reply through the SDK's choices.
   assert.deepStrictEqual(openCodeModel('nvidia/nvidia/active-speaker-detection'), { providerID: 'nvidia', modelID: 'nvidia/active-speaker-detection' });
   assert.strictEqual(openCodeModel('default'), null);
+  assert.deepStrictEqual(openCodeEfforts([{ id: 'low' }, { id: 'medium' }, { id: 'high' }]), ['default', 'low', 'medium', 'high']);
+  assert.deepStrictEqual(openCodeEfforts({ high: {}, max: {} }), ['default', 'high', 'max']);
+  assert.deepStrictEqual(openCodeEfforts(), ['default']);
   const op = openCodePermissionAsk({ permission: 'bash', patterns: ['npm test'], always: ['bash'], metadata: { description: 'Run the tests' } });
   assert.strictEqual(op.ask.question, 'Allow bash?');
   assert.deepStrictEqual(op.ask.detail, ['npm test', 'Run the tests']);
@@ -1279,9 +1287,10 @@ if (require.main === module) {
       asyncSession.onEvent({ type: 'session.status', properties: { sessionID: 'ses_async', status: { type: 'idle' } } });
       return {};
     } } };
-    asyncSession.send('hello');
+    asyncSession.send('hello', { options: { model: 'opencode/deepseek-v4.1-flash-free', effort: 'high' } });
     await asyncSession.queue;
     assert.strictEqual(asyncCalls.length, 1, 'the turn uses the async prompt endpoint');
+    assert.strictEqual(asyncCalls[0].variant, 'high');
     assert.ok(asyncEvents.some(e => e.type === 'idle'), 'an idle racing the POST still settles the turn');
     const dropEvents = [], dropSession = new OpenCodeSession('test', 'opencode', (_k, e) => dropEvents.push(e));
     Object.assign(dropSession, { parts: new Map(), recordedParts: new Set(), tools: new Map(), recordedTools: new Set(),

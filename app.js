@@ -8075,7 +8075,7 @@
       const strip = entry.el.querySelector('.chat-bottom-tabs');
       strip.innerHTML = list.map((e, i) => `<div class="chat-bottom-tab" role="tab" data-i="${i}" aria-selected="${e === owner._bottomTerminal}" tabindex="${e === owner._bottomTerminal ? 0 : -1}">`
         + `<i class="ph ph-terminal" aria-hidden="true"></i><span>${escHtml(e._title || 'Terminal')}</span>`
-        + (list.length > 1 ? '<button type="button" class="chat-bottom-tab-x" tabindex="-1" aria-label="Close terminal"><i class="ph ph-x" aria-hidden="true"></i></button>' : '') + '</div>').join('');
+        + '<button type="button" class="chat-bottom-tab-x" tabindex="-1" aria-label="Close terminal"><i class="ph ph-x" aria-hidden="true"></i></button></div>').join('');
     }
   }
   function bindChatBottomResize(owner, entry) {
@@ -9464,7 +9464,7 @@
   // An agent with no known models still gets one row: its own default.
   // OpenCode's catalog comes from a local server + provider probe: keep it like Codex's and Antigravity's,
   // so the picker shows the saved list at once and refreshes it when stale. One map per project folder, persisted across restarts.
-  const OPENCODE_MODELS_KEY = 'tv-opencode-models';
+  const OPENCODE_MODELS_KEY = 'tv-opencode-models-v2';
   let openCodeCatalogs;
   try { openCodeCatalogs = new Map(Object.entries(JSON.parse(localStorage.getItem(OPENCODE_MODELS_KEY)) || {})); }
   catch { openCodeCatalogs = new Map(); }
@@ -10407,7 +10407,7 @@
       side.innerHTML = cur.efforts.map(e => {
         const isDefault = e !== 'default' && e === cur.defaultEffort, on = o.effort === e || (isDefault && o.effort === 'default');
         return `<button type="button" role="option" class="mp-row mp-effort${on ? ' selected' : ''}" data-e="${isDefault ? 'default' : e}" aria-selected="${on}">`
-          + `<span class="mp-name">${escHtml(EFFORT_NAMES[e] || e)}</span>${isDefault ? '<span class="mp-hint">Default</span>' : ''}`
+          + `<span class="mp-name">${escHtml(e === 'none' ? 'Reasoning off' : EFFORT_NAMES[e] || e)}</span>${isDefault ? '<span class="mp-hint">Default</span>' : ''}`
           + (on ? '<i class="ph ph-check mp-check" aria-hidden="true"></i>' : '') + '</button>';
       }).join('');
       const caps = chatCaps(o), speed = pop.querySelector('.mp-speed'), ultra = pop.querySelector('.mp-ultra');
