@@ -916,7 +916,7 @@ class OpenCodeSession extends Session {
         // OpenCode is still working. The async endpoint returns at once; the SSE stream carries the result and
         // the turn's idle event, so a turn can run for hours.
         const r = await this.client.session.promptAsync({ sessionID: this.sessionId, directory: this.cwd,
-          ...(model ? { model, ...(variant ? { variant } : {}) } : {}), ...(this.options.access === 'plan' ? { agent: 'plan' } : {}), parts });
+          ...(model ? { model } : {}), ...(model && variant ? { variant } : {}), ...(this.options.access === 'plan' ? { agent: 'plan' } : {}), parts });
         const error = openCodeError(r?.data?.info?.error) || this.lastError;
         if (error) this.endTurn(this.aborted ? null : error);
         else if (this.pendingIdle) { this.pendingIdle = false; this.endTurn(this.aborted ? null : this.lastError || null); }
