@@ -14,6 +14,10 @@ app.whenReady().then(async () => {
     document.body.style.margin = '0';
     document.body.innerHTML = '<div id="chat"><div class="thr-flow" style="box-sizing:border-box;height:200px;overflow:auto;padding-bottom:100px"><div style="height:1000px">Messages</div><div hidden>Empty queue</div></div><div class="thr-composer-wrap" style="position:fixed;top:200px;height:100px"><button>Scroll to end</button></div></div>';
     const thrPage = document.getElementById('chat'), flowEl = thrPage.querySelector('.thr-flow'), scrollEndBtn = thrPage.querySelector('button');
+    const queued = document.createElement('span');
+    queued.className = 'thr-scroll-end-queued';
+    scrollEndBtn.append(queued);
+    const chat = { queuedMessages: [] }, curChat = () => ({ chat });
     ${helper}
     flowEl.scrollTop = flowEl.scrollHeight; syncScrollEnd();
     check(scrollEndBtn.hidden, 'Button must be hidden at the physical bottom');
@@ -22,6 +26,16 @@ app.whenReady().then(async () => {
     check(flowEl.scrollTop === top, 'Visibility updates must never force scrolling');
     flowEl.scrollTop -= 150; syncScrollEnd();
     check(!scrollEndBtn.hidden, 'Button must appear when real message content is out of view');
+    check(queued.hidden, 'An empty queue must leave the original label');
+    chat.queuedMessages.push({});
+    syncScrollEnd();
+    check(!queued.hidden && queued.textContent === '• 1 queued', 'One queued message must appear in the label');
+    chat.queuedMessages.push({});
+    syncScrollEnd();
+    check(queued.textContent === '• 2 queued', 'The label must track the current queue');
+    chat.queuedMessages.length = 0;
+    syncScrollEnd();
+    check(queued.hidden && !queued.textContent, 'Clearing the queue must remove the count and separator');
     flowEl.firstElementChild.style.height = '20px'; syncScrollEnd();
     check(scrollEndBtn.hidden, 'Shrinking content must hide stale scroll-to-end controls');
     return 'PASS: scroll-to-end hides at the end and over empty padding, appears for hidden messages and never changes reading position';
