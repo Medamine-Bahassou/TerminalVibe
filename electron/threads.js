@@ -493,12 +493,53 @@ function parseAcp(list) {
     : { role: r.role, text: String(r.text || ''), ts: r.ts || null }), ...(r.interrupted ? { interrupted: r.interrupted, interruptedAt: r.interruptedAt } : {}) }))
     .filter(r => r.role === 'tool' || r.text || r.interrupted);
 }
-async function acpSegment({ sessionId }, home) {
-  // A session run in the terminal (no id recorded) has no history TerminalVibe can read.
-  if (!/^[\w-]{8,64}$/.test(sessionId || '')) return { items: [], unsupported: true };
-  const file = acpFile(sessionId, home);
+// OpenCode 2.x run in a terminal records nothing for TerminalVibe: read its own database. Without a known id,
+// take the session in this folder used since the segment launched (none until the first prompt).
+// shortcut: two OpenCode sessions started in the same folder at once can swap.
+function openCodeTranscript({ sessionId, cwd, since, exclude = [] }, home) {
+  const file = path.join((home === os.homedir() && process.env.XDG_DATA_HOME) || path.join(home, '.local', 'share'), 'opencode', 'opencode.db');
   if (!fs.existsSync(file)) return { sessionId, items: [] };
-  const items = await parseFile(file, parseAcp);
+  let db;
+  try {
+    db = new (require('node:sqlite').DatabaseSync)(file, { readOnly: true });
+    const id = sessionId || (cwd && db.prepare('SELECT id FROM session_v2 WHERE directory = ? AND parent_id IS NULL AND time_updated >= ? ORDER BY time_updated DESC')
+      .all(path.resolve(cwd), Number(since) || 0).find(r => !exclude.includes(r.id))?.id);
+    if (!id) return { sessionId: null, items: [] };
+    const list = [];
+    for (const row of db.prepare("SELECT type, time_created, data FROM session_message WHERE session_id = ? AND type IN ('user', 'assistant') ORDER BY seq").all(id)) {
+      let data; try { data = JSON.parse(row.data); } catch { continue; }
+      const ts = new Date(row.time_created).toISOString();
+      if (row.type === 'user') { list.push({ role: 'user', text: data.text, ts }); continue; }
+      for (const part of data.content || []) {
+        if (part.type === 'text') list.push({ role: 'assistant', text: part.text, ts });
+        else if (part.type === 'reasoning') list.push({ role: 'thinking', text: part.text, ts });
+        else if (part.type === 'tool') {
+          const { input, content, status } = part.state || {};
+          const output = (content || []).map(c => c.text || '').join('\n');
+          list.push({ role: 'tool', name: part.name, summary: toolSummary(input), detail: toolDetail(input), ts,
+            ...(output ? { output } : {}), ...(status === 'error' ? { error: true } : {}) });
+        }
+      }
+    }
+    return { sessionId: id, items: parseAcp(list) };
+  } catch (err) {
+    console.error('[threads] opencode history', err.message);
+    return { sessionId, items: [] };
+  } finally { db?.close(); }
+}
+
+async function acpSegment(seg, home) {
+  const known = /^[\w-]{8,64}$/.test(seg.sessionId || '') ? seg.sessionId : null;
+  const own = seg.harness === 'opencode' ? openCodeTranscript({ ...seg, sessionId: known }, home) : null;
+  // An Antigravity session run in the terminal (no id recorded) has no history TerminalVibe can read.
+  const sessionId = known || own?.sessionId;
+  if (!sessionId) return { items: [], ...(own ? {} : { unsupported: true }) };
+  const file = acpFile(sessionId, home);
+  if (!fs.existsSync(file)) return { sessionId, items: own?.items || [] };
+  let items = await parseFile(file, parseAcp);
+  // A terminal session continued in the chat: what was said before the chat started recording comes first.
+  const from = Date.parse(items[0]?.ts);
+  if (own && from) items = [...own.items.filter(x => Date.parse(x.ts) < from), ...items];
   // A subagent (OpenCode's task tool) has its own session transcript: the row shows its latest step.
   await Promise.all(items.filter(x => x.agent?.sessionId && /^[\w-]{8,64}$/.test(x.agent.sessionId)).map(async ({ agent }) => {
     try {

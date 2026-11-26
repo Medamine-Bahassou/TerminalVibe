@@ -79,7 +79,22 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
   assert.strictEqual(codex.items[1].detail, 'ls -la');
   assert.strictEqual(codex.items[1].error, true);
   assert.strictEqual(codex.sessionId, 'codex-1', 'codex id found from cwd + start time');
-  assert.strictEqual(opencode.unsupported, true);
+  assert(!opencode.unsupported && !opencode.items.length, 'a terminal OpenCode with no session yet is just empty');
+  // Its first prompt creates the session in OpenCode's database: found by folder + start time.
+  const ocDir = path.join(home, '.local', 'share', 'opencode');
+  fs.mkdirSync(ocDir, { recursive: true });
+  const db = new (require('node:sqlite').DatabaseSync)(path.join(ocDir, 'opencode.db'));
+  db.exec('CREATE TABLE session_v2 (id, directory, parent_id, time_updated); CREATE TABLE session_message (session_id, type, seq, time_created, data)');
+  db.prepare('INSERT INTO session_v2 VALUES (?, ?, NULL, ?)').run('ses_terminal1', cwd, Date.now());
+  const add = db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?)');
+  add.run('ses_terminal1', 'user', 1, Date.now(), JSON.stringify({ text: 'hello' }));
+  add.run('ses_terminal1', 'assistant', 2, Date.now(), JSON.stringify({ content: [{ type: 'text', text: 'hi' },
+    { type: 'tool', name: 'shell', state: { status: 'error', input: { command: 'ls' }, content: [{ type: 'text', text: 'no' }] } }] }));
+  db.close();
+  const [oc] = await syncThread({ id: 'thread-oc', segments: [{ harness: 'opencode', sessionId: null, cwd, since: Date.now() - 60000 }] }, home);
+  assert.strictEqual(oc.sessionId, 'ses_terminal1');
+  assert.deepStrictEqual(oc.items.map(i => i.role), ['user', 'assistant', 'tool']);
+  assert(oc.items[2].error && oc.items[2].summary === 'ls');
   // Pasted images are saved in the thread folder and shown by path, not as base64.
   const [img] = claude.items[0].images;
   assert(img.startsWith(path.join(dir, 'images')) && fs.readFileSync(img).equals(Buffer.from(PNG, 'base64')), 'claude image saved');
@@ -118,7 +133,7 @@ const meta = { id: 'thread-1', title: 'Fix the build', projectId: 'p1', cwd, cre
 
   const md = fs.readFileSync(await writeHandoff({ ...meta, names: { claude: 'Claude Code' } }, home), 'utf8');
   for (const text of ['<terminalvibe_handoff project=', '<instructions>', '<session agent="Claude Code" model="opus">', `<message role="user">\nFix the build\n<image path="${img}"/>\n</message>`,
-    'Docs added.', '<tool name="Bash" failed="true">npm test</tool>', '<session agent="opencode" transcript="unavailable">', '</terminalvibe_handoff>']) assert(md.includes(text), text);
+    'Docs added.', '<tool name="Bash" failed="true">npm test</tool>', '<session agent="opencode">', '</terminalvibe_handoff>']) assert(md.includes(text), text);
   assert(!md.includes('handoff.xml'), 'the agent reading the handoff file is not part of the history');
 
   // Fork from the first Codex message: Claude's session whole, Codex's cut after that message.

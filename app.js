@@ -14426,7 +14426,7 @@
       return;
     }
     // An agent is running but nothing was said yet: the same empty state, not a lone session header.
-    if (!segs.some(x => x.handoff) && !hist.some(h => h.items.length || h.unsupported)) {
+    if (!segs.some(x => x.handoff) && !hist.some(h => h.items.length)) {
       flow._historyChunks = undefined;
       flow._imageObserver?.disconnect();
       flow.innerHTML = (t?.stopped || []).map(p => pendingMessageHtml(p, true)).join('') + pendingHtml(ws, '') || '<div class="thr-empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i><div class="thr-empty-title">No chat yet</div><div>Send a prompt to start.</div></div>';
@@ -14492,7 +14492,7 @@
     segs.forEach((seg, i) => {
       if (forkNote && !seg.frozen) { html += forkNote; forkNote = ''; lastHead = ''; }
       const h = harnessOf(seg.harness), name = h?.name || seg.harness, res = hist[i] || { items: [] };
-      if (!res.items.length && !res.unsupported) return; // a session with nothing said shows nothing
+      if (!res.items.length) return; // a session with nothing said shows nothing
       const first = res.items[0];
       const firstOptions = first?.role === 'user' && ws.chat?.turnOptions?.[first.ts];
       // No model picked (a subagent, the agent's default): the one its transcript says it ran on.
@@ -14500,7 +14500,6 @@
       addAgentHeader(firstOptions || seg, seg.harness, firstOptions ? first.ts : seg.since, used(firstOptions || seg));
       if (seg.handoff) html += `<div class="thr-note"><i class="ph ph-arrows-left-right" aria-hidden="true"></i>Started with the full history of the ${i} earlier session${i > 1 ? 's' : ''}</div>`;
       if (res.trimmed) html += `<div class="thr-note">${res.trimmed} earlier items not shown</div>`;
-      if (res.unsupported) html += `<div class="thr-note">${escHtml(name)} keeps no history TerminalVibe can read yet.</div>`;
       // A run of tool calls opens to every call and its full command or arguments.
       const toolsHtml = (tools, key, completed, changedFiles) => {
         const last = tools[tools.length - 1];
