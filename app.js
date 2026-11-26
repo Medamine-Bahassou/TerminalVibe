@@ -15244,9 +15244,9 @@
   function thrFindRun(keepIndex) {
     const flow = thrPage.querySelector('#sbr-thread-flow'), q = thrFind.q.toLowerCase(), ranges = [];
     if (q && flow) {
-      expandThreadDetails(flow, details => !details.dataset.filled);
       const walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT, { acceptNode: n =>
-        n.parentElement?.closest('.thr-actions, .thr-tools-time, .thr-seg-time, .thr-img-actions') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+        n.parentElement?.closest('.thr-msg.user .thr-msg-text, .thr-msg.assistant .thr-msg-text')
+          && !n.parentElement.closest('details') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT });
       for (let n; (n = walker.nextNode());) {
         const text = n.data.toLowerCase();
         for (let at = text.indexOf(q); at !== -1; at = text.indexOf(q, at + q.length)) {
@@ -15268,9 +15268,7 @@
     if (!scroll || !cur) return;
     const flow = thrPage.querySelector('#sbr-thread-flow');
     const target = cur.startContainer.parentElement;
-    // Open every enclosing section before measuring the match.
-    for (let d = target?.closest('details:not([open])'); d; d = d.parentElement?.closest('details:not([open])')) d.open = true;
-    // Tool output and diffs can scroll independently of the transcript.
+    // Code blocks and tables can scroll independently of the transcript.
     for (let el = target; el && el !== flow; el = el.parentElement) {
       const { overflowX, overflowY } = getComputedStyle(el);
       if (!/auto|scroll/.test(overflowX + ' ' + overflowY)) continue;
