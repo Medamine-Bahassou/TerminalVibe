@@ -1,304 +1,175 @@
+<a id="top"></a>
+
 <div align="center">
-
-<img src="logo.png" alt="TerminalVibe logo" width="128">
-
-# TerminalVibe
-
-**The terminal workspace for the AI-agent era.**
-
-Workspaces, split panes, agent chats and real browser tabs in one quiet, keyboard-first desktop app.
-
-[![Release](https://img.shields.io/github/v/release/Medamine-Bahassou/TerminalVibe?style=flat-square&color=7c8cff)](https://github.com/Medamine-Bahassou/TerminalVibe/releases)
-[![Downloads](https://img.shields.io/github/downloads/Medamine-Bahassou/TerminalVibe/total?style=flat-square&color=7c8cff)](https://github.com/Medamine-Bahassou/TerminalVibe/releases)
-[![Stars](https://img.shields.io/github/stars/Medamine-Bahassou/TerminalVibe?style=flat-square&color=7c8cff)](https://github.com/Medamine-Bahassou/TerminalVibe/stargazers)
-![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-1f2430?style=flat-square)
-![Electron](https://img.shields.io/badge/built%20with-Electron-1f2430?style=flat-square&logo=electron)
-
-[**Download**](https://github.com/Medamine-Bahassou/TerminalVibe/releases) ·
-[Features](#features) ·
-[Shortcuts](#keyboard-shortcuts) ·
-[Development](#development) ·
-[Architecture](ARCHITECTURE.md)
-
-<br>
-
-<img src="screenshots/workspace.png" alt="A workspace with Neovim, a dev server and a live browser preview side by side" width="920">
-
+  <img src="logo.png" width="96" alt="TerminalVibe logo">
+  <h1>TerminalVibe</h1>
+  <p><strong>A local-first desktop workspace for terminals, coding agents, and the apps you build.</strong></p>
+  <p>
+    <a href="https://github.com/Medamine-Bahassou/TerminalVibe/releases">Download</a> ·
+    <a href="#features">Features</a> ·
+    <a href="#getting-started">Getting started</a> ·
+    <a href="https://github.com/Medamine-Bahassou/TerminalVibe/issues">Report a bug or request a feature</a>
+  </p>
+  <img src="screenshots/new/Screenshot_20261126_220521.png" alt="TerminalVibe with a terminal, a Neovim pane, and the threads sidebar">
 </div>
 
----
+## Table of contents
 
-## Why TerminalVibe?
+- [About the project](#about-the-project)
+- [Features](#features)
+- [Getting started](#getting-started)
+- [Usage](#usage)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Development](#development)
+- [Contributing](#contributing)
 
-Your editor, dev server, logs, coding agents and the page you're building all live in **one window**.
+## About the project
 
-<table>
-  <tr>
-    <td width="33%" valign="top">
-      <h3>Workspaces</h3>
-      Each project gets its own workspace with its own split layout. The sidebar shows what is running everywhere.
-    </td>
-    <td width="33%" valign="top">
-      <h3>Agent-native</h3>
-      Chat with Claude Code, Codex, Gemini, Antigravity or OpenCode. Switch agents mid-thread and delegate subagents across them.
-    </td>
-    <td width="33%" valign="top">
-      <h3>Browser inside</h3>
-      Real browser tabs with DevTools sit next to your terminals, one click away from every running server.
-    </td>
-  </tr>
-</table>
+> This app is built for me as an engineer who wants to use AI agents like Claude Code.
+>
+> All what you need in T3 Code exists in TerminalVibe, and more.
+
+I wanted to keep an agent conversation, a shell, and the page I'm building in the same window. A project can have its own workspace with a chat, an editor in the terminal, a server log, and a preview. I can switch projects and come back to the layout I left.
+
+**No telemetry in the app.** TerminalVibe is a **local-first app with no cloud backend**. Workspaces, settings, and chat history are stored on your machine. Connected agent CLIs use their own accounts and model providers. Sites you open in browser tabs and GitHub actions use their respective services.
+
+### Built with
+
+Electron and Chromium for the desktop window and browser tabs, node-pty for shell sessions, and xterm.js for terminal rendering. The interface uses JavaScript, HTML, and CSS.
 
 ## Features
 
-<details open>
-<summary><b>Contents</b></summary>
+### Chat with coding agents
 
-- [Threads and agent chats](#threads-and-agent-chats)
-- [Built for coding agents](#built-for-coding-agents)
-- [Workspaces and layout](#workspaces-and-layout)
-- [Built-in browser](#built-in-browser)
-- [Terminal](#terminal)
-- [Command palette, tab search and snippets](#command-palette-tab-search-and-snippets)
-- [Look and feel](#look-and-feel)
-- [Profiles](#profiles)
-- [CLI](#cli)
+![Chat composer with an agent selected and recent threads in the sidebar](screenshots/new/Screenshot_20261126_220708.png)
 
-</details>
+- **Choose the agent for each turn.** Use Claude Code, Codex, Antigravity CLI, or OpenCode with your existing CLI login. The composer lets you pick the model, reasoning effort, and available permission modes. Switch agents in the same thread and TerminalVibe passes along the conversation so far.
+- **Follow the work as it happens.** Tool calls and work details expand in place. Supported turns show changed files you can open as diffs. Answer permission requests and agent questions from the chat, stop a run, or queue a follow-up while it works.
+- **Pick up a conversation.** The threads sidebar shows active and settled work across projects. Search the current conversation with `Ctrl+F`, fork it from a reply, or use the Claude Code history drawer to find and resume an earlier session.
+- **Send project context.** Attach images and files to a prompt. Drag a Claude Code session into a chat to share its context, or drag a workspace into a Claude chat to attach a snapshot of its tabs.
+- **Delegate a subtask.** Supported chats can hand a task to Claude Code, Codex, or OpenCode. Open the subagent row to see its progress and continue the conversation in its own thread.
+- **Interact with replies.** Agents can send A2UI forms, pickers, buttons, images, and charts directly in chat. A form button can send your selections back to the agent as a follow-up.
 
-### Threads and agent chats
+See the [chat guide](docs/chat.md) for session handoff, forks, interactive replies, and storage.
 
-<img src="screenshots/threads.png" alt="Threads sidebar, an agent picker and a chat thread with Claude Code and Codex turns" width="100%">
+### Review changes and manage projects
 
-- **One thread, many agents.** Start a thread with **Claude Code**, **Codex**, **Gemini CLI**, **Antigravity CLI** or **OpenCode**, then switch agents mid-conversation. The new agent gets the earlier history.
-- **Model picker** for each turn: agent, model and reasoning effort, plus permission modes (Ask first, Auto, Accept edits, Plan only, Full access).
-- **Subagents on any harness.** Every chat gets a `delegate_task` tool, so you can ask Claude Code for "a codex subagent", or the other way around.
-- **Full history**: prompts, replies, expandable tool calls and pasted images. Search with `Ctrl+F` and copy any message. TerminalVibe keeps its own copy, so a chat survives deleted transcripts.
-- **Queue and schedule** messages to send while the agent is busy, or later.
-- **Thread details**: branch switcher, commit, push and PR actions, a diff against `origin/main`, project scripts, running servers, and **Session/Weekly usage limits**.
-- **Issues and Pull requests pages** for the GitHub repos your threads use, with search, `label:` filters, sorting and state filters.
-- Agents you start by hand in a terminal (`claude`, `codex`, …) are picked up automatically.
+![GitHub issues page with search and state filters](screenshots/new/Screenshot_20261126_220744.png)
 
-See [docs/chat.md](docs/chat.md) for details.
+- **Review Git changes beside the conversation.** Thread details shows the project folder, branch, and diff against `origin/main`. Switch branches, commit, push, pull, or create a pull request from the panel.
+- **Open issues and pull requests.** Browse GitHub activity for repositories associated with your threads. Search by text or label, filter by state, and sort results.
+- **Run a project script.** Launch a command from `package.json` or `t3.json` in a workspace terminal. Open the project in VS Code or choose another installed editor from the same panel.
+- **Check agent limits.** The Usage page shows remaining quota and reset times where the agent exposes them. Thread details puts the relevant limits beside your current work.
 
-### Built for coding agents
+![Usage limits for Claude Code, Codex, and Antigravity CLI](screenshots/new/Screenshot_20261126_220754.png)
 
-- **Claude Code session history**: a drawer that lists past conversations across projects. Search one, resume it in place, open it in a new tab, or drag it into a chat to attach its context.
-- **Workspace context**: drag a workspace onto a Claude chat to attach a snapshot of all its tabs.
-- **Image previews on hover**: hover an `[Image #N]` or `[Pasted text #N]` chip to see what it holds. `Ctrl+click` opens a viewer with zoom, pan and rotate.
-- **Orchestration skill**: your agent can open other agents in named splits, arrange panes, read their output, send them input and drive browser panes over an authenticated local channel. See [docs/agent-orchestration.md](docs/agent-orchestration.md).
-- **Finish notifications**, with an optional chime, when a command or agent finishes in a tab you aren't looking at.
+### Arrange workspaces and terminals
 
-<p align="center">
-  <img src="screenshots/image-preview.png" alt="Hovering an [Image #1] chip in a Claude Code prompt shows the pasted image" width="920">
-</p>
-<p align="center">
-  <img src="screenshots/claude-history.png" alt="Claude sessions drawer listing past conversations grouped by project" width="454">
-  <img src="screenshots/skills.png" alt="Agent orchestration skill installer for Claude Code and Codex" width="454">
-</p>
+- **Give each project a layout.** Name, color, pin, and reorder workspaces. Split panes horizontally or vertically and mix terminals, browser tabs, and chats in the same layout. Drag a tab to another pane or workspace, maximize it when you need the screen, or lock it to prevent accidental input.
+- **See what's running.** The sidebar identifies processes in each workspace, including agents launched from a shell. Get a notification with an optional sound when a command or agent finishes in a tab you aren't viewing.
+- **Use your existing terminal tools.** Run shells and terminal editors with searchable scrollback, per-tab zoom, clickable links, Unicode, and inline SIXEL and iTerm2 images, including Yazi previews. Bash and Zsh integration tracks the working directory and prompt boundaries. On Windows, use the shell picker to open a WSL tab.
+- **Protect personal details on screen.** Settings can blur email addresses and usernames in displayed terminal output. Click a blurred value to reveal it.
+- **Jump to what you need.** Open the command palette to find actions, search tabs across workspaces, or open the snippet picker to reuse commands. The bundled [orchestration skill](docs/agent-orchestration.md) lets supported agents open and arrange workspace panes.
 
-### Workspaces and layout
+| Email blur in a terminal session | Username blur in a shell path |
+| --- | --- |
+| ![Antigravity CLI with a blurred email address](screenshots/new/Screenshot_20261126_220819.png) | ![Terminal output with the username blurred](screenshots/new/Screenshot_20261126_220903.png) |
 
-- **Workspaces** with names, icons, colors and folders. Drag to reorder, pin favorites, and jump with `Alt+1` … `Alt+9`. Your last workspace opens on launch.
-- **Recursive split panes**, horizontal and vertical. Drag tabs between panes, or onto the sidebar to move them to another workspace.
-- **Tab groups** in every pane, holding any mix of terminals, browser tabs and chats.
-- **Maximize** a tab (`Ctrl+Shift+M`) or **lock** it to block accidental typing.
-- **Live process list** for each workspace, with brand icons for `nvim`, `node`, `python`, `claude`, `codex` and more.
-- **Sidebar modes**: always visible, expand on hover, or hidden (`Ctrl+Shift+S`).
+### Preview and debug in the built-in browser
 
-<img src="screenshots/monitoring.png" alt="A workspace with btop, an API server and a git log with blurred author emails" width="100%">
+- **Keep the preview near the code.** Open a browser tab in any split. Use the address bar to search or navigate, go back or forward, reload the page, or find a site in browser history. Open local PDFs and images in the built-in viewers.
+- **Find your dev server.** The running servers menu lists listening ports and their processes. Click a server to open it in a browser tab.
+- **Inspect the page.** Press `F12` to open a resizable DevTools drawer beneath the current browser tab. Inspect elements, read the console, and check network requests without leaving the workspace.
 
-### Built-in browser
+| Browser history | Docked DevTools |
+| --- | --- |
+| ![Browser tab with the searchable history panel open](screenshots/new/Screenshot_20261126_221013.png) | ![Website open above the docked Chromium DevTools drawer](screenshots/new/Screenshot_20261126_221159.png) |
 
-- **Browser tabs next to your terminals**, with back/forward, reload, URL bar search and history.
-- **DevTools drawer** (`F12`) docked under the page, resizable, per tab.
-- **Running servers** menu lists every listening port with its process. Click one to open it.
-- Opens local files, **PDFs** and **images** in the native viewers.
-- `Ctrl+click` a terminal link to open it in a browser tab or your system browser. `Ctrl+Shift+click` uses the other one.
+### Customize the app and switch profiles
 
-<p align="center">
-  <img src="screenshots/devtools.png" alt="A browser tab previewing a local page with the DevTools drawer open" width="454">
-  <img src="screenshots/servers.png" alt="Running servers menu listing a python server on port 8000" width="454">
-</p>
+- **Make the terminal yours.** Choose a light, dark, or system color scheme, select a built-in theme, or import a theme or font. Set terminal backgrounds globally, per workspace, or per tab.
+- **Set up your workflow.** Pick the default shell, search engine, link behavior, and notification sound. Rebind shortcuts in Settings and see when a key combination conflicts with another action.
+- **Keep separate profiles.** Each profile has its own workspaces, chats, and settings. Choose a profile on launch or set a default.
 
-### Terminal
+| General settings | Profile picker |
+| --- | --- |
+| ![General settings for links, completion notifications, and search](screenshots/new/Screenshot_20261126_220722.png) | ![Profile picker with two profiles and a new profile option](screenshots/new/Screenshot_20261126_221222.png) |
 
-- xterm.js with the **WebGL renderer**, Unicode 11 and clickable links.
-- **Inline images**: SIXEL and iTerm2 protocols, including Yazi previews.
-- **Email blur**: addresses in terminal output stay blurred until you click one.
-- **Drop files or text** into a terminal to paste their paths or contents.
-- **Shell integration** for bash and zsh: the working directory (OSC 7) and prompt markers are tracked and restored.
-- A **default shell** setting, plus a shell picker on the new-tab button (right-click). WSL tabs keep their folder.
-- Incremental search (`Ctrl+Shift+F`), per-terminal zoom (`Ctrl+Scroll`), multi-select (`Ctrl+Alt+Click`), directional focus (`Alt+H/J/K/L`).
-- **Flow control** pauses programs that flood output until the terminal catches up, so the UI never freezes.
+[Back to top](#top)
 
-<p align="center"><img src="screenshots/inline-images.png" alt="A chart rendered inline in the terminal with SIXEL" width="720"></p>
+## Getting started
 
-<p align="center">
-  <img src="screenshots/settings.png" alt="General settings: link behavior, notifications and search engine" width="454">
-  <img src="screenshots/terminal-settings.png" alt="Terminal settings: cursor, default shell, scrollback and email blur" width="454">
-</p>
+Download the desktop app from [GitHub Releases](https://github.com/Medamine-Bahassou/TerminalVibe/releases).
 
-### Command palette, tab search and snippets
+| Platform | Packages |
+| --- | --- |
+| Linux | AppImage, `.deb`, `.rpm` |
+| Windows | Installer, portable `.exe` |
 
-- **Command palette** (`Ctrl+Shift+K`) lists every action and workspace, with their shortcuts.
-- **Tab search** (`Ctrl+Shift+O`) jumps to any tab in any workspace.
-- **Snippets** (`Ctrl+Shift+Y`) and **browser history** live in the same palette.
+To use agent chat, install and sign in to the CLI you plan to use. TerminalVibe uses that CLI and its existing credentials. Open **Settings → Providers** to configure your agent.
 
-<p align="center">
-  <img src="screenshots/command-palette.png" alt="Command palette" width="454">
-  <img src="screenshots/tab-search.png" alt="Tab search across workspaces" width="454">
-</p>
+## Usage
 
-### Look and feel
+1. Create a workspace for your project and choose its folder.
+2. Open a **Chat** tab, select an agent and model, and send a prompt. The threads sidebar lets you return to the conversation from another workspace.
+3. Split the workspace and run your dev server in a terminal. Open the detected port from **Servers** to put the preview beside your chat.
+4. Open **Thread details** to inspect changes, run project scripts, or open the project in VS Code.
 
-- A calm dark UI set in Geist Sans and Geist Mono, with dark, light or system color schemes.
-- **9 built-in themes**: Carbon, Graphite, Catppuccin Mocha, Dracula, Gruvbox, Tokyo Night, Nord, Solarized Dark and Monochrome. Import your own themes and fonts.
-- Terminal **background images**, set globally, per workspace or per tab, with adjustable opacity.
-- **Every shortcut can be rebound**, with conflict detection and a reset for each one.
-- **Offline by design**: fonts, icons and styles ship with the app, so it makes no network requests at launch.
+### Command line
 
-<p align="center">
-  <img src="screenshots/themes.png" alt="Appearance settings with color schemes and themes" width="454">
-  <img src="screenshots/shortcuts.png" alt="Rebindable keyboard shortcuts" width="454">
-</p>
-
-### Profiles
-
-Each profile is a fully isolated set of workspaces, chats and settings. Pick one at launch or set a default (`Ctrl+Shift+P`).
-
-<p align="center"><img src="screenshots/profiles.png" alt="Profile picker" width="600"></p>
-
-### CLI
-
-Build workspaces from the command line or from YAML:
+Use the `terminalvibe` executable to open a workspace with a predefined layout or focus one you already have.
 
 ```bash
-terminalvibe new                     # open a new workspace
-terminalvibe create -f layout.yaml   # build splits and tabs from a layout file
-terminalvibe list | close | attach
+terminalvibe new Dev -t "editor:terminal:nvim ." -s v "web:browser:http://localhost:3000"
+terminalvibe create -f workspaces.yaml
+terminalvibe list
+terminalvibe attach Dev
 ```
 
-See [docs/cli.md](docs/cli.md).
-
-## Install
-
-| Platform | Package |
-|---|---|
-| **Linux** | AppImage · `.deb` · `.rpm` |
-| **Windows** | Installer · portable `.exe` |
-
-Download the latest build from the [**releases page**](https://github.com/Medamine-Bahassou/TerminalVibe/releases). Every push to `master` publishes a new release.
+See the [CLI guide](docs/cli.md) for tab specifications, profiles, and YAML layouts.
 
 ## Keyboard shortcuts
 
-These are the defaults. You can rebind any of them in **Settings → Shortcuts**.
+Change these defaults in **Settings → Shortcuts**.
 
-<details>
-<summary><b>Show all shortcuts</b></summary>
-
-| Action | Shortcut |
-|---|---|
+| Action | Default |
+| --- | --- |
 | New terminal / close tab | `Ctrl+Shift+T` / `Ctrl+Shift+W` |
 | New browser tab | `Ctrl+Shift+B` |
-| Split horizontal / vertical | `Ctrl+Shift+D` / `Ctrl+Shift+E` |
-| Command palette | `Ctrl+Shift+K` |
-| Search tabs | `Ctrl+Shift+O` |
+| Split horizontally / vertically | `Ctrl+Shift+D` / `Ctrl+Shift+E` |
+| Command palette / tab search | `Ctrl+Shift+K` / `Ctrl+Shift+O` |
 | Snippets | `Ctrl+Shift+Y` |
-| Search in terminal (or in the chat history) | `Ctrl+Shift+F` (`Ctrl+F` in a Chat tab) |
-| Copy / paste | `Ctrl+Shift+C` / `Ctrl+Shift+V` |
-| Next / previous tab | `Ctrl+PageDown` / `Ctrl+PageUp` |
-| Move tab right / left | `Ctrl+Shift+PageDown` / `Ctrl+Shift+PageUp` |
-| Next / previous workspace | `Ctrl+Alt+PageDown` / `Ctrl+Alt+PageUp` |
-| Jump to workspace 1–9 | `Alt+1` … `Alt+9` |
+| Find in terminal / chat | `Ctrl+Shift+F` / `Ctrl+F` |
 | Focus pane left / down / up / right | `Alt+H` / `Alt+J` / `Alt+K` / `Alt+L` |
-| Maximize / restore tab | `Ctrl+Shift+M` |
-| Multi-select terminals | `Ctrl+Alt+Click` |
+| Jump to workspace 1 through 9 | `Alt+1` through `Alt+9` |
+| Maximize or restore tab | `Ctrl+Shift+M` |
 | Browser DevTools | `F12` |
-| Profiles | `Ctrl+Shift+P` |
-| Toggle sidebar | `Ctrl+Shift+S` |
-| Quit | `Ctrl+Shift+Q` |
-
-</details>
+| Profiles / toggle sidebar | `Ctrl+Shift+P` / `Ctrl+Shift+S` |
 
 ## Development
 
-**Requirements:** Node.js 18+ and npm. `node-pty` compiles native code when no prebuilt binary is available. On Ubuntu/Debian (including WSL), install the build tools first with `sudo apt-get install -y build-essential python3`. On WSL, Electron needs WSLg.
+Use Git, npm, and Node.js 22, which matches the release workflow. On Debian or Ubuntu, install `build-essential` and `python3` if `node-pty` needs to compile from source.
 
 ```bash
 git clone https://github.com/Medamine-Bahassou/TerminalVibe.git
 cd TerminalVibe
-npm install              # also generates vendor/ assets
-npm run electron:dev     # desktop app (main-process changes need a full restart)
-npm start                # or browser mode: node server.js → http://localhost:6969
+npm ci
+npm run electron:dev
 ```
 
-Run one mode at a time, since both use the dev static server on port 7769. After editing frontend files, run `node scripts/build-dist.js`.
+| Command | Use |
+| --- | --- |
+| `npm start` | Run the browser development mode at `http://localhost:6969` |
+| `npm test` | Run the core suite |
+| `npm run test:chat` | Run chat-specific checks |
+| `npm run test:browser` | Check browser pane resizing and snapshots |
+| `npm run build:linux` | Package AppImage, Debian, and RPM builds in `release/` |
+| `npm run build:win` | Package the Windows installer and portable executable in `release/` |
 
-<details>
-<summary><b>Tests</b></summary>
-
-```bash
-npm test                 # CLI, skills, agent control, servers, shell startup, sessions, chat history
-npm run test:browser     # browser-pane resize + snapshot
-npm run test:sessions    # Claude session history drawer
-npm run test:images      # SIXEL / iTerm2 image rendering
-npm run test:images:yazi # same, plus a real Yazi in an isolated PTY
-node --check app.js      # quick syntax check
-```
-
-</details>
-
-<details>
-<summary><b>Build packages</b></summary>
-
-```bash
-npm run build            # unpacked Linux build in release/
-npm run build:linux      # AppImage + deb + rpm
-npm run build:win        # NSIS installer + portable
-```
-
-Run `build:win` from a checkout on a Windows drive, with Windows Node. It uses node-pty's prebuilt binaries, so you don't need Visual Studio. It can't run from a `\\wsl.localhost` path, and running it on Linux or WSL needs `wine`.
-
-</details>
-
-<details>
-<summary><b>Project layout</b></summary>
-
-| Path | Role |
-|---|---|
-| `index.html` | Static markup: titlebar, sidebar, modals, settings |
-| `app.js` | All renderer logic (one IIFE): state, layout, terminals, browser tabs, chat tabs, settings |
-| `proc-icons.js` | Brand logos for running processes and agents |
-| `workspace.css` | Design system and component styles (`style.css` holds the base layout) |
-| `electron/main.js` · `preload.js` | Main process: PTYs, IPC, native menus, windows, browser views |
-| `electron/threads.js` | Chat history: reads agent transcripts and keeps a copy |
-| `electron/delegate-mcp.js` | `delegate_task` MCP server for cross-harness subagents |
-| `electron/agent-control.js` | Authenticated local control channel used by the orchestration skill |
-| `server.js` | Browser-mode backend (WebSocket PTY server, proxy) |
-| `skills/terminalvibe-orchestration/` | Agent skill and the `tv.js` client |
-| `docs/` | Chat tabs, CLI, agent orchestration, feature recipes |
-
-Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture and [docs/adding-a-feature.md](docs/adding-a-feature.md) for recipes.
-
-</details>
-
-### Tech stack
-
-Electron · node-pty · xterm.js 5 (WebGL, image, search, unicode11, web-links) · vanilla JS, no framework or bundler · Lucide icons · Geist fonts
+For the desktop app internals and contribution workflow, see the [architecture notes](ARCHITECTURE.md) and the [feature development guide](docs/adding-a-feature.md).
 
 ## Contributing
 
-Issues and pull requests are welcome. Before you open a PR, run `npm test` and `node scripts/build-dist.js`. For larger changes, open an issue first so we can agree on the approach.
+Open a [GitHub issue](https://github.com/Medamine-Bahassou/TerminalVibe/issues) with steps to reproduce a bug or a description of the workflow you'd like to improve. For a pull request, run `npm test` and `node scripts/build-dist.js` before submitting.
 
-## Star history
-
-<a href="https://star-history.com/#Medamine-Bahassou/TerminalVibe&Date">
-  <img src="https://api.star-history.com/svg?repos=Medamine-Bahassou/TerminalVibe&type=Date" alt="Star history chart" width="600">
-</a>
-
----
-
-<div align="center">
-<sub>If TerminalVibe makes your day calmer, consider giving it a ⭐</sub>
-</div>
+[Back to top](#top)
