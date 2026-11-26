@@ -46,6 +46,14 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 #btn-settings:hover { background: var(--ui-hover); }
 #sidebar.expanded .sidebar-actions { justify-content:flex-start; }
 #sidebar.expanded .sidebar-actions #btn-settings { width:34px; height:34px; padding:0; justify-content:center; }
+#btn-agent-updates { position:relative; margin-inline-start:auto; width:34px; height:34px; padding:0; border:0; background:transparent; font-size:17px; }
+#btn-agent-updates:hover { background:var(--ui-hover); }
+#btn-agent-updates[hidden] { display:none; }
+#sidebar:not(.expanded) #btn-agent-updates { margin-inline-start:0; }
+@keyframes agent-update-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:no-preference) {
+  #btn-agent-updates[aria-busy="true"] > i { animation:agent-update-spin .85s linear infinite; }
+}
 .term-group-header { height: 32px; min-height: 32px; background: var(--ui-surface); }
 .tg-tab { min-width: 90px; max-width: 160px; padding: 0 8px; gap: 6px; font-size: 12px; border-right-color: var(--border); }
 .tg-tab.active { font-weight: 500; background: var(--bg); }
@@ -1471,6 +1479,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 
 /* ── Chat turns: "Thinking · 4s" while the agent works, "Worked for 12s" under each finished prompt ── */
 #sbr-thread .thr-working { display:flex; align-items:center; gap:8px; min-height:28px; font-size:13px; color:var(--muted-text); }
+#sbr-thread .thr-working-time:empty { display:none; }
 #sbr-thread .thr-working-time { font-size:12px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
 #sbr-thread .thr-working.wait { color:var(--fg); }
 #sbr-thread .thr-working.wait i { font-size:15px; color:var(--muted-text); }
@@ -1478,6 +1487,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 @keyframes thr-shimmer { from { background-position:100% 0; } to { background-position:-150% 0; } }
 #sbr-thread .thr-worked { display:flex; align-items:center; gap:10px; margin:6px 0 2px; font-size:12px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
 #sbr-thread .thr-worked::after { content:''; flex:1; height:1px; background:var(--ui-line); }
+#sbr-thread :is(.thr-worked, .thr-turn-live > summary) > .thr-shimmer { font-weight:400; }
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-shimmer { animation:none; color:var(--muted-text); background:none; } }
 
 /* ── Model picker: permissions at the foot of the reasoning column ── */
@@ -3611,10 +3621,9 @@ body .chat-file-panel .cfp-tab-x { display:grid; place-items:center; flex:none; 
 
 /* ── Chat bottom terminal tabs (newChatBottomTerm): several shells per chat, one shown ── */
 body .chat-bottom-header { gap:2px; padding:4px 6px; min-height:32px; box-sizing:border-box; /* its original height: a taller header left the minimum-size terminal less than a row */ }
-.chat-bottom-header .chat-bottom-tabs { display:flex; align-items:center; gap:2px; flex:1; min-width:0; overflow-x:auto; scrollbar-width:none; }
+.chat-bottom-header .chat-bottom-tabs { display:flex; align-items:center; gap:2px; min-width:0; overflow-x:auto; scrollbar-width:none; }
 .chat-bottom-header .chat-bottom-tabs::-webkit-scrollbar { display:none; }
 body .chat-bottom-header .chat-bottom-tab { display:flex; align-items:center; gap:6px; flex:0 0 auto; width:128px; height:24px; padding:0 4px 0 10px; border-radius:6px !important; color:var(--muted-text); font:400 12px/16px var(--ui-font); cursor:pointer; user-select:none; outline:none; transition:background-color 140ms, color 140ms, box-shadow 140ms; }
-.chat-bottom-header .chat-bottom-tab:only-child { padding-right:10px; }
 .chat-bottom-header .chat-bottom-tab > i { font-size:14px; flex:none; }
 .chat-bottom-header .chat-bottom-tab > span { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .chat-bottom-header .chat-bottom-tab:hover, .chat-bottom-header .chat-bottom-tab[aria-selected="true"] { background:var(--ui-hover); color:var(--fg); }
@@ -3624,6 +3633,8 @@ body .chat-bottom-header .chat-bottom-tab-x { width:20px; height:20px; flex:none
 .chat-bottom-header .chat-bottom-tab-x > i { font-size:12px; }
 .chat-bottom-header .chat-bottom-tab:is(:hover, [aria-selected="true"]) .chat-bottom-tab-x { opacity:1; }
 body .chat-bottom-header > button { flex:none; width:24px; height:24px; }
+.chat-bottom-header > [data-act="new"] { margin-inline-start:6px; }
+.chat-bottom-header > [data-act="hide"] { margin-inline-start:auto; }
 body .chat-bottom-header button:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 @media (prefers-reduced-motion: reduce) { .chat-bottom-header .chat-bottom-tab { transition:none; } }
 /* Inline rename of a bottom terminal tab */
@@ -3674,6 +3685,60 @@ body .chat-file-panel .cfp-tab { flex:none; }
 
 /* ── Chat changed files: keyboard focus uses the app's ring, not the browser's white outline. ── */
 #sbr-thread :is(.thr-changes-head, .thr-change > summary):focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
+
+/* ── Agent updates dialog ── */
+#agent-updates {
+  width:min(420px, calc(100% - 32px)); max-height:calc(100% - 32px);
+  margin:auto; padding:20px; border:1px solid var(--border); border-radius:12px !important;
+  background:var(--ui-surface); color:var(--fg); box-shadow:0 8px 24px #0005; font:13px/1.4 var(--ui-font);
+}
+#agent-updates::backdrop { background:rgba(0,0,0,.5); backdrop-filter:blur(8px); }
+#agent-updates header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+#agent-updates h2 { font-size:15px; font-weight:600; outline:none; }
+#agent-updates button {
+  height:32px; padding:0 12px; border:1px solid var(--border); border-radius:var(--ui-radius) !important;
+  background:transparent; color:var(--fg); font-weight:500; cursor:pointer;
+  transition:background-color 150ms, color 150ms, box-shadow 150ms;
+}
+#agent-updates header form button { display:grid; place-items:center; width:28px; height:28px; padding:0; border:0; color:var(--muted-text); font-size:16px; }
+#agent-updates button:enabled:hover { background:var(--ui-hover); color:var(--fg); }
+#agent-updates button:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#agent-updates button:disabled { opacity:.55; cursor:default; }
+#btn-agent-updates > i, #agent-updates header button > i {
+  display:grid; place-items:center; width:16px; height:16px; font-size:16px;
+}
+#agent-updates .agent-update-list:not(:empty) { border-top:1px solid var(--ui-line); }
+#agent-updates .agent-update-row { display:grid; grid-template-columns:16px minmax(0,1fr) auto; align-items:center; gap:12px; padding:12px 0; }
+#agent-updates .agent-update-row + .agent-update-row { border-top:1px solid var(--ui-line); }
+#agent-updates .agent-update-row:last-child { padding-bottom:0; }
+#agent-updates:has(footer > button:not([hidden])) .agent-update-row:last-child { padding-bottom:12px; }
+#agent-updates .agent-update-logo { display:grid; place-items:center; align-self:start; height:20px; color:var(--muted-text); }
+#agent-updates .agent-update-logo .ws-proc-icon { width:16px; height:16px; }
+#agent-updates .agent-update-details { display:grid; gap:4px; }
+#agent-updates .agent-update-details strong { font-weight:500; }
+#agent-updates .agent-update-versions { display:flex; flex-wrap:wrap; align-items:center; gap:4px; color:var(--muted-text); font:11px/16px var(--mono-font); }
+#agent-updates .agent-update-versions > i + span { color:var(--fg); }
+#agent-updates .agent-update-source { color:var(--muted-text); }
+#agent-updates .agent-update-state { color:var(--fg); font:11px/16px var(--mono-font); font-variant-numeric:tabular-nums; }
+#agent-updates .agent-update-row > button { display:flex; align-items:center; justify-content:center; gap:6px; min-width:104px; }
+#agent-updates .agent-update-row > button > i { font-size:14px; color:var(--muted-text); }
+#agent-updates footer:not(:has(> [hidden])) { display:flex; justify-content:flex-end; padding-top:16px; border-top:1px solid var(--ui-line); }
+#agent-updates #btn-update-all-agents { min-width:104px; border-color:var(--accent); background:var(--accent); color:#0d1017; }
+#agent-updates #btn-update-all-agents:enabled:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); color:#0d1017; }
+#agent-updates .agent-update-status:not([hidden]) { display:flex; align-items:flex-start; gap:8px; padding:4px 0 12px; color:var(--muted-text); }
+#agent-updates .agent-update-status > i { display:grid; place-items:center; flex:none; width:16px; height:16px; font-size:14px; }
+#agent-updates .agent-update-status > .ph-check-circle { color:var(--ui-success); }
+#agent-updates .agent-update-status > .ph-warning-circle { color:var(--ui-error); }
+#agent-updates .ph-circle-notch { display:grid; place-items:center; width:14px; height:14px; position:relative; }
+#agent-updates .ph-circle-notch::before {
+  content:""; position:absolute; inset:1px; border:1.5px solid var(--border);
+  border-top-color:currentColor; border-radius:50% !important;
+  animation:ts-spin 900ms linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  #agent-updates button { transition:none; }
+  #agent-updates .ph-circle-notch::before { animation:none; }
+}
 
 /* Question tray: taller cap so a typical question shows whole; it only scrolls when it truly would not fit. */
 #sbr-thread .thr-ask { max-height:min(70vh, 560px); }
