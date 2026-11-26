@@ -1248,7 +1248,7 @@ body:not(.link-mod-held) .xterm .xterm-cursor-pointer { cursor:inherit; }
 #sbr-thread .thr-code code { padding:0; background:none; font-size:12px; line-height:1.5; }
 /* Tool calls: one muted line (icon, what ran, time, caret); expands to every call. */
 #sbr-thread .thr-tools { min-width:0; }
-#sbr-thread .thr-tools summary { display:flex; align-items:center; gap:8px; min-height:30px; list-style:none; border-radius:6px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:color 140ms; }
+#sbr-thread .thr-tools summary { display:flex; align-items:center; gap:8px; min-height:28px; list-style:none; border-radius:6px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:color 140ms; }
 #sbr-thread .thr-tools summary::-webkit-details-marker { display:none; }
 /* No border: hover only brightens the line. */
 #sbr-thread .thr-tools summary:hover { color:var(--fg); }
@@ -1517,10 +1517,11 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-turn > summary:focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #sbr-thread .thr-turn-caret { font-size:11px; transition:transform 140ms; }
 #sbr-thread .thr-turn[open] > summary .thr-turn-caret { transform:rotate(90deg); }
-#sbr-thread .thr-turn-steps { display:flex; flex-direction:column; gap:2px; padding:4px 0 6px; }
+#sbr-thread :is(.thr-turn-steps, .thr-live-steps) { display:flex; flex-direction:column; gap:2px; min-width:0; }
+#sbr-thread .thr-turn-steps { padding:4px 0 6px; }
 
 #sbr-thread .thr-thought { border-radius:8px !important; }
-#sbr-thread .thr-thought > summary { display:flex; align-items:center; gap:8px; min-height:30px; padding:0; list-style:none; border-radius:8px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-thought > summary { display:flex; align-items:center; gap:8px; min-height:28px; padding:0; list-style:none; border-radius:8px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
 #sbr-thread .thr-thought > summary::-webkit-details-marker { display:none; }
 #sbr-thread .thr-thought > summary:hover { color:var(--fg); }
 #sbr-thread .thr-thought > summary > i:first-child { font-size:14px; flex-shrink:0; }
@@ -2156,7 +2157,7 @@ body #sidebar .ws-btn .ws-proc.ws-proc-agent .ws-proc-icon { color:var(--agent-c
 
 /* ── Chat: an agent's question (AskUserQuestion): a row like a thought, opening to the answer given ── */
 #sbr-thread .thr-qa { border-radius:8px !important; }
-#sbr-thread .thr-qa > summary { display:flex; align-items:center; gap:8px; min-height:30px; padding:0; list-style:none; border-radius:8px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-qa > summary { display:flex; align-items:center; gap:8px; min-height:28px; padding:0; list-style:none; border-radius:8px !important; font-size:12.5px; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
 #sbr-thread .thr-qa > summary::-webkit-details-marker { display:none; }
 #sbr-thread .thr-qa > summary:hover { color:var(--fg); }
 #sbr-thread .thr-qa > summary:focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
@@ -3657,3 +3658,7 @@ body .chat-file-panel .cfp-tab { flex:none; }
 /* ── Chat composer: a pasted web link is an inline chip (favicon + address), like a sent link. ── */
 #sbr-thread .thr-input-links .thr-url-ref > .thr-favicon { display:inline-block; flex:none; align-self:center; width:14px; height:14px; margin:0; object-fit:contain; border-radius:4px !important; user-select:none; -webkit-user-select:none; }
 #sbr-thread .thr-input-links .thr-url-ref > .thr-favicon.mono { background-color:currentColor; -webkit-mask:var(--icon) center / contain no-repeat; mask:var(--icon) center / contain no-repeat; }
+
+/* ── Threads sidebar: offscreen cards skip layout and paint until scrolled near (opening stays fast with many threads) ── */
+#threads-sidebar .ts-card { content-visibility:auto; contain-intrinsic-block-size:auto 74px; }
+#threads-sidebar .ts-card.slim { contain-intrinsic-block-size:auto 34px; }

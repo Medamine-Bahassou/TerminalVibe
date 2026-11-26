@@ -12881,8 +12881,8 @@
     if (!c?.chat) return;
     if (!c._editingQueued) c.chat.draft = thrInput.value;
     c._draft = thrInput.value;
-    clearTimeout(_draftSave); _draftSave = setTimeout(saveState, 400);
-    renderThreadsSidebar();
+    // The sidebar rebuilds every thread card (reading agents' terminal screens): only once typing pauses.
+    clearTimeout(_draftSave); _draftSave = setTimeout(() => { saveState(); renderThreadsSidebar(); }, 400);
   });
   thrInput?.addEventListener('keydown', e => {
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
@@ -14646,7 +14646,10 @@
       // One that ended mid-turn (inTurn) stays in its turn.
       const startsTurn = m => m.role === 'user' || (m.role === 'event' && !m.inTurn);
       const firstPrompt = list.findIndex(x => startsTurn(x.m));
-      if (firstPrompt !== 0) html += stepsHtml(firstPrompt < 0 ? list : list.slice(0, firstPrompt), i + ':pre', !working || i < segs.length - 1 || firstPrompt > 0); // a resumed session's start
+      if (firstPrompt !== 0) { // a resumed session's start
+        const pre = stepsHtml(firstPrompt < 0 ? list : list.slice(0, firstPrompt), i + ':pre', !working || i < segs.length - 1 || firstPrompt > 0);
+        if (pre) html += `<div class="thr-live-steps">${pre}</div>`;
+      }
       finishChunk();
       for (let u = firstPrompt; u >= 0 && u < list.length;) {
         let e = u + 1;
@@ -14670,7 +14673,10 @@
           && (e === list.length || (turnPromptTs && Date.parse(prompt.m.ts) >= turnPromptTs));
         const git = !live && !running ? turnGitFiles(ws, prompt.m.ts, list[e]?.m.ts) : 'later';
         const changedFiles = git === 'later' ? [] : git?.length ? ownTurnFiles(ws, prompt.m.ts, rest, git) : rest.flatMap(({ m }) => m.files || []);
-        if (live) html += stepsHtml(steps, i + ':' + prompt.j);
+        if (live) { // a turn still running: its steps stay together, as tight as a folded turn's
+          const liveSteps = stepsHtml(steps, i + ':' + prompt.j);
+          if (liveSteps) html += `<div class="thr-live-steps">${liveSteps}</div>`;
+        }
         else if (steps.length) {
           const tk = 'turn:' + i + ':' + prompt.j;
           html += `<details class="thr-turn" data-key="${tk}"><summary><span>${took || 'Steps'}</span><i class="ph ph-caret-right thr-turn-caret" aria-hidden="true"></i></summary>`
