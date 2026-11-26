@@ -1005,6 +1005,8 @@ body #sidebar.expanded .ws-folder-row.drop-below .ws-folder-header { background:
 #ctx:not(.open), #servers-dropdown[hidden] { pointer-events:none; }
 .ctx-item:focus-visible { outline:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); background:var(--ui-hover); }
 .ctx-item.has-sub:focus-within > .ctx-sub { display:block; }
+#ctx .ctx-browser-devtools > .ctx-sub { left:100%; }
+#ctx.sub-flip .ctx-browser-devtools > .ctx-sub { left:auto; right:100%; }
 /* The old settings opacity utility must also obey the toggle and reduced motion. */
 #settings-overlay { transition:none; }
 
@@ -1059,7 +1061,15 @@ body .tg-btn:focus-visible, body .titlebar-btn:focus-visible { outline:none; box
 
 /* ── Browser tab DevTools drawer: docked under the page, as in Chrome. The
    page area shrinks through .browser-slot's flex column; the sash resizes. ── */
-body .browser-devtools { position:relative; flex:0 0 auto; min-height:80px; background:var(--bg); }
+body .browser-body { flex:1; min-height:0; min-width:0; display:flex; flex-direction:column; }
+body .browser-body[data-devtools-dock="left"], body .browser-body[data-devtools-dock="right"] { flex-direction:row; }
+body .browser-body > .browser-content { min-width:0; }
+body .browser-devtools { position:relative; flex:0 0 auto; max-width:max(0px, calc(100% - 125px)); max-height:max(0px, calc(100% - 125px)); background:var(--bg); }
+body .browser-devtools-preview { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+body .browser-body[data-devtools-dock="bottom"] > .browser-devtools { max-width:none; }
+body .browser-devtools-sash[aria-orientation="vertical"] { height:auto; width:5px; cursor:col-resize; border-top:0; border-left:1px solid var(--ui-line); }
+body .browser-body[data-devtools-dock="left"] > .browser-devtools,
+body .browser-body[data-devtools-dock="right"] > .browser-devtools { max-height:none; }
 body .browser-devtools-sash { flex:0 0 auto; height:5px; position:relative; z-index:3; cursor:row-resize; border-top:1px solid var(--ui-line); transition:background-color 150ms, border-color 150ms; }
 body .browser-devtools-sash:hover, body.resizing .browser-devtools-sash:active { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 25%, transparent); }
 body.resizing .browser-devtools { pointer-events:none; }
@@ -1151,14 +1161,8 @@ body .browser-history-drawer .bh-foot { padding:10px 12px; border-top:1px solid 
 body .browser-history-drawer .bh-clear { height:32px; padding:0 12px; background:transparent; border:1px solid var(--border); color:var(--ui-error); border-radius:6px !important; font:500 12px var(--ui-font); cursor:pointer; transition:background-color 140ms, border-color 140ms; }
 body .browser-history-drawer .bh-clear:hover:not(:disabled) { background:color-mix(in srgb,var(--ui-error) 12%,transparent); border-color:color-mix(in srgb,var(--ui-error) 40%,transparent); }
 body .browser-history-drawer .bh-clear:disabled { opacity:.4; cursor:default; }
-/* Slides in from the right edge; .is-closing slides it back out before app.js removes it. */
-body .browser-history-drawer { animation:bh-in 180ms cubic-bezier(.2,.8,.2,1); }
-body .browser-history-drawer.is-closing { animation:bh-out 140ms ease-in forwards; pointer-events:none; }
-@keyframes bh-in { from { transform:translateX(100%); opacity:.6; } }
-@keyframes bh-out { to { transform:translateX(100%); opacity:.6; } }
 @media (prefers-reduced-motion: reduce) {
   body .browser-history-drawer * { transition:none !important; }
-  body .browser-history-drawer, body .browser-history-drawer.is-closing { animation:none; }
 }
 
 /* ── Terminal links: pointer cursor only while Ctrl/Cmd is held (they open on Ctrl/Cmd+click;
@@ -1351,12 +1355,16 @@ body .ctx-item:hover .ctx-shell-icon { fill:var(--fg); }
 body #sidebar.expanded:not(.hover-overlay) { flex-shrink:0; }
 
 /* ── Terminal: email addresses blurred until clicked (decoration from blurTermEmails) ── */
-.xterm .xterm-decoration.term-email-blur {
-  pointer-events:auto; cursor:pointer;
+.xterm .xterm-decoration:is(.term-email-blur, .term-user-blur), .tg-tab .tg-tab-name.username-redacted::after {
   -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
   background:color-mix(in srgb,var(--fg) 6%,transparent);
   border-radius:4px !important;
 }
+.xterm .xterm-decoration.term-email-blur { pointer-events:auto; cursor:pointer; }
+.xterm .xterm-decoration.term-user-blur { pointer-events:none; }
+body:not(.blur-work-usernames) .xterm .xterm-decoration.term-user-blur { display:none !important; }
+.tg-tab .tg-tab-name.username-redacted { position:relative; user-select:none; }
+.tg-tab .tg-tab-name.username-redacted::after { content:''; position:absolute; inset:0; pointer-events:none; }
 /* Settings → Hide email addresses off (xterm sets display inline, hence !important). */
 body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !important; }
 /* Keep revealed addresses clickable so the next click restores their blur. */
@@ -1567,7 +1575,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 #sbr-thread .thr-change > summary:hover { background:var(--ui-hover); }
 #sbr-thread .thr-change > summary > i { font-size:14px; color:var(--muted-text); flex-shrink:0; }
 #sbr-thread .thr-change-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono-font); font-size:12px; }
-#sbr-thread .thr-diff { margin:2px 4px 6px; max-height:240px; overflow:auto; padding:6px 0; background:var(--bg); border:1px solid var(--ui-line); border-radius:6px !important; font:400 12px/1.55 var(--mono-font); white-space:pre; }
+#sbr-thread .thr-diff { margin:2px 4px 6px; max-height:240px; overflow:auto; padding:6px 0; background:var(--bg); border:0 solid var(--ui-line); border-width:0 1px; border-radius:0 !important; font:400 12px/1.55 var(--mono-font); white-space:pre; }
 #sbr-thread .thr-diff-lines { display:block; width:max-content; min-width:100%; }
 #sbr-thread .thr-diff .dl { display:block; padding:0 10px; color:var(--muted-text); }
 #sbr-thread .thr-diff .dl.add { color:var(--fg); background:color-mix(in srgb,var(--ui-success) 14%,transparent); }
@@ -2310,6 +2318,7 @@ body #settings-modal .custom-dropdown-menu {
 #sbr-thread .thr-scroll-end:hover { background:color-mix(in srgb,var(--fg) 10%,var(--bg)); border-color:var(--muted-text); }
 #sbr-thread .thr-scroll-end:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 #sbr-thread .thr-scroll-end i { font-size:11px; color:var(--muted-text); }
+#sbr-thread .thr-scroll-end-queued { color:var(--muted-text); }
 #sbr-thread.thr-new .thr-scroll-end { display:none; }
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-scroll-end { transition:none; } }
 
@@ -3614,7 +3623,7 @@ body .chat-file-panel .cfp-tab-x { display:grid; place-items:center; flex:none; 
 body .chat-bottom-header { gap:2px; padding:4px 6px; min-height:32px; box-sizing:border-box; /* its original height: a taller header left the minimum-size terminal less than a row */ }
 .chat-bottom-header .chat-bottom-tabs { display:flex; align-items:center; gap:2px; min-width:0; overflow-x:auto; scrollbar-width:none; }
 .chat-bottom-header .chat-bottom-tabs::-webkit-scrollbar { display:none; }
-body .chat-bottom-header .chat-bottom-tab { display:flex; align-items:center; gap:6px; flex:0 1 auto; min-width:72px; max-width:160px; height:24px; padding:0 4px 0 10px; border-radius:6px !important; color:var(--muted-text); font:400 12px/16px var(--ui-font); cursor:pointer; user-select:none; outline:none; transition:background-color 140ms, color 140ms, box-shadow 140ms; }
+body .chat-bottom-header .chat-bottom-tab { display:flex; align-items:center; gap:6px; flex:0 0 auto; width:128px; height:24px; padding:0 4px 0 10px; border-radius:6px !important; color:var(--muted-text); font:400 12px/16px var(--ui-font); cursor:pointer; user-select:none; outline:none; transition:background-color 140ms, color 140ms, box-shadow 140ms; }
 .chat-bottom-header .chat-bottom-tab > i { font-size:14px; flex:none; }
 .chat-bottom-header .chat-bottom-tab > span { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .chat-bottom-header .chat-bottom-tab:hover, .chat-bottom-header .chat-bottom-tab[aria-selected="true"] { background:var(--ui-hover); color:var(--fg); }
@@ -3729,4 +3738,37 @@ body .chat-file-panel .cfp-tab { flex:none; }
 @media (prefers-reduced-motion: reduce) {
   #agent-updates button { transition:none; }
   #agent-updates .ph-circle-notch::before { animation:none; }
+}
+
+/* Question tray: taller cap so a typical question shows whole; it only scrolls when it truly would not fit. */
+#sbr-thread .thr-ask { max-height:min(70vh, 560px); }
+
+/* Send button: neutral, not accent. White with a black icon in dark mode, black with a white icon in light mode. */
+#sbr-thread .thr-send:not(.stop):not(:disabled) { background:#fff; color:#000; }
+#sbr-thread .thr-send:not(.stop):hover:not(:disabled) { background:color-mix(in srgb,#fff 85%,#000); }
+html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):not(:disabled) { background:#000; color:#fff; }
+html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):hover:not(:disabled) { background:color-mix(in srgb,#000 85%,#fff); }
+
+/* Chat + Ctrl+J terminal: pin the chat's bottom edge to the terminal's top instead of subtracting heights, so the composer
+   and its footer row (project, branch) never extend over the terminal's tab bar. */
+#pane-area .term-slot.chat-bottom-open:not(.chat-cli) > #sbr-thread,
+.term-slot.chat-bottom-open:not(.chat-cli) > .thr-snapshot { height:auto; bottom:var(--chat-terminal-height, 35%); overflow:hidden; }
+
+/* Claude sign-in recovery in the chat history. */
+#sbr-thread .thr-chat-error:has(> .thr-claude-sign-in) { display:grid; grid-template-columns:auto minmax(0,1fr); }
+#sbr-thread .thr-chat-error > .thr-claude-sign-in { grid-column:2; }
+#sbr-thread .thr-msg > .thr-claude-sign-in { margin-left:22px; }
+#sbr-thread .thr-claude-sign-in {
+  justify-self:start; align-self:flex-start; display:inline-flex; align-items:center; gap:6px;
+  min-height:32px; padding:0 8px; border:1px solid var(--border); border-radius:var(--ui-radius) !important;
+  background:transparent; color:var(--fg); font:400 12px var(--ui-font); white-space:normal; cursor:pointer;
+  transition:background-color 150ms;
+}
+#sbr-thread .thr-claude-sign-in > i { font-size:14px; color:var(--muted-text); }
+#sbr-thread .thr-claude-sign-in:hover { background:var(--ui-hover); }
+#sbr-thread .thr-claude-sign-in:focus-visible {
+  outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  #sbr-thread .thr-claude-sign-in { transition:none; }
 }

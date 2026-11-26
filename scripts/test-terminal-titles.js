@@ -38,14 +38,17 @@ app.whenReady().then(async () => {
   const helpers = source.slice(source.indexOf('  function setAutomaticTerminalTitle('), source.indexOf('  function _createTermEntry('));
   const short = source.slice(source.indexOf('  function shortTitle('), source.indexOf('  function renameWorkspace('));
   const cwd = source.slice(source.indexOf('  function _extractOSC7CwdStr('), source.indexOf('  function _getFocusedCwd('));
+  const titlePrivacy = source.slice(source.indexOf('  const _termUsers ='), source.indexOf('  function writePtyData('));
   console.log(await win.webContents.executeJavaScript(`(async () => {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     const renderSidebar = () => {};
+    const threadSettings = { usernames: 'show' };
     let processName = 'claude', probe = async () => processName;
     const checkTerminalRunning = () => probe();
     const findTermById = id => id === entry.id ? { term:entry } : null;
     ${short}
     ${cwd}
+    ${titlePrivacy}
     ${helpers}
     document.body.innerHTML = '<div class="tg-tab" data-termid="one"><span class="tg-tab-name"></span><button data-claude-history="one"></button></div><div id="terminal"></div>';
     const term = new Terminal({ allowProposedApi: true }); term.open(document.getElementById('terminal'));
