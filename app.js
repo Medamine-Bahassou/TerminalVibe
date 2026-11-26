@@ -4237,7 +4237,7 @@
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
             // Drag & drop
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; setTimeout(() => { if (window.draggedTermId) startResizing(true); }, 0); });
             tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
             tab.addEventListener('dragover', e => {
               e.preventDefault();
@@ -4399,7 +4399,7 @@
               }
             });
             tab.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e, 'terminal', { wsId: wsp.id, termId: entry.id }); });
-            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; startResizing(true); });
+            tab.addEventListener('dragstart', e => { e.dataTransfer.setData('application/x-terminalvibe-tab', entry.id); e.dataTransfer.setData('text/plain', entry.id); tab.classList.add('dragging'); window.draggedTermId = entry.id; window.dragSourceGroupId = targetGroup.id; setTimeout(() => { if (window.draggedTermId) startResizing(true); }, 0); });
             tab.addEventListener('dragend', e => { tab.classList.remove('dragging'); window.draggedTermId = null; window.dragSourceGroupId = null; tabsContainer.querySelectorAll('.drop-left, .drop-right').forEach(el => el.classList.remove('drop-left', 'drop-right')); stopResizing(); });
             tab.addEventListener('dragover', e => {
               e.preventDefault();
@@ -5626,7 +5626,7 @@
           window.draggedTermId = t.id;
           window.dragSourceGroupId = node.id;
           tab.classList.add('dragging');
-          startResizing(true);
+          setTimeout(() => { if (window.draggedTermId) startResizing(true); }, 0); // deferred: DOM changes inside dragstart can cancel the drag
 
         });
         tab.addEventListener('dragend', e => {
@@ -8076,6 +8076,7 @@
       strip.innerHTML = list.map((e, i) => `<div class="chat-bottom-tab" role="tab" data-i="${i}" aria-selected="${e === owner._bottomTerminal}" tabindex="${e === owner._bottomTerminal ? 0 : -1}">`
         + `<i class="ph ph-terminal" aria-hidden="true"></i><span>${escHtml(e._title || 'Terminal')}</span>`
         + (list.length > 1 ? '<button type="button" class="chat-bottom-tab-x" tabindex="-1" aria-label="Close terminal"><i class="ph ph-x" aria-hidden="true"></i></button>' : '') + '</div>').join('');
+      strip.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
   }
   function bindChatBottomResize(owner, entry) {
@@ -8217,6 +8218,11 @@
       else if (t && e.target.closest('.chat-bottom-tab-x')) closeChatBottomTerm(owner, t);
       else if (t) showChatBottomTerm(owner, t);
     });
+    // The mouse wheel scrolls the tab strip sideways (it has no scrollbar).
+    panel.querySelector('.chat-bottom-tabs').addEventListener('wheel', e => {
+      if (e.deltaX || !e.deltaY) return;
+      e.currentTarget.scrollLeft += e.deltaY; e.preventDefault();
+    }, { passive: false });
     bindTabDrag(panel.querySelector('.chat-bottom-tabs'), '.chat-bottom-tab', (a, b, after) => {
       const list = owner._bottomTerms, moved = list[a.dataset.i], target = list[b.dataset.i];
       list.splice(list.indexOf(moved), 1);
@@ -8224,6 +8230,7 @@
       renderChatBottomTabs(owner);
     });
     header.addEventListener('dblclick', e => { const t = tabAt(e.target); if (t && !e.target.closest('.chat-bottom-tab-x, input')) renameChatBottomTerm(owner, t); });
+    header.addEventListener('mousedown', e => { if (e.button === 1 && tabAt(e.target)) e.preventDefault(); }); // no middle-click autoscroll
     header.addEventListener('auxclick', e => { const t = e.button === 1 && tabAt(e.target); if (t) closeChatBottomTerm(owner, t); });
     header.addEventListener('keydown', e => { // tablist arrows; Delete closes
       const t = tabAt(e.target), list = owner._bottomTerms;
@@ -8295,8 +8302,7 @@
         + (a.detail.length ? `<div class="thr-ask-detail">${a.detail.map(escHtml).join('<br>')}</div>` : '')
         + a.options.map((o, i) => o.submit
           ? `<button type="button" class="thr-ask-submit" data-ask-i="${i}"><i class="ph ph-check" aria-hidden="true"></i><span>Submit</span></button>`
-          : o.input
-          ? `<label class="thr-ask-opt thr-ask-field"><span class="thr-ask-radio" aria-hidden="true"></span><input type="text" data-ask-i="${i}" placeholder="Type something" aria-label="Your answer" spellcheck="false"><span class="thr-ask-key">${o.key}</span></label>`
+          : o.input ? '' // typed in the composer instead (see the composer's submit)
           : `<button type="button" class="thr-ask-opt" data-ask-i="${i}"${o.checked !== undefined ? ` role="checkbox" aria-checked="${o.checked}"` : ''}>`
             + (o.checked !== undefined ? `<span class="thr-ask-box${o.checked ? ' on' : ''}"><i class="ph ph-check" aria-hidden="true"></i></span>` : '<span class="thr-ask-radio" aria-hidden="true"></span>')
             + `<span class="thr-ask-text"><span class="thr-ask-label">${escHtml(o.label)}</span>${o.desc ? `<span class="thr-ask-desc">${escHtml(o.desc)}</span>` : ''}</span>`
@@ -12906,8 +12912,14 @@
     const text = chatMessageText(typed, files);
     if (!ws || !text) return;
     if (ws._editingQueued) { finishQueuedEdit(ws, true); return; }
+    // A pending question with a free-text choice: the composer is where the answer is typed.
+    const askTray = threadPart(thrPage, 'ask'), askAgent = liveThreadAgent(ws), pending = askAgent && agentQuestion(askAgent);
+    const textI = pending ? pending.options.findIndex(o => o.input) : -1;
+    if (textI >= 0 && !askTray.hidden && !files.length && !/^\//.test(typed)) {
+      clearChatDraft(ws); void answerAgentQuestion(askTray, textI, typed); return;
+    }
     ws.chat ||= { createdAt: Date.now() };
-    const sideAsk = /^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(typed);
+    const sideAsk =/^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(typed);
     if (sideAsk) { clearChatDraft(ws); void openSideChat(ws, (sideAsk[1] || '').trim(), files); return; }
     const message = { id: uuid(), text, typed, files, at: Date.now(), after: _turns.get(ws.id)?.sentAt || Date.now() }, working = !!chatWorking(ws);
     if ((working && _chatCtrl) || _chatStarting.has(ws.id) || _chatSending.has(ws.id)) {
@@ -13979,7 +13991,7 @@
     return out + inline(text.slice(last));
   }
   const toolIcon = n => /view_?image|image_?view|screenshot/i.test(n) ? 'ph-eye' : /bash|shell|exec|command|terminal/i.test(n) ? 'ph-terminal' : /read|view|cat/i.test(n) ? 'ph-file-text'
-    : /\bapply_patch$/i.test(n) ? 'ph-note-pencil' : /edit|write|patch|update|create/i.test(n) ? 'ph-pencil-simple' : /grep|glob|search|find|list/i.test(n) ? 'ph-magnifying-glass'
+    : /\bapply_patch$/i.test(n) ? 'ph-note-pencil' : /edit|write|patch|update|create/i.test(n) ? 'ph-note-pencil' : /grep|glob|search|find|list/i.test(n) ? 'ph-magnifying-glass'
     : /web|fetch|url|browser/i.test(n) ? 'ph-globe' : /task|agent/i.test(n) ? 'ph-robot' : 'ph-wrench';
   // A tool that looks at an image (Codex view_image, Claude's Read of a .png…): its expanded row shows the image
   // with a viewer and copy action alongside the path.
@@ -14931,8 +14943,8 @@
   }
   document.addEventListener('toggle', e => {
     if (e.target.open && e.target.matches?.('details[data-key]')) fillLazyDetails(e.target);
-    // Folding the changed-files card folds each file's diff too.
-    else if (!e.target.open && e.target.matches?.('.thr-changes-list')) e.target.querySelectorAll('.thr-change[open]').forEach(d => { d.open = false; });
+    // Folding a work dropdown (turn steps, tool group, changed files, sub-agents) folds the ones nested in it too.
+    else if (!e.target.open && e.target.matches?.('.thr-turn, .thr-tools, .thr-changes-list, .thr-subs')) e.target.querySelectorAll('details[open]').forEach(d => { d.open = false; });
   }, true);
   // ── A2UI surfaces in agent replies (a2ui.js): one surface registry per chat, so a later block can update an earlier
   // surface. A rendered block is cached by message + position + source and moved into the re-rendered host, so a

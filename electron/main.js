@@ -23,6 +23,12 @@ if (process.platform !== 'win32') {
       if (shellPath) process.env.PATH = [...new Set([...shellPath.split(':'), ...(process.env.PATH || '').split(':')])].filter(Boolean).join(':');
     });
 }
+// node-pty forks a helper (conpty_console_list_agent) each time a terminal is closed, without windowsHide, so a
+// console window flashes on Windows. Every other child process of ours already passes windowsHide.
+if (process.platform === 'win32') {
+  const cp = require('child_process'), realFork = cp.fork;
+  cp.fork = (mod, args, opts) => Array.isArray(args) ? realFork(mod, args, { windowsHide: true, ...opts }) : realFork(mod, { windowsHide: true, ...args });
+}
 let agentControl = null;
 const agentRequests = new Map();
 ipcMain.on('agent:result', (event, { id, result, error }) => {
