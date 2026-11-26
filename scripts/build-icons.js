@@ -17,7 +17,7 @@ const out = path.join(root, 'vendor', 'lucide');
 
 const PH_TO_LUCIDE = {
   'arrow-bend-down-right': 'corner-down-right', 'arrow-bend-up-left': 'corner-up-left',
-  'arrow-clockwise': 'rotate-cw', 'arrow-counter-clockwise': 'rotate-ccw',
+  'arrow-circle-up': 'circle-arrow-up', 'arrow-clockwise': 'rotate-cw', 'arrow-counter-clockwise': 'rotate-ccw',
   'arrow-elbow-up-right': 'corner-up-right', 'arrow-left': 'arrow-left', 'arrow-line-right': 'arrow-right-to-line',
   'arrow-right': 'arrow-right', 'arrows-clockwise': 'refresh-cw', 'arrows-down-up': 'arrow-down-up',
   'arrows-left-right': 'arrow-left-right', 'arrows-out': 'expand', 'arrow-square-out': 'external-link',
