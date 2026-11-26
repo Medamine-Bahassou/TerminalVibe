@@ -1102,6 +1102,7 @@
     // re-raise above the settings layer.
     const profilePicker = document.getElementById('profile-picker');
     const overlayOpen = settingsWindowOpen ||
+      document.getElementById('agent-updates')?.open ||
       (profilePicker && profilePicker.style.display !== 'none') ||
       (document.getElementById('servers-dropdown')?.hidden === false || document.getElementById('servers-dropdown')?.classList.contains('closing')) ||
       (document.getElementById('tab-search')?.style.display === 'flex') ||
@@ -1374,7 +1375,7 @@
     if (runCmd) delete entry.runCmd;
     const typeCmd = (write = _sendStdinRaw) => {
       if (entry) fitTerm(entry, true);
-      if (runCmd) write(obj.id, new TextEncoder().encode(runCmd + '\r'));
+      if (runCmd) write(obj.id, new TextEncoder().encode(runCmd + (entry.typeOnly ? '' : '\r')));
     };
     if (isDesktop() && window.electronAPI && nativePtyReady) {
       const api = window.electronAPI;
@@ -4187,6 +4188,7 @@
     const entry = _createTermEntry(wsp, id, label);
     entry.cwd = cwd;
     if (opts.cmd) entry.runCmd = opts.cmd;
+    if (opts.typeOnly) entry.typeOnly = true; // leave the command at the prompt for the user to run
     if (opts.label) entry.pinLabel = true;
     if (opts.shell) entry.shell = opts.shell;
     if (opts.threadHistory) entry.threadHistory = true;
@@ -8308,27 +8310,33 @@
       if (askEl._html !== askHtml && !typing) { askEl._html = askHtml; askEl._q = a?.question; askEl.innerHTML = askHtml; }
     }
     let el = flow.querySelector('.thr-working');
-    if (!w) { el?.remove(); renderChatQueue(ws, surface); renderChatResume(ws, surface); return; }
+    if (!w) { el?.remove(); flow.querySelector('.thr-turn-live > summary > .thr-working-time')?.replaceChildren(); renderChatQueue(ws, surface); renderChatResume(ws, surface); return; }
     const queue = threadPart(surface, 'queue');
-    const moved = !el || (queue ? el.nextElementSibling !== queue : el !== flow.lastElementChild);
+    // "Thinking" ends the live turn's steps, and its timer moves up beside "Working".
+    // A lock or a wait on the user stays outside, so folding the turn can't hide it.
+    const live = flow.querySelector('.thr-turn-live'), inside = !!live && !w.wait && !w.lock;
+    const parent = inside ? live.querySelector(':scope > .thr-turn-steps') : flow;
+    const moved = !el || el.parentNode !== parent || (!inside && queue ? el.nextElementSibling !== queue : el !== parent.lastElementChild);
     const html = w.lock ? `<i class="ph ph-lock-simple" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
         + `<span class="thr-lock-actions">${window.electronAPI?.releaseAgentSession ? '<button type="button" class="thr-lock-btn primary" data-lock-act="take">Take over</button>' : ''}`
         + '<button type="button" class="thr-lock-btn" data-lock-act="retry">Retry</button></span>'
       : w.wait ? `<i class="ph ph-hand-pointing" aria-hidden="true"></i><span>${escHtml(w.label)}</span>`
-      : `<span class="thr-shimmer">${escHtml(w.label)}</span><span class="thr-working-time"></span>`;
+      : `<span class="thr-shimmer">${escHtml(w.label)}</span>${inside ? '' : '<span class="thr-working-time"></span>'}`;
     const changed = !el || el._html !== html || el.classList.contains('wait') !== !!w.wait || el.classList.contains('lock') !== !!w.lock;
     // An existing timer tick doesn't change the row's height. Reading scroll geometry
     // here would force a layout of the newly selected transcript.
     const atBottom = (moved || changed) && flow.scrollHeight - flow.scrollTop - flow.clientHeight <= 1;
     if (!el) { el = document.createElement('div'); el.className = 'thr-working'; el.setAttribute('role', 'status'); }
-    if (moved) flow.insertBefore(el, queue);
+    if (moved) parent.insertBefore(el, inside ? null : queue);
     if (changed) {
       el.classList.toggle('wait', !!w.wait);
       el.classList.toggle('lock', !!w.lock);
       el._html = html;
       el.innerHTML = html;
     }
-    const timer = el.querySelector('.thr-working-time');
+    const liveTimer = live?.querySelector(':scope > summary > .thr-working-time');
+    if (liveTimer && !inside) liveTimer.textContent = '';
+    const timer = inside ? liveTimer : el.querySelector('.thr-working-time');
     if (timer) {
       const elapsed = fmtSecs(Math.max(0, Math.round((Date.now() - w.since) / 1000)));
       if (timer.textContent !== elapsed) timer.textContent = elapsed;
@@ -14169,7 +14177,7 @@
       const row = document.createElement('div'); row.className = 'thr-chat-error'; row.setAttribute('role', 'alert');
       row.innerHTML = '<i class="ph ph-warning-circle" aria-hidden="true"></i><span></span>';
       row.querySelector('span').textContent = error.message;
-      flow.insertBefore(row, next || flow.querySelector('.thr-working, .thr-queue'));
+      flow.insertBefore(row, next || flow.querySelector(':scope > :is(.thr-working, .thr-queue)'));
     }
   }
   function noteChatError(tab, message) {
@@ -14414,6 +14422,7 @@
     const distanceFromBottom = replacingPreview ? flow.scrollHeight - flow.clientHeight - scrollTop : 0;
     ws._usedModel = { harness: segs.at(-1)?.harness, model: hist[segs.length - 1]?.usedModel || null }; // for pendingHtml's headers
     const open = new Set([...flow.querySelectorAll('[data-key].open, details[data-key][open]')].map(el => el.dataset.key));
+    const folded = new Set([...flow.querySelectorAll('.thr-turn-live:not([open])')].map(el => el.dataset.key));
     const mountedTools = new Set(Array.from(flow.querySelectorAll('.thr-tools:has(> .thr-tool-list)'), el => el.dataset.key));
     const outputScroll = new Map([...flow.querySelectorAll('details[open] > .thr-tool-output')].map(el => [el.parentElement.dataset.key, { top: el.scrollTop, left: el.scrollLeft }]));
     if (!segs.length || note) {
@@ -14675,8 +14684,10 @@
         const git = !live && !running ? turnGitFiles(ws, prompt.m.ts, list[e]?.m.ts) : 'later';
         const changedFiles = git === 'later' ? [] : git?.length ? ownTurnFiles(ws, prompt.m.ts, rest, git) : rest.flatMap(({ m }) => m.files || []);
         if (live) { // a turn still running: its steps stay together, as tight as a folded turn's
-          const liveSteps = stepsHtml(steps, i + ':' + prompt.j);
-          if (liveSteps) html += `<div class="thr-live-steps">${liveSteps}</div>`;
+          // Where "Worked for" lands when it ends. Open until the user folds it; its own key,
+          // so the finished turn still starts folded. syncWorking puts "Thinking" inside and the timer beside "Working".
+          html += `<details class="thr-turn thr-turn-live" data-key="live:${i}:${prompt.j}"><summary><span class="thr-shimmer">Working</span><span class="thr-working-time"></span>`
+            + `<i class="ph ph-caret-right thr-turn-caret" aria-hidden="true"></i></summary><div class="thr-turn-steps">${stepsHtml(steps, i + ':' + prompt.j)}</div></details>`;
         }
         else if (steps.length) {
           const tk = 'turn:' + i + ':' + prompt.j;
@@ -14711,7 +14722,7 @@
     // Keep the open states on replaced rows, without making a toggle invalidate cached markup.
     flow._lazy = lazy;
     expandThreadDetails(content, details => {
-      details.open = open.has(details.dataset.key);
+      details.open = details.matches('.thr-turn-live') ? !folded.has(details.dataset.key) : open.has(details.dataset.key);
       return details.open || mountedTools.has(details.dataset.key);
     }, lazy);
     const newOutputs = content.querySelectorAll('.thr-tool-output');
@@ -18671,6 +18682,135 @@
 
   // Open/close
   document.getElementById('btn-settings').addEventListener('click', () => openSettingsGlobal());
+  const agentUpdatesButton = document.getElementById('btn-agent-updates');
+  const agentUpdatesDialog = document.getElementById('agent-updates');
+  if (agentUpdatesButton && agentUpdatesDialog && window.electronAPI?.providersCheckUpdates) {
+    const api = window.electronAPI;
+    const icon = agentUpdatesButton.querySelector('i');
+    const status = agentUpdatesDialog.querySelector('.agent-update-status');
+    const statusIcon = status.querySelector('i'), statusText = status.querySelector('span');
+    const list = agentUpdatesDialog.querySelector('.agent-update-list');
+    const updateAll = document.getElementById('btn-update-all-agents');
+    let rows = [], checking = false, updating = '', notice = '', progress = null, queued = new Set(), startedAt = 0;
+    const stageNames = { downloading: 'Downloading', verifying: 'Verifying', extracting: 'Extracting', installing: 'Installing' };
+    // The updating agent's own row carries its state: stage, size, speed and elapsed time.
+    function updateStateText() {
+      if (checking) return 'Verifying…';
+      const seconds = Math.floor((Date.now() - startedAt) / 1000);
+      const mb = value => `${(value / 1048576).toFixed(value < 10485760 ? 1 : 0)} MB`;
+      return [stageNames[progress?.stage] || 'Updating',
+        progress?.percent != null && `${progress.percent}%`,
+        progress?.bytes && mb(progress.bytes),
+        progress?.bytes && `${mb(progress.speed)}/s`,
+        `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`].filter(Boolean).join(' · ');
+    }
+    function renderUpdateProgress() {
+      const state = list.querySelector('.agent-update-state');
+      if (state) state.textContent = updateStateText();
+    }
+    api.onProviderUpdateProgress?.(event => {
+      if (!updating || event.id !== updating || checking) return;
+      progress = event;
+      renderUpdateProgress();
+    });
+    function renderAgentUpdates() {
+      const updates = rows.filter(row => row.status === 'available');
+      const unavailable = rows.filter(row => row.status === 'unavailable').map(row => row.name);
+      const label = updates.length ? `Agent updates (${updates.length} available)` : 'Agent updates';
+      agentUpdatesButton.hidden = !updates.length && !updating;
+      agentUpdatesButton.title = checking ? 'Checking for agent updates…' : label;
+      agentUpdatesButton.setAttribute('aria-label', label);
+      agentUpdatesButton.setAttribute('aria-busy', String(checking || !!updating));
+      icon.className = checking || updating ? 'ph ph-arrows-clockwise' : 'ph ph-arrow-circle-up';
+      updateAll.hidden = updates.filter(row => !row.managed).length < 2;
+      updateAll.disabled = checking || !!updating;
+      statusText.textContent = updating ? '' : checking ? 'Checking for updates…' : notice
+        || (unavailable.length ? `Could not check ${unavailable.join(', ')}.` : updates.length ? '' : 'No updates available.');
+      status.hidden = !statusText.textContent;
+      statusIcon.className = checking ? 'ph ph-circle-notch' : notice ? 'ph ph-info'
+        : unavailable.length ? 'ph ph-warning-circle' : 'ph ph-check-circle';
+      list.innerHTML = updates.map(row => `<li class="agent-update-row">
+        <span class="agent-update-logo">${procIconHtml(row.id)}</span>
+        <div class="agent-update-details"><strong>${escHtml(row.name)}</strong>
+          ${row.id === updating ? `<div class="agent-update-state">${escHtml(updateStateText())}</div>` : `<div class="agent-update-versions"><span>${escHtml(row.installed)}</span>
+            <i class="ph ph-arrow-right" role="img" aria-label="to"></i><span>${escHtml(row.latest)}</span>
+            ${row.managed ? `<span class="agent-update-source">· ${row.command ? escHtml(row.managed) : row.managed === 'AUR' ? 'AUR · rebuild to update' : 'update the way you installed it'}</span>` : ''}</div>`}
+        </div>
+        ${!row.managed ? `<button type="button" data-update-agent="${escHtml(row.id)}" aria-label="${row.id === updating ? 'Updating' : 'Update'} ${escHtml(row.name)}"${checking || updating ? ' disabled' : ''}>${row.id === updating ? '<i class="ph ph-circle-notch" aria-hidden="true"></i>Updating' : queued.has(row.id) ? 'Queued' : 'Update'}</button>`
+          : row.command ? `<button type="button" data-terminal-update="${escHtml(row.id)}" title="${escHtml(`Type ${row.command} in a terminal`)}" aria-label="Open in terminal to update ${escHtml(row.name)}"><i class="ph ph-terminal-window" aria-hidden="true"></i>Terminal</button>` : ''}
+      </li>`).join('');
+    }
+    async function checkAgentUpdates() {
+      if (checking) return;
+      checking = true;
+      notice = '';
+      renderAgentUpdates();
+      try { rows = await api.providersCheckUpdates(); }
+      catch { notice = 'Could not check for agent updates.'; }
+      finally { checking = false; renderAgentUpdates(); }
+    }
+    agentUpdatesButton.addEventListener('click', () => {
+      agentUpdatesDialog.showModal();
+      syncBrowserSlots();
+      if (!updating) void checkAgentUpdates();
+    });
+    agentUpdatesDialog.addEventListener('close', syncBrowserSlots);
+    async function updateAgents(pending) {
+      if (checking || updating || !pending.length) return;
+      const errors = [], completed = [];
+      try {
+        queued = new Set(pending.map(row => row.id));
+        for (const row of pending) {
+          queued.delete(row.id);
+          updating = row.id;
+          progress = null;
+          startedAt = Date.now();
+          renderAgentUpdates();
+          const tick = setInterval(renderUpdateProgress, 1000);
+          try {
+            const { error } = await api.providersUpdateAgent(row.id);
+            if (error) errors.push(`${row.name}. ${error}`);
+            else completed.push(row);
+          } catch {
+            errors.push(`Could not update ${row.name}.`);
+          } finally {
+            clearInterval(tick);
+          }
+        }
+        if (completed.length) {
+          await checkAgentUpdates();
+          if (notice) errors.push(notice);
+          else for (const row of completed) {
+            if (!rows.some(candidate => candidate.id === row.id && candidate.status === 'current')) {
+              errors.push(`Could not confirm that ${row.name} is up to date.`);
+            }
+          }
+        }
+        notice = errors.join(' ') || (completed.length === 1 ? `${completed[0].name} is up to date.` : `${completed.length} agents updated.`);
+      } finally {
+        updating = '';
+        queued.clear();
+        renderAgentUpdates();
+        if (agentUpdatesDialog.open && !agentUpdatesDialog.contains(document.activeElement)) {
+          (list.querySelector('[data-update-agent]') || agentUpdatesDialog.querySelector('header form button')).focus();
+        }
+      }
+    }
+    list.addEventListener('click', e => {
+      const button = e.target.closest('[data-update-agent]');
+      if (button) void updateAgents(rows.filter(row => row.id === button.dataset.updateAgent && row.status === 'available'));
+      const id = e.target.closest('[data-terminal-update]')?.dataset.terminalUpdate;
+      const row = rows.find(row => row.id === id);
+      if (row?.command) {
+        agentUpdatesDialog.close();
+        addTerminal(activeWsId, null, { cmd: row.command, typeOnly: true, label: `Update ${row.name}` });
+      }
+    });
+    updateAll.addEventListener('click', () => void updateAgents(rows.filter(row => row.status === 'available' && !row.managed)));
+    void checkAgentUpdates();
+    // The button is hidden while everything is current, so new releases need a check of their own.
+    setInterval(() => { if (!updating && !agentUpdatesDialog.open) void checkAgentUpdates(); }, 60 * 60 * 1000);
+  }
   const btnProfiles = document.getElementById('btn-profiles');
   if (btnProfiles) btnProfiles.addEventListener('click', openProfilePicker);
   // Native browser views sit above DOM overlays; hide them while the picker

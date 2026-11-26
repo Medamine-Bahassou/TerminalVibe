@@ -1645,6 +1645,10 @@ require('./chat-sdk').register(ipcMain, {
 });
 // Settings > Providers (providers.js).
 ipcMain.handle('providers:status', (_e, names) => providers.status(names, terminalEnv()));
+ipcMain.handle('providers:check-updates', () => providers.checkUpdates(terminalEnv()));
+ipcMain.handle('providers:update-agent', (e, id) => providers.updateAgent(id, terminalEnv(), progress => {
+  if (!e.sender.isDestroyed()) e.sender.send('providers:update-progress', { id, ...progress });
+}));
 ipcMain.handle('providers:save', (_e, config) => providers.save(config));
 ipcMain.on('terminal:kill-all', () => {
   require('./chat-sdk').stopAll();
