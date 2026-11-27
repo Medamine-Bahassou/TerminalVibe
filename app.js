@@ -11414,7 +11414,7 @@
         + `${linkIconHtml(file.url)}<span>${escHtml(file.url)}</span></a></span>`;
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
-        + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
+        + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name.replace(/:\d+$/, ''))}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
       if (file.thread) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-cite-ref thr-thread-ref" tabindex="${tabIndex}" title="Thread: ${escHtml(file.name)}">`
         + `<i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
       const label = file.cite ? file.cite.replace(/\s+/g, ' ').slice(0, 42) + (file.cite.replace(/\s+/g, ' ').length > 42 ? '…' : '') : file.name;
@@ -12141,10 +12141,17 @@
       const row = btn.closest('.gdv-comment-row'), text = row.querySelector('textarea').value.trim();
       if (btn.classList.contains('gdv-comment-add')) {
         if (!text) return row.querySelector('textarea').focus();
-        const line = row.previousElementSibling.dataset.line, at = row.closest('.gdv-file').dataset.path + (line ? ':' + line : '');
+        const line = row.previousElementSibling.dataset.line, p = row.closest('.gdv-file').dataset.path, suffix = line ? ':' + line : '';
+        // The file as an @ mention chip, like one picked from the "@" list (sent as typed: "@path:line").
+        const mention = '@' + (/\s/.test(p) ? `"${p}"` : p) + suffix;
+        if (!_chatFiles.some(f => f.mention === mention)) {
+          const abs = /^([\\/]|\w:)/.test(p) || !cwd ? p : `${cwd.replace(/[\\/]$/, '')}/${p}`;
+          _chatFiles.push({ at: true, mention, name: p.split(/[\\/]/).pop() + suffix, path: abs });
+        }
         threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
         const v = thrInput.value.replace(/\s*$/, '');
-        thrInput.value = (v ? v + '\n' : '') + `${at}: ${text}\n`;
+        thrInput.value = (v ? v + '\n' : '') + `${mention} ${text}\n`;
+        renderChatFiles();
         thrInput.setSelectionRange(thrInput.value.length, thrInput.value.length);
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
         thrInput.focus({ preventScroll: true });
