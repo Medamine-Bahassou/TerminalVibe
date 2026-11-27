@@ -1647,7 +1647,7 @@ body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !import
 /* ── Chat prompts: images above the bubble; image paths in the text as link chips (both open the viewer) ── */
 #sbr-thread .thr-msg.user > .thr-images { justify-content:flex-end; max-width:85%; }
 #sbr-thread .thr-msg.user > .thr-images > .thr-img-wrap { flex-shrink:0; }
-#sbr-thread .thr-msg.user > .thr-images .thr-img { display:block; width:100%; height:100%; object-fit:contain; cursor:zoom-in; }
+#sbr-thread .thr-msg.user > .thr-images .thr-img { display:block; width:100%; height:100%; object-fit:cover; object-position:center; cursor:zoom-in; }
 #sbr-thread .thr-img-size:empty { display:none; }
 
 /* ── Tab bar menu: Chat › agents (brand logos), and a disabled row when none is installed ── */
@@ -3772,3 +3772,46 @@ html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):hover:not(:disa
 @media (prefers-reduced-motion: reduce) {
   #sbr-thread .thr-claude-sign-in { transition:none; }
 }
+
+/* Typography settings: live font preview */
+.font-preview-row { padding:12px 12px 10px; border-bottom:1px solid var(--ui-line); }
+#font-preview { margin:0; padding:12px 14px; background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:var(--ui-radius) !important; white-space:pre; overflow-x:auto; }
+#font-preview .fp-dim { color:var(--muted-text); }
+#font-preview .fp-accent { color:var(--accent); }
+#font-preview .fp-ok { color:var(--ui-success); }
+
+/* Queued message actions: fade in on hover/focus */
+#sbr-thread .thr-queued-message .thr-queued-actions { opacity:0; transition:opacity 150ms ease; }
+#sbr-thread .thr-queued-message:hover .thr-queued-actions, #sbr-thread .thr-queued-message:focus-within .thr-queued-actions { opacity:1; }
+@media (hover:none) { #sbr-thread .thr-queued-message .thr-queued-actions { opacity:1; } }
+@media (prefers-reduced-motion:reduce) { #sbr-thread .thr-queued-message .thr-queued-actions { transition:none; } }
+
+/* Providers: "New provider" button + dialog to activate inactive ones */
+#providers-panel .prov-new { display:flex; align-items:center; gap:8px; width:calc(100% - 16px); height:32px; margin:8px; padding:0 10px; border:0; border-radius:6px !important; background:transparent; color:var(--muted-text); font:500 13px var(--ui-font); cursor:pointer; transition:background-color 150ms, color 150ms; }
+#providers-panel .prov-new:hover { background:var(--ui-hover); color:var(--fg); }
+#providers-panel .prov-new:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#providers-panel .prov-new i { font-size:14px; }
+#prov-add-dialog { width:min(420px, calc(100% - 32px)); max-height:calc(100% - 32px); margin:auto; padding:20px; border:1px solid var(--border); border-radius:12px !important; background:var(--ui-surface); color:var(--fg); box-shadow:0 8px 24px #0005; font:13px/1.4 var(--ui-font); }
+#prov-add-dialog::backdrop { background:rgba(0,0,0,.5); backdrop-filter:blur(8px); }
+#prov-add-dialog header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+#prov-add-dialog h2 { font-size:15px; font-weight:600; outline:none; }
+#prov-add-dialog button { height:32px; padding:0 12px; border:1px solid var(--border); border-radius:var(--ui-radius) !important; background:transparent; color:var(--fg); font-weight:500; cursor:pointer; transition:background-color 150ms, color 150ms, box-shadow 150ms; }
+#prov-add-dialog header form button { display:grid; place-items:center; width:28px; height:28px; padding:0; border:0; color:var(--muted-text); font-size:16px; }
+#prov-add-dialog button:hover { background:var(--ui-hover); color:var(--fg); }
+#prov-add-dialog button:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#prov-add-dialog .prov-add-list { border-top:1px solid var(--ui-line); }
+#prov-add-dialog .prov-add-row { display:grid; grid-template-columns:20px minmax(0,1fr) auto; align-items:center; gap:12px; padding:12px 0; }
+#prov-add-dialog .prov-add-row + .prov-add-row { border-top:1px solid var(--ui-line); }
+#prov-add-dialog .prov-add-row:last-child { padding-bottom:0; }
+#prov-add-dialog .prov-logo { display:grid; place-items:center; color:var(--prov-color); }
+#prov-add-dialog .prov-logo .ws-proc-icon { width:18px; height:18px; }
+#prov-add-dialog .prov-add-text { display:grid; gap:2px; }
+#prov-add-dialog .prov-add-text strong { font-weight:500; }
+#prov-add-dialog .prov-add-text > span { display:flex; align-items:center; gap:6px; color:var(--muted-text); font-size:12px; }
+#prov-add-dialog .prov-error { color:var(--ui-error); }
+#prov-add-dialog .prov-dim { color:var(--dim-text); }
+
+/* Chat: new assistant replies fade in */
+@keyframes thr-fade-in { from { opacity:0; } to { opacity:1; } }
+#sbr-thread .thr-msg.assistant.thr-fade-in { animation:thr-fade-in 200ms ease-out; }
+@media (prefers-reduced-motion:reduce) { #sbr-thread .thr-msg.assistant.thr-fade-in { animation:none; } }
