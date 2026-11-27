@@ -4231,6 +4231,19 @@
       for (let k = 0; k < r.text.length; k++) if (r.pos[k].x - 1 >= x && r.pos[k].x - 1 < x + w) s += r.text[k];
       return s;
     };
+    // What the user types is theirs: no username blur from where typing began on that row.
+    // shortcut: only the first row of the input, a command soft-wrapped onto more rows still blurs there.
+    let inputs = [], typing = null;
+    term.onData(data => {
+      const buf = term.buffer.active;
+      if (!typing || typing.marker.isDisposed || typing.marker.line !== buf.baseY + buf.cursorY) {
+        const marker = term.registerMarker(0);
+        if (marker) inputs.push(typing = { marker, x: buf.cursorX });
+        inputs = inputs.filter(i => !i.marker.isDisposed);
+      }
+      if (/[\r\n]/.test(data)) typing = null;
+    });
+    const typed = (y, x) => inputs.some(i => i.marker.line === y && x >= i.x);
     const clear = () => { decos.forEach(d => d.marker.dispose()); decos = []; };
     const scan = () => {
       timer = false;
@@ -4250,7 +4263,10 @@
         const y = d.marker.line;
         if (d.marker.isDisposed || y < 0) { d.marker.dispose(); return false; }
         if (y < top || y >= bottom) return true;
-        d.stale = cellsText(y, d.x, d.w) !== d.text;
+        // A username typed on into a longer word ("med" → "mediterranean") is no longer a username.
+        d.stale = cellsText(y, d.x, d.w) !== d.text
+          || (d.username && typed(y, d.x))
+          || (d.username && /[\w.-]/.test(cellsText(y, d.x + d.w, 1) + (d.x ? cellsText(y, d.x - 1, 1) : '')));
         if (d.stale && !d.shown) { d.marker.dispose(); return false; }
         return true;
       });
@@ -4263,6 +4279,7 @@
         for (const m of row.text.matchAll(privateCells)) {
           const x = row.pos[m.index].x - 1, w = row.pos[m.index + m[0].length - 1].x - x;
           const username = !!(usernames && m[0].match(usernames));
+          if (username && typed(y, x)) continue;
           const at = decos.find(d => d.marker.line === y && d.x === x);
           if (at?.text === m[0] && at.username === username) { at.stale = false; continue; }
           if (at) drop(at);
@@ -8362,12 +8379,13 @@
     showChatBottomTerm(owner, entry);
   }
   // A new shell tab in the chat's bottom panel, in the chat's folder.
-  function newChatBottomTerm(owner, runCmd) {
+  function newChatBottomTerm(owner, runCmd, shell) {
     if (!owner?.threadHistory || owner._cliView || !wsReady) return;
     const wsp = findTermById(owner.id)?.ws;
     if (!wsp) return;
     const entry = _createTermEntry(wsp, uuid(), 'Terminal');
     if (runCmd) entry.runCmd = runCmd.replace(/\r$/, ''); // sendControl types it (+ Enter) once the shell exists
+    if (shell) entry.shell = shell;
     entry._chatOwner = owner;
     entry.cwd = chatCwd(owner) || null;
     owner._bottomSeq = (owner._bottomTerms?.length ? owner._bottomSeq || 1 : 0) + 1;
@@ -8400,6 +8418,8 @@
       else if (t && e.target.closest('.chat-bottom-tab-x')) closeChatBottomTerm(owner, t);
       else if (t) showChatBottomTerm(owner, t);
     });
+    // Right-click +: new terminal with a chosen shell.
+    header.querySelector('[data-act="new"]').addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); showCtxMenu(e, 'chat-terminal-new', { owner }); });
     // The mouse wheel scrolls the tab strip sideways (it has no scrollbar).
     panel.querySelector('.chat-bottom-tabs').addEventListener('wheel', e => {
       if (e.deltaX || !e.deltaY) return;
@@ -16038,6 +16058,12 @@
         item('<i class="ph ph-copy"></i>', 'Copy path', '', () => { void (window.electronAPI?.clipboardWrite ? window.electronAPI.clipboardWrite(path) : navigator.clipboard.writeText(path)); });
         if (window.electronAPI?.showInFolder) item('<i class="ph ph-folder-open"></i>', 'Show in folder', '', () => window.electronAPI.showInFolder(path));
       }
+    } else if (type === 'chat-terminal-new') {
+      const { owner } = data;
+      item('<i class="ph ph-plus"></i>', 'New terminal', '', () => newChatBottomTerm(owner));
+      if (shellList.length) sep();
+      for (const s of shellList) item(`<svg class="ctx-shell-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${shellIconPath(s)}"/></svg>`, escHtml(s.label) + (s.id === defaultShell ? ' (default)' : ''), '',
+        () => newChatBottomTerm(owner, null, s.id));
     } else if (type === 'chat-terminal') {
       const { entry, owner } = data, term = entry.term;
       const copy = item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+Shift+C', () => { void copyPrivateTerminal(term).catch(() => {}); });
