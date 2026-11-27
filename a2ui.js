@@ -280,6 +280,8 @@
         if (safeUrl(u)) { img.src = u; return; }
         img.removeAttribute('src');
         if (isLocal(u)) c.s.opts.loadImage?.(u.replace(/^file:\/\//i, '')).then(src => { if (src && want === u) img.src = src; });
+        // No url but a query: the app's image search finds the picture (TerminalVibe extension).
+        else if (!u && p.query) c.s.opts.searchImage?.(str(val(p.query, c))).then(src => { if (safeUrl(src || '') && want === u) img.src = src; });
       });
       if (!/^(icon|avatar)$/.test(p.variant)) { // pictures open in the app's image viewer
         img.classList.add('a2ui-zoomable');
@@ -298,21 +300,24 @@
       const md = (cls, t) => { const d = h('div', `a2ui-text ${cls}`); if (c.s.opts.markdown) d.innerHTML = c.s.opts.markdown(t); else d.textContent = t; return d; };
       bind(c, () => {
         const raw = val(p.items, c), numbered = val(p.numbered, c) !== false;
-        const list = (Array.isArray(raw) ? raw : []).filter(isObj).map(x => Object.fromEntries(['title', 'url', 'image', 'description', 'note'].map(k => [k, str(val(x[k], c))])));
+        const list = (Array.isArray(raw) ? raw : []).filter(isObj).map(x => Object.fromEntries(['title', 'url', 'image', 'imageQuery', 'description', 'note'].map(k => [k, str(val(x[k], c))])));
         // Every row gets a thumbnail slot once any row can have a picture, so the text column stays aligned.
-        const thumbs = list.some(x => safeUrl(x.image) || safeUrl(x.url));
+        const thumbs = list.some(x => safeUrl(x.image) || x.imageQuery || safeUrl(x.url));
+        const { searchImage, previewImage } = c.s.opts;
+        const fromLink = x => safeUrl(x.url) && previewImage ? previewImage(x.url) : null;
         el.replaceChildren(...list.map((x, i) => {
           const row = h('div', 'a2ui-item'), body = h('div', 'a2ui-item-body'), title = h(safeUrl(x.url) ? 'a' : 'div', 'a2ui-item-title');
-          // No image given: the linked page's own preview picture (found by the app); a shimmer while it loads, and
-          // a tinted tile with the item's initial when there is no picture at all.
-          const src = safeUrl(x.image) ? Promise.resolve(x.image) : safeUrl(x.url) && c.s.opts.previewImage ? c.s.opts.previewImage(x.url) : null;
+          // The picture: a real image URL; else the app's image search for imageQuery; else the linked page's own
+          // preview picture. A shimmer while it loads, a quiet "No preview" tile when nothing is found.
+          const src = safeUrl(x.image) ? Promise.resolve(x.image)
+            : x.imageQuery && searchImage ? searchImage(x.imageQuery).then(u => u || fromLink(x)) : fromLink(x);
           if (thumbs) {
             const thumb = h('div', 'a2ui-item-thumb'), img = h('img', 'a2ui-item-img');
             const empty = () => {
               img.remove(); thumb.classList.remove('loading'); thumb.classList.add('empty');
-              const letter = h('span', 'a2ui-item-initial'); letter.setAttribute('aria-hidden', 'true');
-              letter.textContent = [...x.title.replace(/^[^\p{L}\p{N}]+/u, '')][0]?.toUpperCase() || '';
-              thumb.append(letter);
+              const icon = h('i', 'ph ph-image'), label = h('span', 'a2ui-item-empty-label');
+              icon.setAttribute('aria-hidden', 'true'); label.textContent = 'No preview';
+              thumb.append(icon, label);
             };
             if (!src) empty();
             else {

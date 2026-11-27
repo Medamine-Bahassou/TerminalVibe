@@ -1247,6 +1247,30 @@ async function pagePreviewImage(href) {
   } catch {}
   return null;
 }
+// An image for a search query, the way ChatGPT's AsyncImage works: the agent writes a query (A2UI imageQuery), the
+// app finds the picture. Official keyless APIs only, tried in order: Wikimedia Commons (places, landmarks, nature,
+// logos), then Openverse (WordPress.org's open image index over Flickr and others: products too). A small https
+// thumbnail URL, or null.
+const imageSearchCache = new Map();
+ipcMain.handle('image:search', (_e, query) => {
+  const q = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (!q) return null;
+  if (!imageSearchCache.has(q)) imageSearchCache.set(q, searchImage(q));
+  return imageSearchCache.get(q);
+});
+async function searchImage(q) {
+  const get = href => require('electron').net.fetch(href, {
+    credentials: 'omit', signal: AbortSignal.timeout(6000),
+    headers: { 'Api-User-Agent': 'TerminalVibe/1.0 (desktop app)' }, // Wikimedia asks API clients to name themselves
+  }).then(r => r.ok ? r.json() : null).catch(() => null);
+  const https = u => typeof u === 'string' && /^https:\/\//i.test(u) ? u : null;
+  const commons = await get(`https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search&gsrsearch=${encodeURIComponent(q + ' filetype:bitmap')}&gsrnamespace=6&gsrlimit=5&prop=imageinfo&iiprop=url|mime&iiurlwidth=640`);
+  const page = Object.values(commons?.query?.pages || {}).sort((a, b) => a.index - b.index)
+    .find(p => /^image\/(jpeg|png|webp)$/.test(p.imageinfo?.[0]?.mime) && https(p.imageinfo[0].thumburl));
+  if (page) return page.imageinfo[0].thumburl;
+  const open = await get(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&page_size=5&mature=false`);
+  return open?.results?.map(r => https(r.thumbnail)).find(Boolean) || null;
+}
 // A site's /favicon.ico as a data URL (so the chat can read its pixels and tint single-color icons); null if none.
 // The icon the site's homepage declares (<link rel="icon" / "shortcut icon" / "apple-touch-icon">) comes first: a
 // single-page app often has no /favicon.ico (its server answers that path with the app's HTML). Then /favicon.ico.

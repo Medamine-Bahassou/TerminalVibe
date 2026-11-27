@@ -2666,6 +2666,7 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 
 /* ── Chat composer: controls hidden from its right-click menu, and the context ring ── */
 body.thr-hide-attach .thr-composer .thr-attach,
+body.thr-hide-a2ui .thr-composer .thr-a2ui-toggle,
 body.thr-hide-mode .thr-composer .thr-mode-chip,
 body.thr-hide-ctx .thr-composer .thr-ctx-ring { display:none !important; }
 #ctx :is([role="menuitemcheckbox"], [role="menuitemradio"])[aria-checked="false"] > .ci-key { visibility:hidden; }
@@ -3859,7 +3860,7 @@ body .chat-file-panel .gdv-comment-actions .gdv-comment-add:hover { background:c
 @media (prefers-reduced-motion: reduce) { #sbr-thread a.a2ui-item-title { transition:none; } }
 
 /* A2UI image loading: hidden until downloaded and decoded, then a fade; ItemList thumbnails shimmer while loading and
-   fall back to a tinted tile with the item's initial. */
+   fall back to a quiet "No preview" tile. */
 #sbr-thread .a2ui-fade { opacity:0; transition:opacity 220ms ease-out; }
 #sbr-thread .a2ui-fade.loaded { opacity:1; }
 #sbr-thread .a2ui-item-thumb { position:relative; flex:none; width:160px; height:112px; overflow:hidden; background:var(--ui-surface); border-radius:10px !important; }
@@ -3868,12 +3869,14 @@ body .chat-file-panel .gdv-comment-actions .gdv-comment-add:hover { background:c
   background:linear-gradient(100deg, transparent 30%, color-mix(in srgb,var(--fg) 7%,transparent) 50%, transparent 70%) 0 0 / 200% 100%;
   animation:a2ui-shimmer 1.4s linear infinite; }
 @keyframes a2ui-shimmer { from { background-position:150% 0; } to { background-position:-50% 0; } }
-#sbr-thread .a2ui-item-thumb.empty { display:flex; align-items:center; justify-content:center; border:1px solid var(--ui-line);
-  background:linear-gradient(135deg, color-mix(in srgb,var(--accent) 16%,var(--ui-surface)), color-mix(in srgb,var(--accent) 4%,var(--ui-surface))); }
-#sbr-thread .a2ui-item-initial { font:600 30px/1 var(--ui-font); color:color-mix(in srgb,var(--accent) 65%,var(--fg)); }
+#sbr-thread .a2ui-item-thumb { user-select:none; -webkit-user-select:none; } /* a picture slot, never text to select or cite */
+#sbr-thread .a2ui-item-thumb.empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; border:1px solid var(--ui-line); background:var(--ui-surface); color:var(--dim-text); }
+#sbr-thread .a2ui-item-thumb.empty i { font-size:20px; }
+#sbr-thread .a2ui-item-empty-label { font-size:11px; line-height:16px; }
 @container (max-width:420px) {
   #sbr-thread .a2ui-item-thumb { width:96px; height:72px; border-radius:8px !important; }
-  #sbr-thread .a2ui-item-initial { font-size:22px; }
+  #sbr-thread .a2ui-item-thumb.empty { gap:4px; }
+  #sbr-thread .a2ui-item-thumb.empty i { font-size:16px; }
 }
 @media (prefers-reduced-motion: reduce) {
   #sbr-thread .a2ui-fade { transition:none; }
@@ -3927,3 +3930,17 @@ body dialog.thr-sources-dlg .thr-source:hover > .ph-arrow-up-right { color:var(-
     body.ui-animations dialog.thr-sources-dlg[open]::backdrop { opacity:0; }
   }
 }
+
+/* Composer: reply style button beside the permission-mode chip (an icon button like Attach); its pick menu has
+   Interactive UI (A2UI where it helps) and Plain text, and it shows the picked mode's icon. */
+#sbr-thread .thr-a2ui-toggle { position:relative; display:grid; place-items:center; width:28px; height:28px; flex:none; padding:0; background:transparent; border:0; border-radius:8px !important;
+  color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-a2ui-toggle:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-a2ui-toggle:focus-visible { outline:none; color:var(--fg); box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .thr-a2ui-toggle i { font-size:16px; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-a2ui-toggle { transition:none; } }
+
+/* "Plain text" reply style: the Interactive UI glyph with a slash through it (composer button and its menu row). */
+.a2ui-icon-off { position:relative; display:inline-block; }
+.a2ui-icon-off::after { content:""; position:absolute; left:50%; top:50%; width:125%; height:1.5px; background:currentColor; box-shadow:0 0 0 1px var(--bg);
+  border-radius:1px !important; transform:translate(-50%,-50%) rotate(-45deg); pointer-events:none; }
