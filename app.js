@@ -11671,6 +11671,7 @@
     else if (file?.url) openChatWebLink(file.url, e.shiftKey);
     else if (file?.diff) { if (!openChatDiffAt(curChat(), file.diff, file.line, file.diffKey)) void openChatFileLink(curChat(), file.path, file.line); } // a diff comment's chip
     else if (file?.dir) window.electronAPI?.showInFolder?.(file.path); // a folder mention: reveal it, there's nothing to preview
+    else if (file?.at && file.path) void openChatFileLink(curChat(), file.path, 0, true); // an @file: read-only beside the chat, or why it can't be shown
     else if (file && !file.at) openChatAttachment(file, curChat());
   });
   {
