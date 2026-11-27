@@ -44,7 +44,7 @@ const PH_TO_LUCIDE = {
   'funnel-simple': 'list-filter', 'gauge': 'gauge', 'gear': 'settings', 'gear-six': 'settings',
   'git-branch': 'git-branch', 'git-commit': 'git-commit-horizontal', 'git-fork': 'git-fork', 'git-merge': 'git-merge',
   'git-pull-request': 'git-pull-request', 'globe': 'globe', 'globe-hemisphere-west': 'earth', 'hammer': 'hammer',
-  'hand-pointing': 'pointer', 'hand-wave': 'hand', 'hard-drives': 'hard-drive', 'image': 'image',
+  'hand-pointing': 'pointer', 'hand-wave': 'hand', 'hard-drives': 'hard-drive', 'image': 'image', 'image-broken': 'image-off',
   'infinity': 'infinity', 'info': 'info', 'keyboard': 'keyboard', 'lightning': 'zap', 'linux-logo': 'terminal',
   'list-checks': 'list-checks', 'lock': 'lock', 'lock-simple': 'lock', 'lock-simple-open': 'lock-open',
   'magic-wand': 'wand-sparkles', 'magnifying-glass': 'search', 'magnifying-glass-minus': 'zoom-out',

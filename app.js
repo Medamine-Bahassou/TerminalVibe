@@ -890,8 +890,8 @@
     applyWorkUsernamePrivacy(document);
     applyComposerParts();
   };
-  // Composer controls the user hid from its right-click menu (attach, mode, ctx).
-  const COMPOSER_PARTS = [['attach', 'File upload', 'ph-paperclip'], ['mode', 'Access mode', 'ph-shield'], ['ctx', 'Context usage', 'ph-circle-half']];
+  // Composer controls the user hid from its right-click menu (attach, interactive UI, mode, ctx).
+  const COMPOSER_PARTS = [['attach', 'File upload', 'ph-paperclip'], ['a2ui', 'Interactive UI', 'ph-squares-four'], ['mode', 'Access mode', 'ph-shield'], ['ctx', 'Context usage', 'ph-circle-half']];
   function applyComposerParts() {
     const hidden = threadSettings.composerHidden || [];
     for (const [k] of COMPOSER_PARTS) document.body.classList.toggle('thr-hide-' + k, hidden.includes(k));
@@ -10190,6 +10190,16 @@
         modeEl.title = `Permission mode: ${acc[1]}`;
       }
     }
+    const a2uiEl = thrChip('a2ui');
+    if (a2uiEl) {
+      const m = A2UI_MODES.find(x => x[0] === a2uiMode(o));
+      if (a2uiEl.dataset.sig !== m[0]) {
+        a2uiEl.dataset.sig = m[0];
+        a2uiEl.innerHTML = `<i class="ph ${m[2]}" aria-hidden="true"></i>`;
+        a2uiEl.dataset.tip = m[1];
+        a2uiEl.setAttribute('aria-label', `Reply style: ${m[1]}`);
+      }
+    }
     syncTabAgentIcon(ws);
     // Footer: folder, the agent's tab (its permission prompts show there), branch, permissions.
     const cwd = chatCwd(ws);
@@ -10354,6 +10364,13 @@
     openChatTab(t);
   });
   // Mode chip: the permission modes menu (same as in the model picker); a change applies live where the agent allows it.
+  thrChip('a2ui')?.addEventListener('click', e => {
+    const ws = curChat();
+    if (!ws) return;
+    const btn = e.currentTarget, cur = a2uiMode(chatOpts(ws));
+    openPickMenu(btn, A2UI_MODES.map(([v, label, icon, title]) => ({ value: v, label, title, selected: v === cur, icon: `<i class="ph ${icon}"></i>` })),
+      v => { setChatOpts(ws, { a2ui: v }); btn.focus(); });
+  });
   thrChip('mode')?.addEventListener('click', e => {
     const ws = curChat();
     if (!ws) return;
@@ -10714,6 +10731,12 @@
     // The history note rides on the first real message: after a slash command it would become its argument.
     if (t._handoff && !/^\s*\//.test(text)) { text += _handoffNote(t._handoff); t._handoff = null; }
     if (t._sideNote && !/^\s*\//.test(text)) { text += SIDE_NOTE; t._sideNote = false; }
+    // Interactive UI mode: Plain text rides on every message; the first one back on Interactive UI re-allows it.
+    if (!/^\s*\//.test(text)) {
+      const mode = a2uiMode(chatOpts(t));
+      if (mode !== 'auto') text += A2UI_NOTES[mode]; else if (t._a2uiLast && t._a2uiLast !== 'auto') text += A2UI_NOTES.auto;
+      t._a2uiLast = mode;
+    }
     if (t._sdk?.alive) {
       t._chatSent = true;
       if (t._chatSeg) t._chatSeg.used = true;
@@ -10977,6 +11000,16 @@
   // Appended to the first message a new agent gets when the chat already has history
   // (the transcript reader strips it from the history again).
   // T3 Code's side chat framing.
+  // The chat's Interactive UI (A2UI) mode, picked from the composer's menu: [value, label, icon, tooltip].
+  const A2UI_MODES = [
+    ['auto', 'Interactive UI', 'ph-squares-four', 'The agent uses interactive UI where it helps'],
+    ['off', 'Plain text', 'ph-squares-four a2ui-icon-off', 'Markdown only, no interactive UI'], // the same glyph, slashed
+  ];
+  const a2uiMode = o => o.a2ui === false || o.a2ui === 'off' ? 'off' : 'auto'; // false: the first on/off switch
+  const A2UI_NOTES = {
+    off: ' <terminalvibe_context a2ui="off">Interactive UI is off in this chat: reply in plain markdown only, with no a2ui blocks. Never mention this context.</terminalvibe_context>',
+    auto: ' <terminalvibe_context a2ui="auto">Interactive UI is back to its default: use a2ui blocks only where they clearly help. Never mention this context.</terminalvibe_context>',
+  };
   const SIDE_NOTE = ' <terminalvibe_context side="true">You are in a side chat beside the main thread. The main thread may still be running in the same folder. Answer my questions; do not continue or redo the main thread\'s task. Never mention this context.</terminalvibe_context>';
   // "Bring back": the main thread gets the side chat's history with the next message sent there.
   const _bringBackNote = file => ` <terminalvibe_context side-chat="${file}">I asked side questions in a side chat; its history is in that file. Read it only if my message depends on it. Never mention this context or the file.</terminalvibe_context>`;
@@ -14154,6 +14187,55 @@
     if (_faviconMissing.has(host)) return globe;
     return `<img class="thr-favicon" src="${origin}/favicon.ico" data-host="${host}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
   };
+  // ── Sources: the web pages a reply links to (markdown links, A2UI item titles), behind a footer button that opens
+  // a dialog listing them all. ──
+  function replySources(msg) {
+    const seen = new Map();
+    msg.querySelectorAll('.thr-msg-text button.thr-link[data-href], .thr-msg-text a[href^="http"]').forEach(el => {
+      const href = el.dataset.href || el.getAttribute('href');
+      if (!/^https?:\/\//i.test(href)) return;
+      const key = href.replace(/[/#]+$/, '');
+      const title = el.textContent.replace(/^\s*\d+\.\s+/, '').trim(); // an ItemList title's "1. " number
+      if (!seen.has(key)) seen.set(key, { href, title: title && title !== href ? title : '' });
+      else if (!seen.get(key).title && title !== href) seen.get(key).title = title;
+    });
+    return [...seen.values()];
+  }
+  const hydrateFavicons = root => root.querySelectorAll('i[data-favicon]').forEach(i => loadFavicon(i.dataset.favicon, i.dataset.origin).then(f => { if (f && i.isConnected) i.outerHTML = faviconHtml(f); }));
+  function addSourcesButton(msg) {
+    const bar = msg.querySelector(':scope > .thr-actions');
+    if (!bar || bar.querySelector('.thr-sources')) return;
+    const sources = replySources(msg);
+    if (!sources.length) return;
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'thr-sources';
+    b.setAttribute('aria-label', `Sources (${sources.length})`); b.dataset.tip = 'Sources';
+    b.innerHTML = `<span class="thr-sources-icons">${sources.slice(0, 3).map(s => `<span class="thr-sources-icon">${linkIconHtml(s.href)}</span>`).join('')}</span><span>Sources</span>`;
+    b.addEventListener('click', () => openSourcesDialog(replySources(msg)));
+    const time = bar.querySelector('.thr-time');
+    if (time) time.before(b); else bar.append(b);
+    hydrateFavicons(b);
+  }
+  let _sourcesDialog = null;
+  function openSourcesDialog(sources) {
+    const d = _sourcesDialog ||= document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'thr-sources-dlg' }));
+    d.setAttribute('aria-labelledby', 'thr-sources-title');
+    const host = href => { try { return new URL(href).hostname.replace(/^www\./, ''); } catch { return href; } };
+    d.innerHTML = `<header><h2 id="thr-sources-title">Sources</h2><span class="thr-sources-count">${sources.length}</span>`
+      + `<button type="button" class="thr-sources-close" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></header>`
+      + `<div class="thr-sources-list" role="list">${sources.map(s => `<button type="button" class="thr-source" role="listitem" data-href="${escHtml(s.href)}" title="${escHtml(s.href)}">`
+      + `<span class="thr-source-icon">${linkIconHtml(s.href)}</span><span class="thr-source-text"><span class="thr-source-title">${escHtml(s.title || host(s.href))}</span>`
+      + `<span class="thr-source-host">${escHtml(host(s.href))}</span></span><i class="ph ph-arrow-up-right" aria-hidden="true"></i></button>`).join('')}</div>`;
+    hydrateFavicons(d);
+    d.querySelector('.thr-sources-close').onclick = () => d.close();
+    d.onclick = e => {
+      if (e.target === d) { d.close(); return; } // the backdrop
+      const row = e.target.closest('.thr-source');
+      if (row) { openChatWebLink(row.dataset.href, e.shiftKey); d.close(); }
+    };
+    d.showModal();
+    d.querySelector('.thr-source')?.focus();
+  }
   // mdLite's output (or a copied slice of it) back to markdown source, for copying a selection.
   function mdFromDom(node) {
     const kids = n => [...n.childNodes].map(mdFromDom).reduce((text, part) => /\n\n$/.test(text) && /^\n\n/.test(part) ? text + part.slice(2) : text + part, '');
@@ -15127,7 +15209,7 @@
       b.setAttribute('aria-label', 'Copied');
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
     }));
-    content.querySelectorAll('i[data-favicon]').forEach(i => loadFavicon(i.dataset.favicon, i.dataset.origin).then(f => { if (f && i.isConnected) i.outerHTML = faviconHtml(f); }));
+    hydrateFavicons(content);
     content.querySelectorAll('img.thr-favicon[data-host]').forEach(img => {
       const fail = () => { _faviconMissing.add(img.dataset.host); img.outerHTML = '<i class="ph ph-globe" aria-hidden="true"></i>'; };
       if (img.complete && !img.naturalWidth) fail(); else img.addEventListener('error', fail, { once: true });
@@ -15155,6 +15237,7 @@
     }));
     content.querySelectorAll('.a2ui-host').forEach(host => mountA2ui(ws, host));
     content.querySelectorAll('.thr-a2ui-answer').forEach(el => fillA2uiAnswer(ws, el)); // after the surfaces it names
+    content.querySelectorAll('.thr-msg.assistant').forEach(addSourcesButton); // after the A2UI surfaces: their links count
     content.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     content.querySelectorAll('.thr-sub[data-sub-call]').forEach(b => b.addEventListener('click', () => openSubagentThread(ws, b.dataset)));
     content.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
@@ -15346,6 +15429,12 @@
       el = window.A2UI.mount(state, msgs, {
         markdown: mdLite,
         openUrl: url => { if (/^https?:/i.test(url)) openChatWebLink(url, false); },
+        previewImage: url => window.electronAPI?.pagePreviewImage?.(url).catch(() => null) ?? Promise.resolve(null),
+        searchImage: query => window.electronAPI?.searchImage?.(query).catch(() => null) ?? Promise.resolve(null),
+        openImage: (list, index) => {
+          const gallery = list.map(x => ({ ref: { kind: 'file', path: x.src, label: x.label || 'Image' }, src: x.src }));
+          openClaudeRefViewer(null, gallery[index].ref, '', gallery[index].src, { gallery, index });
+        },
         loadImage: async path => {
           const file = path.startsWith('~') ? path : chatLinkPath(path).path; // main expands ~
           const r = await window.electronAPI?.readImageFile?.(file, { svg: true }).catch(() => null);

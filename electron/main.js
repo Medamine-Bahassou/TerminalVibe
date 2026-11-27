@@ -1221,6 +1221,56 @@ ipcMain.handle('project:icon', async (_e, cwd) => {
   } catch {}
   return null;
 });
+// A web page's preview picture (og:image / twitter:image, what link previews show) as an absolute https URL; null if
+// none. A2UI ItemList rows use it as their thumbnail when the agent gave a link but no image.
+const previewImageCache = new Map();
+ipcMain.handle('page:preview-image', (_e, href) => {
+  if (!previewImageCache.has(href)) previewImageCache.set(href, pagePreviewImage(href));
+  return previewImageCache.get(href);
+});
+async function pagePreviewImage(href) {
+  try {
+    const url = new URL(href);
+    // Public https pages only: never probe the user's own machine or network for an agent-supplied link.
+    if (url.protocol !== 'https:' || /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[|0\.)/i.test(url.hostname)) return null;
+    const res = await require('electron').net.fetch(url.href, { credentials: 'omit', signal: AbortSignal.timeout(6000) });
+    if (!res.ok || !/html/.test(res.headers.get('content-type') || '')) return null;
+    const html = (await res.text()).slice(0, 400 * 1024);
+    const attr = (tag, name) => tag.match(new RegExp(String.raw`\b${name}\s*=\s*["']([^"']+)["']`, 'i'))?.[1];
+    const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map(m => ({ key: (attr(m[0], 'property') || attr(m[0], 'name') || '').toLowerCase(), content: attr(m[0], 'content') }));
+    for (const key of ['og:image:secure_url', 'og:image', 'og:image:url', 'twitter:image', 'twitter:image:src']) {
+      const content = metas.find(m => m.key === key && m.content)?.content;
+      if (!content) continue;
+      const img = new URL(content.replace(/&amp;/g, '&'), res.url || url.href);
+      if (img.protocol === 'https:') return img.href;
+    }
+  } catch {}
+  return null;
+}
+// An image for a search query, the way ChatGPT's AsyncImage works: the agent writes a query (A2UI imageQuery), the
+// app finds the picture. Official keyless APIs only, tried in order: Wikimedia Commons (places, landmarks, nature,
+// logos), then Openverse (WordPress.org's open image index over Flickr and others: products too). A small https
+// thumbnail URL, or null.
+const imageSearchCache = new Map();
+ipcMain.handle('image:search', (_e, query) => {
+  const q = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (!q) return null;
+  if (!imageSearchCache.has(q)) imageSearchCache.set(q, searchImage(q));
+  return imageSearchCache.get(q);
+});
+async function searchImage(q) {
+  const get = href => require('electron').net.fetch(href, {
+    credentials: 'omit', signal: AbortSignal.timeout(6000),
+    headers: { 'Api-User-Agent': 'TerminalVibe/1.0 (desktop app)' }, // Wikimedia asks API clients to name themselves
+  }).then(r => r.ok ? r.json() : null).catch(() => null);
+  const https = u => typeof u === 'string' && /^https:\/\//i.test(u) ? u : null;
+  const commons = await get(`https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search&gsrsearch=${encodeURIComponent(q + ' filetype:bitmap')}&gsrnamespace=6&gsrlimit=5&prop=imageinfo&iiprop=url|mime&iiurlwidth=640`);
+  const page = Object.values(commons?.query?.pages || {}).sort((a, b) => a.index - b.index)
+    .find(p => /^image\/(jpeg|png|webp)$/.test(p.imageinfo?.[0]?.mime) && https(p.imageinfo[0].thumburl));
+  if (page) return page.imageinfo[0].thumburl;
+  const open = await get(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&page_size=5&mature=false`);
+  return open?.results?.map(r => https(r.thumbnail)).find(Boolean) || null;
+}
 // A site's /favicon.ico as a data URL (so the chat can read its pixels and tint single-color icons); null if none.
 // The icon the site's homepage declares (<link rel="icon" / "shortcut icon" / "apple-touch-icon">) comes first: a
 // single-page app often has no /favicon.ico (its server answers that path with the app's HTML). Then /favicon.ico.
