@@ -90,6 +90,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   claudePaste: (query) => ipcRenderer.invoke('history:claude-paste', query),
   readAttachmentPreview: file => ipcRenderer.invoke('fs:attachment-preview', file),
   readImageFile: (file, opts) => ipcRenderer.invoke('fs:read-image', file, opts),
+  pagePreviewImage: url => ipcRenderer.invoke('page:preview-image', url),
   attachmentInfo: (file) => ipcRenderer.invoke('fs:attachment-info', file),
   codexImage: (query) => ipcRenderer.invoke('history:codex-image', query),
   threadAgents: (names) => ipcRenderer.invoke('threads:agents', names),

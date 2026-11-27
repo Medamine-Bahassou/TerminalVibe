@@ -3395,7 +3395,7 @@ body #sidebar :is(.ws-add, .ws-folder-add-btn) .ph { font-size:16px; }
 #sbr-thread .a2ui-chart-tip-row { display:flex; align-items:center; gap:6px; min-height:20px; }
 #sbr-thread .a2ui-chart-tip-row strong { font-weight:600; color:var(--fg); font-variant-numeric:tabular-nums; }
 #sbr-thread .a2ui-chart-tip-key { flex:none; width:10px; height:2px; border-radius:1px !important; }
-#sbr-thread .a2ui-chart-table { margin:0; }
+#sbr-thread :is(.a2ui-chart-table, .a2ui-table) { margin:0; }
 #sbr-thread .a2ui-block [hidden] { display:none !important; } /* beats component display rules (filtered choices, tab panes, the table) */
 @media (prefers-reduced-motion: reduce) {
   #sbr-thread .a2ui-chart-toggle { transition:none; }
@@ -3827,3 +3827,103 @@ body .chat-file-panel .gdv-comment-actions .gdv-comment-add:hover { background:c
 /* A diff line opened from a sent "@path:line" chip (openChatDiffAt): marked like the file panel's linked line. */
 .chat-file-panel .gdv-table tr.cfp-target > td { box-shadow:inset 0 1px 0 color-mix(in srgb,var(--accent) 55%,var(--bg)), inset 0 -1px 0 color-mix(in srgb,var(--accent) 55%,var(--bg)); }
 .chat-file-panel .gdv-table tr.cfp-target > .gdv-num { color:var(--fg); }
+
+/* A2UI images: click to open in the viewer; a dead URL shows a quiet placeholder. Gallery: a ChatGPT-style mosaic,
+   one large tile and up to four small ones ("+N" on the last). */
+#sbr-thread .a2ui-zoomable { cursor:zoom-in; }
+#sbr-thread .a2ui-img-failed { display:flex; align-items:center; gap:8px; min-height:40px; padding:8px 12px; border:1px solid var(--ui-line); border-radius:8px !important; font-size:12px; color:var(--dim-text); }
+#sbr-thread .a2ui-img-failed i { font-size:16px; }
+#sbr-thread .a2ui-gallery { display:grid; gap:4px; grid-template-columns:2fr 1fr 1fr; grid-auto-rows:112px; max-width:640px; }
+#sbr-thread .a2ui-gallery[data-count="0"] { display:none; }
+#sbr-thread .a2ui-gallery[data-count="1"] { grid-template-columns:1fr; grid-auto-rows:260px; }
+#sbr-thread .a2ui-gallery[data-count="2"] { grid-template-columns:1fr 1fr; grid-auto-rows:200px; }
+#sbr-thread .a2ui-gallery[data-count="3"] { grid-template-columns:2fr 1fr; }
+#sbr-thread .a2ui-gallery:is([data-count="3"], [data-count="4"], [data-count="5"]) .a2ui-gallery-tile:first-child { grid-row:span 2; }
+#sbr-thread .a2ui-gallery[data-count="4"] .a2ui-gallery-tile:last-child { grid-column:span 2; }
+#sbr-thread .a2ui-gallery-tile { position:relative; min-width:0; padding:0; border:0; overflow:hidden; cursor:zoom-in; background:var(--ui-surface); border-radius:8px !important; }
+#sbr-thread .a2ui-gallery-tile img { display:block; width:100%; height:100%; object-fit:cover; }
+#sbr-thread .a2ui-gallery-tile:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#sbr-thread .a2ui-gallery-more { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:color-mix(in srgb,var(--bg) 55%,transparent); font:600 15px var(--ui-font); color:var(--fg); font-variant-numeric:tabular-nums; }
+
+/* A2UI ItemList: recommendation rows (thumbnail, linked title, description, note) between hairlines. */
+#sbr-thread .a2ui-items { display:flex; flex-direction:column; container-type:inline-size; }
+#sbr-thread .a2ui-item { display:flex; align-items:flex-start; gap:14px; padding:14px 0; border-top:1px solid var(--ui-line); }
+#sbr-thread .a2ui-item:first-child { border-top:0; padding-top:4px; }
+#sbr-thread .a2ui-item-body { min-width:0; display:flex; flex-direction:column; gap:4px; }
+#sbr-thread .a2ui-item-title { font-size:14px; font-weight:600; color:var(--fg); }
+#sbr-thread a.a2ui-item-title { text-decoration:underline dotted color-mix(in srgb,var(--fg) 45%,transparent); text-underline-offset:4px; cursor:pointer; transition:color 150ms; }
+#sbr-thread a.a2ui-item-title:hover { color:var(--accent); }
+#sbr-thread .a2ui-item-desc { color:var(--fg); }
+#sbr-thread .a2ui-item-note { color:var(--muted-text); }
+#sbr-thread .a2ui-item :is(.a2ui-item-desc, .a2ui-item-note) :is(p, ul) { margin:0; }
+@media (prefers-reduced-motion: reduce) { #sbr-thread a.a2ui-item-title { transition:none; } }
+
+/* A2UI image loading: hidden until downloaded and decoded, then a fade; ItemList thumbnails shimmer while loading and
+   fall back to a tinted tile with the item's initial. */
+#sbr-thread .a2ui-fade { opacity:0; transition:opacity 220ms ease-out; }
+#sbr-thread .a2ui-fade.loaded { opacity:1; }
+#sbr-thread .a2ui-item-thumb { position:relative; flex:none; width:160px; height:112px; overflow:hidden; background:var(--ui-surface); border-radius:10px !important; }
+#sbr-thread .a2ui-item-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; cursor:zoom-in; }
+#sbr-thread .a2ui-item-thumb.loading::before { content:""; position:absolute; inset:0;
+  background:linear-gradient(100deg, transparent 30%, color-mix(in srgb,var(--fg) 7%,transparent) 50%, transparent 70%) 0 0 / 200% 100%;
+  animation:a2ui-shimmer 1.4s linear infinite; }
+@keyframes a2ui-shimmer { from { background-position:150% 0; } to { background-position:-50% 0; } }
+#sbr-thread .a2ui-item-thumb.empty { display:flex; align-items:center; justify-content:center; border:1px solid var(--ui-line);
+  background:linear-gradient(135deg, color-mix(in srgb,var(--accent) 16%,var(--ui-surface)), color-mix(in srgb,var(--accent) 4%,var(--ui-surface))); }
+#sbr-thread .a2ui-item-initial { font:600 30px/1 var(--ui-font); color:color-mix(in srgb,var(--accent) 65%,var(--fg)); }
+@container (max-width:420px) {
+  #sbr-thread .a2ui-item-thumb { width:96px; height:72px; border-radius:8px !important; }
+  #sbr-thread .a2ui-item-initial { font-size:22px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #sbr-thread .a2ui-fade { transition:none; }
+  #sbr-thread .a2ui-item-thumb.loading::before { animation:none; }
+}
+
+/* Reply footer "Sources" button (stacked favicons + label, beside Fork) and the Sources dialog it opens. */
+#sbr-thread .thr-sources { display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 8px 0 6px; margin-left:2px; background:transparent; border:0; border-radius:6px !important;
+  font:500 11.5px var(--ui-font); color:var(--dim-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+#sbr-thread .thr-sources:hover { background:var(--ui-hover); color:var(--fg); }
+#sbr-thread .thr-sources:focus-visible { outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); color:var(--fg); }
+#sbr-thread .thr-sources-icons { display:flex; }
+#sbr-thread .thr-sources-icon { display:grid; place-items:center; width:16px; height:16px; margin-left:-5px; background:var(--bg); border:1px solid var(--bg); border-radius:50% !important; overflow:hidden; }
+#sbr-thread .thr-sources-icon:first-child { margin-left:0; }
+#sbr-thread .thr-sources-icon i { font-size:11px; }
+#sbr-thread .thr-sources-icon .thr-favicon, body dialog.thr-sources-dlg .thr-source-icon .thr-favicon { display:block; width:12px; height:12px; object-fit:contain; border-radius:3px !important; }
+#sbr-thread .thr-sources-icon .thr-favicon.mono, body dialog.thr-sources-dlg .thr-source-icon .thr-favicon.mono { background-color:currentColor; -webkit-mask:var(--icon) center / contain no-repeat; mask:var(--icon) center / contain no-repeat; }
+body dialog.thr-sources-dlg { width:440px; max-width:calc(100vw - 32px); max-height:min(560px, calc(100vh - 96px)); margin:auto; padding:0; flex-direction:column; overflow:hidden;
+  border:1px solid var(--border); border-radius:12px !important; background:var(--ui-surface); color:var(--fg); box-shadow:0 16px 48px #0006; font:400 13px/20px var(--ui-font); }
+body dialog.thr-sources-dlg[open] { display:flex; }
+dialog.thr-sources-dlg::backdrop { background:rgba(0,0,0,0.5); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+body dialog.thr-sources-dlg header { display:flex; align-items:center; gap:8px; padding:16px 16px 12px 20px; border-bottom:1px solid var(--ui-line); }
+body dialog.thr-sources-dlg h2 { margin:0; font:600 15px/20px var(--ui-font); }
+body dialog.thr-sources-dlg .thr-sources-count { padding:0 6px; border-radius:4px !important; background:var(--ui-hover); font-size:11px; line-height:18px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+body dialog.thr-sources-dlg .thr-sources-close { display:grid; place-items:center; width:28px; height:28px; margin-left:auto; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
+body dialog.thr-sources-dlg .thr-sources-close:hover { background:var(--ui-hover); color:var(--fg); }
+body dialog.thr-sources-dlg .thr-sources-list { display:flex; flex-direction:column; gap:2px; padding:8px; overflow-y:auto; }
+body dialog.thr-sources-dlg .thr-source { display:flex; align-items:center; gap:12px; width:100%; min-height:48px; padding:8px 10px; background:transparent; border:0; border-radius:6px !important;
+  text-align:left; color:var(--fg); font:inherit; cursor:pointer; transition:background-color 140ms, color 140ms; }
+body dialog.thr-sources-dlg .thr-source:hover { background:var(--ui-hover); }
+body dialog.thr-sources-dlg .thr-source:focus-visible, body dialog.thr-sources-dlg .thr-sources-close:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+body dialog.thr-sources-dlg .thr-source-icon { display:grid; place-items:center; flex:none; width:28px; height:28px; border:1px solid var(--ui-line); border-radius:6px !important; background:var(--bg); color:var(--muted-text); }
+body dialog.thr-sources-dlg .thr-source-icon .thr-favicon { width:16px; height:16px; }
+body dialog.thr-sources-dlg .thr-source-icon i { font-size:14px; }
+body dialog.thr-sources-dlg .thr-source-text { display:flex; flex-direction:column; min-width:0; flex:1; }
+body dialog.thr-sources-dlg .thr-source-title { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+body dialog.thr-sources-dlg .thr-source-host { font:400 11.5px/16px var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+body dialog.thr-sources-dlg .thr-source > .ph-arrow-up-right { flex:none; font-size:14px; color:var(--dim-text); transition:color 140ms; }
+body dialog.thr-sources-dlg .thr-source:hover > .ph-arrow-up-right { color:var(--fg); }
+@media (prefers-reduced-motion: reduce) { #sbr-thread .thr-sources, body dialog.thr-sources-dlg .thr-source, body dialog.thr-sources-dlg .thr-sources-close, body dialog.thr-sources-dlg .ph-arrow-up-right { transition:none; } }
+/* Sources dialog motion: same as the app's other modals (opt-in via Appearance, off for reduced motion): the backdrop
+   fades, the panel fades and scales from .96, on open and on close (display/overlay stay until the fade ends). */
+@media (prefers-reduced-motion: no-preference) {
+  body.ui-animations dialog.thr-sources-dlg { opacity:0; transform:scale(.96);
+    transition:opacity 180ms ease-out, transform 180ms cubic-bezier(.2,.8,.2,1), display 180ms allow-discrete, overlay 180ms allow-discrete; }
+  body.ui-animations dialog.thr-sources-dlg[open] { opacity:1; transform:scale(1); }
+  body.ui-animations dialog.thr-sources-dlg::backdrop { opacity:0; transition:opacity 180ms ease-out, display 180ms allow-discrete, overlay 180ms allow-discrete; }
+  body.ui-animations dialog.thr-sources-dlg[open]::backdrop { opacity:1; }
+  @starting-style {
+    body.ui-animations dialog.thr-sources-dlg[open] { opacity:0; transform:scale(.96); }
+    body.ui-animations dialog.thr-sources-dlg[open]::backdrop { opacity:0; }
+  }
+}

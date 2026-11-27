@@ -234,6 +234,17 @@
     return el;
   };
   const safeUrl = u => /^(https?:|data:(image|video|audio)\/)/i.test(u) ? u : '';
+  // Images stay hidden until fully downloaded and decoded, then fade in (never painted chunk by chunk).
+  const fadeIn = (img, done) => {
+    img.classList.add('a2ui-fade');
+    img.addEventListener('load', () => img.decode().catch(() => {}).then(() => { img.classList.add('loaded'); done?.(); }));
+    return img;
+  };
+  const brokenImage = alt => {
+    const el = h('div', 'a2ui-img-failed'), i = h('i', 'ph ph-image-broken'), t = h('span');
+    i.setAttribute('aria-hidden', 'true'); t.textContent = alt ? `Image unavailable: ${alt}` : 'Image unavailable';
+    el.append(i, t); return el;
+  };
   // A local image: absolute, file://, or relative to the chat's folder (resolved by the app).
   const isLocal = u => /^(file:\/\/|\/|~[\\/]|[A-Za-z]:[\\/]|\.{1,2}\/)/.test(u) || /^[^:]+\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(u);
   const media = (tag, cls) => (p, c) => {
@@ -255,7 +266,7 @@
       return el;
     },
     Image(p, c) {
-      const img = h('img', `a2ui-image a2ui-img-${p.variant || 'mediumFeature'}`);
+      const img = fadeIn(h('img', `a2ui-image a2ui-img-${p.variant || 'mediumFeature'}`));
       img.referrerPolicy = 'no-referrer'; img.loading = 'lazy'; img.decoding = 'async';
       // The spec's default is "fill", which stretches a picture into the wide feature box; keep its shape unless asked.
       img.style.objectFit = p.fit === 'scaleDown' ? 'scale-down' : p.fit || 'contain';
@@ -270,7 +281,86 @@
         img.removeAttribute('src');
         if (isLocal(u)) c.s.opts.loadImage?.(u.replace(/^file:\/\//i, '')).then(src => { if (src && want === u) img.src = src; });
       });
+      if (!/^(icon|avatar)$/.test(p.variant)) { // pictures open in the app's image viewer
+        img.classList.add('a2ui-zoomable');
+        img.addEventListener('click', () => { if (img.naturalWidth) c.s.opts.openImage?.([{ src: img.currentSrc || img.src, label: img.alt }], 0); });
+      }
+      // A dead or made-up URL shows a quiet placeholder instead of nothing.
+      img.addEventListener('error', () => { if (img.getAttribute('src')) img.replaceWith(brokenImage(img.alt)); });
       return img;
+    },
+    // TerminalVibe extension: {"component":"Gallery","images":[{"url","description"}, …]} — a mosaic of up to 5 tiles
+    // (one large, the rest small, "+N" on the last); a click opens them all in the image viewer.
+    // TerminalVibe extension: {"component":"ItemList","numbered":true,"items":[{"title","url","image","description","note"}, …]}
+    // — recommendation rows (places, products, books…): thumbnail, linked title, description and a note line.
+    ItemList(p, c) {
+      const el = h('div', 'a2ui-items');
+      const md = (cls, t) => { const d = h('div', `a2ui-text ${cls}`); if (c.s.opts.markdown) d.innerHTML = c.s.opts.markdown(t); else d.textContent = t; return d; };
+      bind(c, () => {
+        const raw = val(p.items, c), numbered = val(p.numbered, c) !== false;
+        const list = (Array.isArray(raw) ? raw : []).filter(isObj).map(x => Object.fromEntries(['title', 'url', 'image', 'description', 'note'].map(k => [k, str(val(x[k], c))])));
+        // Every row gets a thumbnail slot once any row can have a picture, so the text column stays aligned.
+        const thumbs = list.some(x => safeUrl(x.image) || safeUrl(x.url));
+        el.replaceChildren(...list.map((x, i) => {
+          const row = h('div', 'a2ui-item'), body = h('div', 'a2ui-item-body'), title = h(safeUrl(x.url) ? 'a' : 'div', 'a2ui-item-title');
+          // No image given: the linked page's own preview picture (found by the app); a shimmer while it loads, and
+          // a tinted tile with the item's initial when there is no picture at all.
+          const src = safeUrl(x.image) ? Promise.resolve(x.image) : safeUrl(x.url) && c.s.opts.previewImage ? c.s.opts.previewImage(x.url) : null;
+          if (thumbs) {
+            const thumb = h('div', 'a2ui-item-thumb'), img = h('img', 'a2ui-item-img');
+            const empty = () => {
+              img.remove(); thumb.classList.remove('loading'); thumb.classList.add('empty');
+              const letter = h('span', 'a2ui-item-initial'); letter.setAttribute('aria-hidden', 'true');
+              letter.textContent = [...x.title.replace(/^[^\p{L}\p{N}]+/u, '')][0]?.toUpperCase() || '';
+              thumb.append(letter);
+            };
+            if (!src) empty();
+            else {
+              thumb.classList.add('loading');
+              img.alt = x.title; img.referrerPolicy = 'no-referrer'; img.decoding = 'async';
+              fadeIn(img, () => thumb.classList.remove('loading'));
+              img.addEventListener('error', empty); // a dead URL: the placeholder, the row keeps its text
+              img.addEventListener('click', () => {
+                const shown = [...el.querySelectorAll('img.a2ui-item-img')].filter(m => m.naturalWidth);
+                c.s.opts.openImage?.(shown.map(m => ({ src: m.currentSrc || m.src, label: m.alt })), Math.max(0, shown.indexOf(img)));
+              });
+              src.then(u => { if (safeUrl(u || '')) img.src = u; else empty(); });
+              thumb.append(img);
+            }
+            row.append(thumb);
+          }
+          title.textContent = (numbered ? `${i + 1}. ` : '') + x.title;
+          if (title.tagName === 'A') { title.href = x.url; title.addEventListener('click', e => { e.preventDefault(); c.s.opts.openUrl?.(x.url); }); }
+          body.append(title);
+          if (x.description) body.append(md('a2ui-item-desc', x.description));
+          if (x.note) body.append(md('a2ui-item-note', x.note));
+          row.append(body);
+          return row;
+        }));
+      });
+      return el;
+    },
+    Gallery(p, c) {
+      const el = h('div', 'a2ui-gallery');
+      bind(c, () => {
+        const list = (Array.isArray(val(p.images, c)) ? val(p.images, c) : [])
+          .map(x => ({ src: str(isObj(x) ? val(x.url, c) : x), label: isObj(x) ? str(val(x.description, c)) : '' }))
+          .filter(x => safeUrl(x.src));
+        const failed = new Set();
+        const count = () => { el.dataset.count = String(Math.min(5, list.length - failed.size)); };
+        const tiles = list.slice(0, 5).map((x, i) => {
+          const tile = h('button', 'a2ui-gallery-tile'), img = fadeIn(h('img'));
+          tile.type = 'button'; tile.title = x.label; tile.setAttribute('aria-label', x.label || `Image ${i + 1}`);
+          img.src = x.src; img.alt = x.label; img.referrerPolicy = 'no-referrer'; img.loading = 'lazy'; img.decoding = 'async';
+          img.addEventListener('error', () => { failed.add(x); tile.remove(); count(); el.hidden = failed.size === list.length; });
+          tile.append(img);
+          if (i === 4 && list.length > 5) { const more = h('span', 'a2ui-gallery-more'); more.textContent = `+${list.length - 5}`; tile.append(more); }
+          tile.addEventListener('click', () => { const ok = list.filter(y => !failed.has(y)); c.s.opts.openImage?.(ok, Math.max(0, ok.indexOf(x))); });
+          return tile;
+        });
+        el.replaceChildren(...tiles); count();
+      });
+      return el;
     },
     Icon(p, c) {
       const el = h('i', 'ph a2ui-icon');
@@ -523,13 +613,25 @@
         row.append(key, v, n); return row;
       }));
       tip.hidden = false;
-      tip.style.left = `${x + 12 + tip.offsetWidth > W ? Math.max(0, x - 12 - tip.offsetWidth) : Math.max(0, x + 12)}px`;
+      placeTip(x, W);
+    }
+    // Beside the pointer while hovering (so it stays in view when the chart's top is scrolled away); keyboard: top, beside x.
+    let ptr = null;
+    function placeTip(x, W = plot.clientWidth) {
+      const [px, py] = ptr || [x, null], tw = tip.offsetWidth, th = tip.offsetHeight;
+      tip.style.left = `${px + 12 + tw > W ? Math.max(0, px - 12 - tw) : Math.max(0, px + 12)}px`;
+      tip.style.top = py == null ? '' : `${Math.max(0, Math.min(plot.clientHeight - th, py - th - 12 < 0 ? py + 12 : py - th - 12))}px`;
     }
     // Keyboard: Tab focuses the chart, arrows step through x positions or slices; a click never focuses it (no ring).
     function bindHover(svg, count, show, hide) {
       let at = -1;
       const go = i => { at = i; show(i); };
-      svg.addEventListener('pointerleave', () => { at = -1; hide(); });
+      svg.addEventListener('pointermove', e => {
+        const r = plot.getBoundingClientRect();
+        ptr = [e.clientX - r.left, e.clientY - r.top];
+        if (!tip.hidden) placeTip();
+      });
+      svg.addEventListener('pointerleave', () => { at = -1; ptr = null; hide(); });
       svg.addEventListener('mousedown', e => e.preventDefault());
       svg.addEventListener('focus', () => go(Math.max(0, at)));
       svg.addEventListener('blur', () => { at = -1; hide(); });
@@ -668,6 +770,26 @@
     plot.style.height = `${height}px`;
     bind(c, () => { const next = read(); if (JSON.stringify(next) === JSON.stringify(data)) return; data = next; draw(); });
     new ResizeObserver(() => { if (plot.clientWidth !== width) draw(); }).observe(plot);
+    return el;
+  };
+
+  // ── Table (TerminalVibe extension): {"component":"Table","columns":["Ticker","Mon",…],"rows":[["AAPL",231.84,…],…]} ──
+  // Real columns instead of "·"-joined Text rows; numeric cells right-align in tabular figures.
+  C.Table = (p, c) => {
+    const el = h('div', 'thr-table-wrap a2ui-table'), scroll = h('div', 'thr-table-scroll');
+    el.append(scroll);
+    const isNum = v => typeof v === 'number' || /^[-+]?[$€£¥₹]?[\d,.]+[%KMBT]?$/.test(String(v ?? '').trim());
+    const cell = (tag, v) => { const td = h(tag); td.textContent = str(v); if (isNum(v)) td.style.textAlign = 'right'; return td; };
+    bind(c, () => {
+      const cols = val(p.columns, c), rows = val(p.rows, c);
+      const t = h('table', 'thr-table'), thead = h('thead'), tbody = h('tbody'), head = h('tr');
+      const list = Array.isArray(rows) ? rows.filter(Array.isArray) : [];
+      if (Array.isArray(cols)) head.append(...cols.map((v, i) => { const th = cell('th', v); if (list.length && isNum(list[0][i])) th.style.textAlign = 'right'; return th; }));
+      thead.append(head);
+      tbody.append(...list.map(r => { const tr = h('tr'); tr.append(...r.map(v => cell('td', v))); return tr; }));
+      t.append(thead, tbody);
+      scroll.replaceChildren(t);
+    });
     return el;
   };
 
