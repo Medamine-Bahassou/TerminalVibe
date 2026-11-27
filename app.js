@@ -12175,18 +12175,19 @@
   // marks the line. False when no diff has the file (the caller opens the file itself).
   function openChatDiffAt(owner, p, line) {
     if (!owner) return false;
+    // One file under different spellings: "\\wsl.localhost\Ubuntu\home\…\app.js", "/home/…/app.js", "app.js".
     const norm = s => s.replace(/\\/g, '/');
-    const hit = [..._chatDiffs].reverse().find(([k, d]) => k.startsWith(owner.id + '|')
-      && d.files.some(f => norm(f.path) === norm(p) || norm(f.path).endsWith('/' + norm(p))));
+    const same = (a, b) => { a = norm(a).replace(/^\/+/, '/'); b = norm(b).replace(/^\/+/, '/'); const tail = s => s[0] === '/' ? s : '/' + s; return a === b || a.endsWith(tail(b)) || b.endsWith(tail(a)); };
+    const hit = [..._chatDiffs].reverse().find(([k, d]) => k.startsWith(owner.id + '|') && d.files.some(f => same(f.path, p)));
     if (!hit) return false;
     const panel = openChatDiffPanel(owner, hit[1].files, hit[1].cwd, hit[0]);
-    const file = panel && [...panel.querySelectorAll('.gdv-file')].find(f => norm(f.dataset.path) === norm(p) || norm(p).endsWith('/' + norm(f.dataset.path)));
+    const file = panel && [...panel.querySelectorAll('.gdv-file')].find(f => same(f.dataset.path, p));
     if (!file) return !!panel;
     file.classList.remove('cfp-collapsed');
     file.querySelector('.gdv-file-head').setAttribute('aria-expanded', 'true');
     const row = line && file.querySelector(`tr[data-line="${line}"]`);
-    if (row) { row.classList.add('cfp-target'); row.scrollIntoView({ block: 'center' }); }
-    else file.scrollIntoView({ block: 'start' });
+    row?.classList.add('cfp-target');
+    requestAnimationFrame(() => (row || file).scrollIntoView({ block: row ? 'center' : 'start' })); // once the panel is laid out
     return true;
   }
   // The changes as git-style unified diffs, one per file, for @git-diff-view/core. Claude's hunks carry their @@ -a,b +c,d @@; a new file
