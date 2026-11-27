@@ -3806,12 +3806,11 @@ html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):hover:not(:disa
 @media (prefers-reduced-motion:reduce) { #sbr-thread .thr-msg.assistant.thr-fade-in { animation:none; } }
 
 /* ── Diff panel line comments (openChatDiffPanel): a "+" on the hovered line's gutter opens a comment box under it ── */
-.chat-file-panel .gdv-num { position:relative; }
-body .chat-file-panel .gdv-comment-btn { position:absolute; left:2px; top:1px; width:18px; height:18px; display:grid; place-items:center; padding:0; border:0; border-radius:4px !important; background:var(--accent); color:#0d1017; font-size:12px; cursor:pointer; opacity:0; transition:background-color 150ms, box-shadow 150ms; }
+.chat-file-panel .gdv-op { position:relative; }
+body .chat-file-panel .gdv-comment-btn { position:absolute; left:3px; top:1px; width:18px; height:18px; display:grid; place-items:center; padding:0; border:0; border-radius:4px !important; background:var(--accent); color:#0d1017; font-size:12px; cursor:pointer; opacity:0; transition:background-color 150ms, box-shadow 150ms; }
 .chat-file-panel tr:hover .gdv-comment-btn, .chat-file-panel .gdv-comment-btn:focus-visible { opacity:1; }
 .chat-file-panel .gdv-comment-btn:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
 .chat-file-panel .gdv-comment-btn:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
-.chat-file-panel .cfp-no-ln .gdv-comment-btn { color:#0d1017; } /* its number cell is transparent text */
 .chat-file-panel .gdv-comment-row > td { padding:8px 12px !important; background:var(--ui-sidebar); border-top:1px solid var(--ui-line); border-bottom:1px solid var(--ui-line); }
 .chat-file-panel .gdv-comment { display:flex; flex-direction:column; gap:8px; font:400 13px/20px var(--ui-font); }
 body .chat-file-panel .gdv-comment textarea { width:100%; min-height:68px; box-sizing:border-box; padding:6px 10px; resize:vertical; background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:6px !important; font:inherit; transition:border-color 150ms, box-shadow 150ms; }
