@@ -8115,9 +8115,10 @@
         })
         // An @path mention (sent as typed from the composer's @ picker): the same file/folder chip as in the composer.
         // shortcut: a name without an extension is shown as a folder; stat it if files like "Makefile" look wrong.
-        .replace(/(^|\s)@((?:\.{1,2}|~)?[\w.-]*[\\/][^\s<]*|[\w-]+\.[\w]+)(?=$|[\s,;!?)])/g, (all, pre, p) => {
-          const name = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p, dir = /[\\/]$/.test(p) || !/\.\w+$/.test(name);
-          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-at-ref" data-path="${p}" title="${p}"><i class="ph ${dir ? 'ph-folder' : linkFileIcon(name)}" aria-hidden="true"></i><span>${name}</span></a></span>`;
+        .replace(/(^|\s)@((?:\.{1,2}|~)?[\w.-]*[\\/][^\s<]*|[\w-]+\.[\w]+(?::\d+)?)(?=$|[\s,;!?)])/g, (all, pre, p) => {
+          const name = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p, file = name.replace(/:\d+$/, ''); // "app.js:12": a diff comment's line
+          const dir = /[\\/]$/.test(p) || !/\.\w+$/.test(file);
+          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-at-ref" data-path="${p}" title="${p}"><i class="ph ${dir ? 'ph-folder' : linkFileIcon(file)}" aria-hidden="true"></i><span>${name}</span></a></span>`;
         })).join('');
     return { html, paths };
   }
@@ -9948,7 +9949,12 @@
     if (cite) { e.preventDefault(); jumpToCitation({ cite: cite.title }); return; }
     // A sent @file chip opens the file beside the chat (openChatFileLink); a folder, or an unreadable file, in the file manager.
     const atRef = e.target.closest('.thr-msg a.thr-at-ref[data-path]');
-    if (atRef) { e.preventDefault(); void openChatFileLink(curChat(), chatLinkPath(atRef.dataset.path).path); return; }
+    if (atRef) {
+      e.preventDefault();
+      const { path, line } = chatLinkPath(atRef.dataset.path), raw = atRef.dataset.path.replace(/:\d+(:\d+)?$/, '');
+      if (!openChatDiffAt(curChat(), raw, line)) void openChatFileLink(curChat(), path, line);
+      return;
+    }
     const lockBtn = e.target.closest('[data-lock-act]');
     if (lockBtn) {
       const ws = curChat(), t = ws && (liveThreadAgent(ws) || ws);
@@ -9986,7 +9992,7 @@
         if (!a.isConnected) return;
         if (!kind) { (a.closest('.thr-inline-ref') || a).replaceWith('@' + a.dataset.path); return; }
         const name = a.lastElementChild?.textContent || '';
-        a.querySelector('i').className = `ph ${kind === 'dir' ? 'ph-folder' : linkFileIcon(name)}`;
+        a.querySelector('i').className = `ph ${kind === 'dir' ? 'ph-folder' : linkFileIcon(name.replace(/:\d+$/, ''))}`;
       });
     }
   }).observe(thrPage, { childList: true, subtree: true });
@@ -12163,6 +12169,25 @@
       if (e.key === 'Escape') { e.stopPropagation(); e.target.closest('.gdv-comment-row').remove(); } // not the panel's Esc
       else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.target.closest('.gdv-comment').querySelector('.gdv-comment-add').click();
     });
+    return panel;
+  }
+  // A sent "@path:line" chip from a diff comment: opens the latest of this chat's diffs with that file, unfolds it and
+  // marks the line. False when no diff has the file (the caller opens the file itself).
+  function openChatDiffAt(owner, p, line) {
+    if (!owner) return false;
+    const norm = s => s.replace(/\\/g, '/');
+    const hit = [..._chatDiffs].reverse().find(([k, d]) => k.startsWith(owner.id + '|')
+      && d.files.some(f => norm(f.path) === norm(p) || norm(f.path).endsWith('/' + norm(p))));
+    if (!hit) return false;
+    const panel = openChatDiffPanel(owner, hit[1].files, hit[1].cwd, hit[0]);
+    const file = panel && [...panel.querySelectorAll('.gdv-file')].find(f => norm(f.dataset.path) === norm(p) || norm(p).endsWith('/' + norm(f.dataset.path)));
+    if (!file) return !!panel;
+    file.classList.remove('cfp-collapsed');
+    file.querySelector('.gdv-file-head').setAttribute('aria-expanded', 'true');
+    const row = line && file.querySelector(`tr[data-line="${line}"]`);
+    if (row) { row.classList.add('cfp-target'); row.scrollIntoView({ block: 'center' }); }
+    else file.scrollIntoView({ block: 'start' });
+    return true;
   }
   // The changes as git-style unified diffs, one per file, for @git-diff-view/core. Claude's hunks carry their @@ -a,b +c,d @@; a new file
   // (all + lines) starts at line 1; a hunk without numbers (Codex's apply_patch) gets placeholder ones, flagged.
