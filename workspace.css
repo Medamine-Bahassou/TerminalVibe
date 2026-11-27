@@ -1355,7 +1355,7 @@ body .ctx-item:hover .ctx-shell-icon { fill:var(--fg); }
 body #sidebar.expanded:not(.hover-overlay) { flex-shrink:0; }
 
 /* ── Terminal: email addresses blurred until clicked (decoration from blurTermEmails) ── */
-.xterm .xterm-decoration:is(.term-email-blur, .term-user-blur), .tg-tab .tg-tab-name.username-redacted::after {
+.xterm .xterm-decoration:is(.term-email-blur, .term-user-blur) {
   -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
   background:color-mix(in srgb,var(--fg) 6%,transparent);
   border-radius:4px !important;
@@ -1363,8 +1363,8 @@ body #sidebar.expanded:not(.hover-overlay) { flex-shrink:0; }
 .xterm .xterm-decoration.term-email-blur { pointer-events:auto; cursor:pointer; }
 .xterm .xterm-decoration.term-user-blur { pointer-events:none; }
 body:not(.blur-work-usernames) .xterm .xterm-decoration.term-user-blur { display:none !important; }
-.tg-tab .tg-tab-name.username-redacted { position:relative; user-select:none; }
-.tg-tab .tg-tab-name.username-redacted::after { content:''; position:absolute; inset:0; pointer-events:none; }
+/* Blur the text itself (like the usage modal email), not a backdrop box: nothing sits behind a tab name to blur. */
+.tg-tab .tg-tab-name.username-redacted { filter:blur(4px); user-select:none; }
 /* Settings → Hide email addresses off (xterm sets display inline, hence !important). */
 body.show-emails .xterm .xterm-decoration.term-email-blur { display:none !important; }
 /* Keep revealed addresses clickable so the next click restores their blur. */
