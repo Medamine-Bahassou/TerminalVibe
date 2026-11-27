@@ -37,9 +37,17 @@ ensureVendorFile('split.min.js', path.join('node_modules', 'split.js', 'dist', '
 ensureVendorFile('coloris.min.js', path.join('node_modules', '@melloware', 'coloris', 'dist', 'umd', 'coloris.min.js'));
 ensureVendorFile('coloris.min.css', path.join('node_modules', '@melloware', 'coloris', 'dist', 'coloris.min.css'));
 ensureVendorFile('highlight.min.js', path.join('node_modules', '@highlightjs', 'cdn-assets', 'highlight.min.js'));
-// diff2html: the chat's diff panel (the UI build without its own highlight.js; it is given the one above).
-ensureVendorFile('diff2html-ui-base.min.js', path.join('node_modules', 'diff2html', 'bundles', 'js', 'diff2html-ui-base.min.js'));
-ensureVendorFile('diff2html.min.css', path.join('node_modules', 'diff2html', 'bundles', 'css', 'diff2html.min.css'));
+// @git-diff-view/core parses the chat's diff panel; it ships ESM only, so it is bundled into a global (GitDiffViewCore).
+// Its lowlight highlighter (~1MB with highlight.js) is stubbed out: the app colors lines with the hljs above.
+if (!fs.existsSync(path.join(vendorDir, 'git-diff-view-core.min.js'))) {
+  require('esbuild').buildSync({
+    entryPoints: [path.join(root, 'node_modules', '@git-diff-view', 'core', 'dist', 'esm', 'index.mjs')],
+    bundle: true, minify: true, format: 'iife', globalName: 'GitDiffViewCore',
+    outfile: path.join(vendorDir, 'git-diff-view-core.min.js'),
+    alias: { '@git-diff-view/lowlight': path.join(__dirname, 'lowlight-stub.mjs') },
+  });
+  console.log('[build] vendor rebuilt from node_modules: git-diff-view-core.min.js');
+}
 // Always regenerated: the icon alias map lives in scripts/build-icons.js.
 require('./build-icons.js');
 // Always regenerated: the class list changes with every frontend edit.

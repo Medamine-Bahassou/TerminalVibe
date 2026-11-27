@@ -4231,6 +4231,19 @@
       for (let k = 0; k < r.text.length; k++) if (r.pos[k].x - 1 >= x && r.pos[k].x - 1 < x + w) s += r.text[k];
       return s;
     };
+    // What the user types is theirs: no username blur from where typing began on that row.
+    // shortcut: only the first row of the input, a command soft-wrapped onto more rows still blurs there.
+    let inputs = [], typing = null;
+    term.onData(data => {
+      const buf = term.buffer.active;
+      if (!typing || typing.marker.isDisposed || typing.marker.line !== buf.baseY + buf.cursorY) {
+        const marker = term.registerMarker(0);
+        if (marker) inputs.push(typing = { marker, x: buf.cursorX });
+        inputs = inputs.filter(i => !i.marker.isDisposed);
+      }
+      if (/[\r\n]/.test(data)) typing = null;
+    });
+    const typed = (y, x) => inputs.some(i => i.marker.line === y && x >= i.x);
     const clear = () => { decos.forEach(d => d.marker.dispose()); decos = []; };
     const scan = () => {
       timer = false;
@@ -4250,7 +4263,10 @@
         const y = d.marker.line;
         if (d.marker.isDisposed || y < 0) { d.marker.dispose(); return false; }
         if (y < top || y >= bottom) return true;
-        d.stale = cellsText(y, d.x, d.w) !== d.text;
+        // A username typed on into a longer word ("med" → "mediterranean") is no longer a username.
+        d.stale = cellsText(y, d.x, d.w) !== d.text
+          || (d.username && typed(y, d.x))
+          || (d.username && /[\w.-]/.test(cellsText(y, d.x + d.w, 1) + (d.x ? cellsText(y, d.x - 1, 1) : '')));
         if (d.stale && !d.shown) { d.marker.dispose(); return false; }
         return true;
       });
@@ -4263,6 +4279,7 @@
         for (const m of row.text.matchAll(privateCells)) {
           const x = row.pos[m.index].x - 1, w = row.pos[m.index + m[0].length - 1].x - x;
           const username = !!(usernames && m[0].match(usernames));
+          if (username && typed(y, x)) continue;
           const at = decos.find(d => d.marker.line === y && d.x === x);
           if (at?.text === m[0] && at.username === username) { at.stale = false; continue; }
           if (at) drop(at);
@@ -8115,9 +8132,10 @@
         })
         // An @path mention (sent as typed from the composer's @ picker): the same file/folder chip as in the composer.
         // shortcut: a name without an extension is shown as a folder; stat it if files like "Makefile" look wrong.
-        .replace(/(^|\s)@((?:\.{1,2}|~)?[\w.-]*[\\/][^\s<]*|[\w-]+\.[\w]+)(?=$|[\s,;!?)])/g, (all, pre, p) => {
-          const name = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p, dir = /[\\/]$/.test(p) || !/\.\w+$/.test(name);
-          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-at-ref" data-path="${p}" title="${p}"><i class="ph ${dir ? 'ph-folder' : linkFileIcon(name)}" aria-hidden="true"></i><span>${name}</span></a></span>`;
+        .replace(/(^|\s)@((?:\.{1,2}|~)?[\w.-]*[\\/][^\s<]*|[\w-]+\.[\w]+(?::\d+)?)(?=$|[\s,;!?)])/g, (all, pre, p) => {
+          const name = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p, file = name.replace(/:\d+$/, ''); // "app.js:12": a diff comment's line
+          const dir = /[\\/]$/.test(p) || !/\.\w+$/.test(file);
+          return `${pre}<span class="thr-inline-ref"><a href="#" class="thr-at-ref" data-path="${p}" title="${p}"><i class="ph ${dir ? 'ph-folder' : linkFileIcon(file)}" aria-hidden="true"></i><span>${name}</span></a></span>`;
         })).join('');
     return { html, paths };
   }
@@ -8361,12 +8379,13 @@
     showChatBottomTerm(owner, entry);
   }
   // A new shell tab in the chat's bottom panel, in the chat's folder.
-  function newChatBottomTerm(owner, runCmd) {
+  function newChatBottomTerm(owner, runCmd, shell) {
     if (!owner?.threadHistory || owner._cliView || !wsReady) return;
     const wsp = findTermById(owner.id)?.ws;
     if (!wsp) return;
     const entry = _createTermEntry(wsp, uuid(), 'Terminal');
     if (runCmd) entry.runCmd = runCmd.replace(/\r$/, ''); // sendControl types it (+ Enter) once the shell exists
+    if (shell) entry.shell = shell;
     entry._chatOwner = owner;
     entry.cwd = chatCwd(owner) || null;
     owner._bottomSeq = (owner._bottomTerms?.length ? owner._bottomSeq || 1 : 0) + 1;
@@ -8399,6 +8418,8 @@
       else if (t && e.target.closest('.chat-bottom-tab-x')) closeChatBottomTerm(owner, t);
       else if (t) showChatBottomTerm(owner, t);
     });
+    // Right-click +: new terminal with a chosen shell.
+    header.querySelector('[data-act="new"]').addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); showCtxMenu(e, 'chat-terminal-new', { owner }); });
     // The mouse wheel scrolls the tab strip sideways (it has no scrollbar).
     panel.querySelector('.chat-bottom-tabs').addEventListener('wheel', e => {
       if (e.deltaX || !e.deltaY) return;
@@ -9948,7 +9969,12 @@
     if (cite) { e.preventDefault(); jumpToCitation({ cite: cite.title }); return; }
     // A sent @file chip opens the file beside the chat (openChatFileLink); a folder, or an unreadable file, in the file manager.
     const atRef = e.target.closest('.thr-msg a.thr-at-ref[data-path]');
-    if (atRef) { e.preventDefault(); void openChatFileLink(curChat(), chatLinkPath(atRef.dataset.path).path); return; }
+    if (atRef) {
+      e.preventDefault();
+      const { path, line } = chatLinkPath(atRef.dataset.path), raw = atRef.dataset.path.replace(/:\d+(:\d+)?$/, '');
+      if (!openChatDiffAt(curChat(), raw, line)) void openChatFileLink(curChat(), path, line);
+      return;
+    }
     const lockBtn = e.target.closest('[data-lock-act]');
     if (lockBtn) {
       const ws = curChat(), t = ws && (liveThreadAgent(ws) || ws);
@@ -9986,7 +10012,7 @@
         if (!a.isConnected) return;
         if (!kind) { (a.closest('.thr-inline-ref') || a).replaceWith('@' + a.dataset.path); return; }
         const name = a.lastElementChild?.textContent || '';
-        a.querySelector('i').className = `ph ${kind === 'dir' ? 'ph-folder' : linkFileIcon(name)}`;
+        a.querySelector('i').className = `ph ${kind === 'dir' ? 'ph-folder' : linkFileIcon(name.replace(/:\d+$/, ''))}`;
       });
     }
   }).observe(thrPage, { childList: true, subtree: true });
@@ -11414,7 +11440,7 @@
         + `${linkIconHtml(file.url)}<span>${escHtml(file.url)}</span></a></span>`;
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
       if (file.at) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref" tabindex="${tabIndex}" title="${escHtml(file.path)}">`
-        + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name)}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
+        + `<i class="ph ${file.dir ? 'ph-folder' : linkFileIcon(file.name.replace(/:\d+$/, ''))}" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
       if (file.thread) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-cite-ref thr-thread-ref" tabindex="${tabIndex}" title="Thread: ${escHtml(file.name)}">`
         + `<i class="ph ph-chats-circle" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
       const label = file.cite ? file.cite.replace(/\s+/g, ' ').slice(0, 42) + (file.cite.replace(/\s+/g, ' ').length > 42 ? '…' : '') : file.name;
@@ -11663,7 +11689,9 @@
     else if (file?.skill) void showChatSkillInfo(file.mention, reference.querySelector('a') || reference); // the card, like a sent chip's
     else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
     else if (file?.url) openChatWebLink(file.url, e.shiftKey);
+    else if (file?.diff) { if (!openChatDiffAt(curChat(), file.diff, file.line, file.diffKey)) void openChatFileLink(curChat(), file.path, file.line); } // a diff comment's chip
     else if (file?.dir) window.electronAPI?.showInFolder?.(file.path); // a folder mention: reveal it, there's nothing to preview
+    else if (file?.at && file.path) void openChatFileLink(curChat(), file.path, 0, true); // an @file: read-only beside the chat, or why it can't be shown
     else if (file && !file.at) openChatAttachment(file, curChat());
   });
   {
@@ -12070,45 +12098,131 @@
     };
     requestAnimationFrame(() => requestIdleCallback(fill, { timeout: 50 }));
   }
-  // A turn's changed files as one read-only diff beside the chat, drawn by diff2html (vendor/diff2html-ui-base.min.js,
-  // colored by the app's highlight.js): sticky file headers, old/new line numbers, word-level changes.
+  // A turn's changed files as one read-only diff beside the chat, drawn from @git-diff-view/core (vendor/git-diff-view-core.min.js,
+  // colored by the app's highlight.js): sticky file headers, old/new line numbers.
   function openChatDiffPanel(owner, files, cwd, key) {
     const add = files.reduce((s, f) => s + f.add, 0), del = files.reduce((s, f) => s + f.del, 0);
-    const { text, unnumbered, maxLn } = unifiedDiff(files, cwd);
+    const { texts, unnumbered, maxLn } = unifiedDiff(files, cwd);
     const panel = openChatPanel(owner, { key, title: `${files.length} changed file${files.length > 1 ? 's' : ''}`, sub: `+${add} -${del}`, icon: 'ph-file-diff', rows: '', diff: true, maxLn });
-    if (!panel || !window.Diff2HtmlUI) return;
-    const ui = new Diff2HtmlUI(panel.querySelector('.cfp-code'), text, { drawFileList: false, outputFormat: 'line-by-line', matching: 'lines',
-      fileContentToggle: false, stickyFileHeaders: false, highlight: true, synchronisedScroll: false }, window.hljs);
-    ui.draw();
-    ui.highlightCode();
-    // One line-number column: the line's number in the new file, or in the old one for a removed line.
-    for (const g of panel.querySelectorAll('.d2h-code-linenumber')) {
-      g.textContent = g.querySelector('.line-num2')?.textContent.trim() || g.querySelector('.line-num1')?.textContent.trim() || '';
-    }
-    // Hunks whose place in the file is unknown (Codex's bare @@): no line numbers rather than made-up ones.
-    panel.querySelectorAll('.d2h-file-wrapper').forEach((w, i) => {
-      if (!unnumbered[i]) return;
-      w.classList.add('cfp-no-ln');
-      for (const el of w.querySelectorAll('.d2h-info .d2h-code-line')) el.textContent = el.textContent.replace(/@@ -1,\d+ \+1,\d+ @@/, '@@');
-    });
-    // Each file header folds its diff like a dropdown.
-    for (const h of panel.querySelectorAll('.d2h-file-header')) {
-      h.insertAdjacentHTML('afterbegin', '<i class="ph ph-caret-down cfp-fold" aria-hidden="true"></i>');
-      const name = h.querySelector('.d2h-file-name');
-      if (name) { name.title = name.textContent; const b = document.createElement('bdi'); b.textContent = name.textContent; name.replaceChildren(b); } // ltr path inside the rtl ellipsis
-      h.setAttribute('role', 'button'); h.tabIndex = 0; h.setAttribute('aria-expanded', 'false'); h.closest('.d2h-file-wrapper').classList.add('cfp-collapsed'); // collapsed by default
-      const toggle = () => h.setAttribute('aria-expanded', String(!h.closest('.d2h-file-wrapper').classList.toggle('cfp-collapsed')));
+    if (!panel || !window.GitDiffViewCore) return;
+    // Drawn like @git-diff-view's unified view: old and new line-number columns, an operator column, word-level changes.
+    const { DiffFile, diffChanges } = GitDiffViewCore;
+    const STATE = { 0: 'gdv-plain', 1: 'gdv-add', 2: 'gdv-del' }, OP = { 0: ' ', 1: '+', 2: '-' };
+    panel.querySelector('.cfp-code').innerHTML = texts.map((t, fi) => {
+      const p = t.match(/^\+\+\+ b\/(.*)$/m)[1], ext = (p.match(/\.(\w+)$/)?.[1] || '').toLowerCase();
+      const hl = s => window.hljs?.getLanguage(ext) ? hljs.highlight(s, { language: ext, ignoreIllegals: true }).value : escHtml(s);
+      const d = new DiffFile(p, '', p, '', [t], ext, ext);
+      d.initRaw(); d.buildUnifiedDiffLines();
+      const items = []; // {hunk} or {l}
+      for (let i = 0; i < d.unifiedLineLength; i++) {
+        const hunk = d.getUnifiedHunkLine(i)?.text;
+        if (hunk) items.push({ hunk });
+        const l = d.getUnifiedLine(i);
+        if (l?.diff && !l.isHidden) items.push({ l });
+      }
+      // A run of removed lines followed by as many added ones pairs up line by line for word-level changes.
+      const words = new Map();
+      for (let i = 0; i < items.length;) {
+        let j = i; while (items[j]?.l?.diff.type === 2) j++;
+        let k = j; while (items[k]?.l?.diff.type === 1) k++;
+        if (j > i && k - j === j - i) for (let n = 0; n < j - i; n++) {
+          const r = diffChanges(items[j + n].l.diff, items[i + n].l.diff);
+          words.set(items[i + n], r.delRange); words.set(items[j + n], r.addRange);
+        }
+        i = Math.max(k, i + 1);
+      }
+      const code = it => {
+        const r = words.get(it);
+        if (!r?.range) return hl(it.l.diff.text.replace(/\n$/, ''));
+        return r.range.map(s => { const h = hl(s.str.replace(/\n$/, '')); return s.type ? `<span class="gdv-word">${h}</span>` : h; }).join('');
+      };
+      const rows = items.map(it => it.hunk != null
+        // Hunks whose place in the file is unknown (Codex's bare @@): no made-up coordinates.
+        ? `<tr class="gdv-hunk"><td class="gdv-num" colspan="2"></td><td class="gdv-code" colspan="2">${escHtml(unnumbered[fi] ? it.hunk.replace(/@@ -1,\d+ \+1,\d+ @@/, '@@') : it.hunk)}</td></tr>`
+        : `<tr class="${STATE[it.l.diff.type]}" data-line="${unnumbered[fi] ? '' : it.l.newLineNumber ?? it.l.oldLineNumber}"><td class="gdv-num">`
+          + `${it.l.oldLineNumber ?? ''}</td><td class="gdv-num">${it.l.newLineNumber ?? ''}</td>`
+          + `<td class="gdv-op"><button type="button" class="gdv-comment-btn" aria-label="Comment on this line" data-tip="Comment"><i class="ph ph-plus" aria-hidden="true"></i></button>${OP[it.l.diff.type]}</td><td class="gdv-code">${code(it)}</td></tr>`).join('');
+      return `<div class="gdv-file cfp-collapsed${unnumbered[fi] ? ' cfp-no-ln' : ''}" data-path="${escHtml(p)}"><div class="gdv-file-head" role="button" tabindex="0" aria-expanded="false">`
+        + `<i class="ph ph-caret-down cfp-fold" aria-hidden="true"></i><span class="gdv-file-name" title="${escHtml(p)}"><bdi>${escHtml(p)}</bdi></span></div>` // ltr path inside the rtl ellipsis
+        + `<div class="gdv-file-diff"><table class="gdv-table"><colgroup><col class="gdv-c-num"><col class="gdv-c-num"><col class="gdv-c-op"><col></colgroup>${rows}</table></div></div>`;
+    }).join('');
+    // Each file header folds its diff like a dropdown (collapsed by default).
+    for (const h of panel.querySelectorAll('.gdv-file-head')) {
+      const toggle = () => h.setAttribute('aria-expanded', String(!h.parentElement.classList.toggle('cfp-collapsed')));
       h.addEventListener('click', () => { if (!getSelection().toString()) toggle(); });
       h.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
     }
+    // A line's "+" opens a comment box under it; "Add to message" puts "path:line: comment" into the chat's draft.
+    const code = panel.querySelector('.cfp-code');
+    code.addEventListener('click', e => {
+      const btn = e.target.closest('.gdv-comment-btn, .gdv-comment-cancel, .gdv-comment-add');
+      if (!btn) return;
+      if (btn.classList.contains('gdv-comment-btn')) {
+        const tr = btn.closest('tr'), next = tr.nextElementSibling;
+        if (next?.classList.contains('gdv-comment-row')) { next.querySelector('textarea').focus(); return; }
+        tr.insertAdjacentHTML('afterend', '<tr class="gdv-comment-row"><td colspan="4"><div class="gdv-comment">'
+          + '<textarea rows="3" placeholder="Leave a comment" aria-label="Comment"></textarea><div class="gdv-comment-actions">'
+          + '<button type="button" class="gdv-comment-cancel">Cancel</button><button type="button" class="gdv-comment-add">Add to message</button></div></div></td></tr>');
+        tr.nextElementSibling.querySelector('textarea').focus();
+        return;
+      }
+      const row = btn.closest('.gdv-comment-row'), text = row.querySelector('textarea').value.trim();
+      if (btn.classList.contains('gdv-comment-add')) {
+        if (!text) return row.querySelector('textarea').focus();
+        const line = row.previousElementSibling.dataset.line, p = row.closest('.gdv-file').dataset.path, suffix = line ? ':' + line : '';
+        // The file as an @ mention chip, like one picked from the "@" list (sent as typed: "@path:line").
+        const mention = '@' + (/\s/.test(p) ? `"${p}"` : p) + suffix;
+        if (!_chatFiles.some(f => f.mention === mention)) {
+          const abs = /^([\\/]|\w:)/.test(p) || !cwd ? p : `${cwd.replace(/[\\/]$/, '')}/${p}`;
+          _chatFiles.push({ at: true, mention, name: p.split(/[\\/]/).pop() + suffix, path: abs, diff: p, line: line || '', diffKey: key });
+        }
+        threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
+        const v = thrInput.value.replace(/\s*$/, '');
+        thrInput.value = (v ? v + ' ' : '') + `${mention} ${text} `; // on the same line as earlier comments
+        renderChatFiles();
+        thrInput.setSelectionRange(thrInput.value.length, thrInput.value.length);
+        thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+        thrInput.focus({ preventScroll: true });
+      }
+      row.remove();
+    });
+    code.addEventListener('keydown', e => {
+      if (!e.target.matches('.gdv-comment textarea')) return;
+      if (e.key === 'Escape') { e.stopPropagation(); e.target.closest('.gdv-comment-row').remove(); } // not the panel's Esc
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.target.closest('.gdv-comment').querySelector('.gdv-comment-add').click();
+    });
+    return panel;
   }
-  // The changes as a git-style unified diff for diff2html. Claude's hunks carry their @@ -a,b +c,d @@; a new file
+  // A diff comment's "@path:line" chip: opens the diff it came from (key, when the chip still knows it), else the latest
+  // of this chat's diffs whose hunks cover the line, else the latest with the file; unfolds the file and marks the line.
+  // False when no diff has the file (the caller opens the file itself).
+  function openChatDiffAt(owner, p, line, key) {
+    if (!owner) return false;
+    // One file under different spellings: "\\wsl.localhost\Ubuntu\home\…\app.js", "/home/…/app.js", "app.js".
+    const norm = s => s.replace(/\\/g, '/');
+    const same = (a, b) => { a = norm(a).replace(/^\/+/, '/'); b = norm(b).replace(/^\/+/, '/'); const tail = s => s[0] === '/' ? s : '/' + s; return a === b || a.endsWith(tail(b)) || b.endsWith(tail(a)); };
+    const covers = f => [...f.patches.join('\n').matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)]
+      .some(m => [[+m[1], +(m[2] ?? 1)], [+m[3], +(m[4] ?? 1)]].some(([s, n]) => line >= s && line < s + n));
+    const mine = [..._chatDiffs].reverse().filter(([k, d]) => k.startsWith(owner.id + '|') && d.files.some(f => same(f.path, p)));
+    const hit = (key && mine.find(([k]) => k === key)) || (line && mine.find(([, d]) => d.files.some(f => same(f.path, p) && covers(f)))) || mine[0];
+    if (!hit) return false;
+    const panel = openChatDiffPanel(owner, hit[1].files, hit[1].cwd, hit[0]);
+    const file = panel && [...panel.querySelectorAll('.gdv-file')].find(f => same(f.dataset.path, p));
+    if (!file) return !!panel;
+    file.classList.remove('cfp-collapsed');
+    file.querySelector('.gdv-file-head').setAttribute('aria-expanded', 'true');
+    const row = line && file.querySelector(`tr[data-line="${line}"]`);
+    row?.classList.add('cfp-target');
+    requestAnimationFrame(() => (row || file).scrollIntoView({ block: row ? 'center' : 'start' })); // once the panel is laid out
+    return true;
+  }
+  // The changes as git-style unified diffs, one per file, for @git-diff-view/core. Claude's hunks carry their @@ -a,b +c,d @@; a new file
   // (all + lines) starts at line 1; a hunk without numbers (Codex's apply_patch) gets placeholder ones, flagged.
   function unifiedDiff(files, cwd) {
     const base = (cwd || '').replace(/[\\/]$/, '');
     const unnumbered = [];
     let maxLn = 0; // the gutter's width
-    const text = files.map(f => {
+    const texts = files.map(f => {
       const p = base && f.path.startsWith(base + '/') ? f.path.slice(base.length + 1) : f.path;
       const hunks = [];
       for (const l of f.patches.join('\n').split('\n')) {
@@ -12128,8 +12242,8 @@
       }).join('\n');
       unnumbered.push(guessed);
       return `diff --git a/${p} b/${p}\n${created ? 'new file mode 100644\n--- /dev/null' : `--- a/${p}`}\n+++ b/${p}\n${body}`;
-    }).join('\n');
-    return { text, unnumbered, maxLn };
+    });
+    return { texts, unnumbered, maxLn };
   }
   // A changes card's files by its key, for its "Open diff". ponytail: never pruned; one entry per changes card seen.
   const _chatDiffs = new Map();
@@ -12150,7 +12264,8 @@
     page.style.setProperty('--cfp-digits', Math.max(3, String(maxLn).length)); // gutters fit the longest number
     page.setAttribute('role', 'tabpanel');
     page.setAttribute('aria-label', title);
-    page.innerHTML = `<div class="cfp-head"><i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-title">${escHtml(title)}</span>`
+    // A diff's icon and title are already its tab's: its head keeps only the +/- counts.
+    page.innerHTML = `<div class="cfp-head">${diff ? '' : `<i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-title">${escHtml(title)}</span>`}`
       + `<span class="cfp-path"${path ? ` title="${escHtml(title)}"` : ''}>${escHtml(sub)}</span>`
       + (path && window.electronAPI?.showInFolder ? '<button type="button" class="cfp-icon" data-act="reveal" aria-label="Show in folder" data-tip="Show in folder"><i class="ph ph-folder-open" aria-hidden="true"></i></button>' : '')
       + '</div>' // closing is on the tab (and Esc closes the panel)
@@ -15943,6 +16058,12 @@
         item('<i class="ph ph-copy"></i>', 'Copy path', '', () => { void (window.electronAPI?.clipboardWrite ? window.electronAPI.clipboardWrite(path) : navigator.clipboard.writeText(path)); });
         if (window.electronAPI?.showInFolder) item('<i class="ph ph-folder-open"></i>', 'Show in folder', '', () => window.electronAPI.showInFolder(path));
       }
+    } else if (type === 'chat-terminal-new') {
+      const { owner } = data;
+      item('<i class="ph ph-plus"></i>', 'New terminal', '', () => newChatBottomTerm(owner));
+      if (shellList.length) sep();
+      for (const s of shellList) item(`<svg class="ctx-shell-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${shellIconPath(s)}"/></svg>`, escHtml(s.label) + (s.id === defaultShell ? ' (default)' : ''), '',
+        () => newChatBottomTerm(owner, null, s.id));
     } else if (type === 'chat-terminal') {
       const { entry, owner } = data, term = entry.term;
       const copy = item('<i class="ph ph-copy"></i>', 'Copy', 'Ctrl+Shift+C', () => { void copyPrivateTerminal(term).catch(() => {}); });
