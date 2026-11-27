@@ -3551,56 +3551,45 @@ body .chat-file-panel .cfp-icon { display:grid; place-items:center; flex:none; w
 .chat-file-panel .cfp-row:hover .cfp-ln { color:var(--muted-text); }
 .chat-file-panel .cfp-row.cfp-target { background:color-mix(in srgb,var(--accent) 12%,transparent); }
 .chat-file-panel .cfp-row.cfp-target .cfp-ln { color:var(--fg); }
-/* A turn's diff (openChatDiffPanel), drawn by diff2html: its palette variables mapped to the app's tokens (so it follows
-   every theme), its fonts to Geist, its frame flattened into the panel (files separated by hairlines, square corners). */
-.chat-file-panel .cfp-diff {
-  --d2h-bg-color:var(--bg); --d2h-border-color:var(--ui-line); --d2h-dim-color:var(--dim-text); --d2h-line-border-color:var(--ui-line);
-  --d2h-file-header-bg-color:var(--ui-sidebar); --d2h-file-header-border-color:var(--ui-line);
-  --d2h-empty-placeholder-bg-color:var(--ui-sidebar); --d2h-empty-placeholder-border-color:var(--ui-line);
-  --d2h-selected-color:color-mix(in srgb,var(--accent) 18%,var(--bg));
-  --d2h-ins-bg-color:color-mix(in srgb,var(--ui-success) 14%,var(--bg)); --d2h-ins-border-color:color-mix(in srgb,var(--ui-success) 35%,var(--bg));
-  --d2h-ins-highlight-bg-color:color-mix(in srgb,var(--ui-success) 36%,var(--bg)); --d2h-ins-label-color:var(--ui-success);
-  --d2h-del-bg-color:color-mix(in srgb,var(--ui-error) 14%,var(--bg)); --d2h-del-border-color:color-mix(in srgb,var(--ui-error) 35%,var(--bg));
-  --d2h-del-highlight-bg-color:color-mix(in srgb,var(--ui-error) 36%,var(--bg)); --d2h-del-label-color:var(--ui-error);
-  --d2h-change-del-color:color-mix(in srgb,var(--ui-error) 10%,var(--bg)); --d2h-change-ins-color:color-mix(in srgb,var(--ui-success) 10%,var(--bg));
-  --d2h-info-bg-color:var(--ui-sidebar); --d2h-info-border-color:var(--ui-line);
-  --d2h-change-label-color:var(--muted-text); --d2h-moved-label-color:var(--accent);
-}
-.chat-file-panel .cfp-diff .cfp-body { padding:0; }
-/* diff2html's line numbers are position:absolute and it sets no positioned ancestor: without this they resolve
-   against the panel, outside the scrolling body, and stay put while the code scrolls under them. Here they scroll
-   with the lines, and stay pinned left while a long line scrolls sideways (.d2h-file-diff's own scroller). */
-.chat-file-panel .cfp-diff .cfp-code { position:relative; }
-.chat-file-panel .d2h-wrapper { color:var(--fg); }
-.chat-file-panel .d2h-file-wrapper { margin:0; border:0; border-bottom:1px solid var(--ui-line); }
-.chat-file-panel .d2h-file-header { position:sticky; top:0; z-index:2; height:32px; padding:0 12px; align-items:center; font:500 12px/16px var(--mono-font); color:var(--fg); }
-.chat-file-panel .d2h-file-name-wrapper { font:inherit; }
-.chat-file-panel .d2h-icon { fill:var(--muted-text); }
-body .chat-file-panel .d2h-tag { border-radius:4px !important; font:500 10.5px/16px var(--ui-font); padding:0 6px; }
-.chat-file-panel :is(.d2h-code-line, .d2h-code-side-line, .d2h-code-linenumber) { font:400 12.5px/20px var(--mono-font); }
-.chat-file-panel .d2h-code-linenumber { font-variant-numeric:tabular-nums; cursor:default; }
-/* Its gutter: one number (openChatDiffPanel merges diff2html's old/new pair), as wide as the longest (--cfp-digits). */
-.chat-file-panel .cfp-diff { --cfp-num:calc(var(--cfp-digits, 3) * 1ch + 1.5em); }
-.chat-file-panel .d2h-code-linenumber { width:calc(var(--cfp-num) + 2px); padding-right:.75em; text-overflow:clip; } /* + its 1px side borders */
-.chat-file-panel .d2h-code-line { padding:0 1em 0 calc(var(--cfp-num) + .5em); width:calc(100% - var(--cfp-num) - 1.5em); }
-.chat-file-panel .d2h-info { color:var(--dim-text); }
-.chat-file-panel .cfp-no-ln .d2h-code-linenumber { color:transparent; } /* positions unknown */
 @media (prefers-reduced-motion: reduce) { .chat-file-panel .cfp-icon, .chat-file-panel > .chat-panel-sash::after { transition:none; } }
-
-/* ── Diff panel: file headers fold their diff like a dropdown; long paths scroll sideways instead of truncating ── */
-.chat-file-panel .d2h-file-header { gap:8px; cursor:pointer; user-select:none; transition:background-color 150ms; }
-.chat-file-panel .d2h-file-header:hover { background:var(--ui-hover); }
-.chat-file-panel .d2h-file-header:focus-visible { outline:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
+/* A turn's diff (openChatDiffPanel), laid out like @git-diff-view's unified view: old and new line-number columns
+   (tinted a step deeper than the code), an operator column, word-level changes and tinted hunk rows. Tints mix with
+   --bg, never transparent, so they stay opaque over the sticky file header. Lines wrap like the file panel's. */
+.chat-file-panel .cfp-diff .cfp-body { padding:0; }
+.chat-file-panel .gdv-file { border-bottom:1px solid var(--ui-line); color:var(--fg); }
+.chat-file-panel .gdv-file-head { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:8px; height:32px; padding:0 12px; background:var(--ui-sidebar); border-bottom:1px solid var(--ui-line); font:500 12px/16px var(--mono-font); cursor:pointer; user-select:none; transition:background-color 150ms; }
+.chat-file-panel .gdv-file-head:hover { background:var(--ui-hover); }
+.chat-file-panel .gdv-file-head:focus-visible { outline:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
 .chat-file-panel .cfp-fold { flex:none; font-size:14px; color:var(--muted-text); }
-.chat-file-panel .d2h-file-header:hover .cfp-fold { color:var(--fg); }
+.chat-file-panel .gdv-file-head:hover .cfp-fold { color:var(--fg); }
 .chat-file-panel .cfp-collapsed .cfp-fold { transform:rotate(-90deg); }
-.chat-file-panel .cfp-collapsed :is(.d2h-file-diff, .d2h-files-diff) { display:none; }
+.chat-file-panel .cfp-collapsed .gdv-file-diff { display:none; }
+.chat-file-panel .cfp-collapsed .gdv-file-head { border-bottom:0; }
 /* Long paths truncate from the left (the file name stays visible); the full path is the tooltip. No scrollbar. */
-.chat-file-panel .d2h-file-name-wrapper { flex:1 1 auto; min-width:0; overflow:hidden; }
-.chat-file-panel .d2h-file-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
-.chat-file-panel .d2h-file-name > bdi { direction:ltr; unicode-bidi:isolate; }
-.chat-file-panel .d2h-file-header .d2h-tag { flex:none; }
-@media (prefers-reduced-motion: reduce) { .chat-file-panel .d2h-file-header { transition:none; } }
+.chat-file-panel .gdv-file-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+.chat-file-panel .gdv-file-name > bdi { direction:ltr; unicode-bidi:isolate; }
+.chat-file-panel .gdv-table { width:100%; border-collapse:collapse; table-layout:fixed; font:400 12.5px/20px var(--mono-font); }
+.chat-file-panel .gdv-table td { padding:0; vertical-align:top; }
+/* Number columns as wide as the longest line number (--cfp-digits, set by openChatPanel). */
+.chat-file-panel .gdv-c-num { width:calc(var(--cfp-digits, 3) * 1ch + 16px); }
+.chat-file-panel .gdv-c-op { width:calc(2ch + 8px); }
+.chat-file-panel .gdv-num { padding:0 8px !important; text-align:right; color:var(--dim-text); font-variant-numeric:tabular-nums; background:var(--ui-sidebar); user-select:none; cursor:default; }
+.chat-file-panel .gdv-op { padding-left:8px !important; color:var(--dim-text); user-select:none; }
+.chat-file-panel .gdv-code { padding-right:16px !important; white-space:pre-wrap; overflow-wrap:anywhere; }
+.chat-file-panel .gdv-add { background:color-mix(in srgb,var(--ui-success) 12%,var(--bg)); }
+.chat-file-panel .gdv-add > .gdv-num { background:color-mix(in srgb,var(--ui-success) 24%,var(--bg)); color:var(--fg); }
+.chat-file-panel .gdv-add > .gdv-op { color:var(--ui-success); }
+.chat-file-panel .gdv-del { background:color-mix(in srgb,var(--ui-error) 12%,var(--bg)); }
+.chat-file-panel .gdv-del > .gdv-num { background:color-mix(in srgb,var(--ui-error) 24%,var(--bg)); color:var(--fg); }
+.chat-file-panel .gdv-del > .gdv-op { color:var(--ui-error); }
+body .chat-file-panel .gdv-word { border-radius:2px !important; }
+.chat-file-panel .gdv-add .gdv-word { background:color-mix(in srgb,var(--ui-success) 34%,var(--bg)); }
+.chat-file-panel .gdv-del .gdv-word { background:color-mix(in srgb,var(--ui-error) 34%,var(--bg)); }
+.chat-file-panel .gdv-hunk { background:color-mix(in srgb,var(--accent) 8%,var(--bg)); color:var(--dim-text); }
+.chat-file-panel .gdv-hunk > .gdv-num { background:color-mix(in srgb,var(--accent) 16%,var(--bg)); }
+.chat-file-panel .gdv-hunk > .gdv-code { padding-left:8px; }
+.chat-file-panel .cfp-no-ln .gdv-num { color:transparent; } /* positions unknown */
+@media (prefers-reduced-motion: reduce) { .chat-file-panel .gdv-file-head { transition:none; } }
 
 /* ── Chat file panel tabs (openChatPanel): files and diffs open as tabs; one page shown at a time ── */
 .chat-file-panel .cfp-page { flex:1; min-height:0; display:flex; flex-direction:column; }
@@ -3815,3 +3804,26 @@ html[data-color-scheme="light"] #sbr-thread .thr-send:not(.stop):hover:not(:disa
 @keyframes thr-fade-in { from { opacity:0; } to { opacity:1; } }
 #sbr-thread .thr-msg.assistant.thr-fade-in { animation:thr-fade-in 200ms ease-out; }
 @media (prefers-reduced-motion:reduce) { #sbr-thread .thr-msg.assistant.thr-fade-in { animation:none; } }
+
+/* ── Diff panel line comments (openChatDiffPanel): a "+" on the hovered line's gutter opens a comment box under it ── */
+.chat-file-panel .gdv-op { position:relative; }
+body .chat-file-panel .gdv-comment-btn { position:absolute; left:3px; top:1px; width:18px; height:18px; display:grid; place-items:center; padding:0; border:0; border-radius:4px !important; background:var(--accent); color:#0d1017; font-size:12px; cursor:pointer; opacity:0; transition:background-color 150ms, box-shadow 150ms; }
+.chat-file-panel tr:hover .gdv-comment-btn, .chat-file-panel .gdv-comment-btn:focus-visible { opacity:1; }
+.chat-file-panel .gdv-comment-btn:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
+.chat-file-panel .gdv-comment-btn:focus-visible { outline:none; box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+.chat-file-panel .gdv-comment-row > td { padding:8px 12px !important; background:var(--ui-sidebar); border-top:1px solid var(--ui-line); border-bottom:1px solid var(--ui-line); }
+.chat-file-panel .gdv-comment { display:flex; flex-direction:column; gap:8px; font:400 13px/20px var(--ui-font); }
+body .chat-file-panel .gdv-comment textarea { width:100%; min-height:68px; box-sizing:border-box; padding:6px 10px; resize:vertical; background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:6px !important; font:inherit; transition:border-color 150ms, box-shadow 150ms; }
+.chat-file-panel .gdv-comment textarea:hover { border-color:var(--muted-text); }
+.chat-file-panel .gdv-comment textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+.chat-file-panel .gdv-comment textarea::placeholder { color:var(--dim-text); }
+.chat-file-panel .gdv-comment-actions { display:flex; justify-content:flex-end; gap:8px; }
+body .chat-file-panel .gdv-comment-actions button { height:32px; padding:0 12px; border:1px solid var(--border); border-radius:6px !important; background:transparent; color:var(--fg); font:500 13px/1 var(--ui-font); cursor:pointer; transition:background-color 150ms, border-color 150ms, box-shadow 150ms; }
+.chat-file-panel .gdv-comment-cancel:hover { background:var(--ui-hover); }
+body .chat-file-panel .gdv-comment-actions .gdv-comment-add { background:var(--accent); border-color:var(--accent); color:#0d1017; }
+body .chat-file-panel .gdv-comment-actions .gdv-comment-add:hover { background:color-mix(in srgb,var(--accent) 85%,#fff); }
+.chat-file-panel .gdv-comment-actions button:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { .chat-file-panel :is(.gdv-comment-btn, .gdv-comment textarea, .gdv-comment-actions button) { transition:none; } }
+/* A diff line opened from a sent "@path:line" chip (openChatDiffAt): marked like the file panel's linked line. */
+.chat-file-panel .gdv-table tr.cfp-target > td { box-shadow:inset 0 1px 0 color-mix(in srgb,var(--accent) 55%,var(--bg)), inset 0 -1px 0 color-mix(in srgb,var(--accent) 55%,var(--bg)); }
+.chat-file-panel .gdv-table tr.cfp-target > .gdv-num { color:var(--fg); }
