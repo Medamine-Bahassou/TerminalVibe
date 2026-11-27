@@ -8554,7 +8554,8 @@
   const pendingMessages = ws => { const p = _pendingMsgs.get(ws.id); return p ? (Array.isArray(p) ? p : [p]) : []; };
   function threadImagesHtml(paths) {
     return paths.length ? `<div class="thr-images">${[...new Set(paths)].map(path =>
-      `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(path)}" alt="Pasted image"></div>`).join('')}</div>` : '';
+      // A cached image renders at once; without a src the alt text flashes until hydrateThreadImage loads it.
+      `<div class="thr-img-wrap"><img class="thr-img" data-path="${escHtml(path)}"${_thrImgCache.has(path) ? ` src="${escHtml(_thrImgCache.get(path))}"` : ''} alt="Pasted image"></div>`).join('')}</div>` : '';
   }
   const resumePrompt = 'continue from where you left';
   const mergePrNumber = text => /^Please merge GitHub PR #(\d+) \(https:\/\/[^\s)]+\)\. If GitHub blocks the merge, tell me why\.(?: <terminalvibe_context [\s\S]*<\/terminalvibe_context>)?$/.exec(text)?.[1];

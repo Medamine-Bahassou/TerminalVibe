@@ -46,10 +46,7 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 #btn-settings:hover { background: var(--ui-hover); }
 #sidebar.expanded .sidebar-actions { justify-content:flex-start; }
 #sidebar.expanded .sidebar-actions #btn-settings { width:34px; height:34px; padding:0; justify-content:center; }
-#btn-agent-updates { position:relative; margin-inline-start:auto; width:34px; height:34px; padding:0; border:0; background:transparent; font-size:17px; }
-#btn-agent-updates:hover { background:var(--ui-hover); }
-#btn-agent-updates[hidden] { display:none; }
-#sidebar:not(.expanded) #btn-agent-updates { margin-inline-start:0; }
+#threads-sidebar .ts-foot > #btn-agent-updates[hidden] { display:none; }
 @keyframes agent-update-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:no-preference) {
   #btn-agent-updates[aria-busy="true"] > i { animation:agent-update-spin .85s linear infinite; }
@@ -1662,7 +1659,7 @@ body .ctx-item.disabled { color:var(--dim-text); cursor:default; pointer-events:
 #sbr-thread .thr-tool-detail { padding:10px 12px; }
 #sbr-thread .thr-tool-output { box-sizing:border-box; height:180px; overflow:auto; margin:0 0 8px 19px; padding:8px 12px; border:0; background:transparent; color:var(--fg); font:400 11.5px/1.5 var(--mono-font); white-space:pre; user-select:text; }
 #sbr-thread .thr-tool-output:focus-visible { outline:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
-body.blur-work-usernames #sbr-thread .thr-work-username, .ui-tooltip .thr-work-username { display:inline-block; width:12ch; overflow:hidden; white-space:nowrap; vertical-align:bottom; font-family:var(--mono-font); filter:blur(4px); }
+body.blur-work-usernames .thr-work-username, .ui-tooltip .thr-work-username { display:inline-block; width:12ch; overflow:hidden; white-space:nowrap; vertical-align:bottom; font-family:var(--mono-font); filter:blur(4px); }
 #sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-c { color:var(--ansi-blue, #7aa2f7); }
 #sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-f { color:var(--ansi-yellow, #e0af68); }
 #sbr-thread :is(.thr-tool-detail,.thr-code,.thr-diff) .tk-s { color:var(--ansi-green, #9ece6a); }
@@ -2524,7 +2521,8 @@ body #ctx .ts-pick-check { position:absolute; right:-5px; bottom:-4px; font-size
 .chat-bottom-header button:hover { background:var(--ui-hover); color:var(--fg); }
 .chat-bottom-header button:focus-visible { outline:2px solid var(--accent); }
 .chat-bottom-body { position:relative; flex:1; min-height:0; }
-.chat-bottom-screen { height:100%; padding:0 8px 6px; }
+/* Bottom-anchored: the leftover under a whole row sits under the tab bar, not under the prompt. */
+.chat-bottom-screen { height:100%; padding:0 8px; display:flex; flex-direction:column; justify-content:flex-end; }
 .chat-bottom-terminal.resizing .chat-bottom-body { overflow:clip; }
 .chat-bottom-terminal.resizing .chat-bottom-screen { position:absolute; inset:var(--chat-terminal-grid-offset, 0px) 0 auto; height:var(--chat-terminal-grid-height); }
 
@@ -3610,7 +3608,7 @@ body .chat-file-panel .cfp-tab-x { display:grid; place-items:center; flex:none; 
 @media (prefers-reduced-motion: reduce) { .chat-file-panel :is(.cfp-tab, .cfp-tab-x) { transition:none; } }
 
 /* ── Chat bottom terminal tabs (newChatBottomTerm): several shells per chat, one shown ── */
-body .chat-bottom-header { gap:2px; padding:4px 6px; min-height:32px; box-sizing:border-box; /* its original height: a taller header left the minimum-size terminal less than a row */ }
+body .chat-bottom-header { gap:2px; padding:4px 6px 0; min-height:28px; box-sizing:border-box; /* no bottom padding: the terminal starts right under the tabs */ }
 .chat-bottom-header .chat-bottom-tabs { display:flex; align-items:center; gap:2px; min-width:0; overflow-x:auto; scrollbar-width:none; }
 .chat-bottom-header .chat-bottom-tabs::-webkit-scrollbar { display:none; }
 body .chat-bottom-header .chat-bottom-tab { display:flex; align-items:center; gap:6px; flex:0 0 auto; width:128px; height:24px; padding:0 4px 0 10px; border-radius:6px !important; color:var(--muted-text); font:400 12px/16px var(--ui-font); cursor:pointer; user-select:none; outline:none; transition:background-color 140ms, color 140ms, box-shadow 140ms; }
@@ -3944,3 +3942,13 @@ body dialog.thr-sources-dlg .thr-source:hover > .ph-arrow-up-right { color:var(-
 .a2ui-icon-off { position:relative; display:inline-block; }
 .a2ui-icon-off::after { content:""; position:absolute; left:50%; top:50%; width:125%; height:1.5px; background:currentColor; box-shadow:0 0 0 1px var(--bg);
   border-radius:1px !important; transform:translate(-50%,-50%) rotate(-45deg); pointer-events:none; }
+
+/* ── Chat images: no alt-text flash while an image without a src is still being read ── */
+.thr-img:not([src]) { color:transparent; }
+
+/* ── Scrollbars: no arrow buttons ──
+   Once scrollbar-width/scrollbar-color are set, Chromium ignores the ::-webkit-scrollbar rules in style.css
+   and draws its native thin bar, which has arrow buttons on Linux. Unset them so the 6px webkit bar
+   (thumb only, no buttons) applies everywhere. Hidden bars keep their own ::-webkit-scrollbar { display:none }. */
+*, .xterm .xterm-viewport { scrollbar-width:auto !important; scrollbar-color:auto !important; }
+*::-webkit-scrollbar-button { display:none !important; width:0 !important; height:0 !important; }
