@@ -8557,7 +8557,9 @@
     if ((!opts.model || opts.model === 'default') && usedModel) opts = { ...opts, model: usedModel };
     const id = opts.harness || fallbackHarness;
     const agent = harnessOf(id), name = agent?.name || id;
-    const meta = [opts.model, opts.effort].filter(value => value && value !== 'default').join(' · ');
+    // "default" effort shows the model's own default (as the composer chip does).
+    const defEffort = (!opts.effort || opts.effort === 'default') && CHAT_AGENTS[id] && (chatModels(id).find(x => x.id === opts.model) || {}).defaultEffort;
+    const meta = [opts.model, defEffort || opts.effort].filter(value => value && value !== 'default').join(' · ');
     const head = name + '|' + meta;
     return { head, html: (cls = '') => `<div class="thr-seg${cls}" data-head="${escHtml(head)}"${agent?.color ? ` style="--agent-color:${agent.color}"` : ''}>${procIconHtml(agent?.bin || '', 'ph-robot')}<span class="thr-seg-name">${escHtml(name)}</span>${meta ? `<span class="thr-seg-meta">${escHtml(meta)}</span>` : ''}<span class="thr-seg-time">${clockTime(time)}</span></div>` };
   };
@@ -13017,7 +13019,7 @@
     const answering = typed && !!chatWorking(c)?.ask?.options.some(o => o.input);
     const working = !!c && !answering && (!!chatWorking(c) || _chatStarting.has(c.id));
     const scheduling = !editing && typed && !answering && (_chatAlt || scheduleDialog?.open);
-    const queue = !scheduling && !editing && working && (_chatCtrl || (typed && _chatStarting.has(c.id))), stop = !editing && working && !typed && !queue;
+    const queue = !scheduling && !editing && ((working && (_chatCtrl || (typed && _chatStarting.has(c.id)))) || (_chatCtrl && typed && !!c?.chat?.queuedMessages?.length)), stop = !editing && working && !typed && !queue;
     thrSend.classList.toggle('stop', stop);
     const resume = !editing && !working && !typed && !!c?.chat?.interruptedAt && !c._resuming && !_chatSending.has(c.id);
     thrSend.disabled = (!!c?._elsewhere && !stop) || (!stop && !typed && !resume);
@@ -13153,7 +13155,8 @@
     const sideAsk =/^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(typed);
     if (sideAsk) { clearChatDraft(ws); void openSideChat(ws, (sideAsk[1] || '').trim(), files); return; }
     const message = { id: uuid(), text, typed, files, at: Date.now(), after: _turns.get(ws.id)?.sentAt || Date.now() }, working = !!chatWorking(ws);
-    if ((working && _chatCtrl) || _chatStarting.has(ws.id) || _chatSending.has(ws.id)) {
+    // Ctrl+Enter with messages already queued (e.g. a paused queue) adds to the end of that queue.
+    if (((working || ws.chat.queuedMessages?.length) && _chatCtrl) || _chatStarting.has(ws.id) || _chatSending.has(ws.id)) {
       (ws.chat.queuedMessages ||= []).push(message);
       clearChatDraft(ws); renderChatQueue(ws); saveState();
     } else {
@@ -13393,7 +13396,7 @@
       box.setAttribute('aria-label', 'Queued messages');
     }
     hydrateChatFiles(queue.flatMap(message => message.files || []), () => updateChatQueue(ws));
-    const header = queue.length && (paused || queue.length > 1) ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + ' queued messages'}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
+    const header = queue.length ? `<div class="thr-queue-head"><span>${paused ? 'Queue paused' : queue.length + (queue.length > 1 ? ' queued messages' : ' queued message')}</span><button type="button" data-queue-act="pause" aria-label="${paused ? 'Resume' : 'Pause'} queue"><i class="ph ${paused ? 'ph-play' : 'ph-pause'}" aria-hidden="true"></i></button></div>` : '';
     const reorder = queue.length > 1; // two or more still waiting: drag one to change the order
     const html = header + queue.map(m => {
       const mergePr = mergePrNumber(m.text);
@@ -14976,6 +14979,14 @@
     html += forkNote + pendingHtml(ws, forkNote ? '' : lastHead, ctx) + (working ? '' : ctx.before(Infinity)) + ctx.waiting;
     finishChunk();
     const content = updateThreadHistory(flow, chunks);
+    // Fade in assistant replies the first time they appear (not on re-renders or when opening a thread).
+    const firstPaint = flow._seenFor !== ws.id;
+    if (firstPaint) { flow._seenFor = ws.id; flow._seenMsgs = new Set(); }
+    content.querySelectorAll('.thr-msg.assistant[data-key]').forEach(el => {
+      if (flow._seenMsgs.has(el.dataset.key)) return;
+      flow._seenMsgs.add(el.dataset.key);
+      if (!firstPaint) el.classList.add('thr-fade-in');
+    });
     const newImages = content.querySelectorAll('img.thr-img');
     // Keep the open states on replaced rows, without making a toggle invalidate cached markup.
     flow._lazy = lazy;
@@ -17968,7 +17979,7 @@
     settingsOverlay.classList.add('open');
     document.activeElement?.blur();
 
-    settingsOverlay.focus({ preventScroll: true });
+    document.getElementById('settings-nav-search').focus({ preventScroll: true });
     syncBrowserSlots();
   }
 
@@ -18286,7 +18297,9 @@
     drawProvidersHead(); drawProviderList(); drawProviderStatus(); drawProviderForm();
   }
   function drawProviderList() {
-    document.querySelector('#providers-panel .prov-list').innerHTML = provHarnesses().map(h => {
+    // Only active providers (and the selected one) are listed; the rest are added from the "New provider" dialog.
+    const off = provHarnesses().filter(h => !provOn(h));
+    document.querySelector('#providers-panel .prov-list').innerHTML = provHarnesses().filter(h => provOn(h) || h.id === _provSelected).map(h => {
       const a = _prov.agents[h.bin] || {}, st = provState(h), sel = h.id === _provSelected, on = provOn(h);
       return `<div class="prov-row${sel ? ' selected' : ''}${on && a.path ? '' : ' off'}" role="listitem">`
         + `<button type="button" class="prov-select" data-act="select" data-id="${h.id}" aria-pressed="${sel}" aria-label="Select ${escHtml(h.name)}"></button>`
@@ -18294,8 +18307,28 @@
         + `<span class="prov-row-text"><span class="prov-row-name">${escHtml(h.name)}${a.version ? `<code>${escHtml(a.version)}</code>` : ''}</span>`
         + `<span class="prov-row-sub"><i class="ph ${st.icon} prov-${st.tone}" aria-hidden="true"></i>${st.text}</span></span>`
         + provSwitch(h, on) + '</div>';
+    }).join('') + (off.length ? '<button type="button" class="prov-new" data-act="new-provider"><i class="ph ph-plus" aria-hidden="true"></i>New provider</button>' : '');
+    if (document.getElementById('prov-add-dialog').open) drawProviderAddDialog();
+  }
+  function drawProviderAddDialog() {
+    const dlg = document.getElementById('prov-add-dialog'), off = provHarnesses().filter(h => !provOn(h));
+    if (!off.length) { dlg.close(); return; }
+    dlg.querySelector('.prov-add-list').innerHTML = off.map(h => {
+      const st = provState(h);
+      return `<li class="prov-add-row"><span class="prov-logo" style="--prov-color:${h.color || 'var(--fg)'}">${procIconHtml(h.bin, 'ph-robot')}</span>`
+        + `<span class="prov-add-text"><strong>${escHtml(h.name)}</strong><span><i class="ph ${st.icon} prov-${st.tone}" aria-hidden="true"></i>${st.text}</span></span>`
+        + `<button type="button" data-id="${h.id}" aria-label="Activate ${escHtml(h.name)}">Activate</button></li>`;
     }).join('');
   }
+  document.getElementById('prov-add-dialog')?.addEventListener('click', e => {
+    const btn = e.target.closest('.prov-add-row button[data-id]');
+    if (!btn || !_prov) return;
+    provCfg(btn.dataset.id).enabled = true;
+    _provSelected = btn.dataset.id;
+    drawProviderList(); drawProviderStatus(); drawProviderForm();
+    document.querySelector('#prov-add-dialog .prov-add-row button')?.focus();
+    void saveProviders(false);
+  });
   function drawProviderStatus() {
     const h = harnessOf(_provSelected), a = _prov.agents[h.bin] || {}, st = provState(h), email = _provEmails[h.id], shown = _provEmailShown.has(h.id);
     const row = (label, value) => value ? `<div class="prov-kv"><span class="prov-label">${label}</span><span class="prov-value">${value}</span></div>` : '';
@@ -18418,7 +18451,8 @@
         const shown = !_provEmailShown.delete(btn.dataset.id);
         if (shown) _provEmailShown.add(btn.dataset.id);
         btn.setAttribute('aria-pressed', shown); btn.title = `Click to ${shown ? 'hide' : 'reveal'} email`;
-      } else if (act === 'login') startProviderLogin(harnessOf(_provSelected));
+      } else if (act === 'new-provider') { drawProviderAddDialog(); document.getElementById('prov-add-dialog').showModal(); }
+      else if (act === 'login') startProviderLogin(harnessOf(_provSelected));
       else if (act === 'arg-add') { readProviderForm(); c.args.push(''); drawProviderForm('arg-' + (c.args.length - 1)); }
       else if (act === 'env-add') {
         // A new variable has no name yet, so it lives only in the form until one is typed.
@@ -18471,6 +18505,8 @@
 
   function applySettings() {
     document.documentElement.style.setProperty('--app-font', currentFontFamily);
+    const fp = document.getElementById('font-preview');
+    if (fp) Object.assign(fp.style, { fontFamily: terminalFontFamily(currentFontFamily), fontSize: currentFontSize + 'px', lineHeight: String(currentLineHeight) });
     const wsp = activeWs();
     if (!wsp) return;
     const terms = getWorkspaceTerminals(wsp);

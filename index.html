@@ -207,6 +207,13 @@
 
   <!-- Context menu -->
   <div id="ctx"></div>
+  <dialog id="prov-add-dialog" aria-labelledby="prov-add-title" closedby="any">
+    <header>
+      <h2 id="prov-add-title" tabindex="-1" autofocus>New provider</h2>
+      <form method="dialog"><button type="submit" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></form>
+    </header>
+    <ul class="prov-add-list"></ul>
+  </dialog>
   <dialog id="agent-updates" aria-labelledby="agent-updates-title" closedby="any">
     <header>
       <h2 id="agent-updates-title" tabindex="-1" autofocus>Agent updates</h2>
@@ -693,6 +700,12 @@
               Typography</div>
             <div
               class="bg-[color-mix(in_srgb,var(--bg)_70%,rgba(255,255,255,0.02))] border border-[var(--border)]  mb-3 flex flex-col">
+              <div data-setting="font preview" class="font-preview-row">
+                <pre id="font-preview" aria-label="Font preview"><span class="fp-dim">~/projects/terminalvibe</span> <span class="fp-accent">main</span> $ npm run dev
+<span class="fp-ok">✓</span> ready in 412ms  →  http://localhost:6969
+The quick brown fox jumps over the lazy dog
+0O 1lI {} [] () =&gt; != === -&gt; &lt;= &gt;=</pre>
+              </div>
               <div
                 data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
                 <div class="flex flex-col gap-1">
