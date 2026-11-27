@@ -11669,6 +11669,7 @@
     else if (file?.skill) void showChatSkillInfo(file.mention, reference.querySelector('a') || reference); // the card, like a sent chip's
     else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
     else if (file?.url) openChatWebLink(file.url, e.shiftKey);
+    else if (file?.diff) { if (!openChatDiffAt(curChat(), file.diff, file.line)) void openChatFileLink(curChat(), file.path, file.line); } // a diff comment's chip
     else if (file?.dir) window.electronAPI?.showInFolder?.(file.path); // a folder mention: reveal it, there's nothing to preview
     else if (file && !file.at) openChatAttachment(file, curChat());
   });
@@ -12152,7 +12153,7 @@
         const mention = '@' + (/\s/.test(p) ? `"${p}"` : p) + suffix;
         if (!_chatFiles.some(f => f.mention === mention)) {
           const abs = /^([\\/]|\w:)/.test(p) || !cwd ? p : `${cwd.replace(/[\\/]$/, '')}/${p}`;
-          _chatFiles.push({ at: true, mention, name: p.split(/[\\/]/).pop() + suffix, path: abs });
+          _chatFiles.push({ at: true, mention, name: p.split(/[\\/]/).pop() + suffix, path: abs, diff: p, line: line || '' });
         }
         threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
         const v = thrInput.value.replace(/\s*$/, '');
