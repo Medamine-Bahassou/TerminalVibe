@@ -12147,6 +12147,7 @@
         thrInput.value = (v ? v + '\n' : '') + `${at}: ${text}\n`;
         thrInput.setSelectionRange(thrInput.value.length, thrInput.value.length);
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+        thrInput.focus({ preventScroll: true });
       }
       row.remove();
     });
