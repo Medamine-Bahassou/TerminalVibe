@@ -1221,6 +1221,32 @@ ipcMain.handle('project:icon', async (_e, cwd) => {
   } catch {}
   return null;
 });
+// A web page's preview picture (og:image / twitter:image, what link previews show) as an absolute https URL; null if
+// none. A2UI ItemList rows use it as their thumbnail when the agent gave a link but no image.
+const previewImageCache = new Map();
+ipcMain.handle('page:preview-image', (_e, href) => {
+  if (!previewImageCache.has(href)) previewImageCache.set(href, pagePreviewImage(href));
+  return previewImageCache.get(href);
+});
+async function pagePreviewImage(href) {
+  try {
+    const url = new URL(href);
+    // Public https pages only: never probe the user's own machine or network for an agent-supplied link.
+    if (url.protocol !== 'https:' || /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[|0\.)/i.test(url.hostname)) return null;
+    const res = await require('electron').net.fetch(url.href, { credentials: 'omit', signal: AbortSignal.timeout(6000) });
+    if (!res.ok || !/html/.test(res.headers.get('content-type') || '')) return null;
+    const html = (await res.text()).slice(0, 400 * 1024);
+    const attr = (tag, name) => tag.match(new RegExp(String.raw`\b${name}\s*=\s*["']([^"']+)["']`, 'i'))?.[1];
+    const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map(m => ({ key: (attr(m[0], 'property') || attr(m[0], 'name') || '').toLowerCase(), content: attr(m[0], 'content') }));
+    for (const key of ['og:image:secure_url', 'og:image', 'og:image:url', 'twitter:image', 'twitter:image:src']) {
+      const content = metas.find(m => m.key === key && m.content)?.content;
+      if (!content) continue;
+      const img = new URL(content.replace(/&amp;/g, '&'), res.url || url.href);
+      if (img.protocol === 'https:') return img.href;
+    }
+  } catch {}
+  return null;
+}
 // A site's /favicon.ico as a data URL (so the chat can read its pixels and tint single-color icons); null if none.
 // The icon the site's homepage declares (<link rel="icon" / "shortcut icon" / "apple-touch-icon">) comes first: a
 // single-page app often has no /favicon.ico (its server answers that path with the app's HTML). Then /favicon.ico.

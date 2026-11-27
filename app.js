@@ -14154,6 +14154,55 @@
     if (_faviconMissing.has(host)) return globe;
     return `<img class="thr-favicon" src="${origin}/favicon.ico" data-host="${host}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
   };
+  // ── Sources: the web pages a reply links to (markdown links, A2UI item titles), behind a footer button that opens
+  // a dialog listing them all. ──
+  function replySources(msg) {
+    const seen = new Map();
+    msg.querySelectorAll('.thr-msg-text button.thr-link[data-href], .thr-msg-text a[href^="http"]').forEach(el => {
+      const href = el.dataset.href || el.getAttribute('href');
+      if (!/^https?:\/\//i.test(href)) return;
+      const key = href.replace(/[/#]+$/, '');
+      const title = el.textContent.replace(/^\s*\d+\.\s+/, '').trim(); // an ItemList title's "1. " number
+      if (!seen.has(key)) seen.set(key, { href, title: title && title !== href ? title : '' });
+      else if (!seen.get(key).title && title !== href) seen.get(key).title = title;
+    });
+    return [...seen.values()];
+  }
+  const hydrateFavicons = root => root.querySelectorAll('i[data-favicon]').forEach(i => loadFavicon(i.dataset.favicon, i.dataset.origin).then(f => { if (f && i.isConnected) i.outerHTML = faviconHtml(f); }));
+  function addSourcesButton(msg) {
+    const bar = msg.querySelector(':scope > .thr-actions');
+    if (!bar || bar.querySelector('.thr-sources')) return;
+    const sources = replySources(msg);
+    if (!sources.length) return;
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'thr-sources';
+    b.setAttribute('aria-label', `Sources (${sources.length})`); b.dataset.tip = 'Sources';
+    b.innerHTML = `<span class="thr-sources-icons">${sources.slice(0, 3).map(s => `<span class="thr-sources-icon">${linkIconHtml(s.href)}</span>`).join('')}</span><span>Sources</span>`;
+    b.addEventListener('click', () => openSourcesDialog(replySources(msg)));
+    const time = bar.querySelector('.thr-time');
+    if (time) time.before(b); else bar.append(b);
+    hydrateFavicons(b);
+  }
+  let _sourcesDialog = null;
+  function openSourcesDialog(sources) {
+    const d = _sourcesDialog ||= document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'thr-sources-dlg' }));
+    d.setAttribute('aria-labelledby', 'thr-sources-title');
+    const host = href => { try { return new URL(href).hostname.replace(/^www\./, ''); } catch { return href; } };
+    d.innerHTML = `<header><h2 id="thr-sources-title">Sources</h2><span class="thr-sources-count">${sources.length}</span>`
+      + `<button type="button" class="thr-sources-close" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></header>`
+      + `<div class="thr-sources-list" role="list">${sources.map(s => `<button type="button" class="thr-source" role="listitem" data-href="${escHtml(s.href)}" title="${escHtml(s.href)}">`
+      + `<span class="thr-source-icon">${linkIconHtml(s.href)}</span><span class="thr-source-text"><span class="thr-source-title">${escHtml(s.title || host(s.href))}</span>`
+      + `<span class="thr-source-host">${escHtml(host(s.href))}</span></span><i class="ph ph-arrow-up-right" aria-hidden="true"></i></button>`).join('')}</div>`;
+    hydrateFavicons(d);
+    d.querySelector('.thr-sources-close').onclick = () => d.close();
+    d.onclick = e => {
+      if (e.target === d) { d.close(); return; } // the backdrop
+      const row = e.target.closest('.thr-source');
+      if (row) { openChatWebLink(row.dataset.href, e.shiftKey); d.close(); }
+    };
+    d.showModal();
+    d.querySelector('.thr-source')?.focus();
+  }
   // mdLite's output (or a copied slice of it) back to markdown source, for copying a selection.
   function mdFromDom(node) {
     const kids = n => [...n.childNodes].map(mdFromDom).reduce((text, part) => /\n\n$/.test(text) && /^\n\n/.test(part) ? text + part.slice(2) : text + part, '');
@@ -15127,7 +15176,7 @@
       b.setAttribute('aria-label', 'Copied');
       setTimeout(() => { b.innerHTML = '<i class="ph ph-copy" aria-hidden="true"></i>'; b.setAttribute('aria-label', 'Copy message'); }, 1200);
     }));
-    content.querySelectorAll('i[data-favicon]').forEach(i => loadFavicon(i.dataset.favicon, i.dataset.origin).then(f => { if (f && i.isConnected) i.outerHTML = faviconHtml(f); }));
+    hydrateFavicons(content);
     content.querySelectorAll('img.thr-favicon[data-host]').forEach(img => {
       const fail = () => { _faviconMissing.add(img.dataset.host); img.outerHTML = '<i class="ph ph-globe" aria-hidden="true"></i>'; };
       if (img.complete && !img.naturalWidth) fail(); else img.addEventListener('error', fail, { once: true });
@@ -15155,6 +15204,7 @@
     }));
     content.querySelectorAll('.a2ui-host').forEach(host => mountA2ui(ws, host));
     content.querySelectorAll('.thr-a2ui-answer').forEach(el => fillA2uiAnswer(ws, el)); // after the surfaces it names
+    content.querySelectorAll('.thr-msg.assistant').forEach(addSourcesButton); // after the A2UI surfaces: their links count
     content.querySelectorAll('.thr-fork').forEach(b => b.addEventListener('click', () => forkChatAt(ws, Number(b.dataset.seg), Number(b.dataset.item))));
     content.querySelectorAll('.thr-sub[data-sub-call]').forEach(b => b.addEventListener('click', () => openSubagentThread(ws, b.dataset)));
     content.querySelectorAll('.thr-diff-btn').forEach(b => b.addEventListener('click', () => {
@@ -15346,6 +15396,11 @@
       el = window.A2UI.mount(state, msgs, {
         markdown: mdLite,
         openUrl: url => { if (/^https?:/i.test(url)) openChatWebLink(url, false); },
+        previewImage: url => window.electronAPI?.pagePreviewImage?.(url).catch(() => null) ?? Promise.resolve(null),
+        openImage: (list, index) => {
+          const gallery = list.map(x => ({ ref: { kind: 'file', path: x.src, label: x.label || 'Image' }, src: x.src }));
+          openClaudeRefViewer(null, gallery[index].ref, '', gallery[index].src, { gallery, index });
+        },
         loadImage: async path => {
           const file = path.startsWith('~') ? path : chatLinkPath(path).path; // main expands ~
           const r = await window.electronAPI?.readImageFile?.(file, { svg: true }).catch(() => null);
