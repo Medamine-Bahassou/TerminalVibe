@@ -12111,9 +12111,10 @@
       const rows = items.map(it => it.hunk != null
         // Hunks whose place in the file is unknown (Codex's bare @@): no made-up coordinates.
         ? `<tr class="gdv-hunk"><td class="gdv-num" colspan="2"></td><td class="gdv-code" colspan="2">${escHtml(unnumbered[fi] ? it.hunk.replace(/@@ -1,\d+ \+1,\d+ @@/, '@@') : it.hunk)}</td></tr>`
-        : `<tr class="${STATE[it.l.diff.type]}"><td class="gdv-num">${it.l.oldLineNumber ?? ''}</td><td class="gdv-num">${it.l.newLineNumber ?? ''}</td>`
+        : `<tr class="${STATE[it.l.diff.type]}" data-line="${unnumbered[fi] ? '' : it.l.newLineNumber ?? it.l.oldLineNumber}"><td class="gdv-num">`
+          + `<button type="button" class="gdv-comment-btn" aria-label="Comment on this line" data-tip="Comment"><i class="ph ph-plus" aria-hidden="true"></i></button>${it.l.oldLineNumber ?? ''}</td><td class="gdv-num">${it.l.newLineNumber ?? ''}</td>`
           + `<td class="gdv-op">${OP[it.l.diff.type]}</td><td class="gdv-code">${code(it)}</td></tr>`).join('');
-      return `<div class="gdv-file cfp-collapsed${unnumbered[fi] ? ' cfp-no-ln' : ''}"><div class="gdv-file-head" role="button" tabindex="0" aria-expanded="false">`
+      return `<div class="gdv-file cfp-collapsed${unnumbered[fi] ? ' cfp-no-ln' : ''}" data-path="${escHtml(p)}"><div class="gdv-file-head" role="button" tabindex="0" aria-expanded="false">`
         + `<i class="ph ph-caret-down cfp-fold" aria-hidden="true"></i><span class="gdv-file-name" title="${escHtml(p)}"><bdi>${escHtml(p)}</bdi></span></div>` // ltr path inside the rtl ellipsis
         + `<div class="gdv-file-diff"><table class="gdv-table"><colgroup><col class="gdv-c-num"><col class="gdv-c-num"><col class="gdv-c-op"><col></colgroup>${rows}</table></div></div>`;
     }).join('');
@@ -12123,6 +12124,37 @@
       h.addEventListener('click', () => { if (!getSelection().toString()) toggle(); });
       h.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
     }
+    // A line's "+" opens a comment box under it; "Add to message" puts "path:line: comment" into the chat's draft.
+    const code = panel.querySelector('.cfp-code');
+    code.addEventListener('click', e => {
+      const btn = e.target.closest('.gdv-comment-btn, .gdv-comment-cancel, .gdv-comment-add');
+      if (!btn) return;
+      if (btn.classList.contains('gdv-comment-btn')) {
+        const tr = btn.closest('tr'), next = tr.nextElementSibling;
+        if (next?.classList.contains('gdv-comment-row')) { next.querySelector('textarea').focus(); return; }
+        tr.insertAdjacentHTML('afterend', '<tr class="gdv-comment-row"><td colspan="4"><div class="gdv-comment">'
+          + '<textarea rows="3" placeholder="Leave a comment" aria-label="Comment"></textarea><div class="gdv-comment-actions">'
+          + '<button type="button" class="gdv-comment-cancel">Cancel</button><button type="button" class="gdv-comment-add">Add to message</button></div></div></td></tr>');
+        tr.nextElementSibling.querySelector('textarea').focus();
+        return;
+      }
+      const row = btn.closest('.gdv-comment-row'), text = row.querySelector('textarea').value.trim();
+      if (btn.classList.contains('gdv-comment-add')) {
+        if (!text) return row.querySelector('textarea').focus();
+        const line = row.previousElementSibling.dataset.line, at = row.closest('.gdv-file').dataset.path + (line ? ':' + line : '');
+        threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
+        const v = thrInput.value.replace(/\s*$/, '');
+        thrInput.value = (v ? v + '\n' : '') + `${at}: ${text}\n`;
+        thrInput.setSelectionRange(thrInput.value.length, thrInput.value.length);
+        thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      row.remove();
+    });
+    code.addEventListener('keydown', e => {
+      if (!e.target.matches('.gdv-comment textarea')) return;
+      if (e.key === 'Escape') { e.stopPropagation(); e.target.closest('.gdv-comment-row').remove(); } // not the panel's Esc
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.target.closest('.gdv-comment').querySelector('.gdv-comment-add').click();
+    });
   }
   // The changes as git-style unified diffs, one per file, for @git-diff-view/core. Claude's hunks carry their @@ -a,b +c,d @@; a new file
   // (all + lines) starts at line 1; a hunk without numbers (Codex's apply_patch) gets placeholder ones, flagged.
