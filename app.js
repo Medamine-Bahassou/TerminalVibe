@@ -11669,7 +11669,7 @@
     else if (file?.skill) void showChatSkillInfo(file.mention, reference.querySelector('a') || reference); // the card, like a sent chip's
     else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
     else if (file?.url) openChatWebLink(file.url, e.shiftKey);
-    else if (file?.diff) { if (!openChatDiffAt(curChat(), file.diff, file.line)) void openChatFileLink(curChat(), file.path, file.line); } // a diff comment's chip
+    else if (file?.diff) { if (!openChatDiffAt(curChat(), file.diff, file.line, file.diffKey)) void openChatFileLink(curChat(), file.path, file.line); } // a diff comment's chip
     else if (file?.dir) window.electronAPI?.showInFolder?.(file.path); // a folder mention: reveal it, there's nothing to preview
     else if (file && !file.at) openChatAttachment(file, curChat());
   });
@@ -12153,7 +12153,7 @@
         const mention = '@' + (/\s/.test(p) ? `"${p}"` : p) + suffix;
         if (!_chatFiles.some(f => f.mention === mention)) {
           const abs = /^([\\/]|\w:)/.test(p) || !cwd ? p : `${cwd.replace(/[\\/]$/, '')}/${p}`;
-          _chatFiles.push({ at: true, mention, name: p.split(/[\\/]/).pop() + suffix, path: abs, diff: p, line: line || '' });
+          _chatFiles.push({ at: true, mention, name: p.split(/[\\/]/).pop() + suffix, path: abs, diff: p, line: line || '', diffKey: key });
         }
         threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
         const v = thrInput.value.replace(/\s*$/, '');
@@ -12172,14 +12172,18 @@
     });
     return panel;
   }
-  // A sent "@path:line" chip from a diff comment: opens the latest of this chat's diffs with that file, unfolds it and
-  // marks the line. False when no diff has the file (the caller opens the file itself).
-  function openChatDiffAt(owner, p, line) {
+  // A diff comment's "@path:line" chip: opens the diff it came from (key, when the chip still knows it), else the latest
+  // of this chat's diffs whose hunks cover the line, else the latest with the file; unfolds the file and marks the line.
+  // False when no diff has the file (the caller opens the file itself).
+  function openChatDiffAt(owner, p, line, key) {
     if (!owner) return false;
     // One file under different spellings: "\\wsl.localhost\Ubuntu\home\…\app.js", "/home/…/app.js", "app.js".
     const norm = s => s.replace(/\\/g, '/');
     const same = (a, b) => { a = norm(a).replace(/^\/+/, '/'); b = norm(b).replace(/^\/+/, '/'); const tail = s => s[0] === '/' ? s : '/' + s; return a === b || a.endsWith(tail(b)) || b.endsWith(tail(a)); };
-    const hit = [..._chatDiffs].reverse().find(([k, d]) => k.startsWith(owner.id + '|') && d.files.some(f => same(f.path, p)));
+    const covers = f => [...f.patches.join('\n').matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)]
+      .some(m => [[+m[1], +(m[2] ?? 1)], [+m[3], +(m[4] ?? 1)]].some(([s, n]) => line >= s && line < s + n));
+    const mine = [..._chatDiffs].reverse().filter(([k, d]) => k.startsWith(owner.id + '|') && d.files.some(f => same(f.path, p)));
+    const hit = (key && mine.find(([k]) => k === key)) || (line && mine.find(([, d]) => d.files.some(f => same(f.path, p) && covers(f)))) || mine[0];
     if (!hit) return false;
     const panel = openChatDiffPanel(owner, hit[1].files, hit[1].cwd, hit[0]);
     const file = panel && [...panel.querySelectorAll('.gdv-file')].find(f => same(f.dataset.path, p));
