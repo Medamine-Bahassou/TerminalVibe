@@ -12070,45 +12070,67 @@
     };
     requestAnimationFrame(() => requestIdleCallback(fill, { timeout: 50 }));
   }
-  // A turn's changed files as one read-only diff beside the chat, drawn by diff2html (vendor/diff2html-ui-base.min.js,
-  // colored by the app's highlight.js): sticky file headers, old/new line numbers, word-level changes.
+  // A turn's changed files as one read-only diff beside the chat, drawn from @git-diff-view/core (vendor/git-diff-view-core.min.js,
+  // colored by the app's highlight.js): sticky file headers, old/new line numbers.
   function openChatDiffPanel(owner, files, cwd, key) {
     const add = files.reduce((s, f) => s + f.add, 0), del = files.reduce((s, f) => s + f.del, 0);
-    const { text, unnumbered, maxLn } = unifiedDiff(files, cwd);
+    const { texts, unnumbered, maxLn } = unifiedDiff(files, cwd);
     const panel = openChatPanel(owner, { key, title: `${files.length} changed file${files.length > 1 ? 's' : ''}`, sub: `+${add} -${del}`, icon: 'ph-file-diff', rows: '', diff: true, maxLn });
-    if (!panel || !window.Diff2HtmlUI) return;
-    const ui = new Diff2HtmlUI(panel.querySelector('.cfp-code'), text, { drawFileList: false, outputFormat: 'line-by-line', matching: 'lines',
-      fileContentToggle: false, stickyFileHeaders: false, highlight: true, synchronisedScroll: false }, window.hljs);
-    ui.draw();
-    ui.highlightCode();
-    // One line-number column: the line's number in the new file, or in the old one for a removed line.
-    for (const g of panel.querySelectorAll('.d2h-code-linenumber')) {
-      g.textContent = g.querySelector('.line-num2')?.textContent.trim() || g.querySelector('.line-num1')?.textContent.trim() || '';
-    }
-    // Hunks whose place in the file is unknown (Codex's bare @@): no line numbers rather than made-up ones.
-    panel.querySelectorAll('.d2h-file-wrapper').forEach((w, i) => {
-      if (!unnumbered[i]) return;
-      w.classList.add('cfp-no-ln');
-      for (const el of w.querySelectorAll('.d2h-info .d2h-code-line')) el.textContent = el.textContent.replace(/@@ -1,\d+ \+1,\d+ @@/, '@@');
-    });
-    // Each file header folds its diff like a dropdown.
-    for (const h of panel.querySelectorAll('.d2h-file-header')) {
-      h.insertAdjacentHTML('afterbegin', '<i class="ph ph-caret-down cfp-fold" aria-hidden="true"></i>');
-      const name = h.querySelector('.d2h-file-name');
-      if (name) { name.title = name.textContent; const b = document.createElement('bdi'); b.textContent = name.textContent; name.replaceChildren(b); } // ltr path inside the rtl ellipsis
-      h.setAttribute('role', 'button'); h.tabIndex = 0; h.setAttribute('aria-expanded', 'false'); h.closest('.d2h-file-wrapper').classList.add('cfp-collapsed'); // collapsed by default
-      const toggle = () => h.setAttribute('aria-expanded', String(!h.closest('.d2h-file-wrapper').classList.toggle('cfp-collapsed')));
+    if (!panel || !window.GitDiffViewCore) return;
+    // Drawn like @git-diff-view's unified view: old and new line-number columns, an operator column, word-level changes.
+    const { DiffFile, diffChanges } = GitDiffViewCore;
+    const STATE = { 0: 'gdv-plain', 1: 'gdv-add', 2: 'gdv-del' }, OP = { 0: ' ', 1: '+', 2: '-' };
+    panel.querySelector('.cfp-code').innerHTML = texts.map((t, fi) => {
+      const p = t.match(/^\+\+\+ b\/(.*)$/m)[1], ext = (p.match(/\.(\w+)$/)?.[1] || '').toLowerCase();
+      const hl = s => window.hljs?.getLanguage(ext) ? hljs.highlight(s, { language: ext, ignoreIllegals: true }).value : escHtml(s);
+      const d = new DiffFile(p, '', p, '', [t], ext, ext);
+      d.initRaw(); d.buildUnifiedDiffLines();
+      const items = []; // {hunk} or {l}
+      for (let i = 0; i < d.unifiedLineLength; i++) {
+        const hunk = d.getUnifiedHunkLine(i)?.text;
+        if (hunk) items.push({ hunk });
+        const l = d.getUnifiedLine(i);
+        if (l?.diff && !l.isHidden) items.push({ l });
+      }
+      // A run of removed lines followed by as many added ones pairs up line by line for word-level changes.
+      const words = new Map();
+      for (let i = 0; i < items.length;) {
+        let j = i; while (items[j]?.l?.diff.type === 2) j++;
+        let k = j; while (items[k]?.l?.diff.type === 1) k++;
+        if (j > i && k - j === j - i) for (let n = 0; n < j - i; n++) {
+          const r = diffChanges(items[j + n].l.diff, items[i + n].l.diff);
+          words.set(items[i + n], r.delRange); words.set(items[j + n], r.addRange);
+        }
+        i = Math.max(k, i + 1);
+      }
+      const code = it => {
+        const r = words.get(it);
+        if (!r?.range) return hl(it.l.diff.text.replace(/\n$/, ''));
+        return r.range.map(s => { const h = hl(s.str.replace(/\n$/, '')); return s.type ? `<span class="gdv-word">${h}</span>` : h; }).join('');
+      };
+      const rows = items.map(it => it.hunk != null
+        // Hunks whose place in the file is unknown (Codex's bare @@): no made-up coordinates.
+        ? `<tr class="gdv-hunk"><td class="gdv-num" colspan="2"></td><td class="gdv-code" colspan="2">${escHtml(unnumbered[fi] ? it.hunk.replace(/@@ -1,\d+ \+1,\d+ @@/, '@@') : it.hunk)}</td></tr>`
+        : `<tr class="${STATE[it.l.diff.type]}"><td class="gdv-num">${it.l.oldLineNumber ?? ''}</td><td class="gdv-num">${it.l.newLineNumber ?? ''}</td>`
+          + `<td class="gdv-op">${OP[it.l.diff.type]}</td><td class="gdv-code">${code(it)}</td></tr>`).join('');
+      return `<div class="gdv-file cfp-collapsed${unnumbered[fi] ? ' cfp-no-ln' : ''}"><div class="gdv-file-head" role="button" tabindex="0" aria-expanded="false">`
+        + `<i class="ph ph-caret-down cfp-fold" aria-hidden="true"></i><span class="gdv-file-name" title="${escHtml(p)}"><bdi>${escHtml(p)}</bdi></span></div>` // ltr path inside the rtl ellipsis
+        + `<div class="gdv-file-diff"><table class="gdv-table"><colgroup><col class="gdv-c-num"><col class="gdv-c-num"><col class="gdv-c-op"><col></colgroup>${rows}</table></div></div>`;
+    }).join('');
+    // Each file header folds its diff like a dropdown (collapsed by default).
+    for (const h of panel.querySelectorAll('.gdv-file-head')) {
+      const toggle = () => h.setAttribute('aria-expanded', String(!h.parentElement.classList.toggle('cfp-collapsed')));
       h.addEventListener('click', () => { if (!getSelection().toString()) toggle(); });
       h.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
     }
   }
-  // The changes as a git-style unified diff for diff2html. Claude's hunks carry their @@ -a,b +c,d @@; a new file
+  // The changes as git-style unified diffs, one per file, for @git-diff-view/core. Claude's hunks carry their @@ -a,b +c,d @@; a new file
   // (all + lines) starts at line 1; a hunk without numbers (Codex's apply_patch) gets placeholder ones, flagged.
   function unifiedDiff(files, cwd) {
     const base = (cwd || '').replace(/[\\/]$/, '');
     const unnumbered = [];
     let maxLn = 0; // the gutter's width
-    const text = files.map(f => {
+    const texts = files.map(f => {
       const p = base && f.path.startsWith(base + '/') ? f.path.slice(base.length + 1) : f.path;
       const hunks = [];
       for (const l of f.patches.join('\n').split('\n')) {
@@ -12128,8 +12150,8 @@
       }).join('\n');
       unnumbered.push(guessed);
       return `diff --git a/${p} b/${p}\n${created ? 'new file mode 100644\n--- /dev/null' : `--- a/${p}`}\n+++ b/${p}\n${body}`;
-    }).join('\n');
-    return { text, unnumbered, maxLn };
+    });
+    return { texts, unnumbered, maxLn };
   }
   // A changes card's files by its key, for its "Open diff". ponytail: never pruned; one entry per changes card seen.
   const _chatDiffs = new Map();
@@ -12150,7 +12172,8 @@
     page.style.setProperty('--cfp-digits', Math.max(3, String(maxLn).length)); // gutters fit the longest number
     page.setAttribute('role', 'tabpanel');
     page.setAttribute('aria-label', title);
-    page.innerHTML = `<div class="cfp-head"><i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-title">${escHtml(title)}</span>`
+    // A diff's icon and title are already its tab's: its head keeps only the +/- counts.
+    page.innerHTML = `<div class="cfp-head">${diff ? '' : `<i class="ph ${icon}" aria-hidden="true"></i><span class="cfp-title">${escHtml(title)}</span>`}`
       + `<span class="cfp-path"${path ? ` title="${escHtml(title)}"` : ''}>${escHtml(sub)}</span>`
       + (path && window.electronAPI?.showInFolder ? '<button type="button" class="cfp-icon" data-act="reveal" aria-label="Show in folder" data-tip="Show in folder"><i class="ph ph-folder-open" aria-hidden="true"></i></button>' : '')
       + '</div>' // closing is on the tab (and Esc closes the panel)
