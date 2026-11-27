@@ -12112,8 +12112,8 @@
         // Hunks whose place in the file is unknown (Codex's bare @@): no made-up coordinates.
         ? `<tr class="gdv-hunk"><td class="gdv-num" colspan="2"></td><td class="gdv-code" colspan="2">${escHtml(unnumbered[fi] ? it.hunk.replace(/@@ -1,\d+ \+1,\d+ @@/, '@@') : it.hunk)}</td></tr>`
         : `<tr class="${STATE[it.l.diff.type]}" data-line="${unnumbered[fi] ? '' : it.l.newLineNumber ?? it.l.oldLineNumber}"><td class="gdv-num">`
-          + `<button type="button" class="gdv-comment-btn" aria-label="Comment on this line" data-tip="Comment"><i class="ph ph-plus" aria-hidden="true"></i></button>${it.l.oldLineNumber ?? ''}</td><td class="gdv-num">${it.l.newLineNumber ?? ''}</td>`
-          + `<td class="gdv-op">${OP[it.l.diff.type]}</td><td class="gdv-code">${code(it)}</td></tr>`).join('');
+          + `${it.l.oldLineNumber ?? ''}</td><td class="gdv-num">${it.l.newLineNumber ?? ''}</td>`
+          + `<td class="gdv-op"><button type="button" class="gdv-comment-btn" aria-label="Comment on this line" data-tip="Comment"><i class="ph ph-plus" aria-hidden="true"></i></button>${OP[it.l.diff.type]}</td><td class="gdv-code">${code(it)}</td></tr>`).join('');
       return `<div class="gdv-file cfp-collapsed${unnumbered[fi] ? ' cfp-no-ln' : ''}" data-path="${escHtml(p)}"><div class="gdv-file-head" role="button" tabindex="0" aria-expanded="false">`
         + `<i class="ph ph-caret-down cfp-fold" aria-hidden="true"></i><span class="gdv-file-name" title="${escHtml(p)}"><bdi>${escHtml(p)}</bdi></span></div>` // ltr path inside the rtl ellipsis
         + `<div class="gdv-file-diff"><table class="gdv-table"><colgroup><col class="gdv-c-num"><col class="gdv-c-num"><col class="gdv-c-op"><col></colgroup>${rows}</table></div></div>`;
