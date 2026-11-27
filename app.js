@@ -890,8 +890,8 @@
     applyWorkUsernamePrivacy(document);
     applyComposerParts();
   };
-  // Composer controls the user hid from its right-click menu (attach, mode, ctx).
-  const COMPOSER_PARTS = [['attach', 'File upload', 'ph-paperclip'], ['mode', 'Access mode', 'ph-shield'], ['ctx', 'Context usage', 'ph-circle-half']];
+  // Composer controls the user hid from its right-click menu (attach, interactive UI, mode, ctx).
+  const COMPOSER_PARTS = [['attach', 'File upload', 'ph-paperclip'], ['a2ui', 'Interactive UI', 'ph-squares-four'], ['mode', 'Access mode', 'ph-shield'], ['ctx', 'Context usage', 'ph-circle-half']];
   function applyComposerParts() {
     const hidden = threadSettings.composerHidden || [];
     for (const [k] of COMPOSER_PARTS) document.body.classList.toggle('thr-hide-' + k, hidden.includes(k));
@@ -10190,6 +10190,16 @@
         modeEl.title = `Permission mode: ${acc[1]}`;
       }
     }
+    const a2uiEl = thrChip('a2ui');
+    if (a2uiEl) {
+      const m = A2UI_MODES.find(x => x[0] === a2uiMode(o));
+      if (a2uiEl.dataset.sig !== m[0]) {
+        a2uiEl.dataset.sig = m[0];
+        a2uiEl.innerHTML = `<i class="ph ${m[2]}" aria-hidden="true"></i>`;
+        a2uiEl.dataset.tip = m[1];
+        a2uiEl.setAttribute('aria-label', `Reply style: ${m[1]}`);
+      }
+    }
     syncTabAgentIcon(ws);
     // Footer: folder, the agent's tab (its permission prompts show there), branch, permissions.
     const cwd = chatCwd(ws);
@@ -10354,6 +10364,13 @@
     openChatTab(t);
   });
   // Mode chip: the permission modes menu (same as in the model picker); a change applies live where the agent allows it.
+  thrChip('a2ui')?.addEventListener('click', e => {
+    const ws = curChat();
+    if (!ws) return;
+    const btn = e.currentTarget, cur = a2uiMode(chatOpts(ws));
+    openPickMenu(btn, A2UI_MODES.map(([v, label, icon, title]) => ({ value: v, label, title, selected: v === cur, icon: `<i class="ph ${icon}"></i>` })),
+      v => { setChatOpts(ws, { a2ui: v }); btn.focus(); });
+  });
   thrChip('mode')?.addEventListener('click', e => {
     const ws = curChat();
     if (!ws) return;
@@ -10714,6 +10731,12 @@
     // The history note rides on the first real message: after a slash command it would become its argument.
     if (t._handoff && !/^\s*\//.test(text)) { text += _handoffNote(t._handoff); t._handoff = null; }
     if (t._sideNote && !/^\s*\//.test(text)) { text += SIDE_NOTE; t._sideNote = false; }
+    // Interactive UI mode: Plain text rides on every message; the first one back on Interactive UI re-allows it.
+    if (!/^\s*\//.test(text)) {
+      const mode = a2uiMode(chatOpts(t));
+      if (mode !== 'auto') text += A2UI_NOTES[mode]; else if (t._a2uiLast && t._a2uiLast !== 'auto') text += A2UI_NOTES.auto;
+      t._a2uiLast = mode;
+    }
     if (t._sdk?.alive) {
       t._chatSent = true;
       if (t._chatSeg) t._chatSeg.used = true;
@@ -10977,6 +11000,16 @@
   // Appended to the first message a new agent gets when the chat already has history
   // (the transcript reader strips it from the history again).
   // T3 Code's side chat framing.
+  // The chat's Interactive UI (A2UI) mode, picked from the composer's menu: [value, label, icon, tooltip].
+  const A2UI_MODES = [
+    ['auto', 'Interactive UI', 'ph-squares-four', 'The agent uses interactive UI where it helps'],
+    ['off', 'Plain text', 'ph-squares-four a2ui-icon-off', 'Markdown only, no interactive UI'], // the same glyph, slashed
+  ];
+  const a2uiMode = o => o.a2ui === false || o.a2ui === 'off' ? 'off' : 'auto'; // false: the first on/off switch
+  const A2UI_NOTES = {
+    off: ' <terminalvibe_context a2ui="off">Interactive UI is off in this chat: reply in plain markdown only, with no a2ui blocks. Never mention this context.</terminalvibe_context>',
+    auto: ' <terminalvibe_context a2ui="auto">Interactive UI is back to its default: use a2ui blocks only where they clearly help. Never mention this context.</terminalvibe_context>',
+  };
   const SIDE_NOTE = ' <terminalvibe_context side="true">You are in a side chat beside the main thread. The main thread may still be running in the same folder. Answer my questions; do not continue or redo the main thread\'s task. Never mention this context.</terminalvibe_context>';
   // "Bring back": the main thread gets the side chat's history with the next message sent there.
   const _bringBackNote = file => ` <terminalvibe_context side-chat="${file}">I asked side questions in a side chat; its history is in that file. Read it only if my message depends on it. Never mention this context or the file.</terminalvibe_context>`;
@@ -15397,6 +15430,7 @@
         markdown: mdLite,
         openUrl: url => { if (/^https?:/i.test(url)) openChatWebLink(url, false); },
         previewImage: url => window.electronAPI?.pagePreviewImage?.(url).catch(() => null) ?? Promise.resolve(null),
+        searchImage: query => window.electronAPI?.searchImage?.(query).catch(() => null) ?? Promise.resolve(null),
         openImage: (list, index) => {
           const gallery = list.map(x => ({ ref: { kind: 'file', path: x.src, label: x.label || 'Image' }, src: x.src }));
           openClaudeRefViewer(null, gallery[index].ref, '', gallery[index].src, { gallery, index });
