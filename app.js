@@ -12157,7 +12157,7 @@
         }
         threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
         const v = thrInput.value.replace(/\s*$/, '');
-        thrInput.value = (v ? v + '\n' : '') + `${mention} ${text}\n`;
+        thrInput.value = (v ? v + ' ' : '') + `${mention} ${text} `; // on the same line as earlier comments
         renderChatFiles();
         thrInput.setSelectionRange(thrInput.value.length, thrInput.value.length);
         thrInput.dispatchEvent(new Event('input', { bubbles: true }));
