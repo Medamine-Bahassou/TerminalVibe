@@ -486,7 +486,7 @@ class AcpSession extends Session {
     if (this.replaying || !this.dir || !this.sessionId) return;
     try {
       fs.mkdirSync(this.dir, { recursive: true });
-      fs.appendFileSync(path.join(this.dir, this.sessionId + '.jsonl'), JSON.stringify({ ...item, ts: new Date().toISOString() }) + '\n');
+      fs.appendFileSync(path.join(this.dir, this.sessionId + '.jsonl'), JSON.stringify({ ...item, ts: item.ts || new Date().toISOString() }) + '\n');
     } catch (err) { console.error('[chat-sdk] acp transcript', err.message); }
   }
   flush() { if (this.buf?.text.trim()) this.record({ role: this.buf.role, text: this.buf.text.trim() }); this.buf = null; }
@@ -973,9 +973,158 @@ function openCodeModels(bin, env, cwd) {
     }
   });
 }
+// ── ZCode ──
+// Its desktop AppImage ships the agent CLI without the TUI, and `zcode app-server` has no published protocol, so a
+// chat runs each turn headless: `zcode --prompt … --output-format stream-json`, continuing with --resume. The model is
+// a config pick, not a flag: the turn gets a copy of the user's provider file with defaultModelSelection set
+// (ZCODE_PERSONAL_PROVIDER_CONFIG_FILE). A session keeps the model it started with, so app.js starts a new session
+// (the history handed over) when the model or effort changes. The chat records the transcript, like ACP.
+const ZCODE_V2 = home => path.join(home, '.zcode', 'v2');
+const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+// The reasoning levels each model takes: ZCode's built-in model rules (anchored regexes, the last match wins).
+function zcodeReasoning(home) {
+  let rules = [];
+  try {
+    const root = path.join(ZCODE_V2(home), 'runtime', 'provider');
+    const files = fs.readdirSync(root).flatMap(p => fs.readdirSync(path.join(root, p)).flatMap(v => fs.readdirSync(path.join(root, p, v))
+      .map(e => path.join(root, p, v, e, 'zcode-builtin.json')))).filter(f => fs.existsSync(f));
+    const newest = files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+    rules = (readJson(newest)?.config?.modelConfigRules?.modelRules || []).filter(r => r.config?.optionSpecs?.reasoningLevel?.values?.length);
+  } catch {}
+  return modelId => {
+    let values = ['disabled', 'enabled'];
+    for (const r of rules) { try { if (new RegExp(`^(?:${r.modelMatch})$`, 'i').test(modelId)) values = r.config.optionSpecs.reasoningLevel.values; } catch {} }
+    return values;
+  };
+}
+// The picker's models: the user's own providers. Account plans (Start Plan, Coding Plan) are left out: the headless CLI
+// doesn't see the desktop's account connection and silently runs its first personal model instead.
+function zcodeModels(home = require('os').homedir()) {
+  const rules = readJson(path.join(ZCODE_V2(home), 'provider_config.json'))?.config?.providerConfigRules?.providerRules || [];
+  const levels = zcodeReasoning(home);
+  return rules.filter(p => p.enabled !== false && p.providerId && !String(p.providerId).includes('/')).flatMap(p => {
+    const ids = p.config?.modelOrder?.length ? p.config.modelOrder : p.config?.personalModelIds || [];
+    return ids.map(modelId => {
+      const values = levels(modelId), toggle = values.includes('disabled');
+      // On/off reasoning is the model's own default (on); only real levels are offered.
+      return { id: `${p.providerId}/${modelId}`, name: `${modelId} · ${p.providerName || 'ZCode'}`,
+        efforts: toggle ? ['default'] : values, defaultEffort: toggle ? 'default' : values.at(-1) };
+    });
+  });
+}
+// The turn's provider file: the user's own with the picked model as the default (or none: ZCode's own default).
+function zcodeProviderFile(file, home, o = {}) {
+  const at = String(o.model || '').indexOf('/');
+  if (!o.model || o.model === 'default' || at < 1) return null;
+  const providerId = o.model.slice(0, at), modelId = o.model.slice(at + 1);
+  const values = zcodeReasoning(home)(modelId);
+  const reasoningLevel = values.includes(o.effort) ? o.effort : values.at(-1);
+  const cfg = readJson(path.join(ZCODE_V2(home), 'provider_config.json')) || { schemaVersion: 1, config: { providerConfigRules: { providerRules: [] }, modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] } } };
+  cfg.config.defaultModelSelection = { providerId, modelId, options: { reasoningLevel } };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(cfg), { mode: 0o600 }); // a copy of the user's file: it holds their API keys
+  return file;
+}
+// Permission modes: plan (read only), build (its default), yolo (everything).
+const ZCODE_MODES = new Set(['plan', 'build', 'edit', 'yolo', 'guarded']);
+class ZCodeSession extends AcpSession {
+  start({ bin, cwd, env, options = {}, resume, transcriptDir, extraArgs = [] }) {
+    Object.assign(this, { bin, cwd, env, options, extraArgs, dir: transcriptDir, tools: new Map(), buf: null, waiting: 0, queue: Promise.resolve(), early: [] });
+    this.home = require('os').homedir();
+    this.configFile = transcriptDir && path.join(path.dirname(transcriptDir), 'zcode', crypto.createHash('sha1').update(this.key).digest('hex').slice(0, 16) + '.json');
+    this.alive = true; // no process between turns: each turn runs its own
+    if (resume) { this.sessionId = resume; this.emit('session', { sessionId: resume }); }
+    return Promise.resolve({ ok: true, sessionId: this.sessionId, models: null });
+  }
+  // A first turn's records wait for the session id ZCode picks.
+  record(item) {
+    if (!this.sessionId) { this.early.push({ ...item, ts: new Date().toISOString() }); return; }
+    super.record(item);
+  }
+  onMessage(m) {
+    if (m.sessionId && !this.sessionId) {
+      this.sessionId = m.sessionId;
+      this.emit('session', { sessionId: m.sessionId });
+      for (const item of this.early.splice(0)) this.record(item);
+    }
+    const p = m.payload || {};
+    if (m.type === 'model.streaming') {
+      if (p.kind === 'text_delta' || p.kind === 'reasoning_delta') {
+        const role = p.kind === 'text_delta' ? 'assistant' : 'thinking';
+        if (this.buf?.role !== role) this.flush();
+        this.buf ||= { role, text: '' };
+        this.buf.text += p.delta || '';
+      } else if (p.kind === 'tool_call' && p.toolCallId) {
+        this.flush();
+        this.tools.set(p.toolCallId, { id: p.toolCallId, name: String(p.toolName || 'tool'), input: p.input ?? {} });
+      }
+    } else if (m.type === 'tool.updated' && p.kind === 'result' && this.tools.has(p.toolCallId)) {
+      const t = this.tools.get(p.toolCallId);
+      t.output = p.result?.content ?? '';
+      this.recordTool(t, p.result?.success === false);
+      this.tools.delete(p.toolCallId);
+    } else if (m.type === 'turn.failed') this.turnError = p.error?.message || 'The turn failed';
+    else if (m.type === 'turn.completed') this.turnError = null;
+  }
+  send(text, { options } = {}) {
+    if (options) this.options = options;
+    this.waiting++;
+    this.setBusy(true);
+    // One turn at a time: a message sent mid-turn runs right after it (headless runs can't be steered).
+    this.queue = this.queue.then(() => new Promise(resolve => {
+      if (!this.alive) return resolve();
+      this.record({ role: 'user', text });
+      const o = this.options || {}, mode = ZCODE_MODES.has(o.access) ? o.access : 'yolo';
+      let env = this.env;
+      try { const f = this.configFile && zcodeProviderFile(this.configFile, this.home, o); if (f) env = { ...env, ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: f }; }
+      catch (err) { console.error('[chat-sdk] zcode model', err.message); }
+      // --prompt=… so a message starting with "-" isn't read as a flag. No question/plan-mode tools: nothing could answer them.
+      const args = [`--prompt=${text}`, '--output-format', 'stream-json', '--no-color', '--mode', mode, '--cwd', this.cwd || this.home,
+        '--disallowed-tools', 'AskUserQuestion EnterPlanMode ExitPlanMode', ...(this.sessionId ? ['--resume', this.sessionId] : []), ...this.extraArgs];
+      const launch = resolveLaunch(this.bin, args);
+      if (!launch) { this.endTurn(`Cannot run ${this.bin}`); return resolve(); }
+      this.turnError = undefined; this.stderr = '';
+      const proc = this.proc = spawn(launch.file, launch.args, { cwd: this.cwd || this.home, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      let buf = '';
+      proc.stdout.on('data', d => {
+        buf += d;
+        for (let i; (i = buf.indexOf('\n')) >= 0;) {
+          const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+          let msg; try { msg = JSON.parse(line); } catch { continue; }
+          try { this.onMessage(msg); } catch (err) { console.error('[chat-sdk]', err); }
+        }
+      });
+      proc.stderr.on('data', d => { this.stderr = (this.stderr + d).slice(-4000); });
+      let done = false;
+      const finish = (code, err) => {
+        if (done) return; done = true;
+        if (this.proc === proc) this.proc = null;
+        // stderr ends in a stack trace: its first line names the problem.
+        const why = err?.message || this.turnError || (code && !this.stopping ? this.stderr.split('\n').find(l => /error/i.test(l))?.trim() || `exited with code ${code}` : null);
+        this.stopping = false;
+        this.endTurn(why);
+        resolve();
+      };
+      proc.on('exit', code => finish(code));
+      proc.on('error', err => finish(1, err));
+    }));
+    return Promise.resolve(true);
+  }
+  interrupt() {
+    if (!this.proc) return;
+    this.stopping = true;
+    try { this.proc.kill('SIGINT'); } catch {}
+  }
+  setAccess(access) { this.options = { ...this.options, access }; } // applies from the next turn
+  stop() {
+    this.silent = true; this.alive = false;
+    try { this.proc?.kill('SIGINT'); } catch {}
+  }
+}
+
 const toolSummaryOf = input => { try { return require('./threads').toolSummary(input); } catch { return ''; } };
 
-const SESSIONS = { claude: ClaudeSession, codex: CodexSession, antigravity: AcpSession, opencode: OpenCodeSession };
+const SESSIONS = { claude: ClaudeSession, codex: CodexSession, antigravity: AcpSession, opencode: OpenCodeSession, zcode: ZCodeSession };
 const sessions = new Map();
 
 // env(key, harness) / args(harness): the provider's env vars and extra launch arguments (Settings > Providers).
@@ -1055,6 +1204,7 @@ function register(ipcMain, { send, env: makeEnv, args: launchArgs = () => [], ve
         .finally(() => modelCache.delete(key))); // only coalesces: app.js decides when its saved list is stale
       return modelCache.get(key);
     }
+    if (harness === 'zcode') return zcodeModels();
     if (harness !== 'antigravity' || typeof bin !== 'string') return [];
     if (!modelCache.has(bin)) modelCache.set(bin, acpProbeModels(bin, makeEnv('models-probe', harness), require('os').tmpdir()).catch(() => { modelCache.delete(bin); return []; }));
     return modelCache.get(bin);
@@ -1126,7 +1276,7 @@ function stop(key) { sessions.get(key)?.stop(); sessions.delete(key); }
 // The agent's own process, skipped by the leftover-process scan: OpenCode's is its `opencode serve` (this.server).
 function sessionPid(key) { const s = sessions.get(key); return s?.alive ? s.proc?.pid || s.server?.pid || null : null; }
 
-module.exports = { register, stopAll, stop, sessionPid, resolveLaunch, claudePermissionAsk, claudeQuestionAsk, codexAsk, codexAccess, codexTurnParams, acpModels, acpPermissionAsk, AcpSession, OpenCodeSession, openCodeModels, openCodeModel, openCodePermissionAsk, openCodeAccessReply };
+module.exports = { register, stopAll, stop, sessionPid, resolveLaunch, zcodeModels, zcodeProviderFile, ZCodeSession, claudePermissionAsk, claudeQuestionAsk, codexAsk, codexAccess, codexTurnParams, acpModels, acpPermissionAsk, AcpSession, OpenCodeSession, openCodeModels, openCodeModel, openCodePermissionAsk, openCodeAccessReply };
 
 if (require.main === module) {
   const assert = require('assert');
@@ -1410,6 +1560,46 @@ if (require.main === module) {
     assert(!childArgs('claude', { prompt: null }, 'edits').includes('--'), 'the prompt comes on stdin');
     assert.equal(delegateKey('codex', 'a'), delegateKey('codex', 'a'));
     assert.notEqual(delegateKey('codex', 'a'), delegateKey('claude', 'a'));
+    // ZCode: models from the user's providers (levels from the built-in rules), the picked one as the turn's default.
+    const zhome = fs.mkdtempSync(path.join(require('os').tmpdir(), 'tv-zcode-'));
+    try {
+      const v2 = path.join(zhome, '.zcode', 'v2'), rules = path.join(v2, 'runtime', 'provider', 'linux-x86_64', '1.0.0', 'endpoint-x');
+      fs.mkdirSync(rules, { recursive: true });
+      fs.writeFileSync(path.join(rules, 'zcode-builtin.json'), JSON.stringify({ config: { modelConfigRules: { modelRules: [
+        { modelMatch: '.*', config: { optionSpecs: { reasoningLevel: { values: ['disabled', 'enabled'] } } } },
+        { modelMatch: '(?:.*/)?glm[^/]*', config: { optionSpecs: { reasoningLevel: { values: ['low', 'high', 'max'] } } } }] } } }));
+      fs.writeFileSync(path.join(v2, 'provider_config.json'), JSON.stringify({ schemaVersion: 1, config: { providerConfigRules: { providerRules: [
+        { providerId: 'p1', providerName: 'Mine', enabled: true, config: { personalModelIds: ['GLM-5.3', 'auto/best'] } },
+        { providerId: 'off', providerName: 'Off', enabled: false, config: { personalModelIds: ['x'] } }] }, modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] } } }));
+      assert.deepStrictEqual(zcodeModels(zhome), [
+        { id: 'p1/GLM-5.3', name: 'GLM-5.3 · Mine', efforts: ['low', 'high', 'max'], defaultEffort: 'max' },
+        { id: 'p1/auto/best', name: 'auto/best · Mine', efforts: ['default'], defaultEffort: 'default' }]);
+      const pick = f => readJson(zcodeProviderFile(path.join(zhome, f), zhome, { model: 'p1/auto/best', effort: 'default' })).config.defaultModelSelection;
+      assert.deepStrictEqual(pick('a.json'), { providerId: 'p1', modelId: 'auto/best', options: { reasoningLevel: 'enabled' } });
+      assert.equal(zcodeProviderFile(path.join(zhome, 'b.json'), zhome, { model: 'default' }), null, 'ZCode default: no file');
+      // A turn: stream-json events become the transcript; the session id comes from the events.
+      if (process.platform !== 'win32') {
+        const bin = path.join(zhome, 'zcode');
+        const ev = (type, payload) => JSON.stringify({ type, sessionId: 'sess_t1', payload });
+        fs.writeFileSync(bin, `#!/bin/sh\necho "$@" > "${zhome}/args"\ncat <<'EOF'\n${[ev('turn.started', {}),
+          ev('model.streaming', { kind: 'text_delta', delta: 'Let me check.' }),
+          ev('model.streaming', { kind: 'tool_call', toolCallId: 'c1', toolName: 'Bash', input: { command: 'echo hi' } }),
+          ev('tool.updated', { kind: 'result', toolCallId: 'c1', result: { success: true, content: 'hi' } }),
+          ev('model.streaming', { kind: 'text_delta', delta: 'Done.' }), ev('turn.completed', { response: 'Done.' })].join('\n')}\nEOF\n`, { mode: 0o755 });
+        const events = [];
+        const z = new ZCodeSession('pane-z', 'zcode', (k, e) => events.push(e));
+        await z.start({ bin, cwd: zhome, env: process.env, options: { access: 'plan' }, transcriptDir: path.join(zhome, 'acp') });
+        await z.send('-x go');
+        await z.queue;
+        assert.deepStrictEqual(events.map(e => e.type), ['busy', 'session', 'idle']);
+        assert.equal(events[2].error, undefined);
+        assert.match(fs.readFileSync(path.join(zhome, 'args'), 'utf8'), /^--prompt=-x go .*--mode plan/);
+        const rows = fs.readFileSync(path.join(zhome, 'acp', 'sess_t1.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+        assert.deepStrictEqual(rows.map(r => [r.role, r.text || r.output]), [['user', '-x go'], ['assistant', 'Let me check.'], ['tool', 'hi'], ['assistant', 'Done.']]);
+        await z.send('again'); await z.queue;
+        assert.match(fs.readFileSync(path.join(zhome, 'args'), 'utf8'), /--resume sess_t1/, 'later turns continue the session');
+      }
+    } finally { fs.rmSync(zhome, { recursive: true, force: true }); }
     console.log('chat-sdk: ok');
   })().catch(error => { console.error(error); process.exitCode = 1; });
 }

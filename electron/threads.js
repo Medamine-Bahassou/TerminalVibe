@@ -553,7 +553,7 @@ async function acpSegment(seg, home) {
 async function readSegment(seg = {}, home = os.homedir()) {
   const r = seg.harness === 'claude' ? await claudeSegment(seg, home)
     : seg.harness === 'codex' ? await codexSegment(seg, home)
-    : seg.harness === 'antigravity' || seg.harness === 'opencode' ? await acpSegment(seg, home)
+    : ['antigravity', 'opencode', 'zcode'].includes(seg.harness) ? await acpSegment(seg, home)
     : { items: [], unsupported: true };
   await delegatedSubagents(r.items, home);
   return r;

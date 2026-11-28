@@ -154,7 +154,7 @@ async function sessionElsewhere(paneId, sessionIds = []) {
   const foreign = foreignOf(all);
   const ours = pid => { for (let p = pid, hops = 0; p && hops < 128; p = all.get(p)?.ppid, hops++) if (p === process.pid) return true; return false; };
   // Another instance's shell or dev server for the same tab isn't the conversation: only an agent binary counts.
-  const AGENT = /^(claude|codex|opencode|gemini|agy|amp|cursor-agent|kimi|copilot|qwen|droid)(\.exe)?$/;
+  const AGENT = /^(claude|codex|opencode|gemini|agy|amp|cursor-agent|kimi|copilot|qwen|droid|zcode(?:-cli)?)(\.exe)?$/;
   const isAgent = p => [p.args?.[0] || p.comm, p.args?.[1] || ''].some(x => AGENT.test(path.basename(x)));
   const flagged = new Map([...all].filter(([pid, p]) => !ours(pid) && !DAEMONS.test(p.comm) && (p.hasSession || (p.match && foreign(pid) && isAgent(p)))));
   // Open elsewhere isn't a conflict, working elsewhere is: an agent's tree (it and its tool processes) that used CPU since the
