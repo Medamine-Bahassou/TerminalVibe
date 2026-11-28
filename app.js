@@ -14,6 +14,7 @@
   // Sidebar width animations: refit terminals once when they settle, not every
   // frame (each refit resizes the PTY and the TUI redraws, which flickers).
   function holdTermFits() {
+    if (!document.body.classList.contains('ui-animations')) return; // no animation: fit right away
     _suppressResize = true;
     clearTimeout(_sbAnimTimer);
     _sbAnimTimer = setTimeout(releaseTermFits, 400); // no transition (reduced motion / no change)
@@ -20251,6 +20252,8 @@
   }
   function sbFit() {
     document.getElementById('sidebar').inert = document.body.classList.contains('sb-hidden');
+    // Mid-animation (the gutter toggles instantly) a fit here costs every TUI an extra redraw; releaseTermFits fits once at the end.
+    if (_sbAnimTimer) return;
     const wsp = activeWs();
     if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
   }
