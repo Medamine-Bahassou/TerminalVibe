@@ -46,7 +46,7 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 #btn-settings:hover { background: var(--ui-hover); }
 #sidebar.expanded .sidebar-actions { justify-content:flex-start; }
 #sidebar.expanded .sidebar-actions #btn-settings { width:34px; height:34px; padding:0; justify-content:center; }
-#threads-sidebar .ts-foot > #btn-agent-updates[hidden] { display:none; }
+:is(#sidebar, #threads-sidebar) .sb-foot-btns > #btn-agent-updates[hidden] { display:none; }
 @keyframes agent-update-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:no-preference) {
   #btn-agent-updates[aria-busy="true"] > i { animation:agent-update-spin .85s linear infinite; }
@@ -2032,15 +2032,17 @@ body.ui-animations #sbr-thread .thr-sides.anim.collapsed .thr-sides-bubble { tra
 #sbr-thread .thr-chip-mode { font-size:13px; color:var(--muted-text); }
 
 /* Threads sidebar footer: icon buttons (pull requests, usage limits) like the left sidebar's settings button, mirrored to the right edge. */
-#threads-sidebar .ts-foot { display:flex; justify-content:flex-end; gap:4px; width:var(--ts-w, 284px); padding:8px 6px 6px; flex-shrink:0; border-top:1px solid var(--ui-line); }
-#threads-sidebar .ts-foot[hidden] { display:none; }
-body #threads-sidebar .ts-foot > button { display:grid; place-items:center; width:34px; height:34px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; transition:background-color 150ms, color 150ms; }
-#threads-sidebar .ts-foot > button:hover { background:var(--ui-hover); color:var(--fg); }
-#threads-sidebar .ts-foot > button > i { font-size:16px; }
-#threads-sidebar .ts-foot > button:focus:not(:focus-visible) { outline:none; }
-#threads-sidebar .ts-foot > button:disabled { cursor:progress; }
-#threads-sidebar .ts-foot > button:focus-visible { outline:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
-@media (prefers-reduced-motion: reduce) { #threads-sidebar .ts-foot > button { transition:none; } }
+#sidebar .sb-foot-btns { display:flex; gap:4px; margin-left:auto; }
+#sidebar:not(.expanded) .sb-foot-btns { flex-direction:column; gap:2px; margin-left:0; }
+#threads-sidebar > .sb-foot-btns { display:flex; justify-content:flex-end; gap:4px; width:var(--ts-w, 284px); padding:8px 6px 6px; flex-shrink:0; border-top:1px solid var(--ui-line); }
+:is(#sidebar, #threads-sidebar) .sb-foot-btns[hidden] { display:none; }
+body :is(#sidebar, #threads-sidebar) .sb-foot-btns > button { display:grid; place-items:center; width:34px; height:34px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; transition:background-color 150ms, color 150ms; }
+:is(#sidebar, #threads-sidebar) .sb-foot-btns > button:hover { background:var(--ui-hover); color:var(--fg); }
+:is(#sidebar, #threads-sidebar) .sb-foot-btns > button > i { font-size:16px; }
+:is(#sidebar, #threads-sidebar) .sb-foot-btns > button:focus:not(:focus-visible) { outline:none; }
+:is(#sidebar, #threads-sidebar) .sb-foot-btns > button:disabled { cursor:progress; }
+:is(#sidebar, #threads-sidebar) .sb-foot-btns > button:focus-visible { outline:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { :is(#sidebar, #threads-sidebar) .sb-foot-btns > button { transition:none; } }
 
 /* ── Usage modal (threads sidebar footer): limit windows per agent ── */
 :is(#usage-overlay, #pulls-overlay) { position:fixed; inset:0; z-index:10003; display:flex; align-items:center; justify-content:center; padding:32px; background:rgba(0,0,0,.5); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
@@ -2200,9 +2202,6 @@ body .ctx-item .ci-key { padding-left:12px; font-size:11px; }
 /* ── Threads sidebar usage gauges: slide up from the bottom edge when they appear ──
    A CSS animation replays only when the row goes from hidden (display:none) to shown, not on the
    once-a-minute redraw of its gauges (the row itself is kept, only its contents change). */
-@keyframes ts-usage-in { from { opacity:0; transform:translateY(100%); } to { opacity:1; transform:none; } }
-body.ui-animations #threads-sidebar .ts-foot:not([hidden]) { animation:ts-usage-in 180ms cubic-bezier(.2,.8,.2,1) both; }
-@media (prefers-reduced-motion: reduce) { body.ui-animations #threads-sidebar .ts-foot:not([hidden]) { animation:none; } }
 
 /* ── Chat: fork a thread from a reply (beside Copy in the reply's actions) ── */
 #sbr-thread .thr-fork { display:grid; place-items:center; width:24px; height:24px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--dim-text); cursor:pointer; transition:background-color 140ms, color 140ms; }
@@ -4011,3 +4010,130 @@ body #prompt-ok.danger:focus-visible { outline:none; box-shadow:0 0 0 2px var(--
    (z-index 2–20) covered the open menu. Lift the header above its body while the menu is open. The 0.85 dim on an
    unfocused header would make the menu see-through, so drop it too. */
 .term-group-header:has(.tg-dropdown.open) { position:relative; z-index:60; opacity:1 !important; }
+
+/* ── Chat: composer-edge tray (side chats / Still running): header pinned, rows scroll under it. Opaque so rows
+   don't show through (same fill as the tray). ── */
+#sbr-thread .thr-sides:not(.collapsed) > :is(.thr-sides-label, .thr-sides-toggle) { position:sticky; top:0; z-index:1; background:color-mix(in srgb,var(--fg) 3%,var(--bg)) !important; } /* !important: beats the hover rule that clears it */
+
+/* ── Threads docked in the left sidebar (Settings → Threads position: Left). The aside moves into #sidebar-inner
+   between the workspaces and the footer; it fills the free height and its list scrolls. Hidden on the collapsed rail. ── */
+body #sidebar #threads-sidebar { flex:1 1 0; min-height:160px; width:auto; align-self:stretch; background:transparent; border:0; border-top:1px solid var(--ui-line); margin-top:6px; }
+body #sidebar #threads-sidebar.collapsed { width:auto; }
+body #sidebar #threads-sidebar > :not(.ts-sash), body #sidebar #threads-sidebar .ts-list { width:auto; }
+body.threads-left #btn-threads { display:none; }
+/* Docked: resizable from its top edge (a row-resize sash over the divider). Height from the drag (--ts-left-h),
+   else it fills the free space; extra room sits above it, under the workspaces. */
+body #sidebar #threads-sidebar { flex:0 1 var(--ts-left-h, 100%); margin-top:auto; }
+body #sidebar #threads-sidebar .ts-sash { left:0; right:0; top:0; bottom:auto; width:auto; height:4px; cursor:row-resize; }
+#sidebar:not(.expanded) #threads-sidebar { display:none !important; }
+body #sidebar #threads-sidebar + .sidebar-actions { margin-top:0; }
+/* ── Browser toolbar: element picker. While picking, the button stays lit (accent icon on the hover tile). ── */
+body .browser-toolbar .browser-pick-btn[aria-pressed="true"] { background:var(--ui-hover); color:var(--accent); }
+
+/* ── Browser element picker: dialog after a pick. A 12px-radius modal (dialog padding 20px) with the element as a
+   quiet card and a chat-composer-style box (textarea + bar with actions) under it. ── */
+#pick-overlay { position:fixed; inset:0; z-index:10003; display:flex; align-items:center; justify-content:center; padding:24px; background:rgba(0,0,0,.5); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+#pick-modal { display:flex; flex-direction:column; gap:12px; width:min(520px,100%); padding:16px 20px 20px; background:var(--ui-surface); border:1px solid var(--border); border-radius:12px !important; box-shadow:0 24px 64px #0008; font:400 13px var(--ui-font); color:var(--fg); }
+#pick-modal .pk-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+#pick-modal #pick-title { font-size:15px; font-weight:600; }
+body #pick-modal .pk-icon { display:grid; place-items:center; width:28px; height:28px; margin-right:-6px; padding:0; background:transparent; border:0; border-radius:6px !important; color:var(--muted-text); cursor:pointer; transition:background-color 150ms, color 150ms; }
+#pick-modal .pk-icon:hover { background:var(--ui-hover); color:var(--fg); }
+#pick-modal .pk-icon i { font-size:16px; }
+#pick-modal .pk-icon:focus { outline:none; }
+#pick-modal .pk-icon:focus-visible { box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#pick-modal .pk-composer { display:flex; flex-direction:column; gap:6px; padding:10px 8px 8px 12px; background:color-mix(in srgb,var(--fg) 5%,var(--bg)); border:1px solid var(--border); border-radius:16px !important; transition:border-color 140ms, box-shadow 140ms; }
+#pick-modal .pk-composer:hover { border-color:var(--muted-text); }
+#pick-modal .pk-composer:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+body #pick-modal textarea { width:100%; min-height:60px; max-height:240px; padding:0 4px 0 0; resize:none; background:transparent; border:0; outline:none; box-shadow:none; font:400 13px/20px var(--ui-font); color:var(--fg); }
+#pick-modal textarea::placeholder { color:var(--dim-text); }
+#pick-modal .pk-bar { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
+#pick-modal .pk-hint { margin-right:auto; font-size:11px; color:var(--dim-text); }
+#pick-modal .pk-hint kbd { display:inline-block; min-width:18px; margin-right:3px; padding:0 4px; text-align:center; border:1px solid var(--border); border-radius:4px !important; background:var(--bg); color:var(--muted-text); font:500 10.5px/16px var(--mono-font); }
+@media (max-width:480px) { #pick-modal .pk-hint { display:none; } }
+@media (prefers-reduced-motion: reduce) { #pick-modal :is(.pk-composer, .pk-icon) { transition:none; } }
+/* Picker dialog: the picked element's screenshot as a square thumbnail beside its details, like an image in the chat
+   composer (64px, contain, zoom-in cursor); click opens the chat's image viewer, lifted above this dialog. */
+body:has(#pick-overlay) .claude-image-viewer { z-index:10004; }
+/* Element chip's card (picked browser element): the typed prompt keeps its line breaks; under it the element as
+   <tag> + selector (mono, start cut so the end stays visible) and its text, quieter. Reuses the skill card. */
+.skill-pop .el-pop-ask { white-space:pre-wrap; }
+.skill-pop .el-pop-el { display:flex; align-items:flex-start; gap:12px; margin-top:12px; }
+.skill-pop .el-pop-info { flex:1; min-width:0; }
+body .skill-pop .el-pop-thumb { flex-shrink:0; width:64px; height:64px; padding:0; overflow:hidden; background:var(--bg); border:1px solid var(--border); border-radius:8px !important; cursor:zoom-in; transition:border-color 150ms, box-shadow 150ms; }
+.skill-pop .el-pop-thumb:hover { border-color:var(--muted-text); }
+.skill-pop .el-pop-thumb:focus { outline:none; }
+.skill-pop .el-pop-thumb:focus-visible { box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+.skill-pop .el-pop-thumb img { display:block; width:100%; height:100%; object-fit:cover; object-position:center; }
+.skill-pop .el-pop-meta { display:flex; align-items:center; gap:8px; min-width:0; }
+.skill-pop .el-pop-tag { flex-shrink:0; padding:1px 6px; background:var(--ui-hover); border-radius:4px !important; font:500 11.5px/18px var(--mono-font); color:var(--fg); }
+.skill-pop .el-pop-sel { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; direction:rtl; text-align:left; font:400 12px var(--mono-font); color:var(--muted-text); }
+.skill-pop .el-pop-text { margin:6px 0 0; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; font-size:12px; line-height:18px; color:var(--muted-text); }
+
+/* ── Chat chips: one color per kind, from the theme's ANSI palette (follows the theme), in the composer and in sent
+   messages. Files/folders blue, links cyan, $skills and /commands yellow, picked elements magenta, threads green;
+   images and citations keep the accent. The folder icon keeps its own folder color. :is() with the id beats the
+   base accent rule without tying the look to #sbr-thread (cloned chat surfaces have no id). ── */
+:is(#sbr-thread, body) .thr-inline-ref a.thr-at-ref, :is(#sbr-thread, body) a.thr-at-ref { color:var(--ansi-blue, var(--accent)); }
+:is(#sbr-thread, body) .thr-inline-ref a.thr-url-ref, :is(#sbr-thread, body) a.thr-url-ref { color:var(--ansi-cyan, var(--accent)); }
+:is(#sbr-thread, body) .thr-inline-ref a.thr-skill-ref, :is(#sbr-thread, body) a.thr-skill-ref { color:var(--ansi-yellow, var(--accent)); }
+:is(#sbr-thread, body) .thr-inline-ref a.thr-el-ref, :is(#sbr-thread, body) a.thr-el-ref { color:var(--ansi-magenta, var(--accent)); }
+:is(#sbr-thread, body) .thr-inline-ref a.thr-thread-ref, :is(#sbr-thread, body) a.thr-thread-ref { color:var(--ansi-green, var(--accent)); }
+/* Picker dialog, element row (modern pass): no box of its own (the dialog and the composer are the only frames).
+   A 56px thumbnail, then three lines by weight: the element's text (what you'd call it), tag + site (quiet), the
+   selector (mono, dimmest, cut at the start so its end shows). No screenshot: the picker icon on a hover tile. */
+#pick-modal .pk-el { display:flex; align-items:center; gap:14px; min-width:0; padding:2px 0 4px; }
+body #pick-modal .pk-thumb { position:relative; flex-shrink:0; display:grid; place-items:center; width:56px; height:56px; padding:0; overflow:hidden; background:var(--bg); border:0; border-radius:10px !important; box-shadow:inset 0 0 0 1px var(--ui-line); color:var(--dim-text); transition:box-shadow 150ms; }
+#pick-modal button.pk-thumb { cursor:zoom-in; }
+#pick-modal button.pk-thumb:hover { box-shadow:inset 0 0 0 1px var(--muted-text); }
+#pick-modal .pk-thumb:focus { outline:none; }
+#pick-modal .pk-thumb:focus-visible { box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#pick-modal .pk-thumb img { display:block; width:100%; height:100%; object-fit:cover; object-position:center; }
+#pick-modal .pk-thumb.empty { background:var(--ui-hover); }
+#pick-modal .pk-thumb.empty i { font-size:20px; }
+#pick-modal .pk-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+#pick-modal .pk-name { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font:500 13px/20px var(--ui-font); color:var(--fg); }
+#pick-modal .pk-meta { display:flex; align-items:center; gap:6px; min-width:0; font-size:12px; line-height:18px; color:var(--muted-text); }
+#pick-modal .pk-tag { flex-shrink:0; padding:0 5px; background:var(--ui-hover); border-radius:4px !important; font:500 11px/18px var(--mono-font); color:var(--fg); }
+#pick-modal .pk-host { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+#pick-modal .pk-sel { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; direction:rtl; text-align:left; font:400 11px/16px var(--mono-font); color:var(--dim-text); }
+@media (prefers-reduced-motion: reduce) { #pick-modal .pk-thumb { transition:none; } }
+/* Picker dialog: copy is an icon button shaped like the chat's send button (round, 32px), filled with the theme's
+   text color, so it reads white on dark themes and black on light ones; the icon takes the page color. */
+body #pick-modal .pk-copy { display:grid; place-items:center; width:32px; height:32px; padding:0; flex-shrink:0; background:var(--fg); border:0; border-radius:50% !important; color:var(--bg); cursor:pointer; transition:background-color 140ms, box-shadow 140ms; }
+#pick-modal .pk-copy:hover { background:color-mix(in srgb,var(--fg) 85%,var(--bg)); }
+#pick-modal .pk-copy:focus { outline:none; }
+#pick-modal .pk-copy:focus-visible { box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#pick-modal .pk-copy i { display:block; font-size:16px; line-height:1; }
+@media (prefers-reduced-motion: reduce) { #pick-modal .pk-copy { transition:none; } }
+
+/* ── Chat right panel: a browser page (openChatBrowserPanel). Its head is a slim browser bar (back, forward, reload,
+   address field like the browser tab's .browser-url, open as tab); the webview fills the rest, no padding. ── */
+.chat-file-panel .cfp-web-bar { gap:2px; padding:0 6px; }
+body .chat-file-panel .cfp-web-url { flex:1; min-width:0; height:28px; margin:0 4px; padding:0 10px; background:var(--bg); border:1px solid var(--border); border-radius:6px !important; outline:none; box-shadow:none; color:var(--fg); font:400 12px var(--mono-font); transition:border-color 140ms, box-shadow 140ms; }
+.chat-file-panel .cfp-web-url:hover { border-color:var(--muted-text); }
+.chat-file-panel .cfp-web-url:focus { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+.chat-file-panel .cfp-web-body { display:flex; padding:0; overflow:hidden; cursor:auto; }
+.chat-file-panel .cfp-webview { display:flex; flex:1; width:100%; height:100%; border:0; }
+@media (prefers-reduced-motion: reduce) { .chat-file-panel .cfp-web-url { transition:none; } }
+
+/* ── Chat right panel: the "New tab" page (Ctrl+Alt+B with nothing open). A centered column of full-width buttons,
+   icon then title, left-aligned; borderless rows that only show a --ui-hover tile on hover (like menu items). ── */
+.chat-file-panel .cfp-start { display:flex; align-items:center; justify-content:center; padding:24px; cursor:default; }
+.chat-file-panel .cfp-start-list { display:flex; flex-direction:column; gap:2px; width:min(280px,100%); }
+body .chat-file-panel .cfp-start-btn { display:flex; align-items:center; justify-content:flex-start; gap:8px; width:100%; height:32px; padding:0 8px; background:transparent; border:0; border-radius:6px !important; color:var(--fg); font:500 13px var(--ui-font); cursor:pointer; transition:background-color 140ms, border-color 140ms, box-shadow 140ms; }
+.chat-file-panel .cfp-start-btn:hover { background:var(--ui-hover); }
+.chat-file-panel .cfp-start-btn > i { font-size:16px; color:var(--muted-text); }
+.chat-file-panel .cfp-start-btn:hover > i { color:var(--fg); }
+.chat-file-panel .cfp-start-btn:focus { outline:none; }
+.chat-file-panel .cfp-start-btn:focus-visible { box-shadow:0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+@media (prefers-reduced-motion: reduce) { .chat-file-panel .cfp-start-btn { transition:none; } }
+/* Web page extras: the site's icon on its tab (sized like the tab's glyph), the picker lit while picking (as the
+   browser tab's), and a load failure as a quiet notice over the page with Try again. */
+.chat-file-panel .cfp-tab > .cfp-tab-favicon { flex:none; width:14px; height:14px; object-fit:contain; border-radius:2px !important; }
+.chat-file-panel .cfp-web-bar .cfp-icon[aria-pressed="true"] { background:var(--ui-hover); color:var(--accent); }
+.chat-file-panel .cfp-web-body { position:relative; }
+.chat-file-panel .cfp-web-error { position:absolute; inset:0; justify-content:center; background:var(--bg); }
+.chat-file-panel .cfp-tab.cfp-start-tab { display:none; } /* the New tab page has no tab: an empty strip */
+/* Picker dialog from a chat panel's page: Add to chat is the round main button (arrow-up, like the chat's send);
+   Copy prompt steps back to a quiet icon button beside it. */
+#pick-modal .pk-bar .pk-copy-quiet { margin-right:0; }
