@@ -14,6 +14,7 @@
   // Sidebar width animations: refit terminals once when they settle, not every
   // frame (each refit resizes the PTY and the TUI redraws, which flickers).
   function holdTermFits() {
+    if (!document.body.classList.contains('ui-animations')) return; // no animation: fit right away
     _suppressResize = true;
     clearTimeout(_sbAnimTimer);
     _sbAnimTimer = setTimeout(releaseTermFits, 400); // no transition (reduced motion / no change)
@@ -7707,6 +7708,7 @@
     { id: 'amp', name: 'Amp', bin: 'amp' },
     { id: 'qwen', name: 'Qwen Code', bin: 'qwen', color: '#6950EF' },
     { id: 'aider', name: 'Aider', bin: 'aider' },
+    { id: 'zcode', name: 'ZCode', bin: 'zcode' },
   ];
   const harnessOf = id => THREAD_HARNESSES.find(h => h.id === id);
   const _tabAgent = new Map(); // termId -> harness running there at the last check
@@ -9684,7 +9686,20 @@
         ...(o.access === 'auto' || o.access === 'full' ? ['--auto'] : o.access === 'plan' ? ['--agent', 'plan'] : []),
         ...(fork ? ['--session', fork, '--fork'] : resume && sid ? ['--session', sid] : [])],
     },
+    // ZCode: chats run each turn headless (electron/chat-sdk.js); the models are the user's own ZCode providers.
+    zcode: {
+      models: [],
+      access: [['build', 'Default', 'ph-shield'], ['plan', 'Plan only', 'ph-list-checks'], ['yolo', 'Full access', 'ph-shield-slash']],
+      argv: (o, sid, resume) => ['--mode', o.access || 'yolo', ...(resume && sid ? ['--resume', sid] : [])],
+    },
   };
+  // Read from ZCode's config files (cheap); at most every 10s. null: nothing new was asked for.
+  let zcodeModelsAt = 0;
+  function loadZcodeModels() {
+    if (Date.now() - zcodeModelsAt < 10000 || !window.electronAPI?.chatSdkModels) return null;
+    zcodeModelsAt = Date.now();
+    return window.electronAPI.chatSdkModels('zcode').then(models => { if (Array.isArray(models)) CHAT_AGENTS.zcode.models = models; }).catch(() => {});
+  }
   const setAgyModels = models => {
     if (!models?.length) return;
     CHAT_AGENTS.antigravity.models = models;
@@ -9752,6 +9767,7 @@
   const chatModels = (harness, ws) => harness === 'opencode'
     ? [{ id: 'default', name: 'OpenCode default', efforts: ['default'], defaultEffort: 'default' },
       ...(openCodeCatalog(chatCwd(ws)) || [])]
+    : harness === 'zcode' ? [{ id: 'default', name: 'ZCode default', efforts: ['default'], defaultEffort: 'default' }, ...CHAT_AGENTS.zcode.models]
     : CHAT_AGENTS[harness].models.length ? CHAT_AGENTS[harness].models
     : [{ id: 'default', name: harnessOf(harness).name, efforts: CHAT_AGENTS[harness].efforts || ['default', 'low', 'medium', 'high'], defaultEffort: 'default' }];
   // Offer supported agents until the PATH check narrows the list to installed agents.
@@ -9771,6 +9787,7 @@
     return _chatAgents;
   }
   if (!SETTINGS_ONLY) loadChatAgents().then(({ found }) => {
+    if (found?.zcode) loadZcodeModels()?.then(() => syncThreadComposer(curChat()));
     // Soft background prime: no picker interaction and no loading state, just a warm cache for when it's opened.
     setTimeout(() => {
       if (!found?.opencode || !window.electronAPI?.chatSdkModels) return;
@@ -9844,7 +9861,7 @@
   // headless stream-json mode, Codex through `codex app-server`. Messages, permission prompts, questions, stop and
   // permission changes go through them; the history is still read from their transcripts. Other agents (and
   // browser mode) still run in the tab's terminal, and the terminal view resumes the same session in the real CLI.
-  const sdkHarness = h => ['claude', 'codex', 'antigravity', 'opencode'].includes(h) && !!window.electronAPI?.chatSdkStart;
+  const sdkHarness = h => ['claude', 'codex', 'antigravity', 'opencode', 'zcode'].includes(h) && !!window.electronAPI?.chatSdkStart;
   // Agents that take model, effort and permissions on every turn (no restart): Codex and OpenCode, and
   // Antigravity except for Full access, which is a start flag.
   const sdkPerTurn = (h, from, to) => h === 'codex' || h === 'opencode' || (h === 'antigravity' && (from === 'full') === (to === 'full'));
@@ -10628,6 +10645,7 @@
         .map(([id, icon, label]) => `<button type="button" role="tab" class="mp-rail-btn${(filter || '') === id ? ' active' : ''}" data-f="${id}" title="${escHtml(label)}" aria-label="${escHtml(label)}" aria-selected="${(filter || '') === id}">${icon}</button>`).join('');
       const q = query.toLowerCase();
       if (q || filter === 'opencode' || (filter === 'fav' && [...favs].some(key => key.startsWith('opencode:')))) requestOpenCode();
+      if (found?.zcode) loadZcodeModels()?.then(() => { if (_modelPicker === pop) render(); });
       if (!agyRequested && found?.agy && window.electronAPI?.chatSdkModels
         && (q || filter === 'antigravity' || (filter === 'fav' && [...favs].some(key => key.startsWith('antigravity:'))))) {
         agyRequested = true;
@@ -11075,7 +11093,7 @@
         const options = latest ? { harness: latest.harness, model: latest.model || 'default', effort: latest.effort || 'default',
           access: current.harness === latest.harness ? current.access : 'default' } : current;
         if (!harnessOf(options.harness) || !CHAT_AGENTS[options.harness]) throw Error('This chat’s agent harness is unavailable.');
-        if (latest?.sessionId && !['claude', 'codex', 'antigravity', 'opencode'].includes(options.harness)) throw Error(`Session resume is not supported for ${harnessOf(options.harness).name} yet.`);
+        if (latest?.sessionId && !['claude', 'codex', 'antigravity', 'opencode', 'zcode'].includes(options.harness)) throw Error(`Session resume is not supported for ${harnessOf(options.harness).name} yet.`);
         const started = await startChatAgent(tab, tab, null, null, { terminalOnly: true, resumeSegment: latest?.sessionId ? latest : null, options });
         if (!started) noteInTerminal(tab, `Could not start ${harnessOf(options.harness)?.name || 'the agent'} here. Check Settings › Providers, then switch views to try again.`);
         return started;
@@ -11114,8 +11132,10 @@
     const segs = threadSegments(ws);
     const oldSeg = replace?._chatSeg;
     const lastUsed = [...segs].reverse().find(x => x.used);
-    const resumeSeg = launch.resumeSegment || (replace ? ((replace._chatSent || oldSeg?.used) ? oldSeg : null)
+    let resumeSeg = launch.resumeSegment || (replace ? ((replace._chatSent || oldSeg?.used) ? oldSeg : null)
       : lastUsed?.harness === o.harness && !unresumable(lastUsed) ? lastUsed : null);
+    // A ZCode session keeps the model it started with: another model or effort starts a new one (handed the history).
+    if (o.harness === 'zcode' && resumeSeg && !launch.resumeSegment && (resumeSeg.model !== o.model || resumeSeg.effort !== o.effort)) resumeSeg = null;
     const resumeSid = resumeSeg?.sessionId || null;
     const sid = resumeSid || (o.harness === 'claude' ? uuid() : null);
     // A side chat's first session forks the main thread's: it starts with what the thread knows.
@@ -20251,6 +20271,8 @@
   }
   function sbFit() {
     document.getElementById('sidebar').inert = document.body.classList.contains('sb-hidden');
+    // Mid-animation (the gutter toggles instantly) a fit here costs every TUI an extra redraw; releaseTermFits fits once at the end.
+    if (_sbAnimTimer) return;
     const wsp = activeWs();
     if (wsp) for (const t of getWorkspaceTerminals(wsp)) fitTerm(t);
   }

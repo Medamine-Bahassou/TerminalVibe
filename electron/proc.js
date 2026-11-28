@@ -39,6 +39,7 @@ const SCRIPT_EXT_RE = /\.(js|mjs|cjs|ts|py|rb|pl|lua|php|sh)$/i;
 // only reveals the interpreter ("node", "python" etc). Reads cmdline to
 // find the script/module the user actually ran.
 function processDisplayName(pid, comm) {
+  if (comm === 'zcode-cli') return 'zcode'; // ZCode's CLI renames its process (process.title)
   if (!INTERP_RE.test(comm)) return comm;
   const cmdline = readProc(`/proc/${pid}/cmdline`);
   if (!cmdline) return comm;
@@ -109,7 +110,7 @@ function runningProcessInfo(pid) {
 const WIN_IDLE_RE = /^(powershell|pwsh|cmd|wsl|wslhost|wslrelay|bash|zsh|sh|fish|dash|ash|ksh|tcsh|csh|nu|conhost|openconsole|windowsterminal)$/i;
 // npm shims run agents as node → native binary (codex.cmd → node codex.js → codex.exe), and the
 // table has no command lines: name the agent under an interpreter, not "node". Mirrors THREAD_HARNESSES bins.
-const WIN_AGENT_RE = /^(claude|codex|gemini|agy|opencode|cursor-agent|copilot|amp|qwen|aider)$/i;
+const WIN_AGENT_RE = /^(claude|codex|gemini|agy|opencode|cursor-agent|copilot|amp|qwen|aider|zcode)$/i;
 function winWorkload(byParent, pid, base) {
   if (INTERP_RE.test(base.toLowerCase())) {
     const agent = (byParent.get(pid) || []).find(k => WIN_AGENT_RE.test(k.name.replace(/\.exe$/i, '')));
