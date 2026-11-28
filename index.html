@@ -146,7 +146,7 @@
         <button type="button" class="ts-icon-btn" id="ts-new" title="New thread" aria-label="New thread" aria-haspopup="dialog"><i class="ph ph-note-pencil"></i></button>
       </div>
       <div class="ts-list" id="ts-list" role="list"></div>
-      <div class="ts-foot" hidden><button type="button" id="btn-agent-updates" title="Agent updates" aria-label="Agent updates" aria-haspopup="dialog" aria-controls="agent-updates" hidden><i class="ph ph-arrow-circle-up" aria-hidden="true"></i></button><button type="button" class="ts-pulls" id="ts-pulls" title="Pull requests" aria-label="Pull requests" aria-haspopup="dialog"><i class="ph ph-git-pull-request" aria-hidden="true"></i></button><button type="button" class="ts-pulls" id="ts-issues" title="Issues" aria-label="Issues" aria-haspopup="dialog"><i class="ph ph-circle-dot" aria-hidden="true"></i></button><button type="button" class="ts-usage" id="ts-usage" title="Usage limits" aria-label="Usage limits" aria-haspopup="dialog"><i class="ph ph-chart-bar" aria-hidden="true"></i></button></div>
+      <div class="sb-foot-btns" hidden><button type="button" id="btn-agent-updates" title="Agent updates" aria-label="Agent updates" aria-haspopup="dialog" aria-controls="agent-updates" hidden><i class="ph ph-arrow-circle-up" aria-hidden="true"></i></button><button type="button" class="ts-pulls" id="ts-pulls" title="Pull requests" aria-label="Pull requests" aria-haspopup="dialog"><i class="ph ph-git-pull-request" aria-hidden="true"></i></button><button type="button" class="ts-pulls" id="ts-issues" title="Issues" aria-label="Issues" aria-haspopup="dialog"><i class="ph ph-circle-dot" aria-hidden="true"></i></button><button type="button" class="ts-usage" id="ts-usage" title="Usage limits" aria-label="Usage limits" aria-haspopup="dialog"><i class="ph ph-chart-bar" aria-hidden="true"></i></button></div>
     </aside>
   </div>
 
@@ -491,6 +491,19 @@
                     <option value="project">By Project</option>
                   </select>
                   <div class="custom-dropdown" data-for="set-thread-layout"></div>
+                </div>
+              </div>
+              <div data-setting class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] gap-4 hover:bg-white/[0.01]">
+                <div class="flex flex-col gap-1">
+                  <label for="set-threads-place" class="text-[12.5px] font-medium text-[var(--fg)]">Threads position</label>
+                  <span class="text-[11px] text-[var(--muted-text)] leading-tight max-w-[280px]">Show threads in their own right sidebar or under the workspaces</span>
+                </div>
+                <div class="flex-1 flex items-center justify-end gap-3">
+                  <select id="set-threads-place" class="native-select-hidden">
+                    <option value="right">Right sidebar</option>
+                    <option value="left">Left sidebar</option>
+                  </select>
+                  <div class="custom-dropdown" data-for="set-threads-place"></div>
                 </div>
               </div>
             </div>

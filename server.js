@@ -20,7 +20,7 @@ const { listRunningServers, killServer } = require('./electron/servers');
 const { terminalEnv } = require('./electron/terminal-env');
 const { prepareShellStartup } = require('./electron/shell-startup');
 const { resolveExecutable } = require('./electron/shells');
-const { randomUUID } = require('crypto');
+const { randomUUID, createHash, timingSafeEqual } = require('crypto');
 let agentControl;
 const agentClients = new Set();
 const agentRequests = new Map();
@@ -54,6 +54,18 @@ const controlReady = startAgentControl({
 
 const HOST = "127.0.0.1";
 const PORT = parseInt(process.env.WS_PORT || "7681", 10); // WebSocket PTY
+// Opt-in remote access for the mobile app: with a token set, the PTY socket
+// listens on TV_HOST (default all interfaces) and every client must send it.
+const REMOTE_TOKEN = process.env.TV_REMOTE_TOKEN || "";
+if (REMOTE_TOKEN && REMOTE_TOKEN.length < 16) { console.error("TV_REMOTE_TOKEN must be at least 16 characters"); process.exit(1); }
+const WS_HOST = REMOTE_TOKEN ? (process.env.TV_HOST || "0.0.0.0") : HOST;
+const sha = (value) => createHash("sha256").update(String(value)).digest();
+function remoteTokenOk(req) {
+  if (!REMOTE_TOKEN) return true;
+  const header = req.headers.authorization || "";
+  const given = header.startsWith("Bearer ") ? header.slice(7) : "";
+  return timingSafeEqual(sha(given), sha(REMOTE_TOKEN));
+}
 const APP_PORT = parseInt(process.env.APP_PORT || "6969", 10); // HTTP app server
 
 const SESSIONS = {};
@@ -295,8 +307,9 @@ class PTYSession {
 //  WEBSOCKET HANDLER
 // ─────────────────────────────────────────────────────────────
 
-const wss = new WebSocketServer({ port: PORT, host: HOST, maxPayload: 128 * 1024 * 1024, // Workspace exports allow 64 MiB plus JSON escaping.
-  verifyClient: ({ origin }) => {
+const wss = new WebSocketServer({ port: PORT, host: WS_HOST, maxPayload: 128 * 1024 * 1024, // Workspace exports allow 64 MiB plus JSON escaping.
+  verifyClient: ({ origin, req }) => {
+    if (!remoteTokenOk(req)) return false;
     if (!origin) return true; // Local CLI/test clients do not send Origin.
     try {
       const parsed = new URL(origin);
@@ -511,4 +524,4 @@ appServer.listen(APP_PORT, HOST, () => {
 });
 console.log(`Open http://${HOST}:${APP_PORT} in your browser`);
 
-console.log(`TerminalVibe PTY server listening on ws://${HOST}:${PORT}`);
+console.log(`TerminalVibe PTY server listening on ws://${WS_HOST}:${PORT}${REMOTE_TOKEN ? " (remote access, token required)" : ""}`);

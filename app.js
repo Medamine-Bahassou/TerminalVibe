@@ -590,6 +590,163 @@
     if (inTab && ws) addBrowserTab(ws.id, null, href); else openExternalUrl(href);
   }
 
+  // Runs inside a browser tab's page (stringified): highlight the hovered element, resolve with the clicked
+  // one's selector/text/HTML, or null on Escape or window.__tvPickCancel(). The page's own clicks are swallowed.
+  function pickPageElement(accent) {
+    return new Promise(resolve => {
+      window.__tvPickCancel?.();
+      const box = document.createElement('div');
+      box.style.cssText = `position:fixed;z-index:2147483647;pointer-events:none;display:none;box-sizing:border-box;border:2px solid ${accent};background:color-mix(in srgb,${accent} 15%,transparent);border-radius:2px`;
+      document.documentElement.appendChild(box);
+      // Crosshair everywhere while picking. A constructed sheet: a page's CSP can block an injected <style>.
+      const cursor = new CSSStyleSheet();
+      cursor.replaceSync('*, *::before, *::after { cursor: crosshair !important; }');
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, cursor];
+      const esc =s => (window.CSS?.escape ? CSS.escape(s) : s);
+      const selectorOf = el => {
+        const parts = [];
+        for (let n = el; n && n.nodeType === 1 && n !== document.documentElement && parts.length < 6; n = n.parentElement) {
+          if (n.id && document.querySelectorAll('#' + esc(n.id)).length === 1) { parts.unshift('#' + esc(n.id)); break; }
+          let part = n.localName;
+          const same = n.parentElement ? [...n.parentElement.children].filter(c => c.localName === n.localName) : [];
+          if (same.length > 1) part += `:nth-of-type(${same.indexOf(n) + 1})`;
+          parts.unshift(part);
+        }
+        return parts.join(' > ');
+      };
+      const move = e => {
+        const r = e.target.getBoundingClientRect();
+        Object.assign(box.style, { display: 'block', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+      };
+      const swallow = e => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); };
+      const swallowed = ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'auxclick', 'dblclick'];
+      const done = value => {
+        removeEventListener('mousemove', move, true);
+        removeEventListener('click', click, true);
+        removeEventListener('keydown', key, true);
+        swallowed.forEach(t => removeEventListener(t, swallow, true));
+        box.remove();
+        document.adoptedStyleSheets = document.adoptedStyleSheets.filter(s => s !== cursor);
+        delete window.__tvPickCancel;
+        // Two frames so the highlight is off the screen before the app captures the element.
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(value)));
+      };
+      const click = e => {
+        swallow(e);
+        const el = e.target, html = el.outerHTML;
+        const r = el.getBoundingClientRect(), x = Math.max(0, r.left), y = Math.max(0, r.top);
+        const rect = { x: Math.floor(x), y: Math.floor(y), width: Math.ceil(Math.min(innerWidth, r.right) - x), height: Math.ceil(Math.min(innerHeight, r.bottom) - y) };
+        done({ url: location.href, selector: selectorOf(el), rect,
+          text: (el.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+          html: html.length > 4000 ? html.slice(0, 4000) + '\n<!-- … truncated -->' : html });
+      };
+      const key = e => { if (e.key === 'Escape') { swallow(e); done(null); } };
+      addEventListener('mousemove', move, true);
+      addEventListener('click', click, true);
+      addEventListener('keydown', key, true);
+      swallowed.forEach(t => addEventListener(t, swallow, true));
+      window.__tvPickCancel = () => done(null);
+    });
+  }
+  // After a pick: the element (tag, selector, text) over a chat-composer-style box. "Copy prompt" puts the instruction
+  // plus the element on the clipboard; pasted into a chat composer it becomes an element chip.
+  // The element as prompt text: what an agent gets (pasted in a terminal, or a chat's element chip when sent).
+  const pickElementText = picked => [`Element on ${picked.url}`, `Selector: ${picked.selector}`,
+    picked.text && `Text: "${picked.text}"`, '```html\n' + picked.html + '\n```'].filter(Boolean).join('\n\n');
+  const pickTag = picked => /^<([\w-]+)/.exec(picked.html)?.[1] || 'element';
+  // The last copied pick: pasting exactly that text into the chat composer makes an element chip instead.
+  let _lastPick = null;
+  // chat: the thread whose right panel the page is in; then the main action adds the element to that chat's input.
+  function openPickDialog(picked, returnFocus, chat = null) {
+    const promptText = ask => [ask.trim(), pickElementText(picked)].filter(Boolean).join('\n\n');
+    const tag = pickTag(picked);
+    const host = (() => { try { return new URL(picked.url).hostname.replace(/^www\./, ''); } catch { return picked.url; } })();
+    const overlay = document.createElement('div');
+    overlay.id = 'pick-overlay';
+    overlay.innerHTML = `<div id="pick-modal" role="dialog" aria-modal="true" aria-labelledby="pick-title">
+      <div class="pk-head"><span id="pick-title">Edit element</span>
+        <button type="button" class="pk-icon" data-act="close" title="Close (Esc)" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></div>
+      <div class="pk-el">${picked.shot ? `<button type="button" class="pk-thumb" data-act="shot" aria-label="Open the picked element fullscreen"><img src="${escHtml(picked.shot)}" alt="" decoding="async"></button>`
+          : '<span class="pk-thumb empty" aria-hidden="true"><i class="ph ph-square-dashed-mouse-pointer"></i></span>'}
+        <div class="pk-info"><div class="pk-name" title="${escHtml(picked.text || '')}">${escHtml(picked.text || `${tag} element`)}</div>
+          <div class="pk-meta"><span class="pk-tag">${escHtml(tag)}</span><span class="pk-host" title="${escHtml(picked.url)}">${escHtml(host)}</span></div>
+          <div class="pk-sel" title="${escHtml(picked.selector)}"><bdi>${escHtml(picked.selector)}</bdi></div></div></div>
+      <div class="pk-composer">
+        <textarea rows="3" placeholder="Describe the change (optional)" aria-label="What should change" spellcheck="true"></textarea>
+        <div class="pk-bar"><span class="pk-hint"><kbd>Ctrl</kbd><kbd>Enter</kbd> ${chat ? 'to add to chat' : 'to copy'}</span>
+          ${chat ? '<button type="button" class="pk-icon pk-copy-quiet" data-act="copy" data-tip="Copy prompt" aria-label="Copy prompt"><i class="ph ph-copy" aria-hidden="true"></i></button>'
+            + '<button type="button" class="pk-copy" data-act="chat" title="Add to chat (Ctrl+Enter)" aria-label="Add to chat"><i class="ph ph-chat-circle-plus" aria-hidden="true"></i></button>'
+          : '<button type="button" class="pk-copy" data-act="copy" title="Copy prompt (Ctrl+Enter)" aria-label="Copy prompt"><i class="ph ph-copy" aria-hidden="true"></i></button>'}</div></div></div>`;
+    const ta = overlay.querySelector('textarea');
+    const close = () => { overlay.remove(); returnFocus?.focus?.(); };
+    const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 240) + 'px'; };
+    const copy = () => {
+      const text = promptText(ta.value), ask = ta.value.trim();
+      privateClipboardText(text).then(safe => { _lastPick = { text: safe.trim(), ask, picked }; return copyPrivateText(text); })
+        .then(() => zoomBadge.success('Copied: paste it into an agent or the chat'), () => zoomBadge.error('Could not copy the element'));
+      close();
+    };
+    // Into the chat's input as an element chip (the prompt is its label and goes with it when sent).
+    const addToChat = () => {
+      const ws = wsOf(chat);
+      if (!ws || !thrInput) return copy();
+      close();
+      if (curChat() !== chat) activateTerminal(ws.id, chat.id);
+      const files = [..._chatFiles], v = thrInput.value.replace(/\s*$/, '');
+      const insert = chatElementMention(picked, files, v, ta.value.trim()) + ' ';
+      threadPart(thrPage, 'input-links')?._recordDraftUndo?.();
+      thrInput.value = (v ? v + ' ' : '') + insert;
+      _chatFiles = files; renderChatFiles();
+      thrInput.setSelectionRange(thrInput.value.length, thrInput.value.length);
+      thrInput.dispatchEvent(new Event('input', { bubbles: true }));
+      thrInput.focus({ preventScroll: true });
+    };
+    overlay.addEventListener('mousedown', e => { if (e.target === overlay) close(); });
+    overlay.addEventListener('click', e => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'close') close(); else if (act === 'copy') copy(); else if (act === 'chat') addToChat();
+      else if (act === 'shot') openClaudeRefViewer(null, { kind: 'file', path: '', label: `<${tag}> ${picked.selector}` }, '', picked.shot); // the chat's image viewer
+    });
+    overlay.addEventListener('keydown', e => {
+      e.stopPropagation(); // app shortcuts stay out of the textarea
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); chat ? addToChat() : copy(); }
+    });
+    ta.addEventListener('input', grow);
+    document.body.appendChild(overlay);
+    ta.focus();
+  }
+  // A screenshot small enough to keep in a chat draft (saved state): at most maxW px wide, as JPEG.
+  function shrinkDataUrl(src, maxW) {
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, maxW / img.naturalWidth), c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => resolve(src);
+      img.src = src;
+    });
+  }
+  // The picker button of a browser tab or a chat panel's web page: toggles pick mode in the page's <webview>,
+  // then opens the Edit element dialog with the pick and its screenshot.
+  async function runElementPick(surface, btn, chat = null) {
+    if (!surface) return;
+    if (btn.getAttribute('aria-pressed') === 'true') { surface.executeJavaScript('window.__tvPickCancel?.()').catch(() => {}); return; }
+    btn.setAttribute('aria-pressed', 'true');
+    const accent = getComputedStyle(document.body).getPropertyValue('--accent').trim() || '#4c8dff';
+    let picked = null;
+    try { picked = await surface.executeJavaScript(`(${pickPageElement.toString()})(${JSON.stringify(accent)})`, true); } catch {}
+    btn.setAttribute('aria-pressed', 'false');
+    if (!picked) return;
+    // A picture of what was picked (the visible part), shown in the dialog.
+    if (picked.rect?.width > 0 && picked.rect?.height > 0) {
+      try { picked.shot = await shrinkDataUrl((await surface.capturePage(picked.rect)).toDataURL(), 640); } catch {}
+    }
+    openPickDialog(picked, btn, chat);
+  }
   function openExternalUrl(url) {
     if (isDesktop() && window.electronAPI) {
       window.electronAPI.openExternal(url);
@@ -6179,6 +6336,16 @@
             const surface = contentWrap.querySelector('webview.browser-surface');
             return surface?._guestReady ? surface : null; // The webview API throws before dom-ready.
           };
+          // Element picker: hover highlights in the page, a click picks; the element (plus an optional
+          // instruction) goes to the clipboard as a prompt to paste into an agent or the chat composer.
+          const btnPick = document.createElement('button');
+          btnPick.className = 'browser-btn browser-pick-btn';
+          btnPick.title = 'Pick an element';
+          btnPick.setAttribute('aria-label', 'Pick an element');
+          btnPick.setAttribute('aria-pressed', 'false');
+          btnPick.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/></svg>';
+          toolbar.insertBefore(btnPick, btnOpenExt);
+          btnPick.addEventListener('click', () => runElementPick(page(), btnPick));
           entry._closeDevTools = () => {
             const dt = entry._devtools;
             if (!dt) return;
@@ -6377,12 +6544,15 @@
                 showLoading(false);
                 resumeBrowserTab(entry);
               });
-              surface.addEventListener('did-navigate', e => { setBrowserTabFavicon(entry, []); syncUrl(e.url); });
+              // The main frame committed: the site answered, so the load timeout can't call it unreachable.
+              surface.addEventListener('did-navigate', e => { clearTimeout(entry._loadTimer); setBrowserTabFavicon(entry, []); syncUrl(e.url); });
               surface.addEventListener('did-navigate-in-page', e => syncUrl(e.url));
               surface.addEventListener('page-favicon-updated', e => setBrowserTabFavicon(entry, e.favicons));
               surface.addEventListener('page-title-updated', e => setBrowserHistoryTitle(entry.url, e.title));
-              surface.addEventListener('did-fail-load', (e, errorCode) => {
-                if (errorCode === -3) return; // ERR_ABORTED = redirect, not real error
+              // A <webview> passes one event (e.errorCode, e.isMainFrame). Only the page itself failing counts:
+              // a subframe (ad, tracker) failing or ERR_ABORTED (a redirect or a superseded load) is not an error.
+              surface.addEventListener('did-fail-load', e => {
+                if (e.errorCode === -3 || e.isMainFrame === false) return;
                 // Retry a few times before giving up
                 entry._retryCount = (entry._retryCount || 0) + 1;
                 if (entry._retryCount <= 3) {
@@ -7162,7 +7332,8 @@
   function renderSidebar() {
     const sb = document.getElementById('sidebar-inner') || document.getElementById('sidebar');
     if (!sideOrder.length && (workspaces.length || folders.length)) rebuildSideOrder();
-    const actionsEl = sb.querySelector('.sidebar-actions');
+    // Threads docked in the left sidebar sit between the workspaces and the footer.
+    const actionsEl = sb.querySelector('#threads-sidebar') || sb.querySelector('.sidebar-actions');
     sb.querySelectorAll('.ws-header, .ws-folder-row, .ws-btn, .ws-pin-label, .ws-pin-sep').forEach(e => e.remove());
 
     const clearDropMarks = () => {
@@ -8779,26 +8950,52 @@
     const shown = !!host._panelGuest || (!!host._filePanel?.isConnected && !host._rightHidden);
     if (shown) {
       host._rightHidden = true;
-      host._hiddenGuest = host._panelGuest;
       host._panelGuest = null;
       activateTerminal(ws.id, host.id);
       return;
     }
     host._rightHidden = false;
-    const group = findGroupContainingTerm(ws.layout, host.id);
-    const guest = group?.terminals.find(g => g.id === host._hiddenGuest && chatPanelHost(g, group) === host);
-    const side = guest || (!host._filePanel?.isConnected && group && chatPanelSides(host, group)[0]);
-    if (side) {
-      // Revealing the panel keeps the main transcript and composer mounted and focused.
-      host._panelGuest = side.id;
-      syncThreadPanel();
+    // Never jumps into a side chat by itself: the panel comes back as it was (its strip lists the side chats too),
+    // else the New tab page with what it can hold.
+    if (host._filePanel?.isConnected) syncChatPanels(ws);
+    else openChatPanelStart(host);
+  }
+  // Ctrl+Alt+B with nothing in the right panel: a "New tab" page listing what it can hold. Picking one replaces it.
+  function openChatPanelStart(host) {
+    // Changes: every file this chat changed, all its replies' diffs in one list (a file's edits in reply order).
+    let diff = null;
+    for (const [k, d] of _chatDiffs) {
+      if (!k.startsWith(host.id + '|')) continue;
+      diff ||= { files: new Map(), cwd: '' };
+      diff.cwd = d.cwd || diff.cwd;
+      for (const f of d.files) {
+        const m = diff.files.get(f.path) || { path: f.path, add: 0, del: 0, patches: [] };
+        m.add += f.add; m.del += f.del; m.patches.push(...f.patches); diff.files.set(f.path, m);
+      }
     }
-    else if (host._filePanel?.isConnected) syncChatPanels(ws);
-    else zoomBadge('Nothing open in the right panel');
+    const actions = [
+      ['side', 'ph-chat-circle-dots', 'Side chat'],
+      ...(isDesktop() ? [['web', 'ph-globe', 'Web page']] : []),
+      ...(diff ? [['diff', 'ph-git-diff', 'Changes']] : []),
+    ];
+    const page = openChatPanel(host, { key: 'start', title: 'New tab', icon: 'ph-plus',
+      html: '<div class="cfp-body cfp-start"><div class="cfp-start-list">' + actions.map(([act, icon, label]) =>
+        `<button type="button" class="cfp-start-btn" data-start="${act}"><i class="ph ${icon}" aria-hidden="true"></i><span>${label}</span></button>`).join('') + '</div></div>' });
+    if (!page) return;
+    page._tab.classList.add('cfp-start-tab'); // no tab in the strip: the page is what an empty panel shows
+    page.querySelector('.cfp-start-btn')?.focus({ preventScroll: true });
+    page.addEventListener('click', e => {
+      const act = e.target.closest('[data-start]')?.dataset.start;
+      if (!act) return;
+      if (act === 'side') void openSideChat(host, '');
+      else if (act === 'web') openChatBrowserPanel(host, '');
+      else if (act === 'diff') openChatDiffPanel(host, [...diff.files.values()], diff.cwd, host.id + '|all');
+      if (page.isConnected) closeChatPanelTab(host, page); // the start page has done its job
+    });
   }
   const CHAT_PANEL_HIDE_BTN = '<button type="button" class="cfp-icon cfp-hide" data-act="hide" aria-label="Hide panel (Ctrl+Alt+B)" data-tip="Hide panel (Ctrl+Alt+B)"><i class="ph ph-x" aria-hidden="true"></i></button>';
   function chatPanelSides(host, group) {
-    const sides = group.terminals.filter(g => g !== host && chatPanelHost(g, group) === host && !host._sideClosed?.has(g.id));
+    const sides = group.terminals.filter(g => g !== host && chatPanelHost(g, group) === host && host._sideOpen?.has(g.id)); // only side chats opened here (the strip starts empty)
     const order = host._sideOrder || [];
     return sides.sort((a, b) => (order.indexOf(a.id) + 1 || 1e9) - (order.indexOf(b.id) + 1 || 1e9));
   }
@@ -8896,9 +9093,12 @@
   function closeSideChatTab(host, id) {
     const ws = host && wsOf(host);
     if (!ws) return;
-    (host._sideClosed ||= new Set()).add(id);
-    if (host._panelGuest === id) { host._panelGuest = null; activateTerminal(ws.id, host.id); }
-    else syncChatPanels(ws);
+    host._sideOpen?.delete(id);
+    if (host._panelGuest !== id) { syncChatPanels(ws); return; }
+    // The side chat on show closed: the pane stays, on its other tabs or else the New tab page.
+    host._panelGuest = null; host._rightHidden = false;
+    activateTerminal(ws.id, host.id);
+    if (!host._filePanel?.isConnected) openChatPanelStart(host);
   }
   function showSideChatTab(host, id) {
     const ws = host && wsOf(host);
@@ -8937,7 +9137,7 @@
       const tabEl = t => groupEl?.querySelector(`.tg-tab[data-termid="${CSS.escape(t.id)}"]`);
       const active = group.terminals.find(t => t.id === group.activeTermId);
       const activeHost = chatPanelHost(active, group);
-      if (activeHost) { activeHost._panelGuest = active.id; activeHost._rightHidden = false; activeHost._sideClosed?.delete(active.id); } // shown: back in the strip
+      if (activeHost) { activeHost._panelGuest = active.id; activeHost._rightHidden = false; (activeHost._sideOpen ||= new Set()).add(active.id); } // shown: a tab in the strip
       const host = activeHost || active;
       const guest = host?.threadHistory && group.terminals.find(g => g.id === host._panelGuest && chatPanelHost(g, group) === host);
       for (const t of group.terminals) {
@@ -8950,7 +9150,7 @@
         if (pair) on.add(t);
       }
       if (guest) {
-        host._sideClosed?.delete(guest.id); // shown in the panel (from the tray, say): its tab is back in the strip
+        (host._sideOpen ||= new Set()).add(guest.id); // shown in the panel (opened, or from the tray): a tab in the strip
         tabEl(host)?.classList.add('active');
         if (guest.el && !guest.el.querySelector(':scope > .chat-panel-sash')) guest.el.append(chatPanelSash());
       }
@@ -9052,26 +9252,6 @@
   // A chat's context lines, each placed before the first prompt after it (before(t) hands out those up to t):
   // in the main thread, "Included side chat X" before the message that carried it; in a side chat, "Shared as
   // context with Y" where it was shared, with its outcome. waiting: the main thread's line while it waits, with Discard.
-  // Runs of process events of one kind, each within 10s of the run's first (a stop also takes down its children).
-  function procEventGroups(events) {
-    const groups = [];
-    // Only servers the agent left listening are history-worthy. Tool commands inherit the same pane id but aren't
-    // background servers (an old "Process started git" line is dropped here too); a chat's own structured agent was
-    // logged before agent-procs.js skipped it ("claude -p … stream-json", opencode serve, etc.).
-    const harnessServer = ev => /\bopencode(\.exe)?\s+serve\s+--hostname=127\.0\.0\.1\s+--port=0$/.test(ev.command || '')
-      || /(^|[\\/])claude(\.exe)?\s(.*\s)?-p\s.*stream-json|(^|[\\/])codex(\.exe|\.js)?\s+app-server\b|(^|[\\/])agy(\.exe)?\s+acp\b/.test(ev.command || '');
-    for (const ev of [...events].filter(ev => ev.urls?.length && !harnessServer(ev)).sort((a, b) => a.at - b.at)) {
-      const g = groups.at(-1);
-      if (g && g[0].kind === ev.kind && ev.at - g[0].at <= 10000) g.push(ev); else groups.push([ev]);
-    }
-    return groups;
-  }
-  // "./venv/bin/python server.py --port 1" → "python server.py"; "/…/node_modules/.bin/vite" → "vite".
-  const procShortName = cmd => {
-    const [bin = 'process', arg] = String(cmd || '').trim().split(/\s+/);
-    const base = s => s.split('/').pop();
-    return arg && !arg.startsWith('-') && /[./]/.test(arg) ? `${base(bin)} ${base(arg)}` : base(bin);
-  };
   function contextLines(ws) {
     const link = (key, title) => `<button type="button" class="thr-context-link" data-thread-key="${escHtml(key || '')}"${key ? '' : ' disabled'} title="${escHtml(title)}">${escHtml(title)}</button>`;
     const line = (at, cls, icon, text, rest = '') => ({ at, html: `<div class="thr-status-line thr-context-line ${cls}" data-ts="${at}" role="status"><i class="ph ${icon}" aria-hidden="true"></i><span class="thr-status-title">${text}</span>${rest}</div>` });
@@ -9082,18 +9262,6 @@
         const p = findThreadByKey(s.parentId), title = p?.chat?.title || p?.label || 'a deleted thread';
         return line(s.at, s.state, s.state === 'discarded' ? 'ph-x-circle' : s.state === 'sent' ? 'ph-check-circle' : 'ph-arrow-bend-up-left', 'Shared as context with',
           link(p && s.parentId, title) + `<span class="thr-context-state">${s.state === 'pending' ? 'goes with its next message' : s.state === 'sent' ? 'sent' : 'discarded'}</span>`);
-      }),
-      // Processes the agent left running: when they started and stopped (recorded by refreshAgentProcCards).
-      // Events of one kind within a few seconds of each other are one line: "Started  http://…:8000, node".
-      ...procEventGroups(ws.chat?.procEvents || []).map(g => {
-        const start = g[0].kind === 'start', servers = g.filter(ev => ev.urls?.length), others = g.filter(ev => !ev.urls?.length);
-        const noun = !others.length ? (servers.length > 1 ? 'Servers' : 'Server') : !servers.length ? (others.length > 1 ? 'Processes' : 'Process') : '';
-        const items = [
-          ...servers.map(ev => `<button type="button" class="thr-link" data-href="${escHtml(ev.urls[0])}" title="${escHtml(ev.command || ev.urls[0])}">${escHtml(ev.urls[0].replace(/^https?:\/\//, ''))}</button>`),
-          ...others.map(ev => `<span class="thr-proc-cmd" title="${escHtml(ev.command || '')}">${escHtml(procShortName(ev.command))}</span>`),
-        ].join('<span class="thr-proc-sep">,</span>');
-        return line(g[0].at, `thr-proc-line ${g[0].kind}`, start ? 'ph-play' : 'ph-stop-circle', noun ? `${noun} ${start ? 'started' : 'stopped'}` : start ? 'Started' : 'Stopped',
-          `<span class="thr-proc-items">${items}</span>` + (g.some(ev => ev.by === 'you') ? '<span class="thr-context-state">by user</span>' : ''));
       }),
     ].sort((a, b) => a.at - b.at);
     const b = bringBackOf(ws);
@@ -9224,7 +9392,7 @@
     if (prev !== tab) clearCitationFlash();
     if (prev && prev !== tab) {
       rememberThreadScroll(prev);
-      prev._draft = thrInput.value; prev._files = _chatFiles;
+      prev._draft = thrInput.value; prev._files = _chatFiles; if (prev.chat && !prev._editingQueued) prev.chat.draft = thrInput.value; // the tab's unsent mark reads chat.draft
     }
     const snapshot = tab && prev !== tab ? tab.el.querySelector(':scope > .thr-snapshot') : null;
     if (prev !== tab && (prev || snapshot)) {
@@ -11298,7 +11466,9 @@
     if (node.nodeType === Node.TEXT_NODE) return node.data;
     if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return '';
     if (node.dataset?.mention) return node.dataset.mention;
-    if (node.nodeName === 'BR') return node.parentNode?.childNodes.length === 1 ? '' : '\n';
+    // A <br> alone in its line is Chrome's placeholder for an empty editor/line, not a newline. Empty text
+    // nodes beside it (left after deleting everything) don't count, or a cleared composer reads as "\n".
+    if (node.nodeName === 'BR') return [...(node.parentNode?.childNodes || [])].every(n => n === node || (n.nodeType === Node.TEXT_NODE && !n.data)) ? '' : '\n';
     let text = '';
     for (const child of node.childNodes) {
       if (['DIV', 'P'].includes(child.nodeName) && text && !text.endsWith('\n')) text += '\n';
@@ -11505,6 +11675,8 @@
       if (!file) return md ? mdInputHtml(part, lineStart) : chatDraftTextHtml(part);
       if (file.skill) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-skill-ref" tabindex="${tabIndex}">`
         + `<i class="ph ${file.skill === 'skill' ? 'ph-lightning' : 'ph-terminal'}" aria-hidden="true"></i><span>${escHtml(file.name.replace(/^\$/, ''))}</span></a></span>`;
+      if (file.element) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-el-ref" tabindex="${tabIndex}" title="${escHtml(file.element.ask || file.element.selector)}">`
+        + `<i class="ph ph-square-dashed-mouse-pointer" aria-hidden="true"></i><span>${escHtml(file.name)}</span></a></span>`;
       if (file.url) return `<span class="thr-inline-ref" contenteditable="false" data-mention="${escHtml(part)}"><a href="#" class="thr-at-ref thr-url-ref" tabindex="${tabIndex}" title="${escHtml(file.url)}">`
         + `${linkIconHtml(file.url)}<span>${escHtml(file.url)}</span></a></span>`;
       // An @ mention: the file or folder's icon and name; sent as typed (@path), the agents resolve it.
@@ -11530,6 +11702,17 @@
     // An untouched editor keeps its selection; resetting it forces a layout of the whole page.
     if (rewrote && surface === thrPage && document.activeElement === editor) restoreChatEditorSelection(editor, input);
     openMdTokens(editor); // now, not on the async selectionchange: no frame with the caret's markers hidden
+  }
+  // A picked browser element as a composer chip ("[Element N]" in the draft, sent as the element's prompt text).
+  // at:true keeps it out of the attachments bar and drops it with its text, like a link chip.
+  // ask: the instruction typed in the picker; it becomes the chip's label (truncated) and is sent with the element.
+  function chatElementMention(picked, files, value, ask = '') {
+    const used = [...value.matchAll(/\[Element (\d+)\]/g), ...files.map(f => f.element && /\d+/.exec(f.mention))].filter(Boolean).map(m => +m[1] || +m[0]);
+    const mention = `[Element ${Math.max(0, ...used) + 1}]`;
+    const { url, selector, text, html, shot } = picked;
+    const label = ask.replace(/\s+/g, ' ') || `<${pickTag(picked)}> ${text || selector}`;
+    files.push({ at: true, element: { url, selector, text, html, ask, shot }, mention, name: label.length > 40 ? label.slice(0, 39) + '…' : label });
+    return mention;
   }
   function insertChatMention(file, input = thrInput, files = _chatFiles) {
     const kind = file.cite ? 'Citation' : file.thread ? 'Thread' : file.image === false ? 'File' : 'Image';
@@ -11561,6 +11744,11 @@
     const quoted = [], trailing = [], notes = [];
     let body = typed;
     for (const file of files) {
+      if (file.element) { // a picked browser element: its prompt text where the chip sits
+        const block = [file.element.ask, pickElementText(file.element)].filter(Boolean).join('\n\n');
+        if (file.mention && body.includes(file.mention)) body = body.split(file.mention).join('\n\n' + block + '\n\n'); else trailing.push('\n\n' + block);
+        continue;
+      }
       if (file.at) continue; // @path stays in the text as typed
       if (file.thread) {
         const title = `“${file.name}”`;
@@ -11757,6 +11945,7 @@
     if (file?.cite) jumpToCitation(file);
     else if (file?.skill) void showChatSkillInfo(file.mention, reference.querySelector('a') || reference); // the card, like a sent chip's
     else if (file?.thread) { const t = findThreadByKey(file.thread); if (t) openChatTab(t); }
+    else if (file?.element) showChatElementInfo(file, reference.querySelector('a') || reference); // its prompt, like a skill's card
     else if (file?.url) openChatWebLink(file.url, e.shiftKey);
     else if (file?.diff) { if (!openChatDiffAt(curChat(), file.diff, file.line, file.diffKey)) void openChatFileLink(curChat(), file.path, file.line); } // a diff comment's chip
     else if (file?.dir) window.electronAPI?.showInFolder?.(file.path); // a folder mention: reveal it, there's nothing to preview
@@ -11890,6 +12079,13 @@
           rememberChatEditorSelection(editor);
           const text = (e.clipboardData?.getData('text/plain') || '').replace(/\r\n?/g, '\n');
           if (!text) return;
+          // The element picker's copied prompt: its instruction as text plus an element chip, not the whole block.
+          if (_lastPick && text.trim() === _lastPick.text) {
+            const v = thrInput.value, s = thrInput.selectionStart, end = thrInput.selectionEnd, files = [..._chatFiles];
+            const insert = chatElementMention(_lastPick.picked, files, v, _lastPick.ask) + ' ';
+            applyDraft(v.slice(0, s) + insert + v.slice(end), s + insert.length, s + insert.length, files);
+            return;
+          }
           // A long paste becomes an attached text file (a chip, like images) instead of flooding the draft.
           if (text.length > 2000 || text.split('\n').length > 40) {
             addChatFiles([Object.assign(new File([text], `pasted-${text.split('\n').length}-lines.txt`, { type: 'text/plain' }), { tvPasted: true })]);
@@ -12097,13 +12293,41 @@
     const skill = sigil === '$' || /(^|[\\/])SKILL\.md$/i.test(it?.path || '');
     const desc = it ? escHtml(it.description || 'No description.') : `Not found in ${escHtml(harnessOf(harness)?.name || 'this agent')}'s ${skill ? 'skills' : 'commands'} for this folder.`;
     if (!anchor?.isConnected) return;
+    const pop = openChipPop(anchor, name, `<div class="skill-pop-title">${escHtml(name)}</div><p class="skill-pop-desc">${desc}</p>`
+      + (it?.path ? '<button type="button" class="skill-pop-view">View instructions</button>' : ''));
+    pop.querySelector('.skill-pop-view')?.addEventListener('click', async () => {
+      _skillPop?.close();
+      const r = await window.electronAPI?.readAttachmentPreview?.(it.path).catch(() => null);
+      if (r?.text == null) { zoomBadge(r?.error || 'Couldn’t read this file'); return; }
+      openChatFilePanel(ws, it.path, name, r.text);
+    });
+  }
+  // A picked browser element's chip: its card shows the prompt typed in the picker and what it points at.
+  function showChatElementInfo(file, anchor) {
+    const again = _skillPop?.anchor === anchor;
+    _skillPop?.close();
+    if (again || !anchor?.isConnected) return;
+    const el = file.element, tag = /^<([\w-]+)/.exec(el.html || '')?.[1] || 'element';
+    const title = 'Edit element'; // the feature's name, as on the picker dialog that made this chip
+    const pop = openChipPop(anchor, title, `<div class="skill-pop-title">${escHtml(title)}</div>`
+      + (el.ask ? `<p class="skill-pop-desc el-pop-ask">${escHtml(el.ask)}</p>` : '')
+      + `<div class="el-pop-el">${el.shot ? '<button type="button" class="el-pop-thumb" aria-label="Open the picked element fullscreen"><img src="' + escHtml(el.shot) + '" alt="" decoding="async"></button>' : ''}`
+      + `<div class="el-pop-info"><div class="el-pop-meta"><span class="el-pop-tag">&lt;${escHtml(tag)}&gt;</span><span class="el-pop-sel" title="${escHtml(el.selector)}"><bdi>${escHtml(el.selector)}</bdi></span></div>`
+      + (el.text ? `<p class="el-pop-text">${escHtml(el.text)}</p>` : '') + '</div></div>'
+      + `<button type="button" class="skill-pop-view">Open page</button>`);
+    pop.querySelector('.skill-pop-view').addEventListener('click', () => { _skillPop?.close(); openChatWebLink(el.url); });
+    // The photo opens in the chat's image viewer, like the picker dialog's thumbnail.
+    pop.querySelector('.el-pop-thumb')?.addEventListener('click', () => { _skillPop?.close(); openClaudeRefViewer(null, { kind: 'file', path: '', label: `<${tag}> ${el.selector}` }, '', el.shot); });
+  }
+  // A chip's info card (skills, picked elements): centered above the chip, fades in; closes on a second click on the
+  // same chip, Escape, an outside click or a scroll. → the card element.
+  function openChipPop(anchor, label, html) {
     const pop = document.createElement('div');
     pop.className = 'skill-pop';
     pop.setAttribute('role', 'dialog');
-    pop.setAttribute('aria-label', name);
+    pop.setAttribute('aria-label', label);
     pop.tabIndex = -1;
-    pop.innerHTML = `<div class="skill-pop-title">${escHtml(name)}</div><p class="skill-pop-desc">${desc}</p>`
-      + (it?.path ? '<button type="button" class="skill-pop-view">View instructions</button>' : '');
+    pop.innerHTML = html;
     const outside = e => { if (!pop.contains(e.target) && !anchor.contains(e.target)) _skillPop?.close(); };
     const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); _skillPop?.close(); anchor.focus(); } };
     const onScroll = e => { if (!pop.contains(e.target)) _skillPop?.close(); }; // the chat moved away from it
@@ -12113,12 +12337,6 @@
     document.addEventListener('pointerdown', outside, true);
     document.addEventListener('keydown', onKey, true);
     addEventListener('scroll', onScroll, true);
-    pop.querySelector('.skill-pop-view')?.addEventListener('click', async () => {
-      _skillPop?.close();
-      const r = await window.electronAPI?.readAttachmentPreview?.(it.path).catch(() => null);
-      if (r?.text == null) { zoomBadge(r?.error || 'Couldn’t read this file'); return; }
-      openChatFilePanel(ws, it.path, name, r.text);
-    });
     document.body.append(pop);
     // Centered above the chip (kept inside the window); below it when there's no room. Reading its size
     // commits the hidden state, so adding .open fades it in.
@@ -12127,6 +12345,7 @@
     pop.style.top = (r.top - 8 - h < 8 ? r.bottom + 8 : r.top - 8 - h) + 'px';
     pop.classList.add('open');
     (pop.querySelector('.skill-pop-view') || pop).focus();
+    return pop;
   }
   // A file shown read-only beside the chat, inside its tab (openChatPanel): line numbers, wrapped lines,
   // highlighted by its type (a Markdown file's YAML front matter as YAML).
@@ -12319,7 +12538,7 @@
   // The panel on the right of a chat's tab (like a side chat panel: same width, same sash). Files and diffs open as
   // tabs in it; opening one already there refreshes it in place. → the tab's page (head + body).
   const CFP_MAX_TABS = 12; // shortcut: the oldest inactive tab closes past this; make it a setting if anyone asks
-  function openChatPanel(owner, { key, title, path = '', sub = '', icon = 'ph-file-text', rows, line = 0, diff = false, maxLn = 0 }) {
+  function openChatPanel(owner, { key, title, path = '', sub = '', icon = 'ph-file-text', rows, line = 0, diff = false, maxLn = 0, html = '' }) {
     // Files and diffs always open in the right panel of the thread that hosts it, also when its side chat asked:
     // a panel inside the side chat would be a second strip the merged one can't close or hide.
     owner = chatRightPanelHost(owner) || owner;
@@ -12339,6 +12558,7 @@
       + (path && window.electronAPI?.showInFolder ? '<button type="button" class="cfp-icon" data-act="reveal" aria-label="Show in folder" data-tip="Show in folder"><i class="ph ph-folder-open" aria-hidden="true"></i></button>' : '')
       + '</div>' // closing is on the tab (and Esc closes the panel)
       + `<div class="cfp-body" tabindex="0" aria-label="${escHtml(title)} (read-only)"><div class="cfp-code">${rows}</div></div>`;
+    if (html) page.innerHTML = html; // a page of its own kind (a browser page brings its toolbar and body)
     const tab = document.createElement('div');
     tab.className = 'cfp-tab';
     tab.setAttribute('role', 'tab');
@@ -12357,7 +12577,7 @@
     const wsp = wsOf(owner);
     if (wsp && owner._panelGuest) { owner._panelGuest = null; activateTerminal(wsp.id, owner.id); }
     else if (wsp) syncChatPanels(wsp);
-    page.querySelector('.cfp-body').focus({ preventScroll: true });
+    page.querySelector('.cfp-body')?.focus({ preventScroll: true });
     // A link to a line (#L12, :12): that line, marked and centered.
     const target = line > 0 && page.querySelectorAll('.cfp-row')[line - 1];
     if (target) {
@@ -12365,6 +12585,96 @@
       const body = target.closest('.cfp-body'), tr = target.getBoundingClientRect(), br = body.getBoundingClientRect();
       body.scrollTop += tr.top - br.top - (body.clientHeight - tr.height) / 2; // only the panel scrolls, never the chat
     }
+    return page;
+  }
+  // A web page in the chat's right panel, a tab in its strip beside side chats and files (desktop: a <webview>).
+  // Its bar: back, forward, reload, the address, and "Open as tab" to move it to a full browser tab.
+  function openChatBrowserPanel(owner, url) {
+    const host = u => { try { return new URL(u).hostname.replace(/^www\./, '') || u; } catch { return u; } };
+    const btn = (act, icon, tip) => `<button type="button" class="cfp-icon" data-web="${act}" aria-label="${tip}" data-tip="${tip}"><i class="ph ${icon}" aria-hidden="true"></i></button>`;
+    const page = openChatPanel(owner, { key: 'web:' + Date.now(), title: url ? host(url) : 'New page', icon: 'ph-globe',
+      html: `<div class="cfp-head cfp-web-bar">${btn('back', 'ph-caret-left', 'Back')}${btn('forward', 'ph-caret-right', 'Forward')}${btn('reload', 'ph-arrow-clockwise', 'Reload')}`
+        + `<input class="cfp-web-url" type="text" spellcheck="false" autocomplete="off" aria-label="Address">`
+        + `${btn('pick', 'ph-square-dashed-mouse-pointer', 'Pick an element')}${btn('tab', 'ph-arrow-square-out', 'Open as tab')}${btn('more', 'ph-dots-three-vertical', 'More')}</div>`
+        + '<div class="cfp-body cfp-web-body"></div>' });
+    if (!page) return;
+    page.classList.add('cfp-web');
+    const input = page.querySelector('.cfp-web-url'), wv = document.createElement('webview');
+    wv.className = 'cfp-webview';
+    wv.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
+    wv.setAttribute('allowpopups', '');
+    wv.src = url || 'about:blank'; input.value = url;
+    page.querySelector('.cfp-web-body').append(wv);
+    // Its shadow iframe must stretch on both axes, or the guest stays 150px tall (as the browser tab's pinIframe).
+    const pin = () => { const f = wv.shadowRoot?.querySelector('iframe'); if (f) f.style.cssText = 'display:block;flex:1 1 auto;width:100%;height:100%;min-width:0;min-height:0;border:0'; return !!f; };
+    if (!pin()) { const mo = new MutationObserver(() => { if (pin()) mo.disconnect(); }); mo.observe(wv, { childList: true, subtree: true }); }
+    wv.addEventListener('dom-ready', pin);
+    if (!url) { input.placeholder = 'Search or enter URL…'; setTimeout(() => input.focus(), 0); }
+    const name = text => {
+      page._tab.querySelector('.cfp-tab-name').textContent = text; page._tab.title = input.value; page.setAttribute('aria-label', text);
+      refreshChatPanelStrips(owner); // the side chat's copy of the strip
+    };
+    const sync = e => { if (e.url === 'about:blank') return; if (document.activeElement !== input) input.value = e.url; name(host(e.url)); };
+    wv.addEventListener('did-navigate', sync);
+    wv.addEventListener('did-navigate-in-page', e => { if (e.isMainFrame) sync(e); });
+    wv.addEventListener('page-title-updated', e => name(e.title || host(input.value)));
+    wv.addEventListener('new-window', e => { e.preventDefault(); wv.loadURL(e.url).catch(() => {}); }); // stays in this page
+    // The page's icon on its tab (the globe until one arrives, and again on a new page).
+    const setIcon = src => {
+      const old = page._tab.querySelector(':scope > i, :scope > .cfp-tab-favicon');
+      const icon = src ? Object.assign(document.createElement('img'), { className: 'cfp-tab-favicon', src, alt: '' }) : Object.assign(document.createElement('i'), { className: 'ph ph-globe' });
+      if (src) icon.onerror = () => setIcon(null);
+      old?.replaceWith(icon); refreshChatPanelStrips(owner);
+    };
+    wv.addEventListener('page-favicon-updated', e => setIcon((e.favicons || []).find(u => /^(https?:\/\/|data:image\/)/i.test(u)) || null));
+    wv.addEventListener('did-navigate', () => setIcon(null));
+    // Loading: reload becomes stop, and the page's own tab shows a spinner-free busy state through aria-busy.
+    const reloadBtn = page.querySelector('[data-web="reload"]');
+    const busy = on => {
+      page.setAttribute('aria-busy', String(on));
+      reloadBtn.dataset.web = on ? 'stop' : 'reload';
+      reloadBtn.setAttribute('aria-label', on ? 'Stop' : 'Reload'); reloadBtn.dataset.tip = on ? 'Stop' : 'Reload';
+      reloadBtn.firstElementChild.className = 'ph ' + (on ? 'ph-x' : 'ph-arrow-clockwise');
+    };
+    wv.addEventListener('did-start-loading', () => busy(true));
+    wv.addEventListener('did-stop-loading', () => busy(false));
+    // The page itself failing (not a subframe, not a redirect's ERR_ABORTED): a quiet notice with Try again.
+    const body = page.querySelector('.cfp-web-body');
+    wv.addEventListener('did-fail-load', e => {
+      if (e.errorCode === -3 || e.isMainFrame === false) return;
+      body.querySelector('.cfp-web-error')?.remove();
+      body.insertAdjacentHTML('beforeend', `<div class="cfp-empty cfp-web-error"><i class="ph ph-warning-circle" aria-hidden="true"></i>`
+        + `<span>Can’t reach ${escHtml(host(e.validatedURL || input.value))}</span><button type="button" class="cfp-empty-btn" data-web="retry">Try again</button></div>`);
+    });
+    wv.addEventListener('did-navigate', () => body.querySelector('.cfp-web-error')?.remove());
+    const go = raw => {
+      const v = raw.trim();
+      if (!v) return;
+      const u = /^[a-z][\w+.-]*:\/\//i.test(v) ? v : /^(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(v) ? 'http://' + v
+        : /^[^\s]+\.[^\s]+$/.test(v) ? 'https://' + v : 'https://www.google.com/search?q=' + encodeURIComponent(v); // an address, else a search
+      wv.loadURL(u).catch(() => {});
+    };
+    input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { go(input.value); wv.focus(); } else if (e.key === 'Escape') { input.value = wv.getURL?.() || input.value; wv.focus(); } });
+    input.addEventListener('focus', () => input.select());
+    page.addEventListener('click', e => {
+      const b = e.target.closest('[data-web]'), act = b?.dataset.web;
+      if (!act) return;
+      try {
+        if (act === 'back' && wv.canGoBack()) wv.goBack();
+        else if (act === 'forward' && wv.canGoForward()) wv.goForward();
+        else if (act === 'reload' || act === 'retry') { body.querySelector('.cfp-web-error')?.remove(); wv.reload(); }
+        else if (act === 'stop') wv.stop();
+        else if (act === 'pick') void runElementPick(wv, b, page.parentElement?._owner || owner); // the panel's chat gets Add to chat
+        else if (act === 'more') {
+          e.stopPropagation(); // the document click handler would close the menu right away
+          if (ctxEl.classList.contains('open') && ctxEl._owner === b) { hideCtxMenu(); return; }
+          const r = b.getBoundingClientRect();
+          showCtxMenu({ pageX: r.right, pageY: r.bottom + 6, alignRight: true }, 'panel-web-more', { wv, url: () => wv.getURL?.() || input.value });
+          ctxEl._owner = b;
+        }
+      } catch {} // the webview API throws before its page is attached
+      if (act === 'tab') { const ws = wsOf(owner); if (ws) { addBrowserTab(ws.id, null, wv.getURL?.() || input.value); closeChatPanelTab(owner, page); } }
+    });
     return page;
   }
   function createChatPanel(owner) {
@@ -12493,7 +12803,13 @@
     if (!panel) return;
     owner = panel._owner || owner;
     const all = [...panel.querySelectorAll(':scope > .cfp-page')];
-    if (all.length < 2) { closeChatFilePanel(owner); return; }
+    if (all.length < 2) {
+      // The last tab: the pane stays, on the New tab page (closing that one, or the ✕ / Esc, closes the pane).
+      if (page.dataset.key === 'start') { closeChatFilePanel(owner); return; }
+      openChatPanelStart(owner);
+      page._tab.remove(); page.remove(); refreshChatPanelStrips(owner);
+      return;
+    }
     const i = all.indexOf(page);
     page._tab.remove(); page.remove();
     if (!page.hidden) activateChatPanelTab(all[i + 1] || all[i - 1]);
@@ -14069,13 +14385,32 @@
   // Open/closed animates its width (like the left sidebar); the terminals refit once it settles.
   let tsOpen = false;
   const tsSettle = () => { const w = activeWs(); if (w) getWorkspaceTerminals(w).forEach(t => fitTerm(t)); syncBrowserSlots(); };
+  // Position setting: 'left' moves the whole aside into the left sidebar, always open there.
+  const tsPlace = document.getElementById('set-threads-place');
+  const tsHome = tsAside.parentNode;
+  let tsLeft = false;
+  function placeThreads(left) {
+    tsLeft = left;
+    const sb = document.getElementById('sidebar-inner');
+    if (left) sb.insertBefore(tsAside, sb.querySelector('.sidebar-actions'));
+    else tsHome.appendChild(tsAside);
+    // PRs / issues / usage / agent updates: the threads sidebar's footer, or beside Settings when threads sit on the left.
+    const footBtns = document.querySelector('.sb-foot-btns');
+    if (footBtns) (left ? sb.querySelector('.sidebar-actions') : tsAside).appendChild(footBtns);
+    document.body.classList.toggle('threads-left', left);
+    setThreadsSidebar(left || localStorage.getItem('tv-threads-sidebar') === '1');
+  }
+  tsPlace?.addEventListener('change', () => {
+    try { localStorage.setItem('tv-threads-place', tsPlace.value); } catch {}
+    placeThreads(tsPlace.value === 'left');
+  });
   function setThreadsSidebar(open) {
-    tsOpen = !!open;
+    tsOpen = !!open || tsLeft;
     holdTermFits();
     tsAside.classList.toggle('collapsed', !tsOpen);
     tsAside.inert = !tsOpen;
     document.getElementById('btn-threads')?.setAttribute('aria-expanded', String(tsOpen));
-    try { localStorage.setItem('tv-threads-sidebar', tsOpen ? '1' : ''); } catch {}
+    if (!tsLeft) try { localStorage.setItem('tv-threads-sidebar', tsOpen ? '1' : ''); } catch {}
     if (tsOpen) renderThreadsSidebar();
     if (!document.body.classList.contains('ui-animations')) tsSettle();
   }
@@ -14083,9 +14418,23 @@
   // Resize: drag its left edge (220-520px, remembered).
   const TS_MIN = 220, TS_MAX = 520;
   try { const w = +localStorage.getItem('tv-threads-w'); if (w) tsAside.style.setProperty('--ts-w', Math.max(TS_MIN, Math.min(TS_MAX, w)) + 'px'); } catch {}
+  // Docked on the left, the same sash sits on its top edge and sets its height (the workspaces get the rest).
+  try { const h = +localStorage.getItem('tv-threads-left-h'); if (h) tsAside.style.setProperty('--ts-left-h', h + 'px'); } catch {}
   tsAside.querySelector('.ts-sash')?.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     e.preventDefault();
+    if (tsLeft) {
+      const sash = e.currentTarget, startY = e.clientY, startH = tsAside.offsetHeight;
+      const room = tsAside.parentElement.clientHeight - 160; // keep the workspaces and the footer in view
+      sash.setPointerCapture(e.pointerId); sash.classList.add('dragging');
+      const move = ev => tsAside.style.setProperty('--ts-left-h', Math.max(120, Math.min(room, startH + startY - ev.clientY)) + 'px');
+      const up = () => {
+        sash.removeEventListener('pointermove', move); sash.removeEventListener('pointerup', up); sash.classList.remove('dragging');
+        try { localStorage.setItem('tv-threads-left-h', String(tsAside.offsetHeight)); } catch {}
+      };
+      sash.addEventListener('pointermove', move); sash.addEventListener('pointerup', up);
+      return;
+    }
     const sash = e.currentTarget, startX = e.clientX, startW = tsAside.offsetWidth;
     sash.setPointerCapture(e.pointerId); sash.classList.add('dragging');
     _suppressResize = true; startResizing();
@@ -14099,6 +14448,13 @@
   });
   document.getElementById('btn-threads')?.addEventListener('click', () => setThreadsSidebar(!tsOpen));
   try { if (!SETTINGS_ONLY && localStorage.getItem('tv-threads-sidebar')) setThreadsSidebar(true); } catch {}
+  try { if (localStorage.getItem('tv-threads-place') === 'left') { tsPlace.value = 'left'; if (!SETTINGS_ONLY) placeThreads(true); } } catch {}
+  // The Settings window shares localStorage; follow its change here.
+  if (!SETTINGS_ONLY) window.addEventListener('storage', e => {
+    if (e.key !== 'tv-threads-place') return;
+    tsPlace.value = e.newValue || 'right';
+    placeThreads(tsPlace.value === 'left');
+  });
   setInterval(renderThreadsSidebar, 1000); // working timers and statuses; selection updates on activation
 
   // ── Syntax highlighting (shell, JSON) for tool calls and code blocks: escaped spans, colors from the terminal theme ──
@@ -14460,18 +14816,23 @@
       return kept.reduce((out, s, k) => out + (k && !s.block && !kept[k - 1].block ? '\n' : '') + s.html, '');
     };
     let out = '', last = 0;
-    for (const m of text.matchAll(/```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g)) {
+    // Fences open at a line start (indented inside list items too) with 3+ backticks or tildes and close only on a
+    // line of the same fence, so a ```` block can hold ``` lines. The opener's indent is stripped from the body.
+    for (const f of text.matchAll(/(^|\n)([ \t]*)(`{3,}|~{3,})([^\n`]*)([\s\S]*?)(\n[ \t]*\3[`~]*[ \t]*(?=\n|$)|$)/g)) {
+      const indent = f[2].length, closed = !!f[6];
+      const body = f[5].replace(/^\n/, '').split('\n').map(l => l.replace(new RegExp(`^[ \\t]{0,${indent}}`), '')).join('\n');
+      const m = Object.assign(['', f[4], body], { index: f.index + f[1].length }), end = f.index + f[0].length;
       // A complete ```a2ui block of A2UI messages renders as part of the reply, not as code: an empty host that
       // mountA2ui fills after render. (An unfinished one, still streaming, shows as code until it closes.)
-      if (/^a2ui$/i.test(m[1].trim()) && m[0].endsWith('```') && window.A2UI?.parse(m[2])) {
+      if (/^a2ui$/i.test(m[1].trim()) && closed && window.A2UI?.parse(m[2])) {
         out += inline(text.slice(last, m.index)) + `<div class="thr-a2ui a2ui-host" data-src="${escHtml(m[2])}"></div>`;
-        last = m.index + m[0].length;
+        last = end;
         continue;
       }
       // A submitted A2UI form (sent from a surface's button): shown as the answers, not JSON; fillA2uiAnswer fills it.
-      if (/^a2ui-action$/i.test(m[1].trim()) && m[0].endsWith('```')) {
+      if (/^a2ui-action$/i.test(m[1].trim()) && closed) {
         out += inline(text.slice(last, m.index)) + `<div class="thr-a2ui-answer" data-src="${escHtml(m[2])}"></div>`;
-        last = m.index + m[0].length;
+        last = end;
         continue;
       }
       const svg = svgPreviewHtml(m[1].trim(), m[2]);
@@ -14479,7 +14840,7 @@
         + '<button type="button" class="thr-code-copy" title="Copy code" aria-label="Copy code"><i class="ph ph-copy" aria-hidden="true"></i></button>'
         + (SHELL_FENCE.test(m[1].trim().split(/[\s{]/)[0]) && m[2].trim() ? '<button type="button" class="thr-code-run" title="Run in terminal" aria-label="Run in terminal"><i class="ph ph-play" aria-hidden="true"></i></button>' : '')
         + (svg ? '<button type="button" class="thr-svg-toggle" title="Show code" aria-label="Show code"><i class="ph ph-code" aria-hidden="true"></i></button>' : '') + '</div>';
-      last = m.index + m[0].length;
+      last = end;
     }
     return out + inline(text.slice(last));
   }
@@ -16094,6 +16455,7 @@
       const copy = text => { void copyPrivateText(text).catch(() => {}); };
       if (/^https?:/i.test(data)) {
         item('<i class="ph ph-arrow-square-out"></i>', 'Open link', '', () => openChatWebLink(data));
+        if (isDesktop() && curChat()) item('<i class="ph ph-sidebar-right"></i>', 'Open beside chat', '', () => openChatBrowserPanel(curChat(), data));
         item(`<i class="ph ${terminalLinkTarget === 'external' ? 'ph-browser' : 'ph-globe'}"></i>`, terminalLinkTarget === 'external' ? 'Open in a browser tab' : 'Open in system browser', '', () => openChatWebLink(data, true));
         item('<i class="ph ph-copy"></i>', 'Copy link', '', () => copy(data));
       } else {
@@ -16163,9 +16525,15 @@
       const inTab = terminalLinkTarget !== 'external';
       if (file.url) {
         item('<i class="ph ph-globe"></i>', inTab ? 'Open in browser tab' : 'Open in default browser', '', () => openChatWebLink(file.url));
+        if (isDesktop() && curChat()) item('<i class="ph ph-sidebar-right"></i>', 'Open beside chat', '', () => openChatBrowserPanel(curChat(), file.url));
         item('<i class="ph ph-arrow-square-out"></i>', inTab ? 'Open in default browser' : 'Open in browser tab', 'Shift+Click', () => openChatWebLink(file.url, true));
         sep();
         item('<i class="ph ph-copy"></i>', 'Copy link', '', () => copy(file.url));
+      } else if (file.element) {
+        item('<i class="ph ph-globe"></i>', 'Open page', '', () => openChatWebLink(file.element.url));
+        sep();
+        item('<i class="ph ph-copy"></i>', 'Copy selector', '', () => copy(file.element.selector));
+        item('<i class="ph ph-code"></i>', 'Copy HTML', '', () => copy(file.element.html));
       } else if (file.cite) {
         item('<i class="ph ph-quotes"></i>', 'Go to passage', '', () => jumpToCitation(file));
         sep();
@@ -16226,6 +16594,16 @@
       item('<i class="ph ph-plus"></i>', 'New terminal', '', () => newChatBottomTerm(owner));
       if (owner._bottomTerms?.length > 1) item('<i class="ph ph-trash"></i>', 'Close terminal', '', () => closeChatBottomTerm(owner, entry));
       item('<i class="ph ph-x"></i>', 'Hide terminal', 'Ctrl+J', () => toggleChatBottomTerminal(owner));
+    } else if (type === 'panel-web-more') { // a chat panel's web page: what the browser tab's menus offer, for this page
+      const { wv, url } = data;
+      let id = null; try { id = wv.getWebContentsId(); } catch {}
+      if (id != null && window.electronAPI?.browserDevTools) {
+        let open = false; try { open = wv.isDevToolsOpened(); } catch {}
+        item('<i class="ph ph-code"></i>', open ? 'Close developer tools' : 'Developer tools', '', () => window.electronAPI.browserDevTools(id, !open, 'external').catch(() => {}));
+        sep();
+      }
+      item('<i class="ph ph-globe"></i>', 'Open in system browser', '', () => openExternalUrl(url()));
+      item('<i class="ph ph-copy"></i>', 'Copy link', '', () => { void copyPrivateText(url()).catch(() => {}); });
     } else if (type === 'browser-more') {
       const { entry, history } = data;
       item('<i class="ph ph-clock-counter-clockwise"></i>', 'History', '', history);
@@ -20196,7 +20574,7 @@
   // Width shared by the left sidebar and #main (Split's sizes are percents of it).
   function sbPairWidth() {
     // #app also holds the right threads sidebar; Split.js measures only the pair.
-    return document.getElementById('app').offsetWidth - (document.getElementById('threads-sidebar')?.offsetWidth || 0);
+    return document.getElementById('app').offsetWidth - (document.querySelector('#app > #threads-sidebar')?.offsetWidth || 0);
   }
   const SB_SPLIT_OPTS = {
     gutterSize: 4,
