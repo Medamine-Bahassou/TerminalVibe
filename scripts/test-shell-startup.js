@@ -201,7 +201,10 @@ assert.equal(findShell('ssh:-oProxyCommand=x'), null);
   fs.appendFileSync(file, 'Host old'); // a config that doesn't end with a newline
   assert.equal(saveSshHost({ name: 'vm', host: 'ubuntu@10.0.0.5', port: '22' }, '', file), null);
   assert.equal(read(), 'Host phone\n  HostName 192.168.11.101\n  Port 8022\nHost old\n\nHost vm\n  HostName 10.0.0.5\n  User ubuntu\n', 'Port 22 is the default: no Port line');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600, 'ssh refuses a config others can write');
+  // Windows reports synthetic mode bits for files whose permissions are controlled by ACLs.
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600, 'ssh refuses a config others can write');
+  }
   assert.match(saveSshHost({ name: 'PHONE', host: 'x' }, '', file), /already exists/);
   for (const bad of [{ name: 'a\n  ProxyCommand x', host: 'h' }, { name: 'b', host: 'h\n  ProxyCommand x' }, { name: 'c', host: 'u x@h' },
     { name: 'd', host: '-oProxyCommand=x' }, { name: 'e*', host: 'h' }, { name: 'f', host: 'h', port: '70000' }, { name: '', host: 'h' }]) {
@@ -226,14 +229,16 @@ assert.equal(findShell('ssh:-oProxyCommand=x'), null);
   fs.rmSync(dir, { recursive: true, force: true });
 }
 (async () => {
+  assert.deepEqual(await testSshHost('-oProxyCommand=x'), { ok: false, message: 'Invalid host name' });
+  if (process.platform === 'win32') return; // The fake ssh below is a POSIX executable script.
   // The connection test against a fake ssh: the host name (the argument before `true`) picks the answer.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-sshtest-')), bin = path.join(dir, 'ssh');
   fs.writeFileSync(bin, '#!/bin/sh\nfor a; do [ "$a" = true ] && break; last=$a; done\ncase $last in\n'
     + ' up) exit 0;;\n pw) echo "u@pw: Permission denied (publickey,password)." >&2; exit 255;;\n'
     + ' *) echo "ssh: connect to host $last port 22: Connection timed out" >&2; exit 255;;\nesac\n', { mode: 0o755 });
-  const results = await Promise.all(['up', 'pw', 'down', '-oProxyCommand=x'].map(name => testSshHost(name, bin)));
+  const results = await Promise.all(['up', 'pw', 'down'].map(name => testSshHost(name, bin)));
   assert.deepEqual(results.map(r => [r.ok, r.message]), [[true, 'Connected'], [true, 'Reachable, asks for a password or key'],
-    [false, 'connect to host down port 22: Connection timed out'], [false, 'Invalid host name']]);
+    [false, 'connect to host down port 22: Connection timed out']]);
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('PASS: SSH connection test');
 })().catch(err => { console.error(err); process.exitCode = 1; });
