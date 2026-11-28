@@ -13806,7 +13806,16 @@
   function setThreadFlag(tab, key, on) {
     tab.chat ||= { createdAt: Date.now() };
     if (on) tab.chat[key] = key === 'settledAt' ? Date.now() : true; else delete tab.chat[key];
+    // Un-settling keeps the thread active for another idle window; settling drops that.
+    if (key === 'settledAt') { if (on) delete tab.chat.keptAt; else tab.chat.keptAt = Date.now(); }
     saveState(); renderThreadsSidebar();
+  }
+  // When a thread counts as settled (0 = not): the user's Settle, or auto after 2 days unused.
+  const THREAD_IDLE_MS = 2 * 864e5;
+  function threadSettledAt(chat, updated) {
+    if (chat?.settledAt >= updated) return chat.settledAt;
+    const idleFrom = Math.max(updated, chat?.keptAt || 0);
+    return idleFrom && Date.now() - idleFrom > THREAD_IDLE_MS ? idleFrom + THREAD_IDLE_MS : 0;
   }
   // Inline rename (double-click / F2): Enter or leaving saves, Escape cancels.
   function startThreadRename(card) {
@@ -13869,7 +13878,7 @@
     // T3 Code's sidebar logic: one-line rows ([agent] title [pin] · time, the time giving way to a Settle /
     // Un-settle action on hover); shelves Pinned · Working · the active list · Settled (10, then 25 more per click).
     // Settling is the user's "done": new activity after it brings the thread back to the active list.
-    const settled = x => !x.work && x.w.chat.settledAt && x.w.chat.settledAt >= x.updated;
+    const settled = x => !x.work && threadSettledAt(x.w.chat, x.updated) > 0;
     const clocks = new Map();
     const row = (x, shelf) => {
       const tipRows = [{ icon: 'ph-folder', text: x.cwd || 'No project' }, ...(x.openIn ? [{ icon: 'ph-squares-four', text: x.openIn.label }] : []),
@@ -13934,7 +13943,7 @@
         + shelf('working', 'Working', rest.filter(x => x.work))
         + shelf('active', 'Threads', rest.filter(x => !x.work && !settled(x)))
         + shelf('sides', 'Side chats', sideChats)
-        + shelf('settled', 'Settled', rest.filter(settled).sort((a, b) => b.w.chat.settledAt - a.w.chat.settledAt));
+        + shelf('settled', 'Settled', rest.filter(settled).sort((a, b) => threadSettledAt(b.w.chat, b.updated) - threadSettledAt(a.w.chat, a.updated)));
     };
     const byProject = () => {
       const groups = new Map();
@@ -16121,7 +16130,7 @@
       if (window.electronAPI?.chatTitle) item('<i class="ph ph-sparkle"></i>', 'Regenerate title', '', () => regenerateChatTitle(tab));
       item(`<i class="ph ${tab.chat?.pinned ? 'ph-push-pin-slash' : 'ph-push-pin'}"></i>`, tab.chat?.pinned ? 'Unpin' : 'Pin', '', () => setThreadFlag(tab, 'pinned', !tab.chat?.pinned));
       if (tsLayout.value !== 'project') {
-        const isSettled = tab.chat?.settledAt && tab.chat.settledAt >= (tab.chat.updatedAt || 0);
+        const isSettled = threadSettledAt(tab.chat, threadInfo(tab).updated) > 0;
         item(`<i class="ph ${isSettled ? 'ph-arrow-counter-clockwise' : 'ph-check'}"></i>`, isSettled ? 'Un-settle' : 'Settle', '', () => setThreadFlag(tab, 'settledAt', !isSettled));
       }
       if (h) {
