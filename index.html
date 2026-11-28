@@ -905,6 +905,23 @@ The quick brown fox jumps over the lazy dog
                 </div>
               </div>
             </div>
+            <div id="ssh-hosts-section" hidden>
+              <div data-setting="ssh hosts remote server phone tmux" class="settings-section-label mt-4 mb-1.5 ml-1">SSH hosts</div>
+              <div class="ssh-hosts-card">
+                <div id="ssh-hosts-list"></div>
+                <form id="ssh-host-form" class="ssh-host-form" autocomplete="off">
+                  <input type="text" id="ssh-host-name" placeholder="Name, e.g. phone" spellcheck="false" aria-label="Name" required>
+                  <input type="text" id="ssh-host-address" placeholder="user@192.168.1.10" spellcheck="false" aria-label="Host" required>
+                  <input type="text" id="ssh-host-port" value="22" placeholder="22" inputmode="numeric" spellcheck="false" aria-label="Port" title="Port">
+                  <div class="ssh-host-form-actions">
+                    <button type="button" id="ssh-host-cancel" class="theme-action-btn" hidden>Cancel</button>
+                    <button type="submit" id="ssh-host-submit" class="theme-action-btn ssh-host-add">Add host</button>
+                  </div>
+                </form>
+                <div id="ssh-host-error" class="ssh-host-error" role="alert" hidden></div>
+                <div class="ssh-hosts-hint">Saved to <code>~/.ssh/config</code>. Open one from the tab bar's right-click menu.</div>
+              </div>
+            </div>
           </div>
           <!-- Shortcuts -->
           <div class="settings-section select-none" data-cat="shortcuts">

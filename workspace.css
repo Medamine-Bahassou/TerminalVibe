@@ -1840,7 +1840,7 @@ body.ui-animations .tv-model-picker.closing { animation:tv-model-picker-out 120m
 
 /* Queued prompts are quiet outgoing chat messages, above the floating composer. */
 #sbr-thread .thr-flow > .thr-queue { flex-shrink:0; align-self:stretch; max-height:none; overflow:visible; gap:12px; padding:8px 0 0; border:0; }
-#sbr-thread .thr-queued-bubble { display:flex; flex-direction:column; gap:8px; max-width:85%; min-width:0; padding:8px 12px; border:1px solid var(--border); border-radius:16px !important; background:transparent; color:var(--muted-text); }
+#sbr-thread .thr-queued-bubble { display:flex; flex-direction:column; gap:8px; max-width:85%; min-width:0; padding:8px 12px; border:1px dashed var(--border); border-radius:16px !important; background:transparent; color:var(--muted-text); }
 #sbr-thread .thr-queued-text { font:400 13px/1.55 var(--ui-font); white-space:pre-wrap; overflow-wrap:anywhere; }
 #sbr-thread .thr-queue-edit { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:6px 4px; color:var(--muted-text); font:400 12px/1.4 var(--ui-font); }
 #sbr-thread .thr-queue-edit button { padding:4px 8px; border:0; border-radius:6px !important; background:transparent; color:var(--accent); font:inherit; cursor:pointer; }
@@ -2359,7 +2359,8 @@ body #settings-modal .custom-dropdown-menu {
 @media (prefers-reduced-motion: reduce) { #sbr-thread .thr-side-del { transition:none; } }
 /* The delete button sits inside the row (over the chip's right end), not beside it; the row highlights as one. */
 #sbr-thread .thr-sides:not(.collapsed) .thr-side-row { position:relative; gap:0; }
-#sbr-thread .thr-side-row .thr-side-chip { padding-right:34px; }
+/* Beats the tray's `padding:0 8px` chip rule, or the working spinner sits under the delete button. */
+#sbr-thread .thr-sides:not(.collapsed) .thr-side-row .thr-side-chip { padding-right:34px; }
 #sbr-thread .thr-side-row:hover .thr-side-chip { background:var(--ui-hover); color:var(--fg); }
 #sbr-thread .thr-side-row .thr-side-del { position:absolute; right:3px; top:50%; transform:translateY(-50%); width:24px; height:24px; }
 #sbr-thread .thr-side-row .thr-side-del:hover { background:color-mix(in srgb,var(--ui-error) 16%,var(--ui-hover)); }
@@ -2826,8 +2827,9 @@ body dialog.gh-login .gh-login-open:hover:not(:disabled) { background:color-mix(
 body dialog.gh-login .gh-login-open:disabled { opacity:0.5; cursor:default; }
 body dialog.gh-login :is(.prompt-actions button, .gh-login-copy):focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
 @media (prefers-reduced-motion: reduce) { dialog.gh-login .gh-spin { animation:none; } }
-/* A citation placed mid-message sits inline in the text: cap its width so the sentence stays readable. */
-#sbr-thread :not(.thr-cites) > a.thr-cite { max-width:min(360px, 100%); vertical-align:bottom; }
+/* A citation placed mid-message sits inline in the text: cap its width so the sentence stays readable
+   and the chip fits after a short sentence instead of wrapping onto its own line. */
+#sbr-thread :not(.thr-cites) > a.thr-cite { max-width:min(260px, 100%); vertical-align:bottom; }
 
 /* Agent question row: the icon and caret follow the question's first line when it wraps (open), not its middle.
    20px lines + 5px padding keep the collapsed row at 30px. */
@@ -3653,8 +3655,12 @@ body .term-slot.cmb-on > .chat-file-panel.cmb-strip { display:flex; }
 .chat-file-panel .cfp-tab.cmb-side + .cfp-tab:not(.cmb-side) { margin-left:5px; } /* side chats, then files */
 
 /* Right panel hide button (toggleChatRightPanel, Ctrl+Alt+B): at the tab strip's right end, like the Ctrl+J terminal's */
-.chat-file-panel > .cfp-tabs { padding-right:40px; }
-body .chat-file-panel > .cfp-hide { position:absolute; top:4px; right:6px; z-index:2; }
+/* It has a cell of its own, split off by a hairline: the tabs scroll and clip at its left border, never under it. */
+/* The cell is the panel's ::before; the button stays a normal 28px icon button inside it. */
+.chat-file-panel > .cfp-tabs { margin-right:40px; padding-right:6px; }
+.chat-file-panel::before { content:''; position:absolute; top:0; right:0; z-index:1; width:40px; height:36px; box-sizing:border-box;
+  background:var(--ui-sidebar); border-left:1px solid var(--ui-line); border-bottom:1px solid var(--ui-line); pointer-events:none; }
+body .chat-file-panel > .cfp-hide { position:absolute; top:4px; right:5px; z-index:2; }
 
 /* Chat file panel tabs: keep their width and scroll the strip when there are too many. */
 body .chat-file-panel .cfp-tab { flex:none; }
@@ -3952,3 +3958,55 @@ body dialog.thr-sources-dlg .thr-source:hover > .ph-arrow-up-right { color:var(-
    (thumb only, no buttons) applies everywhere. Hidden bars keep their own ::-webkit-scrollbar { display:none }. */
 *, .xterm .xterm-viewport { scrollbar-width:auto !important; scrollbar-color:auto !important; }
 *::-webkit-scrollbar-button { display:none !important; width:0 !important; height:0 !important; }
+
+/* ── Settings › Terminal › SSH hosts: Host entries of ~/.ssh/config + an add form ── */
+#settings-modal .ssh-hosts-card { background:var(--ui-sidebar); border:1px solid var(--ui-line); border-radius:10px !important; margin-bottom:24px; }
+#settings-modal .ssh-host-row { display:flex; align-items:center; gap:10px; min-height:40px; padding:10px 16px; border-bottom:1px solid var(--ui-line); }
+#settings-modal .ssh-host-row > i.ph { font-size:16px; color:var(--muted-text); }
+#settings-modal .ssh-host-row.editing { background:var(--ui-hover); }
+#settings-modal .ssh-host-text { flex:1; min-width:0; display:flex; align-items:baseline; gap:10px; }
+#settings-modal .ssh-host-name { font:400 12.5px/1.4 var(--mono-font); color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; max-width:50%; }
+#settings-modal .ssh-host-address { font:400 11.5px/1.4 var(--mono-font); color:var(--dim-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#settings-modal .ssh-host-btn { width:28px; height:28px; display:grid; place-items:center; flex-shrink:0; border:0; background:transparent; color:var(--muted-text); border-radius:6px !important; cursor:pointer; transition:background-color 150ms, color 150ms; }
+#settings-modal .ssh-host-btn i.ph { font-size:14px; }
+#settings-modal .ssh-host-btn:hover { background:var(--ui-hover); color:var(--fg); }
+#settings-modal .ssh-host-row.editing .ssh-host-btn:hover { background:color-mix(in srgb,var(--fg) 8%,transparent); }
+#settings-modal .ssh-host-btn.danger:hover { background:color-mix(in srgb,var(--ui-error) 14%,transparent); color:var(--ui-error); }
+#settings-modal .ssh-host-btn:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-sidebar), 0 0 0 4px color-mix(in srgb,var(--accent) 60%,transparent); }
+#settings-modal .ssh-host-form-actions { display:flex; gap:8px; }
+#settings-modal .ssh-host-form-actions [hidden] { display:none; }
+#settings-modal .ssh-host-btn:disabled { opacity:.45; cursor:default; background:transparent; color:var(--muted-text); }
+/* Connection test result: a status icon + short label (round trip or ssh's reason), never a dot. */
+#settings-modal .ssh-host-status { display:flex; align-items:center; gap:6px; min-width:0; max-width:40%; font-size:11.5px; color:var(--dim-text); font-variant-numeric:tabular-nums; }
+#settings-modal .ssh-host-status:empty { display:none; }
+#settings-modal .ssh-host-status span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#settings-modal .ssh-host-status i.ph { width:14px; height:14px; display:grid; place-items:center; flex-shrink:0; font-size:14px; }
+#settings-modal .ssh-host-status.ok i.ph { color:var(--ui-success); }
+#settings-modal .ssh-host-status.failed i.ph { color:var(--ui-error); }
+/* The font glyph rotated off-center (its ink isn't centered in the line box) and drifted: like
+   #agent-updates, draw the spinner as a bordered ring that turns around its own center. */
+#settings-modal .ssh-host-status.testing i.ph { position:relative; color:var(--muted-text); }
+#settings-modal .ssh-host-status.testing i.ph::before {
+  content:""; position:absolute; inset:1px; border:1.5px solid var(--border);
+  border-top-color:currentColor; border-radius:50% !important;
+  animation:ssh-host-spin 900ms linear infinite;
+}
+@keyframes ssh-host-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #settings-modal .ssh-host-btn { transition:none; } #settings-modal .ssh-host-status.testing i.ph::before { animation:none; } }
+
+/* ── Confirm dialog: destructive variant (showConfirm(..., { danger:true })), same look as #cc-close ── */
+body #prompt-ok.danger { background:var(--ui-error); border-color:var(--ui-error); color:#0d1017; }
+body #prompt-ok.danger:hover { background:color-mix(in srgb,var(--ui-error) 85%,#fff); }
+body #prompt-ok.danger:focus-visible { outline:none; box-shadow:0 0 0 2px var(--ui-surface), 0 0 0 4px color-mix(in srgb,var(--ui-error) 60%,transparent); }
+#settings-modal .ssh-host-form { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) 72px auto; gap:8px; padding:14px 16px 8px; }
+#settings-modal .ssh-host-form input { width:100%; min-width:0; }
+#settings-modal .ssh-host-error { padding:0 16px 4px; font-size:12px; color:var(--ui-error); }
+#settings-modal .ssh-host-error[hidden] { display:none; }
+#settings-modal .ssh-hosts-hint { padding:0 16px 14px; font-size:11.5px; color:var(--dim-text); }
+#settings-modal .ssh-hosts-hint code { font:400 11px var(--mono-font); color:var(--muted-text); }
+@media (max-width: 720px) { #settings-modal .ssh-host-form { grid-template-columns:minmax(0,1fr); } }
+
+/* Tab bar "More actions" (narrow panes): the header paints before the pane body, whose chat/terminal layers
+   (z-index 2–20) covered the open menu. Lift the header above its body while the menu is open. The 0.85 dim on an
+   unfocused header would make the menu see-through, so drop it too. */
+.term-group-header:has(.tg-dropdown.open) { position:relative; z-index:60; opacity:1 !important; }

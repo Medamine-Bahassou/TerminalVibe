@@ -52,7 +52,7 @@ const PH_TO_LUCIDE = {
   'open-ai-logo': 'bot', 'paperclip': 'paperclip', 'pause': 'pause', 'pencil-simple': 'pencil',
   'pencil-simple-line': 'pen-line', 'play': 'play', 'plus': 'plus', 'push-pin': 'pin', 'push-pin-simple': 'pin',
   'push-pin-slash': 'pin-off', 'puzzle-piece': 'puzzle', 'quotes': 'quote', 'robot': 'bot', 'rows': 'rows-2',
-  'selection': 'square-dashed', 'selection-all': 'square-dashed-mouse-pointer', 'shield': 'shield',
+  'selection': 'square-dashed', 'selection-all': 'square-dashed-mouse-pointer', 'server': 'server', 'shield': 'shield',
   'shield-slash': 'shield-off', 'sidebar-simple': 'panel-left', 'shapes': 'shapes', 'arrow-square-in': 'square-arrow-down-left', 'sign-in': 'log-in',
   'sliders-horizontal': 'sliders-horizontal', 'sort-ascending': 'arrow-up-narrow-wide',
   'sort-descending': 'arrow-down-wide-narrow', 'sparkle': 'sparkle', 'square': 'square',

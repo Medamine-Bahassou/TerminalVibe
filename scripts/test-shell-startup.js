@@ -73,7 +73,7 @@ const all = node => !node ? [] : node.type === 'group' ? node.terminals : node.c
 const first = node => !node ? null : node.type === 'group' ? node : first(node.children[0]);
 const group = (node, predicate) => !node ? null : node.type === 'group' ? predicate(node) ? node : null : node.children.map(n => group(n,predicate)).find(Boolean);
 const context = {
-  activeWsId: workspace.id, defaultTerminalPath: '/project',
+  activeWsId: workspace.id, defaultTerminalPath: '/project', defaultShell: '',
   findWs: () => workspace, uuid: () => ++sequence === 1 ? 'terminal' : 'terminal-'+sequence,
   findFirstGroup: first, findGroupById: (node,id) => group(node,g => g.id === id),
   findGroupContainingTerm: (node,id) => group(node,g => g.terminals.some(t => t.id === id)),
@@ -111,6 +111,8 @@ assert.equal(controls.at(-1).inheritFromId,'right-parent');
 right.terminals.push({id:'browser',type:'browser'});right.activeTermId='browser';right._history=['right-parent'];
 context.addTerminal(workspace.id,'right');
 assert.equal(controls.at(-1).cwd,'/repo/right','Browser tabs must retain the split’s previous terminal directory');
+context.addTerminal(workspace.id,'right',{shell:'ssh:phone'});
+assert.deepEqual([right.terminals.at(-1).label, right.terminals.at(-1).pinLabel], ['phone', true], 'An SSH tab is named after its host, not the local folder');
 const forwarded = [];
 const transport = vm.createContext({isDesktop:()=>true,nativePtyReady:true,findTermById:()=>null,
   window:{electronAPI:{terminalCreate:spec=>{forwarded.push(spec);return Promise.resolve(true);}}}});
@@ -146,7 +148,7 @@ assert.equal(titles.shortTitle('/home/demo'), 'demo');
 assert.equal(titles.shortTitle('user@host:/home/demo'), 'demo');
 console.log('PASS: Windows and POSIX OSC 7 paths, PowerShell cwd hook, Windows tab titles');
 
-const { parseWslList, windowsShells, posixShells, findShell, resolveExecutable } = require('../electron/shells');
+const { parseWslList, windowsShells, posixShells, sshHosts, sshHostList, saveSshHost, removeSshHost, testSshHost, sshLaunch, findShell, resolveExecutable } = require('../electron/shells');
 {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-bin-'));
   for (const name of ['tool.exe', 'helper.com', 'npm.cmd', 'tool']) fs.writeFileSync(path.join(bin, name), '');
@@ -180,6 +182,61 @@ assert.deepEqual(posixShells(() => '# comment\n/bin/bash\n/usr/bin/bash\n/usr/sb
   ['/bin/bash', '/bin/zsh'], 'Duplicates, non-shells and missing files must be dropped');
 assert.deepEqual(posixShells(() => { throw new Error('no /etc/shells'); }), []);
 assert.equal(findShell('shell-that-was-uninstalled'), null, 'A missing saved shell must fall back to the system default');
+assert.deepEqual(sshHosts(() => 'Host devbox pi\n  HostName 10.0.0.2\nHost *\nhost=gpu.lab\nHost !bad -oProxyCommand=x a;b\n').map(shell => shell.id),
+  ['ssh:devbox', 'ssh:pi', 'ssh:gpu.lab'], 'Wildcards, negations, options and shell syntax are not hosts');
+assert.deepEqual(sshHosts(() => { throw new Error('no ~/.ssh/config'); }), []);
+assert.equal(findShell('ssh:devbox').ssh, 'devbox', 'A saved SSH tab opens without its config line');
+assert.equal(findShell('ssh:-oProxyCommand=x'), null);
+{
+  const unix = sshLaunch('devbox', 'abcd1234-ffff', 'linux');
+  assert.deepEqual([unix.command, unix.args[2]], ['/bin/sh', 'devbox'], 'The host is a positional argument, never script text');
+  assert.match(unix.args[3], /tmux new-session -A -s tv-abcd1234 /, 'The pane id names the session, so a restart reattaches it');
+  assert.deepEqual(unix.killArgs.slice(-2), ['devbox', 'tmux kill-session -t tv-abcd1234']);
+  assert.equal(sshLaunch('devbox', 'abcd1234', 'win32').command, 'ssh');
+}
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-ssh-')), file = path.join(dir, '.ssh', 'config');
+  const read = () => fs.readFileSync(file, 'utf8');
+  assert.equal(saveSshHost({ name: 'phone', host: '192.168.11.101', port: '8022' }, '', file), null, 'Creates ~/.ssh and the config');
+  fs.appendFileSync(file, 'Host old'); // a config that doesn't end with a newline
+  assert.equal(saveSshHost({ name: 'vm', host: 'ubuntu@10.0.0.5', port: '22' }, '', file), null);
+  assert.equal(read(), 'Host phone\n  HostName 192.168.11.101\n  Port 8022\nHost old\n\nHost vm\n  HostName 10.0.0.5\n  User ubuntu\n', 'Port 22 is the default: no Port line');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600, 'ssh refuses a config others can write');
+  assert.match(saveSshHost({ name: 'PHONE', host: 'x' }, '', file), /already exists/);
+  for (const bad of [{ name: 'a\n  ProxyCommand x', host: 'h' }, { name: 'b', host: 'h\n  ProxyCommand x' }, { name: 'c', host: 'u x@h' },
+    { name: 'd', host: '-oProxyCommand=x' }, { name: 'e*', host: 'h' }, { name: 'f', host: 'h', port: '70000' }, { name: '', host: 'h' }]) {
+    assert.equal(typeof saveSshHost(bad, '', file), 'string', `Rejected: ${JSON.stringify(bad)}`);
+    assert.equal(typeof saveSshHost(bad, 'vm', file), 'string', `Rejected edit: ${JSON.stringify(bad)}`);
+  }
+  assert.doesNotMatch(read(), /ProxyCommand/, 'No field can write extra config lines');
+
+  // Edit keeps hand-written options and comments; delete takes the comment above the host with it.
+  fs.writeFileSync(file, 'Host a b\n  User shared\n\n# my phone\nHost phone\n    HostName 1.2.3.4\n    IdentityFile ~/.ssh/k\n    Port 8022\n\n# vm\nHost vm\n  HostName 10.0.0.5\n');
+  assert.deepEqual(sshHostList(file).map(h => [h.name, h.hostName, h.user, h.port, h.editable]),
+    [['a', '', '', '', false], ['b', '', '', '', false], ['phone', '1.2.3.4', '', '8022', true], ['vm', '10.0.0.5', '', '', true]]);
+  assert.equal(saveSshHost({ name: 'pixel', host: 'me@5.6.7.8', port: '22' }, 'phone', file), null);
+  assert.equal(read(), 'Host a b\n  User shared\n\n# my phone\nHost pixel\n    HostName 5.6.7.8\n    IdentityFile ~/.ssh/k\n    User me\n\n# vm\nHost vm\n  HostName 10.0.0.5\n');
+  assert.equal(fs.readFileSync(`${file}.terminalvibe.bak`, 'utf8').includes('Host phone'), true, 'The previous config is kept as a backup');
+  assert.match(saveSshHost({ name: 'vm', host: 'x' }, 'pixel', file), /already exists/, 'Renaming onto another host is refused');
+  assert.match(saveSshHost({ name: 'a', host: 'x' }, 'a', file), /only be edited/, 'A shared Host line is left to the user');
+  assert.equal(removeSshHost('pixel', file), null);
+  assert.equal(read(), 'Host a b\n  User shared\n\n# vm\nHost vm\n  HostName 10.0.0.5\n');
+  assert.match(removeSshHost('b', file), /only be removed/);
+  assert.match(removeSshHost('missing', file), /only be removed/);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+(async () => {
+  // The connection test against a fake ssh: the host name (the argument before `true`) picks the answer.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-sshtest-')), bin = path.join(dir, 'ssh');
+  fs.writeFileSync(bin, '#!/bin/sh\nfor a; do [ "$a" = true ] && break; last=$a; done\ncase $last in\n'
+    + ' up) exit 0;;\n pw) echo "u@pw: Permission denied (publickey,password)." >&2; exit 255;;\n'
+    + ' *) echo "ssh: connect to host $last port 22: Connection timed out" >&2; exit 255;;\nesac\n', { mode: 0o755 });
+  const results = await Promise.all(['up', 'pw', 'down', '-oProxyCommand=x'].map(name => testSshHost(name, bin)));
+  assert.deepEqual(results.map(r => [r.ok, r.message]), [[true, 'Connected'], [true, 'Reachable, asks for a password or key'],
+    [false, 'connect to host down port 22: Connection timed out'], [false, 'Invalid host name']]);
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('PASS: SSH connection test');
+})().catch(err => { console.error(err); process.exitCode = 1; });
 assert.equal(findShell(''), null);
 const cmdPrompt = prepareShellStartup('cmd.exe', { PROMPT: '$G' }).env.PROMPT;
 assert(cmdPrompt.startsWith('$e]7;file:///$P$e\\$e]133;A$e\\') && cmdPrompt.endsWith('$G'), 'cmd must signal its folder and keep the user prompt');
