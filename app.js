@@ -4105,18 +4105,15 @@
       if (slot.closest('.has-global-bg, .has-ws-bg')) { slot.style.backgroundColor = ''; return; }
       try {
         const buf = term.buffer.active;
-        const line = buf.getLine(buf.baseY + term.rows - 1);
-        const cell = line && line.getCell(term.cols - 1);
-        let css = '';
-        if (cell) {
-          if (cell.isBgRGB()) {
-            const c = cell.getBgColor();
-            css = `rgb(${(c >> 16) & 255},${(c >> 8) & 255},${c & 255})`;
-          } else if (cell.isBgPalette()) {
-            css = paletteToCss(cell.getBgColor()) || '';
-          }
-        }
-        slot.style.backgroundColor = css;
+        const bgAt = row => {
+          const cell = buf.getLine(buf.baseY + row)?.getCell(term.cols - 1);
+          if (cell?.isBgRGB()) { const c = cell.getBgColor(); return `rgb(${(c >> 16) & 255},${(c >> 8) & 255},${c & 255})`; }
+          return cell?.isBgPalette() ? paletteToCss(cell.getBgColor()) || '' : '';
+        };
+        // Only a full-screen background (both right corners agree) bleeds into the frame:
+        // a tmux or vim status line in the last row alone would paint the whole frame green.
+        const bottom = bgAt(term.rows - 1);
+        slot.style.backgroundColor = bottom === bgAt(0) ? bottom : '';
       } catch { }
     };
     term.onWriteParsed(() => { if (!edgeTimer) edgeTimer = setTimeout(syncEdgeBg, 150); });
@@ -4340,12 +4337,14 @@
     const cwd = opts.cwd || wsp.cwd || previous?.cwd || ((defaultTerminalPath && defaultTerminalPath.trim())
       ? defaultTerminalPath.trim().replace(/^["']|["']$/g, '') : null);
     const id = uuid();
-    const label = opts.label || (cwd || '').split(/[\\/]/).filter(Boolean).pop() || 'Terminal';
+    // An SSH tab is named after its host: the local cwd says nothing about where it runs.
+    const sshHost = /^ssh:(.+)/.exec(opts.shell || defaultShell || '')?.[1];
+    const label = opts.label || sshHost || (cwd || '').split(/[\\/]/).filter(Boolean).pop() || 'Terminal';
     const entry = _createTermEntry(wsp, id, label);
     entry.cwd = cwd;
     if (opts.cmd) entry.runCmd = opts.cmd;
     if (opts.typeOnly) entry.typeOnly = true; // leave the command at the prompt for the user to run
-    if (opts.label) entry.pinLabel = true;
+    if (opts.label || sshHost) entry.pinLabel = true;
     if (opts.shell) entry.shell = opts.shell;
     if (opts.threadHistory) entry.threadHistory = true;
 
@@ -9311,6 +9310,15 @@
         }
         refreshThreadFlow(tab); syncThreadComposer(tab);
       }
+      // A chat shown beside this one (a thread and its side chat panel) lives in a snapshot: keep it live while it
+      // works and refresh it once more when it finishes, or it stays on "Thinking" until clicked.
+      if (document.hidden) return;
+      for (const sibling of shown) {
+        if (sibling === tab || sibling._cliView) continue;
+        const snap = sibling.el?.querySelector(':scope > .thr-snapshot'), working = !!chatWorking(sibling);
+        if (snap && (working || sibling._snapWorking)) { refreshThreadFlow(sibling, snap); syncThreadComposer(sibling, snap); }
+        sibling._snapWorking = working;
+      }
     }, 1000);
   }
 
@@ -9390,6 +9398,13 @@
       from.classList.add('thr-snapshot');
       from.setAttribute('aria-hidden', 'true');
       watchThreadSnapshot(from, owner);
+      // ponytail: Chromium workaround. In a maximized pane, the chat beside a side chat panel stopped painting (and
+      // taking clicks) once focus moved to the other side; flipping content-visibility for a frame repaints it.
+      const slot = owner.el;
+      if (slot?.classList.contains('chat-panel-on')) {
+        slot.style.contentVisibility = 'auto';
+        requestAnimationFrame(() => slot.style.removeProperty('content-visibility'));
+      }
     } else from.remove();
     previous.removeAttribute('id');
     previous.dataset.thrId = 'sbr-thread-flow';
@@ -13248,7 +13263,21 @@
     clearTimeout(_draftSave); _draftSave = setTimeout(() => { saveState(); renderThreadsSidebar(); }, 400);
   });
   // Up/Down at the edge of the input walk back through this chat's earlier prompts (like a shell's history).
-  let _histI = -1, _histDraft = '', _histText = '', _histChat = null;
+  let _histI = -1, _histDraft = '', _histDraftFiles = [], _histText = '', _histChat = null;
+  // A sent prompt back in composer form: its image/file chips and citations become mentions with their files again.
+  function sentPromptDraft(node) {
+    const clone = node.cloneNode(true), files = [], counts = {};
+    clone.querySelectorAll('.thr-image-ref[data-path], .thr-cite[title]').forEach(el => {
+      const path = el.dataset.path;
+      const file = path ? { path, name: el.dataset.tip || path.split(/[\\/]/).pop(), image: /\.(png|jpe?g|gif|webp|bmp)$/i.test(path), size: _thrImgSize.get(path) || 0 }
+        : { cite: el.title };
+      const kind = file.cite ? 'Citation' : file.image ? 'Image' : 'File';
+      file.mention = `[${kind} ${counts[kind] = (counts[kind] || 0) + 1}]`;
+      files.push(file);
+      el.replaceWith(` ${file.mention} `);
+    });
+    return { text: mdFromDom(clone).replace(/[ \t]{2,}/g, ' ').trim(), files };
+  }
   thrInput?.addEventListener('keydown', e => {
     if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
     const v = thrInput.value, c = curChat(), s0 = thrInput.selectionStart, s1 = thrInput.selectionEnd;
@@ -13261,17 +13290,20 @@
     const go = _histI < 0 ? up && collapsed && (!v || !s0)
       : collapsed && (up ? !v.slice(0, s0).includes('\n') : !v.slice(s1).includes('\n'));
     if (!go) return;
-    const past = [...thrPage.querySelectorAll('.thr-flow > .thr-msg.user .thr-msg-text')].map(n => n.textContent.trim())
-      .filter((t, i, all) => t && t !== all[i - 1]); // empty and back-to-back duplicate prompts are skipped
+    const past = [...thrPage.querySelectorAll('.thr-flow > .thr-msg.user .thr-msg-text')]
+      .filter((n, i, all) => n.textContent.trim() && n.textContent.trim() !== all[i - 1]?.textContent.trim()); // empty and back-to-back duplicate prompts are skipped
     const next = _histI < 0 ? past.length - 1 : _histI + (up ? -1 : 1);
     if (!past.length || next < -1 || next >= past.length || (_histI < 0 && !up)) return;
     e.preventDefault();
-    if (_histI < 0) { _histDraft = v; _histChat = c; }
+    if (_histI < 0) { _histDraft = v; _histDraftFiles = _chatFiles; _histChat = c; }
     _histI = next;
-    thrInput.value = _histText = next < 0 ? _histDraft : past[next];
+    const recalled = next < 0 ? { text: _histDraft, files: _histDraftFiles } : sentPromptDraft(past[next]);
+    thrInput.value = _histText = recalled.text;
+    _chatFiles = recalled.files;
     // Shell feel: Up lands at the start of the prompt (so Up again keeps going), Down at its end.
     const at = up && next >= 0 ? 0 : thrInput.value.length;
     thrInput.setSelectionRange(at, at);
+    renderChatFiles(); // the chips, and their image previews once loaded
     thrInput.dispatchEvent(new Event('input', { bubbles: true }));
   });
   thrInput?.addEventListener('keydown', e => {
@@ -16602,9 +16634,12 @@
     promptOverlay.onclick = e => { if (e.target === promptOverlay) close(); };
   }
 
-  function showConfirm(message, callback, onCancel) {
+  // danger: a red button for destructive actions (the quit dialog's #cc-close look), named okLabel.
+  function showConfirm(message, callback, onCancel, { okLabel = 'OK', danger = false } = {}) {
     onCancel = onCancel || (() => { });
     promptLabel.textContent = message;
+    promptOk.textContent = okLabel;
+    promptOk.classList.toggle('danger', danger);
     promptInput.style.display = 'none';
     promptColors.style.display = 'none';
     promptIconBtn.style.display = 'none';
@@ -16619,6 +16654,8 @@
       promptOverlay.inert = true;
       promptOverlay.classList.remove('open');
       promptInput.style.display = '';
+      promptOk.textContent = 'OK';
+      promptOk.classList.remove('danger');
       promptOk.onclick = null;
       promptCancel.onclick = null;
       promptOverlay.onclick = null;
@@ -17707,6 +17744,10 @@
   const SHELL_GLYPHS = {
     terminal: 'M2 4h20v16H2zM5.2 9l3.4 3-3.4 3 1.2 1.4 4.8-4.4-4.8-4.4zM12 14.6v1.8h6.5v-1.8z',
     powershell: 'M6 4h16.5L18 20H1.5zM7 8.8l3.4 3.2-4.7 3 1.2 1.4 6.1-4.5-4.7-4.5zM11.6 14.7l-.4 1.7h5.4l.4-1.7z',
+    // Lucide "server" (2px stroke) traced as a fill: each rack is a rounded ring (the inner
+    // outline winds the other way to cut the hole) plus its round status light.
+    server: 'M4 1h16a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3H4a3 3 0 0 1-3-3V4a3 3 0 0 1 3-3zM4 3a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zM5 6a1 1 0 1 0 2 0a1 1 0 1 0-2 0z'
+      + 'M4 13h16a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3H4a3 3 0 0 1-3-3v-4a3 3 0 0 1 3-3zM4 15a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1zM5 18a1 1 0 1 0 2 0a1 1 0 1 0-2 0z',
   };
   const SHELL_ICON_SLUGS = [
     [/^git bash$/, 'git'], [/^bash$/, 'gnubash'], [/^zsh$/, 'zsh'], [/^fish$/, 'fishshell'], [/^nu$/, 'nushell'],
@@ -17715,6 +17756,7 @@
   ];
   function shellIconPath({ id, label }) {
     if (id === 'powershell' || id === 'pwsh') return SHELL_GLYPHS.powershell;
+    if (id.startsWith('ssh:')) return SHELL_GLYPHS.server;
     const name = label.toLowerCase();
     const slug = SHELL_ICON_SLUGS.find(([pattern]) => pattern.test(name))?.[1] || (id.startsWith('wsl:') ? 'linux' : null);
     return window.PROC_ICON_PATHS?.[slug] || SHELL_GLYPHS.terminal;
@@ -17724,6 +17766,8 @@
     // Browser mode's server picks its own shell.
     if (!window.electronAPI?.listShells) { document.getElementById('set-default-shell-row').style.display = 'none'; return; }
     const shells = await window.electronAPI.listShells();
+    shellList = shells; // the tab bar menu picks up hosts added below without a restart
+    renderSshHosts();
     const select = document.getElementById('set-default-shell');
     select.replaceChildren(...[{ id: '', label: 'System default' }, ...shells].map(shell => {
       const option = new Option(shell.label, shell.id);
@@ -17734,6 +17778,86 @@
     const dd = document.querySelector('.custom-dropdown[data-for="set-default-shell"]');
     if (dd) initCustomDropdown(dd);
   }
+
+  // Settings > Terminal > SSH hosts: the Host entries of ~/.ssh/config, edited through one form.
+  // Editing fills the form with the row's values; saving or Cancel returns it to "Add host".
+  let sshEditing = '';
+  const sshField = id => document.getElementById(id);
+  function setSshForm(host) {
+    sshEditing = host?.name || '';
+    sshField('ssh-host-name').value = host?.name || '';
+    sshField('ssh-host-address').value = host ? (host.user ? `${host.user}@` : '') + (host.hostName || host.name) : '';
+    sshField('ssh-host-port').value = host?.port || '22';
+    sshField('ssh-host-submit').textContent = host ? 'Save' : 'Add host';
+    sshField('ssh-host-cancel').hidden = !host;
+    showSshError('');
+    for (const row of document.querySelectorAll('.ssh-host-row')) row.classList.toggle('editing', row.dataset.name === sshEditing);
+    if (host) sshField('ssh-host-name').focus();
+  }
+  // Last connection test per host (Settings session only): a spinner while ssh runs, then a green
+  // check with the round trip or a red warning with ssh's reason (full text in the tooltip).
+  const sshStatus = new Map();
+  function showSshStatus(row, status) {
+    const slot = row.querySelector('.ssh-host-status'), button = row.querySelector('[data-act="test"]');
+    button.disabled = !!status?.testing;
+    slot.className = 'ssh-host-status' + (status?.testing ? ' testing' : status ? (status.ok ? ' ok' : ' failed') : '');
+    if (!status) { slot.replaceChildren(); slot.removeAttribute('title'); return; }
+    const label = status.testing ? 'Testing' : status.ok ? `${status.ms} ms` : status.message;
+    slot.innerHTML = `<i class="ph ${status.testing ? 'ph-circle-notch' : status.ok ? 'ph-check-circle' : 'ph-warning-circle'}"></i><span></span>`;
+    slot.querySelector('span').textContent = label;
+    slot.title = status.testing ? 'Testing connection' : status.ok ? `${status.message} · ${status.ms} ms` : status.message;
+  }
+  function showSshError(error) {
+    sshField('ssh-host-error').textContent = error || '';
+    sshField('ssh-host-error').hidden = !error;
+  }
+  async function renderSshHosts() {
+    const section = sshField('ssh-hosts-section');
+    if (!section || !window.electronAPI?.sshHosts) return;
+    section.hidden = false;
+    const hosts = await window.electronAPI.sshHosts().catch(() => []);
+    sshField('ssh-hosts-list').replaceChildren(...hosts.map(host => {
+      const row = document.createElement('div');
+      row.className = 'ssh-host-row' + (host.name === sshEditing ? ' editing' : '');
+      row.dataset.name = host.name;
+      const address = (host.user ? `${host.user}@` : '') + (host.hostName || host.name) + (host.port && host.port !== '22' ? `:${host.port}` : '');
+      row.innerHTML = `<i class="ph ph-server"></i><span class="ssh-host-text"><span class="ssh-host-name"></span><span class="ssh-host-address"></span></span>`
+        + `<span class="ssh-host-status"></span><button type="button" class="ssh-host-btn" data-act="test" title="Test connection"><i class="ph ph-arrows-clockwise"></i></button>`
+        + (host.editable ? `<button type="button" class="ssh-host-btn" data-act="edit" title="Edit"><i class="ph ph-pencil-simple"></i></button>`
+          + `<button type="button" class="ssh-host-btn danger" data-act="delete" title="Delete"><i class="ph ph-trash"></i></button>` : '');
+      row.querySelector('.ssh-host-name').textContent = host.name;
+      row.querySelector('.ssh-host-address').textContent = address === host.name ? '' : address;
+      showSshStatus(row, sshStatus.get(host.name));
+      row.querySelector('[data-act="test"]').addEventListener('click', async () => {
+        sshStatus.set(host.name, { testing: true });
+        showSshStatus(row, sshStatus.get(host.name));
+        const result = await window.electronAPI.testSshHost(host.name).catch(err => ({ ok: false, message: err.message || 'Test failed' }));
+        sshStatus.set(host.name, result);
+        // The list may have re-rendered while ssh ran: update whichever row shows this host now.
+        const current = [...document.querySelectorAll('.ssh-host-row')].find(r => r.dataset.name === host.name);
+        if (current) showSshStatus(current, result);
+      });
+      row.querySelector('[data-act="edit"]')?.addEventListener('click', () => setSshForm(host));
+      row.querySelector('[data-act="delete"]')?.addEventListener('click', () => showConfirm(`Delete SSH host "${host.name}" from ~/.ssh/config?`, async () => {
+        const error = await window.electronAPI.removeSshHost(host.name).catch(err => err.message || 'Could not delete the host');
+        if (!error && sshEditing === host.name) setSshForm(null);
+        showSshError(error);
+        refreshDefaultShellSetting();
+      }, null, { okLabel: 'Delete', danger: true }));
+      if (!host.editable) row.title = 'Shares its Host line with other names: edit it in ~/.ssh/config';
+      return row;
+    }));
+  }
+  sshField('ssh-host-cancel')?.addEventListener('click', () => setSshForm(null));
+  sshField('ssh-host-form')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const error = await window.electronAPI.saveSshHost({ name: sshField('ssh-host-name').value, host: sshField('ssh-host-address').value, port: sshField('ssh-host-port').value }, sshEditing)
+      .catch(err => err.message || 'Could not save the host');
+    showSshError(error);
+    if (error) return;
+    setSshForm(null);
+    refreshDefaultShellSetting();
+  });
 
   let closeActiveDropdown = null;
   let dropdownSequence = 0;

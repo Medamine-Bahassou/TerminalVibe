@@ -9,7 +9,7 @@ const { startAgentControl, validateLaunch, dispatchWithCapabilities, canReplaceS
 const { listRunningServers, killServer } = require('./servers');
 const { terminalEnv } = require('./terminal-env');
 const { prepareShellStartup } = require('./shell-startup');
-const { listShellsFresh, findShell, resolveExecutable } = require('./shells');
+const { listShellsFresh, findShell, sshLaunch, sshHostList, saveSshHost, removeSshHost, testSshHost, resolveExecutable } = require('./shells');
 // The AppImage runtime exports ARGV0 (the .AppImage path). zsh uses an exported ARGV0 as argv[0] of every command
 // it runs, so tools that re-exec themselves via argv[0] (Python's sys.executable, …) launched new TerminalVibe windows.
 delete process.env.ARGV0;
@@ -1533,6 +1533,15 @@ ipcMain.handle('terminal:workspace-context', (event, id, context) => {
 let defaultShellId = '';
 ipcMain.on('shell:set-default', (_e, id) => { defaultShellId = String(id || ''); });
 ipcMain.handle('shell:list', async () => (await listShellsFresh()).map(({ id, label }) => ({ id, label })));
+// Settings > Terminal > SSH hosts. These write ~/.ssh/config, so only the app window may call them.
+const sshSettings = fn => (event, ...args) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Unauthorized');
+  return fn(...args);
+};
+ipcMain.handle('ssh:hosts', sshSettings(() => sshHostList()));
+ipcMain.handle('ssh:save-host', sshSettings((host, oldName) => saveSshHost(host, typeof oldName === 'string' ? oldName : '')));
+ipcMain.handle('ssh:remove-host', sshSettings(name => removeSshHost(String(name || ''))));
+ipcMain.handle('ssh:test-host', sshSettings(name => testSshHost(String(name || ''))));
 
 function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle, replaceClaude, returnToShell, inheritFromId, shell: shellId, restoreOnly, provider }) {
   if (restoreOnly === true && ptys.has(id)) return true;
@@ -1573,13 +1582,14 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
     }
     // A tab opened with a specific shell (tab bar menu): only ids of detected shells resolve.
     const profile = executable || argv?.length ? null : findShell(typeof shellId === 'string' ? shellId : '') || findShell(defaultShellId);
-    const shell = profile?.command || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
+    const ssh = profile?.ssh ? sshLaunch(profile.ssh, id) : null;
+    const shell = ssh?.command || profile?.command || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
     // An agent the chat starts gets its provider's env vars and launch arguments (Settings > Providers).
     const agent = executable && typeof provider === 'string' ? provider : null;
     const env = agent ? providers.envFor(agent, terminalEnv()) : terminalEnv();
     if (agent) argv = [...(argv || []), ...providers.argsFor(agent)];
-    startup = executable || argv?.length ? { args: [], env: {}, tmpDir: null } : prepareShellStartup(shell, env);
-    const shellArgs = [...(profile?.args || []), ...(!cwdRequested && profile?.homeArgs || []), ...startup.args];
+    startup = executable || argv?.length || ssh ? { args: [], env: {}, tmpDir: null } : prepareShellStartup(shell, env);
+    const shellArgs = ssh ? ssh.args : [...(profile?.args || []), ...(!cwdRequested && profile?.homeArgs || []), ...startup.args];
     const t = pty.spawn(resolveExecutable(executable || shell), argv && argv.length ? argv : shellArgs, {
       name: 'xterm-256color',
       cols: cols || 80,
@@ -1588,6 +1598,7 @@ function createTerminal(_e, { id, cols, rows, cwd, argv, executable, replaceIdle
       env: { ...env, ...startup.env, TERMINALVIBE_PANE_ID: id,
         ...(agentControl ? { TERMINALVIBE_CONTROL_FILE: agentControl.file } : {}) },
     });
+    if (ssh) t.tvSshKill = ssh.killArgs;
     ptys.set(id, t);
     // Explicit launches can finish without input. An interactive shell has to
     // receive a submitted command before its foreground processes count.
@@ -1671,6 +1682,7 @@ ipcMain.on('terminal:close', (_e, id) => {
   notifyBusy.delete(id); ptyIO.delete(id);
   const t = ptys.get(id);
   if (t) { try { t.kill(); } catch {} ptys.delete(id); }
+  if (t?.tvSshKill) require('child_process').execFile(resolveExecutable('ssh'), t.tvSshKill, { timeout: 15000, windowsHide: true }, () => {});
 });
 // Is this process still alive? Instant, unlike the cached Windows process table.
 ipcMain.handle('process:alive', (_e, pid) => { try { return Number.isInteger(pid) && pid > 1 && process.kill(pid, 0); } catch (err) { return err.code === 'EPERM'; } });

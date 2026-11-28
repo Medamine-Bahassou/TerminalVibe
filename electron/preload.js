@@ -76,6 +76,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolveLocalPath: (p) => ipcRenderer.invoke('file:resolve', p),
   selectDirectory: (defaultPath) => ipcRenderer.invoke('dialog:openDirectory', defaultPath),
   listShells: () => ipcRenderer.invoke('shell:list'),
+  sshHosts: () => ipcRenderer.invoke('ssh:hosts'),
+  saveSshHost: (host, oldName) => ipcRenderer.invoke('ssh:save-host', host, oldName),
+  removeSshHost: (name) => ipcRenderer.invoke('ssh:remove-host', name),
+  testSshHost: (name) => ipcRenderer.invoke('ssh:test-host', name),
   setDefaultShell: (id) => ipcRenderer.send('shell:set-default', id),
 
   // Native PTY (node-pty runs in the main process)
